@@ -311,6 +311,11 @@ mod tests {
         assert_eq!(c.faces[0].name, "Delver of Secrets");
         assert_eq!(c.faces[1].name, "Insectile Aberration");
         assert_eq!(c.faces[1].artist.as_deref(), Some("Nils Hamm"));
+        // Scryfall gives a transform's back face `"mana_cost": ""`, which is not the same
+        // as having a cost of nothing to render — a `Some("")` here is a cost pill on the
+        // back of every DFC in the game.
+        assert_eq!(c.faces[0].mana_cost.as_deref(), Some("{U}"));
+        assert!(c.faces[1].mana_cost.is_none(), "an empty cost is no cost");
     }
 
     #[test]
