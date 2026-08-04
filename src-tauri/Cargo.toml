@@ -29,7 +29,10 @@ thiserror = "2"
 # deliberately NO `gzip` feature: Scryfall bulk data is a real .gz *file*, not a
 # Content-Encoding, so transparent decompression would corrupt the download.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-tokio = { version = "1", features = ["fs", "io-util"] }
+# `rt` is not optional: tokio::fs runs every operation through spawn_blocking, which
+# needs a runtime handle. It reaches us through tauri's tokio today, but this crate
+# must not depend on another crate's feature selection to compile.
+tokio = { version = "1", features = ["fs", "io-util", "rt"] }
 futures-util = "0.3"
 
 [dev-dependencies]

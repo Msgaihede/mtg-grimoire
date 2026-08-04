@@ -107,6 +107,20 @@ impl Client {
         self.http.get(url).header("Accept", ACCEPT)
     }
 
+    /// GET `uri`, optionally resuming from byte `from`. File origins, not the API, so
+    /// no `Accept` — only the `User-Agent` the client itself carries.
+    async fn get_from(
+        &self,
+        uri: &str,
+        from: Option<u64>,
+    ) -> Result<reqwest::Response, ScryfallError> {
+        let mut req = self.http.get(uri);
+        if let Some(n) = from {
+            req = req.header("Range", format!("bytes={n}-"));
+        }
+        Ok(req.send().await?)
+    }
+
     /// Ask whether the `default_cards` bulk file has changed since `etag`.
     ///
     /// Uses the per-type endpoint rather than the `/bulk-data` collection, whose ETag
@@ -151,9 +165,15 @@ impl Client {
     /// attempt, not just those fetched by this call.
     ///
     /// Resume rules: a `dest` smaller than `expected_size` sends `Range: bytes=N-`,
-    /// and a 206 appends; a 200 (server ignored the range, or nothing to resume)
-    /// restarts the file from zero. Any other status returns *before* `dest` is
-    /// opened, so a 5xx or a 429 can never truncate a partial download.
+    /// and a 206 appends *after* its `Content-Range` is confirmed to start at exactly
+    /// the byte the file ends on — a server that resumed from somewhere else would
+    /// otherwise produce a file of the right length with garbage in the middle, and the
+    /// first sign of it would be a gzip CRC failure deep inside the ingest. A 200
+    /// (server ignored the range, or nothing to resume) restarts the file from zero,
+    /// and a 416 — the partial is longer than the resource, so that range can never be
+    /// satisfied — is retried once without a range, which discards the stale partial.
+    /// Any other status returns *before* `dest` is opened, so a 5xx or a 429 can never
+    /// truncate a partial download.
     ///
     /// The size check is the load-bearing part. A truncated bulk file is still valid
     /// gzip and would ingest as a plausible-looking partial card database, so the byte
@@ -162,12 +182,16 @@ impl Client {
     /// place**: a short file is exactly what a later `Range` resume needs, and a long
     /// one is restarted from scratch by the rule above. Callers must not hand a file
     /// to the ingest after this returns an error.
+    ///
+    /// `progress` is `Send` so that the returned future is: a download has to be
+    /// spawnable (`tokio::spawn`, or an `async` Tauri command) rather than tied to the
+    /// task that built it.
     pub async fn download(
         &self,
         uri: &str,
         dest: &Path,
         expected_size: u64,
-        progress: &mut dyn FnMut(u64, u64),
+        progress: &mut (dyn FnMut(u64, u64) + Send),
     ) -> Result<(), ScryfallError> {
         use futures_util::StreamExt;
         use tokio::io::AsyncWriteExt;
@@ -178,21 +202,40 @@ impl Client {
             .unwrap_or(0);
         // A file at or past the expected size is not resumable — it is either finished
         // or wrong. Either way the fix is to fetch it again from byte zero.
-        let resuming = existing > 0 && existing < expected_size;
-        let mut req = self.http.get(uri);
-        if resuming {
-            req = req.header("Range", format!("bytes={existing}-"));
+        let mut resuming = existing > 0 && existing < expected_size;
+        let mut resp = self.get_from(uri, resuming.then_some(existing)).await?;
+
+        // 416 Range Not Satisfiable: the partial on disk is longer than the resource the
+        // server is offering — a rotated file, a truncated re-upload. That range can
+        // never be satisfied, and re-sending it on every future attempt would wedge the
+        // sync forever, so drop the range and take the whole file instead. The 200 arm
+        // below then truncates the stale partial away.
+        if resp.status().as_u16() == 416 && resuming {
+            resuming = false;
+            resp = self.get_from(uri, None).await?;
         }
-        let resp = req.send().await?;
 
         let (mut file, mut done) = match resp.status().as_u16() {
-            206 if resuming => (
-                tokio::fs::OpenOptions::new()
-                    .append(true)
-                    .open(dest)
-                    .await?,
-                existing,
-            ),
+            206 if resuming => {
+                // Trusting the offset is exactly what would make a wrong one silent.
+                let start = resp
+                    .headers()
+                    .get("content-range")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(content_range_start);
+                if start != Some(existing) {
+                    return Err(ScryfallError::Unexpected(format!(
+                        "206 resumed at {start:?}, expected byte {existing}"
+                    )));
+                }
+                (
+                    tokio::fs::OpenOptions::new()
+                        .append(true)
+                        .open(dest)
+                        .await?,
+                    existing,
+                )
+            }
             200 => (tokio::fs::File::create(dest).await?, 0),
             429 => return Err(ScryfallError::RateLimited),
             s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
@@ -257,6 +300,15 @@ impl Client {
         }
         Ok(out)
     }
+}
+
+/// First byte of a `Content-Range: bytes 400-999/1000` header.
+///
+/// `None` for anything that is not a satisfied byte range — including the
+/// unsatisfied form `bytes */1000`, which must never be read as "resume at 0".
+fn content_range_start(value: &str) -> Option<u64> {
+    let range = value.trim().strip_prefix("bytes")?.trim_start();
+    range.split('-').next()?.trim().parse().ok()
 }
 
 /// Parse a response body as JSON.
@@ -371,7 +423,9 @@ mod tests {
             when.method(GET)
                 .path("/resume.gz")
                 .header("range", "bytes=400-");
-            then.status(206).body(vec![9u8; 600]);
+            then.status(206)
+                .header("content-range", "bytes 400-999/1000")
+                .body(vec![9u8; 600]);
         });
         let c = Client::new(server.base_url());
         let dest = std::env::temp_dir().join("mtgtest-dl-resume.gz");
@@ -450,6 +504,116 @@ mod tests {
             "expected an unexpected-status error, got {err:?}"
         );
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), 400);
+    }
+
+    /// A 206 that starts somewhere other than the end of the local file would splice
+    /// two byte ranges together into a file of exactly the right length whose middle is
+    /// wrong — a corruption that only surfaces as a gzip CRC error mid-ingest. Reject
+    /// it at the source, and leave the partial alone.
+    #[tokio::test]
+    async fn download_rejects_a_206_that_resumes_at_the_wrong_offset() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/liar.gz");
+            then.status(206)
+                .header("content-range", "bytes 0-999/1000")
+                .body(vec![9u8; 600]);
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl-liar.gz");
+        std::fs::write(&dest, vec![7u8; 400]).unwrap();
+
+        let err = c
+            .download(
+                &format!("{}/liar.gz", server.base_url()),
+                &dest,
+                1000,
+                &mut |_, _| {},
+            )
+            .await;
+        assert!(
+            matches!(&err, Err(ScryfallError::Unexpected(m)) if m.contains("expected byte 400")),
+            "expected a resume-offset error, got {err:?}"
+        );
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 400);
+    }
+
+    /// A partial longer than the resource can never satisfy its own Range, so retrying
+    /// it forever would wedge the sync. One rangeless retry takes the whole file.
+    #[tokio::test]
+    async fn download_restarts_from_zero_after_a_416() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/gone.gz").header_exists("range");
+            then.status(416);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/gone.gz").header_missing("range");
+            then.status(200).body(vec![1u8; 1000]);
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl-416.gz");
+        std::fs::write(&dest, vec![7u8; 400]).unwrap();
+
+        c.download(
+            &format!("{}/gone.gz", server.base_url()),
+            &dest,
+            1000,
+            &mut |_, _| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            vec![1u8; 1000],
+            "the stale partial must be replaced, not appended to"
+        );
+    }
+
+    /// Bodies are decoded with serde_json rather than reqwest's `json` feature, so the
+    /// mapping of a parse failure onto `Unexpected` is this module's own contract.
+    #[tokio::test]
+    async fn a_malformed_json_body_is_reported_as_unexpected() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/default_cards");
+            then.status(200).body("<html>Service Unavailable</html>");
+        });
+        let c = Client::new(server.base_url());
+        let err = c.check_bulk_update(None).await;
+        assert!(
+            matches!(&err, Err(ScryfallError::Unexpected(m)) if m.contains("not JSON")),
+            "expected a JSON parse error, got {err:?}"
+        );
+    }
+
+    /// Task 8 has to be able to `tokio::spawn` a sync, or run it from an `async` Tauri
+    /// command. That needs every future here to be `Send`, which the `progress`
+    /// callback — held across every await in the download loop — silently decides.
+    /// This is a compile-time assertion; reaching the asserts means it held.
+    #[test]
+    fn futures_are_send_so_they_can_be_spawned() {
+        fn assert_send<T: Send>(_: &T) {}
+        let c = Client::new("http://127.0.0.1:1".into());
+        let mut progress = |_: u64, _: u64| {};
+        assert_send(&c.check_bulk_update(None));
+        assert_send(&c.fetch_sets());
+        assert_send(&c.download(
+            "http://127.0.0.1:1/x.gz",
+            Path::new("unused"),
+            1,
+            &mut progress,
+        ));
+    }
+
+    #[test]
+    fn content_range_start_reads_the_first_byte_offset() {
+        assert_eq!(content_range_start("bytes 400-999/1000"), Some(400));
+        assert_eq!(content_range_start("bytes 0-9/10"), Some(0));
+        // The unsatisfied form carries no start offset and must not read as byte 0.
+        assert_eq!(content_range_start("bytes */1000"), None);
+        assert_eq!(content_range_start("items 400-999/1000"), None);
     }
 
     /// 429 is not a generic failure: Scryfall locks the caller out for 30 seconds and
