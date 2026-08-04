@@ -33,6 +33,8 @@ describe("manaSymbolClass", () => {
 });
 
 describe("manaParts", () => {
+  const glyphs = (cost: string) => manaParts(cost).map((p) => (p.kind === "symbol" ? p.glyph : p));
+
   it("draws each symbol of a printed cost, in printed order", () => {
     expect(manaParts("{2}{U}{U}")).toEqual([
       { kind: "symbol", token: "2", glyph: "ms ms-2" },
@@ -47,9 +49,6 @@ describe("manaParts", () => {
    * every hybrid card an empty box where its cost should be.
    */
   it("reads hybrid, twobrid and Phyrexian mana as the font spells them", () => {
-    const glyphs = (cost: string) =>
-      manaParts(cost).map((p) => (p.kind === "symbol" ? p.glyph : p));
-
     expect(glyphs("{W/U}")).toEqual(["ms ms-wu"]);
     expect(glyphs("{2/R}")).toEqual(["ms ms-2r"]);
     expect(glyphs("{G/P}")).toEqual(["ms ms-gp"]);
@@ -57,6 +56,19 @@ describe("manaParts", () => {
     // Not a mana symbol and printed in costs' company all the same, with its own name in
     // the font.
     expect(glyphs("{T}")).toEqual(["ms ms-tap"]);
+  });
+
+  /**
+   * The four symbols Scryfall emits that never appear in a mana cost: the planeswalker and
+   * chaos symbols on Planechase cards, and the acorn and ticket stamps of the Un-sets. Two
+   * of them are single letters in the data and whole words in the font, which is exactly
+   * the kind of mapping that goes missing and renders as an empty box.
+   */
+  it("reads the symbols that are printed outside a cost", () => {
+    expect(glyphs("{PW}")).toEqual(["ms ms-planeswalker"]);
+    expect(glyphs("{CHAOS}")).toEqual(["ms ms-chaos"]);
+    expect(glyphs("{A}")).toEqual(["ms ms-acorn"]);
+    expect(glyphs("{TK}")).toEqual(["ms ms-tk"]);
   });
 
   /**

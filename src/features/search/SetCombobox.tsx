@@ -79,6 +79,9 @@ export function SetCombobox({
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // Consumed here, so an outer layer listening for the same key does not close on the
+      // same press: the card detail pane checks `defaultPrevented` before acting on it.
+      e.preventDefault();
       setOpen(false);
       // Escape is a keyboard word, and the element it dismissed is about to unmount with
       // the focus still on it — which drops the caret onto `<body>`, so the next Tab
@@ -90,10 +93,16 @@ export function SetCombobox({
     const onClick = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    window.addEventListener("keydown", onKey);
+    // Escape is listened for in the **capture** phase, which is what actually makes the
+    // `defaultPrevented` handshake above work. Two `window` listeners for the same event
+    // run in registration order, and an outer layer — the card detail pane — was mounted
+    // long before this popup opened, so in the bubble phase it would act on the key first
+    // and read `defaultPrevented` as false. Capture puts the innermost open thing first
+    // regardless of who mounted when.
+    window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onClick);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("mousedown", onClick);
     };
   }, [open]);

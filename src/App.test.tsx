@@ -128,6 +128,33 @@ it("opens the detail pane for the card that was clicked, and closes it again", a
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 });
 
+/**
+ * Escape dismisses one layer, not the stack. The pane and the set filter both listen for
+ * the key on `window`, and the pane has been mounted since before the filter opened — so
+ * without the capture-phase handshake between them a single press closes a popup the
+ * reader opened *and* the card underneath it, with two focus hand-backs racing for the
+ * caret.
+ */
+it("closes the set filter on the first Escape and the card on the second", async () => {
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole("button", { name: /Lightning Bolt/ }));
+  await screen.findByRole("complementary", { name: /card details/i });
+  const setFilter = screen.getByRole("button", { name: "Set" });
+  await userEvent.click(setFilter);
+  expect(await screen.findByRole("combobox", { name: /search sets/i })).toBeInTheDocument();
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("combobox", { name: /search sets/i })).not.toBeInTheDocument();
+  expect(screen.getByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+  expect(setFilter).toHaveFocus();
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
 /** A card left open through a view change would dock beside a page it has nothing to do
  *  with — and the Decks placeholder has no way to dismiss it. */
 it("closes the card when the reader leaves the view", async () => {

@@ -91,6 +91,37 @@ function wrap(cardId: string, onClose = vi.fn()) {
   );
 }
 
+/**
+ * Open the pane the way the app does — from a control that had the focus — and hand back
+ * that control, which is where the pane owes the caret when it closes. Rendering the pane
+ * already mounted would capture `<body>` as the opener and prove nothing about either
+ * hand-back.
+ */
+async function openFromAButton(): Promise<HTMLElement> {
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open the card
+        </button>
+        {open && <CardDetailPane cardId="p1" onClose={() => setOpen(false)} />}
+      </>
+    );
+  }
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <Harness />
+    </QueryClientProvider>,
+  );
+
+  const opener = screen.getByRole("button", { name: "Open the card" });
+  await userEvent.click(opener);
+  await screen.findByRole("complementary", { name: /card details/i });
+  return opener;
+}
+
 /** The card as it arrives, with the given fields replaced. */
 const card = (over: Partial<CardDetail>): CardDetail => ({ ...detail, ...over });
 
@@ -254,30 +285,10 @@ describe("CardDetailPane", () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(printings));
 
-    function Harness() {
-      const [open, setOpen] = useState(false);
-      return (
-        <>
-          <button type="button" onClick={() => setOpen(true)}>
-            Open the card
-          </button>
-          {open && <CardDetailPane cardId="p1" onClose={() => setOpen(false)} />}
-        </>
-      );
-    }
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <Harness />
-      </QueryClientProvider>,
-    );
-
-    const opener = screen.getByRole("button", { name: "Open the card" });
-    await userEvent.click(opener);
+    const opener = await openFromAButton();
 
     // Focus moves in, so the pane's own controls are the next thing Tab reaches.
-    const pane = await screen.findByRole("complementary", { name: /card details/i });
-    expect(pane).toHaveFocus();
+    expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
 
@@ -288,13 +299,14 @@ describe("CardDetailPane", () => {
   it("closes from the button and hands focus back the same way", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(printings));
-    const onClose = vi.fn();
 
-    wrap("p1", onClose);
+    const opener = await openFromAButton();
+    await userEvent.click(screen.getByRole("button", { name: /close card details/i }));
 
-    await userEvent.click(await screen.findByRole("button", { name: /close card details/i }));
-
-    expect(onClose).toHaveBeenCalled();
+    // The close button is about to unmount with the caret on it, which drops focus to
+    // `<body>` exactly as Escape would — so it owes the same hand-back.
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
   });
 
   /**

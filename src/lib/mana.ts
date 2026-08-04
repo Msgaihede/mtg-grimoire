@@ -61,8 +61,11 @@ export const MANA_COST_GLYPHS: ReadonlySet<string> = new Set([
   ...tokens("wp up bp rp gp"),
   ...tokens("wup ubp brp rgp gwp wbp urp bgp rwp gup"),
   ...tokens("cw cu cb cr cg"),
-  // Not mana, printed in mana's company.
+  // Not mana, printed in mana's company: the tap and untap symbols, the two oddities, and
+  // the four Scryfall emits that no cost contains — planeswalker and chaos on Planechase
+  // cards, the acorn and ticket stamps on Un-set and Unfinity printings.
   ...tokens("tap untap infinity 1-2"),
+  ...tokens("planeswalker chaos acorn tk"),
 ]);
 
 /** A row of the table above. Written as one string so a group stays one line. */
@@ -81,6 +84,9 @@ const GLYPH_ALIAS: Record<string, string> = {
   q: "untap",
   "∞": "infinity",
   "½": "1-2",
+  // `{PW}` and `{A}` are single letters in the data and whole words in the font.
+  pw: "planeswalker",
+  a: "acorn",
 };
 
 /** One piece of a printed string: a symbol the font can draw, or the prose around it. */

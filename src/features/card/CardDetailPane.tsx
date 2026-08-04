@@ -106,7 +106,14 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key !== "Escape") return;
+      // One layer per Escape. A control open *over* the results — the set filter's
+      // listbox, anything later — consumes the key from the capture phase and marks it;
+      // without this the pane closes underneath it on the same press, and the two focus
+      // hand-backs fight over where the caret lands.
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -139,10 +146,9 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       )}
     >
       <div className="flex items-start gap-2">
-        {/* The pane's title, and the one place Cinzel is allowed below the ribbon: a card's
-            name is the display line of the whole screen, set at the face's 18px floor so
-            it announces the card without competing with the art under it. */}
-        <h2 className="min-w-0 flex-1 font-heading text-lg leading-snug">
+        {/* The card's name is content, not a section header, so it stays in Geist —
+            Cinzel is for view titles and hero copy, and never below 18px. */}
+        <h2 className="min-w-0 flex-1 text-base font-medium">
           {card.data?.name ?? (card.isPending ? "Loading…" : "Card")}
         </h2>
         <button
