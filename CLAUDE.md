@@ -9,6 +9,19 @@ Scryfall as the only external dependency.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 
+## Data & sync (measured against the live Scryfall API, 2026-08-04)
+- Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtgcollection.tracker/data`.
+  **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
+  `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
+  folder to force a clean first-run sync. All three locations are gitignored.
+- A cold sync takes ~45 s (77 MB download + streaming ingest + FTS rebuild) and yields
+  ~116.5 k cards / ~1 050 sets. `mtg.db` is ~880 MB, two thirds of it the `raw` JSON
+  column.
+- The app never closes its SQLite connection, so a `mtg.db-wal` the size of the ingest
+  (~857 MB) outlives the process until something opens and cleanly closes the file.
+- A second launch inside 24 h makes **no network call at all** — the throttle returns
+  before the ETag check and writes nothing, so `last_check_at` does not move.
+
 ## Architecture (read the spec first)
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
 - Research (live-verified facts, incl. Scryfall breaking changes): `docs/superpowers/research/`

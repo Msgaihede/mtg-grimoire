@@ -61,7 +61,7 @@ Later plans build on: `db.rs` (user tables), `scryfall.rs` (images), `search.rs`
 **Interfaces:**
 - Produces: working `npm run tauri dev` / `npm run build`; `src-tauri` crate named `mtg-collection-tracker`; window title "MTG Collection Tracker".
 
-- [ ] **Step 1: Verify prerequisites** (install only what's missing)
+- [x] **Step 1: Verify prerequisites** (install only what's missing)
 
 ```powershell
 node --version    # need >= 20
@@ -72,7 +72,7 @@ rustup component list --installed   # toolchain must be *-msvc
 ```
 If `link.exe` errors appear later: `winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet"`.
 
-- [ ] **Step 2: Scaffold into the existing repo** (create-tauri-app needs an empty dir; scaffold to temp, move up)
+- [x] **Step 2: Scaffold into the existing repo** (create-tauri-app needs an empty dir; scaffold to temp, move up)
 
 ```powershell
 npm create tauri-app@latest tmp-scaffold -- --template react-ts --manager npm --yes
@@ -81,13 +81,13 @@ Remove-Item tmp-scaffold -Recurse -Force
 npm install
 ```
 
-- [ ] **Step 3: Configure identity & pin versions**
+- [x] **Step 3: Configure identity & pin versions**
 
 In `src-tauri/tauri.conf.json`: `productName: "MTG Collection Tracker"`, `identifier: "com.mtgcollection.tracker"`, window `title: "MTG Collection Tracker"`, `width: 1280, height: 800, minWidth: 1024, minHeight: 700`.
 In `src-tauri/Cargo.toml`: package name `mtg-collection-tracker`, `tauri = "2"` (verify lockfile resolves ≥ 2.11).
 In `package.json`: ensure `typescript` is `~6.0.3` (downgrade if template gave 7.x: `npm i -D typescript@~6.0.3`), `react`/`react-dom` `^19`.
 
-- [ ] **Step 4: Replace `.gitignore`**
+- [x] **Step 4: Replace `.gitignore`**
 
 ```gitignore
 node_modules/
@@ -99,7 +99,7 @@ data/
 .DS_Store
 ```
 
-- [ ] **Step 5: Verify it builds**
+- [x] **Step 5: Verify it builds**
 
 ```powershell
 npm run build                                  # tsc + vite build
@@ -107,7 +107,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 ```
 Expected: both succeed. (`npm run tauri dev` opens a window — verify manually if running interactively; CI-style check is build + cargo check.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -A; git commit -m "chore: scaffold Tauri 2 + React 19 + TypeScript app"
@@ -124,7 +124,7 @@ git add -A; git commit -m "chore: scaffold Tauri 2 + React 19 + TypeScript app"
 **Interfaces:**
 - Produces: `npm run lint`, `npm run test:run`, `npm run verify` (build+lint+tests+cargo test); Tailwind v4 + shadcn initialized with Radix; `queryClient` export.
 
-- [ ] **Step 1: Install and wire tooling**
+- [x] **Step 1: Install and wire tooling**
 
 ```powershell
 npm i -D eslint @eslint/js typescript-eslint prettier vitest @vitest/coverage-v8 jsdom @testing-library/react @testing-library/jest-dom @testing-library/user-event
@@ -177,7 +177,7 @@ export default tseslint.config(
 }
 ```
 
-- [ ] **Step 2: Dark theme tokens** — `src/index.css`:
+- [x] **Step 2: Dark theme tokens** — `src/index.css`:
 
 ```css
 @import "tailwindcss";
@@ -194,7 +194,7 @@ export default tseslint.config(
 body { @apply bg-bg text-text antialiased; }
 ```
 
-- [ ] **Step 3: QueryClient** — `src/lib/query.ts`:
+- [x] **Step 3: QueryClient** — `src/lib/query.ts`:
 
 ```ts
 import { QueryClient } from "@tanstack/react-query";
@@ -203,7 +203,7 @@ export const queryClient = new QueryClient({
 });
 ```
 
-- [ ] **Step 4: Write `CLAUDE.md`** (repo root):
+- [x] **Step 4: Write `CLAUDE.md`** (repo root):
 
 ```markdown
 # MTG Collection Tracker
@@ -239,7 +239,7 @@ Scryfall as the only external dependency.
 - Superpowers flow: brainstorm → spec → plan → subagent-driven implementation.
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```powershell
 npm run build; npm run lint; npm run test:run   # test run passes with no test files (or trivial placeholder passes)
@@ -257,7 +257,7 @@ git add -A; git commit -m "chore: tooling (eslint, vitest, tailwind v4, shadcn/r
 **Interfaces:**
 - Produces: `db::open(path: &Path) -> rusqlite::Result<Connection>` (WAL, synchronous=NORMAL, foreign_keys on); `paths::resolve_data_dir(exe_dir: &Path, appdata_dir: &Path) -> PathBuf` (writability probe).
 
-- [ ] **Step 1: Add dependencies** to `src-tauri/Cargo.toml`:
+- [x] **Step 1: Add dependencies** to `src-tauri/Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -267,7 +267,7 @@ serde_json = "1"
 thiserror = "2"
 ```
 
-- [ ] **Step 2: Write the failing FTS5 spike test** (in `src-tauri/src/db.rs`):
+- [x] **Step 2: Write the failing FTS5 spike test** (in `src-tauri/src/db.rs`):
 
 ```rust
 use rusqlite::Connection;
@@ -309,7 +309,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run** `cargo test --manifest-path src-tauri/Cargo.toml`
+- [x] **Step 3: Run** `cargo test --manifest-path src-tauri/Cargo.toml`
 Expected: PASS if the bundled amalgamation includes FTS5. **If `no such module: fts5`:** set FTS5 compile flags — add to `src-tauri/.cargo/config.toml`:
 ```toml
 [env]
@@ -317,7 +317,7 @@ LIBSQLITE3_FLAGS = "-DSQLITE_ENABLE_FTS5"
 ```
 then `cargo clean -p libsqlite3-sys` and re-run. (Check libsqlite3-sys docs for a `bundled-full`/fts5 feature as an alternative.) This MUST pass before proceeding — it's spec risk #1.
 
-- [ ] **Step 4: Portable data dir** — `src-tauri/src/paths.rs`:
+- [x] **Step 4: Portable data dir** — `src-tauri/src/paths.rs`:
 
 ```rust
 use std::fs;
@@ -359,9 +359,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 5: Register modules** in `src-tauri/src/lib.rs` (`mod db; mod paths;`), run `cargo test` again → all PASS.
+- [x] **Step 5: Register modules** in `src-tauri/src/lib.rs` (`mod db; mod paths;`), run `cargo test` again → all PASS.
 
-- [ ] **Step 6: Commit** — `git add -A; git commit -m "feat: SQLite module with verified FTS5 + portable data dir resolution"`
+- [x] **Step 6: Commit** — `git add -A; git commit -m "feat: SQLite module with verified FTS5 + portable data dir resolution"`
 
 ---
 
@@ -375,7 +375,7 @@ mod tests {
 - Consumes: `db::open`.
 - Produces: `schema::migrate(conn: &Connection) -> rusqlite::Result<()>` (idempotent, `PRAGMA user_version`); `schema::create_staging(conn) -> Result<()>` (fresh `cards_staging` clone); `schema::swap_staging(conn) -> Result<()>` (staging→cards, rebuilds `cards_fts`); tables `cards`, `sets`, `sync_meta(key TEXT PK, value TEXT)`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[test]
@@ -405,7 +405,7 @@ fn staging_swap_replaces_cards_and_fts_finds_new_rows() {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** (`migrate` undefined), then implement:
+- [x] **Step 2: Run to verify failure** (`migrate` undefined), then implement:
 
 ```rust
 use rusqlite::Connection;
@@ -503,7 +503,7 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
 ```
 Note: `search_text` is the FTS haystack (oracle text + all face names/text concatenated by ingest). FTS is dropped/recreated on swap — deterministic, avoids external-content rowid drift.
 
-- [ ] **Step 3: Run tests** → PASS. **Step 4: Commit** `feat: cards/sets/sync_meta schema with staging swap + FTS5 rebuild`
+- [x] **Step 3: Run tests** → PASS. **Step 4: Commit** `feat: cards/sets/sync_meta schema with staging swap + FTS5 rebuild`
 
 ---
 
@@ -524,7 +524,7 @@ impl CardRow {
 ```
 Field types: `id/name/lang/set_code/collector_number/layout: String`; `oracle_id/set_name/released_at/rarity/mana_cost/type_line/oracle_text/colors/color_identity/border_color/illustration_id/image_status/image_updated_at: Option<String>`; `cmc/price_usd/price_eur: Option<f64>`; `legalities/games/finishes/prices/faces/frame_effects/promo_types: Option<String>` (compact JSON re-serialization); `full_art/promo/digital/is_paper/game_changer: bool`; `edhrec_rank: Option<i64>`; `search_text: String`.
 
-- [ ] **Step 1: Write failing tests** (in `card_row.rs`; fixtures shared with Task 6):
+- [x] **Step 1: Write failing tests** (in `card_row.rs`; fixtures shared with Task 6):
 
 ```rust
 #[cfg(test)]
@@ -574,7 +574,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run → fail. Step 3: Implement:**
+- [x] **Step 2: Run → fail. Step 3: Implement:**
 
 ```rust
 use serde_json::Value;
@@ -659,8 +659,8 @@ impl CardRow {
 }
 ```
 
-- [ ] **Step 4: Run tests → PASS.** Also create `src-tauri/tests/fixtures/cards_sample.jsonl` with the 10 fixture lines (reuse the JSON from the tests plus meld/split/art_series/etched-only variants — one object per line, real Scryfall field shapes).
-- [ ] **Step 5: Commit** `feat: CardRow JSONL parsing covering all Scryfall layout gotchas`
+- [x] **Step 4: Run tests → PASS.** Also create `src-tauri/tests/fixtures/cards_sample.jsonl` with the 10 fixture lines (reuse the JSON from the tests plus meld/split/art_series/etched-only variants — one object per line, real Scryfall field shapes).
+- [x] **Step 5: Commit** `feat: CardRow JSONL parsing covering all Scryfall layout gotchas`
 
 ---
 
@@ -680,9 +680,12 @@ pub struct IngestStats { pub inserted: u64, pub skipped: u64 }
 pub fn ingest_gz(conn: &mut Connection, gz_path: &Path,
                  progress: &mut dyn FnMut(u64)) -> Result<IngestStats, IngestError>;
 ```
-`IngestError` (thiserror): `Io(std::io::Error)`, `Db(rusqlite::Error)`.
+`IngestError` (thiserror): `Io(std::io::Error)`, `Db(rusqlite::Error)`, `Empty { skipped: u64 }`
+— the file decoded but held no card rows (a gzipped error page, the wrong bulk variant, a
+truncated download), which must abort *before* the swap rather than replace `cards` with an
+empty table.
 
-- [ ] **Step 1: Write failing test** (build a gz fixture in the test):
+- [x] **Step 1: Write failing test** (build a gz fixture in the test):
 
 ```rust
 #[cfg(test)]
@@ -730,7 +733,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run → fail. Step 3: Implement:**
+- [x] **Step 2: Run → fail. Step 3: Implement:**
 
 ```rust
 use crate::{card_row::CardRow, schema};
@@ -783,7 +786,7 @@ pub fn ingest_gz(conn: &mut Connection, gz_path: &Path,
 ```
 (Single transaction for the whole staging load is correct here — staging is invisible until swap; a crash rolls back cleanly.)
 
-- [ ] **Step 4: Run tests → PASS. Step 5: Commit** `feat: streaming gz JSONL ingest with staging swap`
+- [x] **Step 4: Run tests → PASS. Step 5: Commit** `feat: streaming gz JSONL ingest with staging swap`
 
 ---
 
@@ -824,7 +827,7 @@ pub struct SetRow { pub code: String, pub name: String, pub arena_code: Option<S
 ```
 `ScryfallError` (thiserror): `Http(reqwest::Error)`, `Io(std::io::Error)`, `SizeMismatch { expected: u64, actual: u64 }`, `RateLimited`, `Unexpected(String)`.
 
-- [ ] **Step 1: Write failing httpmock tests:**
+- [x] **Step 1: Write failing httpmock tests:**
 
 ```rust
 #[cfg(test)]
@@ -916,7 +919,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run → fail. Step 3: Implement** (key parts):
+- [x] **Step 2: Run → fail. Step 3: Implement** (key parts):
 
 ```rust
 impl Client {
@@ -1009,7 +1012,7 @@ impl Client {
 }
 ```
 
-- [ ] **Step 4: Run tests → PASS. Step 5: Commit** `feat: Scryfall client with ETag checks, resumable downloads, sets pagination`
+- [x] **Step 4: Run tests → PASS. Step 5: Commit** `feat: Scryfall client with ETag checks, resumable downloads, sets pagination`
 
 ---
 
@@ -1029,7 +1032,7 @@ impl Client {
   - `AppState { db: Mutex<Connection>, data_dir: PathBuf, syncing: AtomicBool, client: scryfall::Client }` managed by Tauri.
 - 24 h throttle: skip check when `force == false` and `last_check_at` is < 24 h old (RFC3339 compare using `std::time::SystemTime` serialized as unix seconds — store `last_check_at` as unix seconds string).
 
-- [ ] **Step 1: Write failing tests** for the pure parts (throttle + meta):
+- [x] **Step 1: Write failing tests** for the pure parts (throttle + meta):
 
 ```rust
 #[test]
@@ -1051,7 +1054,7 @@ fn throttle_skips_recent_check() {
 }
 ```
 
-- [ ] **Step 2: Implement** `should_check(last: Option<u64>, now: u64, force: bool) -> bool` (`force || last.map_or(true, |l| now - l >= 86_400)`), meta helpers (`INSERT ... ON CONFLICT(key) DO UPDATE`), and the orchestrator:
+- [x] **Step 2: Implement** `should_check(last: Option<u64>, now: u64, force: bool) -> bool` (`force || last.map_or(true, |l| now - l >= 86_400)`), meta helpers (`INSERT ... ON CONFLICT(key) DO UPDATE`), and the orchestrator:
 
 ```rust
 pub async fn run_sync(state: Arc<AppState>, app: tauri::AppHandle, force: bool)
@@ -1115,7 +1118,7 @@ fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> sync::SyncStatus { /* 
 ```
 Setup in `lib.rs::run()`: resolve data dir (`std::env::current_exe()` parent + `app.path().app_data_dir()`), `db::open(data_dir.join("mtg.db"))`, `schema::migrate`, manage `Arc<AppState>`, and `tauri::async_runtime::spawn(run_sync(state, handle, false))` after setup. Register `generate_handler![sync_run, sync_status, search_cards]` (search_cards arrives in Task 9 — add it then).
 
-- [ ] **Step 3: Run `cargo test` → PASS (pure parts) and `cargo check` → clean. Step 4: Commit** `feat: sync orchestrator with 24h throttle, progress events, startup hook`
+- [x] **Step 3: Run `cargo test` → PASS (pure parts) and `cargo check` → clean. Step 4: Commit** `feat: sync orchestrator with 24h throttle, progress events, startup hook`
 
 ---
 
@@ -1152,7 +1155,7 @@ pub struct SearchResponse { pub items: Vec<CardSummary>, pub total: i64 }
     -> Result<SearchResponse, String>;
 ```
 
-- [ ] **Step 1: Write failing tests** against a seeded in-memory DB (pure fn `run_search(conn, &req)` that the command wraps):
+- [x] **Step 1: Write failing tests** against a seeded in-memory DB (pure fn `run_search(conn, &req)` that the command wraps):
 
 ```rust
 #[cfg(test)]
@@ -1219,7 +1222,7 @@ mod tests {
 ```
 (`SearchRequest` derives `Default` for tests: `limit: 0` clamps to 50.)
 
-- [ ] **Step 2: Run → fail. Step 3: Implement** `run_search`:
+- [x] **Step 2: Run → fail. Step 3: Implement** `run_search`:
 
 ```rust
 pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchResponse, String> {
@@ -1289,7 +1292,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 ```
 Register `search_cards` in `generate_handler!`. (Window-function `count(*) OVER ()` avoids a second query; `NULLS LAST` is supported in SQLite ≥3.30.)
 
-- [ ] **Step 4: Run tests → PASS. Step 5: Commit** `feat: card search command (FTS prefix, format/color/set filters)`
+- [x] **Step 4: Run tests → PASS. Step 5: Commit** `feat: card search command (FTS prefix, format/color/set filters)`
 
 ---
 
@@ -1337,7 +1340,7 @@ export const ipc = {
 };
 ```
 
-- [ ] **Step 1: Write failing AppShell test:**
+- [x] **Step 1: Write failing AppShell test:**
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -1363,9 +1366,9 @@ describe("AppShell", () => {
 });
 ```
 
-- [ ] **Step 2: Run → fail. Step 3: Implement** `AppShell` (left sidebar: Search / Collection / Wishlist / Decks / Settings as nav items — non-Search items render "coming in a later plan" placeholders; header: app title, Refresh button calling `ipc.syncRun(true)` disabled while syncing, subtle status line "116,568 cards · data from 2026-08-03" from `syncStatus`), `SyncProgress` (subscribes `onSyncProgress`; renders a slim progress bar + phase label; full-screen variant when `cardCount === 0` — first run), wire in `App.tsx` with `QueryClientProvider` + a `zustand` store for `activeView`.
+- [x] **Step 2: Run → fail. Step 3: Implement** `AppShell` (left sidebar: Search / Collection / Wishlist / Decks / Settings as nav items — non-Search items render "coming in a later plan" placeholders; header: app title, Refresh button calling `ipc.syncRun(true)` disabled while syncing, subtle status line "116,568 cards · data from 2026-08-03" from `syncStatus`), `SyncProgress` (subscribes `onSyncProgress`; renders a slim progress bar + phase label; full-screen variant when `cardCount === 0` — first run), wire in `App.tsx` with `QueryClientProvider` + a `zustand` store for `activeView`.
 
-- [ ] **Step 4: Run `npm run test:run` → PASS; `npm run build` clean. Step 5: Commit** `feat: typed IPC layer, app shell with nav + refresh, sync progress UI`
+- [x] **Step 4: Run `npm run test:run` → PASS; `npm run build` clean. Step 5: Commit** `feat: typed IPC layer, app shell with nav + refresh, sync progress UI`
 
 ---
 
@@ -1380,7 +1383,7 @@ describe("AppShell", () => {
 - Consumes: `ipc.searchCards`, `CardSummary`.
 - Produces: `<SearchPage />` — search input (300 ms debounce), format `<select>` (Standard/Pioneer/Modern/Legacy/Vintage/Pauper/Commander — values are Scryfall keys), five color toggle buttons + C, virtualized result table rows (name, set+CN, type, rarity, USD price right-aligned) via `useInfiniteQuery` (pageParam = offset, 50/page) + `useVirtualizer`.
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
 
 ```tsx
 import { render, screen, waitFor } from "@testing-library/react";
@@ -1422,9 +1425,9 @@ describe("SearchPage", () => {
 ```
 (jsdom has no layout — mock `Element.prototype.getBoundingClientRect` in test-setup if the virtualizer renders zero rows; assert on data presence, not row virtualization mechanics.)
 
-- [ ] **Step 2: Run → fail. Step 3: Implement** SearchPage: `useState` for text/format/colors, `useDeferredValue`-style debounce via `useEffect` + `setTimeout(300)` into `debouncedText`, `useInfiniteQuery({ queryKey: ["search", debouncedText, format, colors], queryFn: ({ pageParam }) => ipc.searchCards({ text: debouncedText || undefined, format, colors, limit: 50, offset: pageParam }), initialPageParam: 0, getNextPageParam: (last, all) => { const seen = all.reduce((n, p) => n + p.items.length, 0); return seen < last.total ? seen : undefined; } })`, flatten pages, `useVirtualizer({ count: rows.length, estimateSize: () => 44 })` over a `ref` scroll container, `onScroll` fetches next page at 80%. Show `total` count above results; empty state when DB is empty points at sync status.
+- [x] **Step 2: Run → fail. Step 3: Implement** SearchPage: `useState` for text/format/colors, `useDeferredValue`-style debounce via `useEffect` + `setTimeout(300)` into `debouncedText`, `useInfiniteQuery({ queryKey: ["search", debouncedText, format, colors], queryFn: ({ pageParam }) => ipc.searchCards({ text: debouncedText || undefined, format, colors, limit: 50, offset: pageParam }), initialPageParam: 0, getNextPageParam: (last, all) => { const seen = all.reduce((n, p) => n + p.items.length, 0); return seen < last.total ? seen : undefined; } })`, flatten pages, `useVirtualizer({ count: rows.length, estimateSize: () => 44 })` over a `ref` scroll container, `onScroll` fetches next page at 80%. Show `total` count above results; empty state when DB is empty points at sync status.
 
-- [ ] **Step 4: Run `npm run test:run` → PASS. Step 5: Commit** `feat: search page with debounced FTS search and virtualized results`
+- [x] **Step 4: Run `npm run test:run` → PASS. Step 5: Commit** `feat: search page with debounced FTS search and virtualized results`
 
 ---
 
@@ -1433,9 +1436,33 @@ describe("SearchPage", () => {
 **Files:**
 - Modify: `CLAUDE.md` (any command corrections discovered), plan checkboxes
 
-- [ ] **Step 1:** `npm run verify` — all four stages green. Fix anything that isn't.
-- [ ] **Step 2: Manual smoke** (requires interactive run): `npm run tauri dev` — expect: window opens; first-run screen appears; real download (~77 MB) + ingest completes in under ~2 min; search "lightning bolt" returns results with prices; Refresh button reports up-to-date. Record actual ingest duration in the commit message (spec risk #6 benchmark).
-- [ ] **Step 3:** Check off all boxes in this plan file, commit `chore: complete plan 1 (foundation & card database)`.
+- [x] **Step 1:** `npm run verify` — all four stages green. Fix anything that isn't.
+- [x] **Step 2: Manual smoke** (requires interactive run): `npm run tauri dev` — expect: window opens; first-run screen appears; real download (~77 MB) + ingest completes in under ~2 min; search "lightning bolt" returns results with prices; Refresh button reports up-to-date. Record actual ingest duration in the commit message (spec risk #6 benchmark).
+- [x] **Step 3:** Check off all boxes in this plan file, commit `chore: complete plan 1 (foundation & card database)`.
+
+**Smoke result (2026-08-04, live Scryfall API — spec risk #6 benchmark):**
+Run headlessly by an agent rather than by hand, so the UI half was verified through the
+production code paths and the process/database state, not by clicking.
+
+| | |
+|---|---|
+| Data dir | `src-tauri/target/debug/data/` — `<exe dir>/data`, and under `tauri dev` the exe is in `target/debug` |
+| Launch → window | ~22 s (16 s of it incremental `cargo` build; the window does not wait on the network) |
+| Check + download + ingest | **44 s** (77.4 MB gz), well inside the ~2 min budget |
+| Result | 116 568 cards, 1 047 sets, 116 568 FTS rows, 97 924 priced |
+| `mtg.db` | 880 MB (622 MB of it the `raw` column) + an ~857 MB `-wal` |
+| `sync_meta` | `bulk_etag`, `bulk_updated_at`, `card_count`, `last_check_at`, `last_ingest_at` all present; no `last_error` |
+| Second launch (<24 h) | No network call, no write: `tmp/` empty, `mtg.db` mtime unchanged, `-wal` 0 bytes, `last_check_at` unmoved |
+
+FTS via `run_search` on the real 116 k-row corpus (release / debug warm):
+`lightning bol` 72 hits **0.4 / 0.8 ms** · `seance`→Séance 4 hits **0.1 / 0.2 ms** ·
+`jotun`→Jötun Grunt 6 hits **0.1 / 0.2 ms** · `ajani's` and `ajani s` both 95 hits
+**17 / 29 ms** (identical, confirming the split) · single char `a` 91 627 hits
+**388 / 488 ms**.
+
+The short-token cost that was ledgered is real and now measured: a 1-character token is
+~1000× a normal query. The driver is breadth, not the prefix expansion alone — `count(*)
+OVER ()` is evaluated over all 91 k matched rows to fill `total`.
 
 ---
 
