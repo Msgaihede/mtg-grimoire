@@ -23,6 +23,14 @@ Scryfall as the only external dependency.
 - A second launch inside 24 h makes **no network call at all** — the throttle returns
   before the ETag check and writes nothing, so `last_check_at` does not move.
 
+## Frontend design (binding)
+- **All frontend work follows the `frontend-design` skill** (invoke it before UI tasks) and the
+  visual direction doc: `docs/superpowers/specs/2026-08-04-visual-design-direction.md`.
+  Implementers execute that direction (palette, type, mana line, filter chips) — they do not
+  invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
+  never a CDN.
+- Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+
 ## Architecture (read the spec first)
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
 - Research (live-verified facts, incl. Scryfall breaking changes): `docs/superpowers/research/`
