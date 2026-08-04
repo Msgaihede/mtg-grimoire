@@ -116,10 +116,12 @@ pub fn run() {
 
 /// How long the exit handler will wait for the write connection.
 ///
-/// Quitting mid-ingest is the case this bounds: the sync holds the lock for up to ~44 s,
-/// and a window-less process sitting on a lock is a process the user believes has already
-/// quit. Five seconds covers every ordinary contention (a search, a status poll) and
-/// gives up on the one that would be visible.
+/// Nothing short-lived contends for `db` any more: searches and status polls read through
+/// `db_read`, and the image cache's bookkeeping asks with a zero timeout it is content to
+/// lose. What is left is the sync, which holds the connection for the whole of a ~44 s
+/// ingest — so in practice this wait is either instant or longer than anyone will stand
+/// for, and five seconds is simply where it stops trying. A window-less process still
+/// sitting on a lock is a process the user believes has already quit.
 const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Fold the write-ahead log back into `mtg.db` on the way out.

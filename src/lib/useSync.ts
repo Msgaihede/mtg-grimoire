@@ -12,16 +12,17 @@ export const UP_TO_DATE_MS = 5_000;
  * Fold a fresh poll into what the UI already knows.
  *
  * Since `sync::status` reads through the read-only connection this is no longer a
- * once-a-day event — mid-sync polls now carry real numbers. It stays because the fields
- * are still nullable and a read can still fail (a poisoned lock, a file that moved), and
- * a `null` there means "not readable right now", not "zero" and not "cleared": rendering
- * it literally would blank the card count and throw away an error banner the user has
- * not read yet.
+ * once-a-day event — mid-sync polls now carry real numbers. It stays for the case the
+ * nullable fields exist for: the database going away underneath a running app, which for
+ * something that runs off a USB stick is a Tuesday. A `null` there means "not readable
+ * right now", not "zero" and not "cleared": rendering it literally would blank the card
+ * count and throw away an error banner the user has not read yet.
  *
- * `cardCount` is the discriminator: `status()` fills it in for *every* poll that read the
- * database (a failed count reads as 0, never as `None`), so a non-null count means the
- * whole group was read and its nulls are real — including a `lastError` the last run
- * cleared, which must be allowed to land.
+ * `cardCount` is the discriminator: `status()` fills it in for every poll whose count
+ * query ran at all — an empty database is a real `0` — so a non-null count means the
+ * whole group was read and its nulls are real, including a `lastError` the last run
+ * cleared, which must be allowed to land. `null` is the count that could not run, which
+ * `sync.rs`'s `a_count_that_cannot_be_read_is_none_and_never_zero` pins on the other side.
  */
 export function mergeStatus(prev: SyncStatus | null, next: SyncStatus): SyncStatus {
   if (next.cardCount !== null) return next;

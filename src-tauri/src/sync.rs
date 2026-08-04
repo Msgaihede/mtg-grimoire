@@ -318,8 +318,9 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 
 /// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.
 ///
-/// A different mutex from `db`, which is the point: this one is only ever held for the
-/// length of one query, so waiting for it is bounded no matter what the writer is doing.
+/// A different mutex from `db`, which is the point: this one is only ever held for a short
+/// run of queries — one search, or the five reads [`status`] makes — and never across an
+/// `.await`, so waiting for it is bounded no matter what the writer is doing.
 pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
     lock_conn(&state.db_read)
 }
@@ -638,15 +639,24 @@ async fn do_sync(
 /// reports the pre-swap figures — which are true, and are what the user is still looking
 /// at in the results list.
 ///
-/// The fields stay `Option` regardless: a read can still fail (a poisoned lock, a file
-/// that has gone away), and `None` there means "not readable right now", never "zero".
+/// The fields stay `Option` regardless, because the read can still fail outright — this
+/// app runs from a USB stick, and the database going away underneath it is the case they
+/// are `Option` *for*. `None` means "not readable right now", never "zero".
 ///
 /// `card_count` is counted live rather than read from `sync_meta`, so it is right even if
-/// a previous run died before writing its meta.
+/// a previous run died before writing its meta — and it is counted *here* rather than
+/// through [`count_cards`], whose `unwrap_or(0)` is right for its own callers (an empty
+/// database must download) and wrong for this one. `Some(0)` is not the smaller lie: `0`
+/// is what the UI renders as "no card data yet", so a failed count would put a first-run
+/// overlay over a running app and throw away the figures it already had. `None` is what
+/// the frontend's `mergeStatus` keys off to keep them; the test
+/// `a_count_that_cannot_be_read_is_none_and_never_zero` pins this side of that contract.
 pub fn status(state: &AppState) -> SyncStatus {
     let conn = lock_db_read(state);
     SyncStatus {
-        card_count: Some(count_cards(&conn)),
+        card_count: conn
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .ok(),
         last_check_at: get_meta(&conn, K_LAST_CHECK_AT),
         bulk_updated_at: get_meta(&conn, K_BULK_UPDATED_AT),
         last_error: get_meta(&conn, K_LAST_ERROR),
@@ -897,6 +907,40 @@ mod tests {
         assert_eq!(busy.last_check_at.as_deref(), Some("1800000000"));
         assert_eq!(busy.last_error.as_deref(), Some("rate limited by Scryfall"));
         assert_eq!(busy.last_ingest_skipped, Some(12));
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the `Option`, and the case the whole nullable DTO exists for: a
+    /// status read that genuinely cannot count answers `None`, never `Some(0)`.
+    ///
+    /// This is a USB-stick app, so "the database went away underneath us" is a Tuesday.
+    /// `Some(0)` there is not a smaller lie than a wrong number: `0` is the value the UI
+    /// reads as "no card data yet", and it takes the whole screen with a first-run overlay
+    /// over a running app. `None` is what `mergeStatus` keys off to keep the figures it
+    /// already had, so this test is the backend half of that contract.
+    #[test]
+    fn a_count_that_cannot_be_read_is_none_and_never_zero() {
+        let (state, dir) = file_state("unreadable", false);
+        {
+            // Stands in for the volume disappearing: the table the count needs is gone,
+            // which is what the read connection then reports. (Deleting the file itself
+            // is not available as a test — Windows will not unlink an open one.)
+            let conn = lock_db(&state);
+            conn.execute_batch("DROP TABLE cards_fts; DROP TABLE cards;")
+                .unwrap();
+        }
+
+        let broken = status(&state);
+
+        assert_eq!(
+            broken.card_count, None,
+            "an unreadable count must not be reported as an empty collection"
+        );
+        // The two that never needed the database still answer, as they always did.
+        assert!(!broken.syncing);
+        assert_eq!(broken.data_dir, "D:\\app\\data");
 
         drop(state);
         let _ = std::fs::remove_dir_all(&dir);
