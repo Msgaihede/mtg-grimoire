@@ -121,11 +121,30 @@ pub struct SyncStatus {
     pub syncing: bool,
 }
 
+/// Every value [`Progress::phase`] takes, in the order a run that does all of them
+/// produces them.
+///
+/// Mirrored by hand on the other side of the IPC boundary — `SyncPhase` in
+/// `src/lib/ipc.ts`, and `PHASE_LABEL` in `src/lib/useSyncProgress.ts`, which must have an
+/// entry for each or the mana line renders `undefined`. Pinned here by
+/// `the_progress_phases_are_the_ones_the_frontend_mirrors` and there by
+/// `useSyncProgress.test.ts`.
+pub const PHASES: [&str; 8] = [
+    "checking",
+    "downloading",
+    "ingesting",
+    "reclaiming",
+    "sets",
+    "compacting",
+    "done",
+    "error",
+];
+
 /// Payload of the `sync:progress` event.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    /// `checking` | `downloading` | `ingesting` | `sets` | `compacting` | `done` | `error`.
+    /// One of [`PHASES`].
     pub phase: String,
     pub done: u64,
     pub total: u64,
@@ -499,6 +518,39 @@ async fn finish_unchanged(
 /// A failure is recorded and never retried automatically: `VACUUM` needs free space about
 /// the size of the database, so the common failure is a disk that will still be full
 /// tomorrow. Plan 6's "Compact database" control is what clears the key and asks again.
+/// Give the pages the swap just freed back to the filesystem, on the `reclaiming` phase.
+///
+/// The swap has dropped an entire copy of `cards`, and returning it is the difference
+/// between a file that plateaus and one that grows by ~1 GB per refresh. Measured at 8.4 s
+/// for 1.02 GB, so it gets a phase of its own rather than passing for a stalled `ingesting`
+/// — and, uniquely among the phases, a real fraction: the freelist is counted once at entry
+/// and only falls.
+///
+/// On a blocking thread, and taking the write connection one chunk at a time, for the same
+/// reason the ingest does both: this is seconds of synchronous SQLite work, and a user
+/// action that wants the connection must not be made to wait for all of it. See
+/// [`crate::maintenance::reclaim_freed_pages`].
+///
+/// A failure is logged and nothing more. The cards are ingested and swapped in either way,
+/// and a database whose freelist did not shrink is a database that works.
+async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
+    let joined = {
+        let state = state.clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::maintenance::reclaim_freed_pages(&state.db, &mut |done, total| {
+                emit(&app, "reclaiming", done.max(0) as u64, total.max(0) as u64)
+            })
+        })
+        .await
+    };
+    match joined {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("could not return freed pages after the swap: {e}"),
+        Err(e) => eprintln!("the page-return task failed: {e}"),
+    }
+}
+
 /// Asked of the **write** connection, not `db_read`, and that is the difference between
 /// "once, ever" and "once per sync". `PRAGMA auto_vacuum` is answered from a per-connection
 /// cache of the file header, and a connection refreshes it only when a read transaction
@@ -507,18 +559,28 @@ async fn finish_unchanged(
 /// the session. The connection that ran the `VACUUM` is the one that knows. Pinned by
 /// `maintenance::tests::a_read_only_handle_reports_a_stale_auto_vacuum_after_a_conversion`.
 async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
-    let due = {
+    let (convert, rebuild) = {
         let conn = lock_db(state);
-        crate::maintenance::needs_conversion(&conn)
-            && get_meta(&conn, crate::maintenance::K_AUTO_VACUUM_ERROR).is_none()
+        (
+            crate::maintenance::needs_conversion(&conn)
+                && get_meta(&conn, crate::maintenance::K_AUTO_VACUUM_ERROR).is_none(),
+            // A launch normally pays this off first, so reaching it here means the kill
+            // happened during *this* session — or that the launch's own rebuild failed.
+            crate::maintenance::fts_rebuild_is_pending(&conn),
+        )
     };
-    if !due {
+    if !convert && !rebuild {
         return;
     }
     emit(app, "compacting", 0, 0);
     let state = state.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_db(&state);
+        if !convert {
+            // Nothing to convert, only a rebuild owing: paying that off is not a
+            // conversion attempt and must not be recorded as one.
+            return crate::maintenance::rebuild_fts_if_pending(&conn).map(|_| ());
+        }
         let result = crate::maintenance::convert_to_incremental(&conn);
         if let Err(e) = &result {
             let _ = set_meta(
@@ -655,18 +717,7 @@ async fn do_sync(
     };
     let _ = std::fs::remove_file(&gz);
 
-    {
-        // The swap has just freed an entire copy of `cards`, and returning those pages is
-        // the difference between a file that plateaus and one that grows by ~1 GB per
-        // refresh. Measured at 12.1 s for 1.02 GB on the live database — page movement, so
-        // it costs what it hands back — with the write connection held throughout. That is
-        // affordable *here* and nowhere else: the user has already been told a sync is
-        // running, and the swap that just ran held the same lock.
-        let conn = lock_db(state);
-        if let Err(e) = crate::maintenance::incremental_vacuum(&conn) {
-            eprintln!("could not return freed pages after the swap: {e}");
-        }
-    }
+    reclaim_freed_pages(state, app).await;
 
     let card_count = stats.inserted as i64;
     {
@@ -1132,6 +1183,32 @@ mod tests {
             failed,
             serde_json::json!({"phase":"error","done":0,"total":0,"message":"boom"})
         );
+    }
+
+    /// The phase strings are a hand-mirrored union, exactly as the DTO field names are, and
+    /// they fail the same way: a phase the frontend has never heard of has no
+    /// `PHASE_LABEL` entry, so the mana line renders `undefined` while the sync runs
+    /// perfectly. This is the Rust half; `useSyncProgress.test.ts` pins the other.
+    #[test]
+    fn the_progress_phases_are_the_ones_the_frontend_mirrors() {
+        assert_eq!(
+            PHASES,
+            [
+                "checking",
+                "downloading",
+                "ingesting",
+                "reclaiming",
+                "sets",
+                "compacting",
+                "done",
+                "error"
+            ]
+        );
+        // And each really is what goes on the wire.
+        for phase in PHASES {
+            let json = serde_json::to_value(Progress::new(phase, 0, 0)).unwrap();
+            assert_eq!(json["phase"], phase);
+        }
     }
 
     /// Spec §8: parse failures are "logged and skipped with a count surfaced (not silently

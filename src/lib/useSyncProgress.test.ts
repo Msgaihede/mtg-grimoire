@@ -9,7 +9,28 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { onSyncProgress, syncStatus: vi.fn(), syncRun: vi.fn(), searchCards: vi.fn() },
 }));
 
-import { useSyncProgress } from "./useSyncProgress";
+import { PHASE_LABEL, useSyncProgress } from "./useSyncProgress";
+
+/**
+ * The phase strings are a hand-mirrored union of `sync::PHASES` in `src-tauri/src/sync.rs`,
+ * and a phase Rust emits that is missing here has no label — the mana line renders
+ * `undefined` while the sync runs perfectly, so nothing fails except what the user reads.
+ * The Rust half is pinned by `the_progress_phases_are_the_ones_the_frontend_mirrors`; this
+ * is the other half, and the two lists are meant to be compared by eye when either moves.
+ */
+it("labels every phase the backend can emit", () => {
+  expect(Object.keys(PHASE_LABEL)).toEqual([
+    "checking",
+    "downloading",
+    "ingesting",
+    "reclaiming",
+    "sets",
+    "compacting",
+    "done",
+    "error",
+  ]);
+  expect(Object.values(PHASE_LABEL).every((label) => label.length > 0)).toBe(true);
+});
 
 /** Pushes one `sync:progress` event through the listener the hook registered. */
 let emit: (e: SyncProgressEvent) => void;

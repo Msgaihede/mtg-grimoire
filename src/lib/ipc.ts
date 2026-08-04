@@ -224,6 +224,7 @@ export type SyncPhase =
   | "checking"
   | "downloading"
   | "ingesting"
+  | "reclaiming"
   | "sets"
   | "compacting"
   | "done"

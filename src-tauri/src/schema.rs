@@ -254,7 +254,15 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Everything a freshly opened database needs before the app touches it: the schema is
-/// brought to head, and any `cards_staging` an interrupted ingest left behind is dropped.
+/// brought to head, a search index an interrupted compaction owes is rebuilt, and any
+/// `cards_staging` an interrupted ingest left behind is dropped.
+///
+/// The rebuild is second because it is the one that cannot wait for a sync. A compaction
+/// killed between its `VACUUM` and its `create_fts` leaves a database whose header says it
+/// is converted and whose index answers with the wrong cards; nothing else would notice,
+/// because the sync that rebuilds the index is the one that ingests and most syncs get a
+/// 304. See [`crate::maintenance::K_FTS_REBUILD_PENDING`]. It costs a `PRAGMA user_version`
+/// read and one `sync_meta` lookup on every launch that does not need it.
 ///
 /// The drop is not tidiness. The ingest commits its staging load a batch at a time, so a
 /// sync that is killed partway — a closed lid, a pulled stick, a crash — leaves a
@@ -278,6 +286,7 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     migrate(conn)?;
+    crate::maintenance::rebuild_fts_if_pending(conn)?;
     conn.execute_batch("DROP TABLE IF EXISTS cards_staging")
 }
 
