@@ -5,6 +5,7 @@ import { ManaText } from "@/components/ManaText";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import { rarityColor } from "@/lib/rarity";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import {
   faceCount,
@@ -104,20 +105,11 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     if (opener?.isConnected) opener.focus();
   }, [onClose]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // One layer per Escape. A control open *over* the results — the set filter's
-      // listbox, anything later — consumes the key from the capture phase and marks it;
-      // without this the pane closes underneath it on the same press, and the two focus
-      // hand-backs fight over where the caret lands.
-      if (e.defaultPrevented) return;
-      e.preventDefault();
-      close();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [close]);
+  // The outer layer: bubble phase, and it yields to any control open over the results —
+  // the set filter's listbox, anything later — that consumed the press from the capture
+  // phase. Without that the pane closes underneath such a control on the same press, and
+  // the two focus hand-backs fight over where the caret lands. See `useDismissOnEscape`.
+  useDismissOnEscape({ layer: "outer", onDismiss: close });
 
   const card = useQuery({
     queryKey: ["card", cardId],

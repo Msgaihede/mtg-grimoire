@@ -289,6 +289,52 @@ describe("SearchPage", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 
+  /**
+   * The table and the art grid show the same five facts about the same printing, so they
+   * are held to one presentation: data in the mono face, and a rarity as a gem dot beside
+   * a tinted word rather than as a fifth column of grey prose. The direction spends its
+   * colour budget on mana and card art, which is why a rarity gets 6px and a tint and
+   * never a filled badge.
+   */
+  it("prints the data columns in the mono face and tints the rarity like a tile does", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+    const cells = screen.getAllByRole("cell");
+    const [, set, , rarity, price] = cells;
+
+    expect(set).toHaveClass("font-mono");
+    expect(price).toHaveClass("font-mono");
+    // Aligned on the decimal too — a price column that is not is a column nobody can scan.
+    expect(price).toHaveClass("tabular-nums");
+
+    // The dot carries the colour and nothing else; the word beside it says which rarity it
+    // is, so the dot stays out of the accessibility tree rather than repeating it.
+    const dot = rarity.querySelector("[aria-hidden='true']");
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveStyle({ backgroundColor: "var(--color-rarity-common)" });
+    expect(screen.getByText("common")).toHaveStyle({ color: "var(--color-rarity-common)" });
+  });
+
+  /**
+   * Spec §5: a price is never shown without saying how old it is. The pane says it in the
+   * open; the table has a 36px header row, so it says it on the column it is about.
+   */
+  it("says how old the prices are, on the price column", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+    const header = screen.getByRole("columnheader", { name: /^Price/ });
+
+    expect(header).toHaveAttribute("title", "Prices as of the last card-data sync.");
+    // And in the accessible name, because a tooltip is not an answer for anyone who is not
+    // holding a mouse over the right four pixels. It still *starts* with "Price", so the
+    // column is still addressable by the word on screen.
+    expect(header).toHaveAccessibleName("Price. Prices as of the last card-data sync.");
+  });
+
   it("counts the matches, and says `+` when the backend stopped counting", async () => {
     searchCards.mockResolvedValue(page([BOLT], 42));
     const { unmount } = wrap(<SearchPage />);

@@ -2,6 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ManaText } from "@/components/ManaText";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
+import { rarityColor } from "@/lib/rarity";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
@@ -28,6 +29,15 @@ const ROW_FOCUS =
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
+/**
+ * How old a price is, in the detail pane's own words.
+ *
+ * The same sentence in both places on purpose: prices come from one place — whatever the
+ * last sync wrote — so two phrasings would imply two freshnesses. Static text, because it
+ * is a statement about where prices come from rather than a timestamp to render.
+ */
+const PRICES_AS_OF = "Prices as of the last card-data sync.";
+
 /** Prices are the one column worth aligning on the decimal point; absent is an em dash. */
 function price(value: number | null): string {
   return value === null ? "—" : usd.format(value);
@@ -43,17 +53,38 @@ function Row({ card }: { card: CardSummary }) {
         <ManaText source={card.manaCost} className="shrink-0 text-xs" />
       </span>
       {/* `setName` is nullable and the code is not, so the code is what is shown; the
-          full name rides along as the tooltip when there is one. */}
-      <span role="cell" className="truncate text-muted" title={card.setName ?? undefined}>
+          full name rides along as the tooltip when there is one. Mono because a collector
+          number is data — the same rule as the grid caption and the pane. */}
+      <span
+        role="cell"
+        className="truncate font-mono text-muted"
+        title={card.setName ?? undefined}
+      >
         {card.setCode.toUpperCase()} · {card.collectorNumber}
       </span>
       <span role="cell" className="truncate text-muted">
         {card.typeLine ?? "—"}
       </span>
-      <span role="cell" className="truncate capitalize text-muted">
-        {card.rarity ?? "—"}
+      {/* Gem dot plus tinted word, exactly as the grid tiles caption a rarity — the two
+          views show the same fact and there is no reason for it to look like two facts.
+          The dot is `aria-hidden`: the word beside it already says which rarity it is. */}
+      <span role="cell" className="flex min-w-0 items-center gap-1.5">
+        <span
+          aria-hidden="true"
+          className="size-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: rarityColor(card.rarity) }}
+        />
+        <span
+          className="truncate capitalize text-muted"
+          // Tinted only when there is a rarity to tint — the inline colour wins over the
+          // muted class where there is one. The fallback token is the border colour, and
+          // an em dash drawn in it would be a character nobody can read.
+          style={card.rarity ? { color: rarityColor(card.rarity) } : undefined}
+        >
+          {card.rarity ?? "—"}
+        </span>
       </span>
-      <span role="cell" className="text-right tabular-nums">
+      <span role="cell" className="text-right font-mono tabular-nums">
         {price(card.priceUsd)}
       </span>
     </>
@@ -318,7 +349,18 @@ function Results({
               <span role="columnheader">Set</span>
               <span role="columnheader">Type</span>
               <span role="columnheader">Rarity</span>
-              <span role="columnheader" className="text-right">
+              {/* Spec §5: a price is never shown without saying how old it is. The detail
+                  pane has room to say it in the open; a 36px header row does not, so the
+                  same sentence rides as the column's tooltip and inside its accessible
+                  name. The label *begins* with the visible word, which is what keeps an
+                  overriding `aria-label` legitimate here (WCAG 2.5.3, label in name) —
+                  "Price" still selects this column for anyone driving it by voice. */}
+              <span
+                role="columnheader"
+                className="cursor-help text-right"
+                title={PRICES_AS_OF}
+                aria-label={`Price. ${PRICES_AS_OF}`}
+              >
                 Price
               </span>
             </div>

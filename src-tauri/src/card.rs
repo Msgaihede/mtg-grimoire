@@ -504,4 +504,173 @@ mod tests {
         assert!(parse_faces(Some("not json")).is_empty());
         assert!(parse_faces(Some(r#"{"name":"an object, not an array"}"#)).is_empty());
     }
+
+    /// `src/lib/ipc.ts` mirrors these names by hand and nothing checks that the two still
+    /// agree — a `rename_all` lost in a refactor turns every field of the detail pane into
+    /// an `undefined` TypeScript is perfectly happy with, and the pane renders blank
+    /// instead of failing. Compared as one whole value, so a field *added* on this side and
+    /// never mirrored fails here too; a field-by-field check reads straight past that.
+    ///
+    /// The nulls are part of the shape. Nothing here carries `skip_serializing_if`, so an
+    /// absent `oracleText` arrives as an explicit `null` rather than a missing key — which
+    /// is what `string | null` on the TypeScript side promises, and what the difference
+    /// between "this card has no rules text" and "the backend forgot to send it" rests on.
+    ///
+    /// A double-faced card, because it is the only shape that pins [`CardFace`] as well.
+    #[test]
+    fn card_detail_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(CardDetail {
+            id: "dfc".into(),
+            oracle_id: Some("o2".into()),
+            name: "Delver of Secrets // Insectile Aberration".into(),
+            set_code: "isd".into(),
+            set_name: Some("Innistrad".into()),
+            collector_number: "51".into(),
+            rarity: Some("common".into()),
+            layout: "transform".into(),
+            lang: "en".into(),
+            // A transform has no cost of its own; the front face carries it.
+            mana_cost: None,
+            cmc: Some(1.0),
+            type_line: Some("Creature — Human Wizard // Creature — Human Insect".into()),
+            oracle_text: None,
+            illustration_id: Some("art-c".into()),
+            artist: Some("Nils Hamm".into()),
+            released_at: Some("2011-09-30".into()),
+            legalities: Some(r#"{"modern":"legal"}"#.into()),
+            prices: Some(r#"{"usd":"0.35"}"#.into()),
+            finishes: Some(r#"["nonfoil","foil"]"#.into()),
+            image_status: Some("highres_scan".into()),
+            faces: vec![
+                CardFace {
+                    name: "Delver of Secrets".into(),
+                    type_line: Some("Creature — Human Wizard".into()),
+                    oracle_text: Some("At the beginning of your upkeep…".into()),
+                    mana_cost: Some("{U}".into()),
+                    artist: Some("Nils Hamm".into()),
+                },
+                CardFace {
+                    name: "Insectile Aberration".into(),
+                    type_line: Some("Creature — Human Insect".into()),
+                    oracle_text: Some("Flying".into()),
+                    // The back of a transform: no cost to render, and `null` is how the
+                    // flip control is told so.
+                    mana_cost: None,
+                    artist: Some("Nils Hamm".into()),
+                },
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": "dfc",
+                "oracleId": "o2",
+                "name": "Delver of Secrets // Insectile Aberration",
+                "setCode": "isd",
+                "setName": "Innistrad",
+                "collectorNumber": "51",
+                "rarity": "common",
+                "layout": "transform",
+                "lang": "en",
+                "manaCost": null,
+                // A `1` here would not compare equal: `cmc` is an `f64` on the wire, and
+                // the TypeScript `number` covers both.
+                "cmc": 1.0,
+                "typeLine": "Creature — Human Wizard // Creature — Human Insect",
+                "oracleText": null,
+                "illustrationId": "art-c",
+                "artist": "Nils Hamm",
+                "releasedAt": "2011-09-30",
+                "legalities": r#"{"modern":"legal"}"#,
+                "prices": r#"{"usd":"0.35"}"#,
+                "finishes": r#"["nonfoil","foil"]"#,
+                "imageStatus": "highres_scan",
+                "faces": [
+                    {
+                        "name": "Delver of Secrets",
+                        "typeLine": "Creature — Human Wizard",
+                        "oracleText": "At the beginning of your upkeep…",
+                        "manaCost": "{U}",
+                        "artist": "Nils Hamm"
+                    },
+                    {
+                        "name": "Insectile Aberration",
+                        "typeLine": "Creature — Human Insect",
+                        "oracleText": "Flying",
+                        "manaCost": null,
+                        "artist": "Nils Hamm"
+                    }
+                ]
+            })
+        );
+    }
+
+    /// The list half of the same hand-mirrored contract, pinned whole for the same reason:
+    /// `fullArt` and `borderColor` are the names a printings row is *distinguished* by, and
+    /// a printing whose art variant renders wrong looks like a data problem rather than a
+    /// rename.
+    ///
+    /// The empty answer is pinned too. [`PrintingsResponse::default()`] is what a blank
+    /// `oracle_id` returns, and `items` has to reach a pane that maps over it as `[]` — an
+    /// `Option<Vec<_>>` here, or a `skip_serializing_if` on an empty one, would send
+    /// `null`/nothing and crash the map instead of rendering an empty list.
+    #[test]
+    fn printings_response_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(PrintingsResponse {
+            items: vec![Printing {
+                id: "p1".into(),
+                set_code: "lea".into(),
+                set_name: Some("Limited Edition Alpha".into()),
+                collector_number: "161".into(),
+                released_at: Some("1993-08-05".into()),
+                rarity: Some("common".into()),
+                illustration_id: Some("art-a".into()),
+                artist: Some("Christopher Rush".into()),
+                lang: "en".into(),
+                finishes: Some(r#"["nonfoil"]"#.into()),
+                prices: Some(r#"{"usd":"400.50"}"#.into()),
+                promo: false,
+                full_art: false,
+                // Absent, not empty: an Alpha printing has no frame effects at all.
+                frame_effects: None,
+                border_color: Some("black".into()),
+                layout: "normal".into(),
+            }],
+            // Larger than `items`, which is the whole signal that a list was truncated.
+            total: 862,
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "items": [{
+                    "id": "p1",
+                    "setCode": "lea",
+                    "setName": "Limited Edition Alpha",
+                    "collectorNumber": "161",
+                    "releasedAt": "1993-08-05",
+                    "rarity": "common",
+                    "illustrationId": "art-a",
+                    "artist": "Christopher Rush",
+                    "lang": "en",
+                    "finishes": r#"["nonfoil"]"#,
+                    "prices": r#"{"usd":"400.50"}"#,
+                    "promo": false,
+                    "fullArt": false,
+                    "frameEffects": null,
+                    "borderColor": "black",
+                    "layout": "normal"
+                }],
+                "total": 862
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(PrintingsResponse::default()).unwrap(),
+            serde_json::json!({"items": [], "total": 0})
+        );
+    }
 }

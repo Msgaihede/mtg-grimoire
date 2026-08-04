@@ -9,6 +9,9 @@
 //! * **The URI is the version.** Scryfall's `?<epoch>` cache-buster equals
 //!   `image_updated_at`, so "are these bytes current" is a string comparison against the
 //!   URI they came from. No clock, no mtime, nothing a FAT32 stick can round away.
+//!   The corollary is a rule in its own right: a URI with *no* cache-buster is one this
+//!   cache must never hold, because bytes stored under it would answer "current" for the
+//!   life of the installation ([`is_fetchable`]).
 //! * **The cache is disposable.** `image_cache` records what was fetched; deleting
 //!   `data/images` is always safe and costs only re-downloads (spec §8).
 
@@ -182,6 +185,61 @@ pub enum Resolution {
     Unknown,
 }
 
+/// The only host this app will fetch a card image from.
+///
+/// The trailing slash is the entire check. `https://cards.scryfall.io.evil.test/…` and
+/// `https://cards.scryfall.io@evil.test/…` both fail it, because the byte after the host
+/// has to be the path separator — which is what makes a `starts_with` a host comparison
+/// rather than a substring search.
+const IMAGE_HOST: &str = "https://cards.scryfall.io/";
+
+/// Does `uri` carry the `?<epoch>` cache-buster the whole invalidation rule stands on?
+///
+/// Digits, not merely a query string: `?<epoch>` is `image_updated_at`, and the point is
+/// that it *moves* when Scryfall re-scans the card. A `?` followed by anything else is not
+/// a version, it is punctuation.
+fn has_cache_buster(uri: &str) -> bool {
+    uri.split_once('?')
+        .is_some_and(|(_, v)| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Is this a URI worth fetching — and, more to the point, worth *keeping*?
+///
+/// Both halves answer a live defect rather than a hypothesis. Eight printings in the
+/// current bulk data (`plst UMA-149`, `mic 55`–`58`, three more) publish
+/// `https://errors.scryfall.com/soon.jpg` in all four `image_uris` slots: Scryfall's own
+/// error page, as a JPEG, on a host that is not the image CDN, with nothing after it.
+/// Fetched, those bytes would be written as `<id>-0.webp` and — because [`is_current`]
+/// compares URIs and this URI can never change — served as that card's artwork forever.
+/// No re-sync would clear it and no re-scan could, because there is nothing there to
+/// re-scan. Deleting `data/images` would not even help: the next request would fetch the
+/// same error page again.
+///
+/// So the version rule is the one that catches today's eight, and the host allowlist is
+/// the belt for whatever the next placeholder host turns out to be.
+///
+/// Scryfall says the same thing in a second place — all eight carry `image_status`
+/// `'missing'`, and the column is already on `cards` — but that is a *label* on the data
+/// and this is a property of the URI itself: a versionless URI is uncacheable whatever any
+/// status field claims, and it is the one of the two that cannot be wrong. `image_status`
+/// is the right signal for the other half of spec §5, re-fetching when a picture improves
+/// from `lowres`/`placeholder`, which is Plan-3 work.
+fn is_fetchable(uri: &str) -> bool {
+    // `cfg!` the macro, not the attribute: `is_image_host` stays compiled and directly
+    // tested in both configurations rather than being swapped for something weaker. The
+    // widening exists because the fetch tests below run against an `httpmock` server on
+    // loopback, and it is the only seam in this predicate.
+    has_cache_buster(uri) && (is_image_host(uri) || (cfg!(test) && is_loopback(uri)))
+}
+
+fn is_image_host(uri: &str) -> bool {
+    uri.starts_with(IMAGE_HOST)
+}
+
+fn is_loopback(uri: &str) -> bool {
+    uri.starts_with("http://127.0.0.1:") || uri.starts_with("http://localhost:")
+}
+
 /// Resolve a key against `cards`, applying spec §5's rule: `image_uris` if present, else
 /// `card_faces[i].image_uris`.
 ///
@@ -207,7 +265,16 @@ pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> 
     // and a `meld` card's top-level image is its front and nothing else. Falling back to
     // the top-level image for face 1 would show the front of the card on its own back.
     if let Some(uri) = face.or_else(|| (key.face == 0).then_some(top).flatten()) {
-        return Ok(Resolution::Uri(uri));
+        // A URI this cache cannot version — or one from a host that does not serve card
+        // art — is Scryfall saying "no image" in a shape that looks like a picture. It is
+        // answered as the gap it is, here, before any of it reaches the network or the
+        // disk. `NoImage` on either face: "Scryfall has no image for this" is exactly what
+        // a `soon.jpg` means, and it stays true of a back face that never got scanned.
+        return Ok(if is_fetchable(&uri) {
+            Resolution::Uri(uri)
+        } else {
+            Resolution::Missing(Placeholder::NoImage)
+        });
     }
     Ok(Resolution::Missing(if key.face > 0 {
         Placeholder::CardBack
@@ -542,7 +609,20 @@ fn respond(result: Result<Served, ImageError>) -> tauri::http::Response<Vec<u8>>
         Ok(served) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, served.content_type)
-            .header(header::CACHE_CONTROL, IMAGE_MAX_AGE)
+            // A placeholder is the one 200 whose content is *meant* to change. It stands in
+            // for a picture the next sync may well supply — Scryfall scans a card and the
+            // `soon.jpg` becomes real art — and there is no URI change to notice it by,
+            // because the placeholder was never fetched from a URI at all. Real bytes keep
+            // their day: their URI *is* their version, so their staleness is bounded by the
+            // re-scan that ended it.
+            .header(
+                header::CACHE_CONTROL,
+                if served.content_type == SVG {
+                    "no-store"
+                } else {
+                    IMAGE_MAX_AGE
+                },
+            )
             .body(served.bytes)
             .expect("image response"),
         Err(ImageError::UnknownCard) => fail(StatusCode::NOT_FOUND, "no such card", None),
@@ -707,17 +787,17 @@ async fn warm(
         // The cache's own semaphore and interval gate do the pacing; this loop just hands
         // it work.
         attempted += 1;
-        match cache.get(client, read, write, &key).await {
-            // A rate limit is carried by the shared gate, so it is already true of every
-            // key left in this batch: continuing would be ~99 round trips through the
-            // database and the gate mutex, each failing fast and each contending with the
-            // tiles that are actually on screen. Abandon the batch — the next page that
-            // lands queues a fresh one, and any tile that needed these asks for itself.
-            Err(ImageError::RateLimited { .. }) => break,
-            // Anything else is this key's own problem and not the batch's: a 404 for a URI
-            // Scryfall published, an unreadable row. Not worth reporting either — the tile
-            // will ask again when it renders.
-            _ => {}
+        // A rate limit is carried by the shared gate, so it is already true of every key
+        // left in this batch: continuing would be ~99 round trips through the database and
+        // the gate mutex, each failing fast and each contending with the tiles that are
+        // actually on screen. Abandon the batch — the next page that lands queues a fresh
+        // one, and any tile that needed these asks for itself.
+        //
+        // Every other outcome is this key's own problem rather than the batch's: a 404 for
+        // a URI Scryfall published, an unreadable row, a `soon.jpg` answered with a
+        // placeholder. None worth reporting — the tile asks again when it renders.
+        if let Err(ImageError::RateLimited { .. }) = cache.get(client, read, write, &key).await {
+            break;
         }
     }
     attempted
@@ -766,8 +846,8 @@ mod tests {
     use httpmock::prelude::*;
     use rusqlite::Connection;
 
-    /// A normal card (top-level images), a transform (per-face), and one of the 162
-    /// printings that have no image anywhere.
+    /// A normal card (top-level images), a transform (per-face), one of the 162 printings
+    /// that have no image anywhere, and one of the eight that have something worse.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
@@ -797,8 +877,25 @@ mod tests {
             [],
         )
         .unwrap();
+        // Copied byte for byte out of the live database, where eight printings carry it:
+        // `plst UMA-149`, `plst BFZ-149`, `plst AKH-150`, `plst E01-49` and `mic 55`–`58`.
+        // All four slots, one error page, no `?<epoch>` anywhere in it.
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
+             VALUES ('21081971-7cb9-479f-9c3e-cb5b4a40a936','Ghouls'' Night Out','mic','57','en','normal',
+                     json_object(
+                       'thumb','https://errors.scryfall.com/soon.jpg',
+                       'grid','https://errors.scryfall.com/soon.jpg',
+                       'display','https://errors.scryfall.com/soon.jpg',
+                       'art','https://errors.scryfall.com/soon.jpg'), '{}')",
+            [],
+        )
+        .unwrap();
         conn
     }
+
+    /// The live `mic 57` row: Scryfall's error page in every `image_uris` slot.
+    const SOON: &str = "21081971-7cb9-479f-9c3e-cb5b4a40a936";
 
     fn key(id: &str, face: u8, variant: Variant) -> ImageKey {
         ImageKey {
@@ -1084,6 +1181,78 @@ mod tests {
         );
     }
 
+    /// `soon.jpg` — the live poisoning, in the shape it actually ships in.
+    ///
+    /// Eight printings publish Scryfall's error page as their artwork. Nothing downstream
+    /// could have recovered from taking it at face value: the bytes are a JPEG that would
+    /// be written as `<id>-0.webp`, and since [`is_current`] compares URIs and *this* URI
+    /// has no version to move, the row would call them current for as long as the app is
+    /// installed. Not a fetch to retry — a picture that has to be refused at resolution.
+    #[test]
+    fn a_versionless_uri_resolves_to_a_placeholder_rather_than_bytes_to_cache() {
+        let conn = seeded();
+        for variant in [
+            Variant::Thumb,
+            Variant::Grid,
+            Variant::Display,
+            Variant::Art,
+        ] {
+            let r = resolve(&conn, &key(SOON, 0, variant)).unwrap();
+            assert!(
+                matches!(r, Resolution::Missing(Placeholder::NoImage)),
+                "{variant:?} must not resolve to an error page: {r:?}"
+            );
+        }
+    }
+
+    /// The two halves of [`is_fetchable`], separately, because they fail for different
+    /// reasons and only one of them is a security boundary.
+    ///
+    /// The host check is a `starts_with` and that is only a host comparison because of the
+    /// trailing slash — the near-misses below are the ones that would make it a substring
+    /// search instead, and they are exactly the shapes an attacker-supplied `image_uris`
+    /// would take if the bulk file were ever tampered with in transit.
+    #[test]
+    fn only_a_versioned_uri_on_the_image_host_is_worth_fetching() {
+        for good in [
+            "https://cards.scryfall.io/grid/front/0/0/x.webp?1699999999",
+            "https://cards.scryfall.io/art/back/a/b/y.webp?0",
+        ] {
+            assert!(has_cache_buster(good), "{good}");
+            assert!(is_image_host(good), "{good}");
+            assert!(is_fetchable(good), "{good}");
+        }
+
+        // No version: nothing here can ever be invalidated, whoever serves it.
+        for versionless in [
+            "https://errors.scryfall.com/soon.jpg",
+            "https://cards.scryfall.io/grid/front/0/0/x.webp",
+            "https://cards.scryfall.io/grid/front/0/0/x.webp?",
+            "https://cards.scryfall.io/grid/front/0/0/x.webp?v=17",
+            "https://cards.scryfall.io/grid/front/0/0/x.webp?latest",
+            "",
+        ] {
+            assert!(!has_cache_buster(versionless), "{versionless}");
+            assert!(!is_fetchable(versionless), "{versionless}");
+        }
+
+        // Right shape, wrong host — including the two that a substring check would wave
+        // through, where the real host is the *prefix* of a hostile one or its userinfo.
+        for off_host in [
+            "https://errors.scryfall.com/soon.jpg?17",
+            "https://cards.scryfall.io.evil.test/grid/x.webp?17",
+            "https://cards.scryfall.io@evil.test/grid/x.webp?17",
+            "https://evil.test/https://cards.scryfall.io/grid/x.webp?17",
+            "http://cards.scryfall.io/grid/x.webp?17",
+        ] {
+            assert!(has_cache_buster(off_host), "{off_host}");
+            assert!(
+                !is_image_host(off_host),
+                "{off_host} must not read as the CDN"
+            );
+        }
+    }
+
     #[test]
     fn an_unknown_card_is_not_a_placeholder() {
         let conn = seeded();
@@ -1243,7 +1412,7 @@ mod tests {
             when.method(GET).path("/grid/v17.webp");
             then.status(200).body(body.clone());
         });
-        let uri = format!("{}/grid/v17.webp", server.base_url());
+        let uri = format!("{}/grid/v17.webp?17", server.base_url());
         f.card(BOLT, &uri);
         let client = scryfall::Client::new(server.base_url());
         let k = key(BOLT, 0, Variant::Grid);
@@ -1280,7 +1449,7 @@ mod tests {
             when.method(GET).path("/grid/v17.webp");
             then.status(200).body(vec![7u8; 16]);
         });
-        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/v17.webp?17", server.base_url()));
         let client = scryfall::Client::new(server.base_url());
         let k = key(BOLT, 0, Variant::Grid);
 
@@ -1310,10 +1479,10 @@ mod tests {
         let client = scryfall::Client::new(server.base_url());
         let k = key(BOLT, 0, Variant::Grid);
 
-        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/v17.webp?17", server.base_url()));
         assert_eq!(f.get(&client, &k).await.unwrap().bytes, vec![1u8; 8]);
 
-        let new_uri = format!("{}/grid/v99.webp", server.base_url());
+        let new_uri = format!("{}/grid/v99.webp?99", server.base_url());
         f.card(BOLT, &new_uri);
         let served = f.get(&client, &k).await.unwrap();
 
@@ -1350,6 +1519,39 @@ mod tests {
         assert!(
             !f.cache.dir().exists(),
             "a placeholder must not create cache directories"
+        );
+    }
+
+    /// The same refusal through the whole cache, which is where it has to hold: nothing
+    /// leaves the process, nothing lands on the disk, and no row is written that would
+    /// vouch for an error page as a card's artwork until the app is reinstalled.
+    #[tokio::test]
+    async fn a_versionless_uri_is_never_fetched_stored_or_recorded() {
+        let f = Fixture::new("soon");
+        let server = MockServer::start();
+        let anything = server.mock(|when, then| {
+            when.method(GET);
+            then.status(200).body("a JPEG error page, 8.5 KB of it");
+        });
+        f.card(BOLT, "https://errors.scryfall.com/soon.jpg");
+        let client = scryfall::Client::new(server.base_url());
+        let k = key(BOLT, 0, Variant::Grid);
+
+        let served = f.get(&client, &k).await.unwrap();
+
+        assert_eq!(served.content_type, SVG);
+        assert!(String::from_utf8(served.bytes)
+            .unwrap()
+            .contains("No image"));
+        assert_eq!(anything.calls(), 0, "an error page is not worth a request");
+        assert_eq!(
+            f.cached_row(BOLT),
+            None,
+            "a row here would outlive every sync that could have fixed it"
+        );
+        assert!(
+            !cache_path(f.cache.dir(), &k).unwrap().exists(),
+            "and the bytes must not be sitting there under a .webp name"
         );
     }
 
@@ -1403,7 +1605,7 @@ mod tests {
             // retrying inside the window we are being punished for.
             then.status(429).header("retry-after", "0");
         });
-        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/v17.webp?17", server.base_url()));
         let client = scryfall::Client::new(server.base_url());
 
         let err = f
@@ -1446,7 +1648,7 @@ mod tests {
             when.method(GET).path("/grid/v17.webp");
             then.status(429).header("retry-after", "30");
         });
-        let uri = format!("{}/grid/v17.webp", server.base_url());
+        let uri = format!("{}/grid/v17.webp?17", server.base_url());
         // Ten real cards, all uncached, all pointing at the endpoint that says no.
         let ids: Vec<String> = (0..10)
             .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
@@ -1486,7 +1688,7 @@ mod tests {
             when.method(GET).path("/grid/v17.webp");
             then.status(429).header("retry-after", "31536000");
         });
-        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/v17.webp?17", server.base_url()));
         let client = scryfall::Client::new(server.base_url());
 
         let err = f
@@ -1529,7 +1731,7 @@ mod tests {
             when.method(GET).path("/grid/v17.webp");
             then.status(429).header("retry-after", "60");
         });
-        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/v17.webp?17", server.base_url()));
         let client = scryfall::Client::new(server.base_url());
         let k = key(BOLT, 0, Variant::Grid);
 
@@ -1638,7 +1840,7 @@ mod tests {
             when.method(GET).path("/grid/v17.webp");
             then.status(200).body(vec![7u8; 16]);
         });
-        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/v17.webp?17", server.base_url()));
         let client = scryfall::Client::new(server.base_url());
         // A *file* where the variant directory has to go: `create_dir_all` cannot win
         // against that on any platform, and it needs no permission games to arrange.
@@ -1671,10 +1873,10 @@ mod tests {
             when.method(GET);
             then.status(200).body(vec![7u8; 4]);
         });
-        f.card(BOLT, &format!("{}/grid/a.webp", server.base_url()));
+        f.card(BOLT, &format!("{}/grid/a.webp?1", server.base_url()));
         f.card(
             "ab000000-0000-0000-0000-000000000001",
-            &format!("{}/grid/b.webp", server.base_url()),
+            &format!("{}/grid/b.webp?2", server.base_url()),
         );
         let client = scryfall::Client::new(server.base_url());
 
@@ -1730,8 +1932,15 @@ mod tests {
 
     /// A printing Scryfall has no art for is a **200**: there is nothing to retry, and a
     /// failure status would put a broken-image icon where the app has a considered answer.
+    ///
+    /// But it is the one 200 the webview may not keep. Every other image carries its own
+    /// version in its URL, so a day of caching is bounded by the re-scan that ended it; a
+    /// placeholder was never fetched from a URL at all, and the thing that replaces it —
+    /// a sync that fills in the art, or a `soon.jpg` that finally becomes a picture —
+    /// changes nothing the webview could notice. `no-store` is what makes the next look at
+    /// that card ask again.
     #[test]
-    fn a_placeholder_is_a_200_because_there_is_nothing_to_retry() {
+    fn a_placeholder_is_a_200_the_webview_may_not_keep() {
         let svg = placeholder_svg(Placeholder::NoImage, Variant::Grid);
         let r = respond(Ok(Served {
             bytes: svg.clone().into_bytes(),
@@ -1740,6 +1949,7 @@ mod tests {
 
         assert_eq!(r.status(), tauri::http::StatusCode::OK);
         assert_eq!(header(&r, "content-type"), Some(SVG));
+        assert_eq!(header(&r, "cache-control"), Some("no-store"));
         assert_eq!(r.body(), &svg.into_bytes());
     }
 

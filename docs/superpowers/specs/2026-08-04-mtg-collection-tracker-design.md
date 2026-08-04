@@ -102,10 +102,10 @@ Single user, fully local. The only external dependency is the Scryfall API (card
 
 Bulk data has image *URLs*, not images (full library at display size would be tens of GB; `png` = 161 GB).
 
-- **Lazy + permanent**: fetch from `cards.scryfall.io` on first display, cache forever under `data/images/<variant>/<id[0..2]>/<id>-<face>.webp`, keyed/invalidated by `image_updated_at` (also re-fetch when `image_status` improves from `lowres`/`placeholder`).
+- **Lazy + permanent**: fetch from `cards.scryfall.io` on first display, cache forever under `data/images/<variant>/<id[0..2]>/<id>-<face>.webp`, keyed/invalidated by `image_updated_at` (also re-fetch when `image_status` improves from `lowres`/`placeholder`). **Decided in Plan 2:** because the `?<epoch>` cache-buster *is* the version, a URI that has none is uncacheable by construction and is refused at resolution — it resolves to the no-image placeholder, never to bytes. Eight live printings need this: they publish `https://errors.scryfall.com/soon.jpg` in all four slots, and cached once it could never be invalidated. A `cards.scryfall.io` host allowlist backs it up.
 - **Variants**: WEBP only — `thumb` (~9 KB, list rows), `grid` (~62 KB, card grids), `display` (~93 KB, detail/preview), `art` (deck covers). 39–48% smaller than the legacy JPGs, which the docs mark as being replaced.
 - **Pre-warm**: a resumable background job keeps images for all collection/wishlist/deck cards cached (`thumb`+`grid`, `display` for deck cards) so the user's own cards browse fully offline. Worst-case full-library `thumb` cache ≈ 1.1 GB; pre-warm scope is far smaller.
-- **Serving**: custom Tauri protocol (e.g. `mtgimg://<card>/<face>/<variant>`) with asset scope + CSP configured; renderer never touches paths. Cache misses trigger fetch + cache, and return the image when available (UI shows skeleton frames meanwhile).
+- **Serving**: custom Tauri protocol with asset scope + CSP configured; renderer never touches paths. Cache misses trigger fetch + cache, and return the image when available. **Decided in Plan 2:** the URL is `<origin>/<variant>/<card_id>/<face>` — the cache layout's own segment order, so a URL and a file name read the same way round; `parse_request_path` and CLAUDE.md's hard rule pin it. **Also decided in Plan 2:** the skeleton shown meanwhile is the empty 5:7 frame and nothing more — a shimmer across forty tiles would be the only animation on the page, in the one view whose whole argument is that the art out-shouts the UI, and the direction doc's motion budget is already spent on the mana line.
 - **Policy compliance** (Scryfall requires): show artist + copyright wherever `art`/`art_crop` is displayed (deck covers, headers); never distort/watermark/recolor card images; prices always labeled with as-of date; `tix` never summed with fiat.
 
 ## 6. Data model (user data)
@@ -124,6 +124,8 @@ Same SQLite DB, separate tables from `cards` (which is rebuilt on sync; user tab
 
 ### Global search
 FTS5-backed instant search (name/type/text, diacritic-insensitive) + structured filters: colors/color identity (toggle chips with authentic mana symbols per the visual direction doc), set (searchable multi-select with set glyphs), mana value (0–8+ chips), type, rarity, format legality, price range, finish availability, owned/wishlist status. All filters combine (AND) and a **Reset all** control clears them; active filters are visible at a glance. Global actions (Refresh, sync status, settings) live in a top ribbon, not in views — see `2026-08-04-visual-design-direction.md` (binding). Results in a virtualized card grid (art view) or table view. Right-click/hover actions everywhere: add to collection (with finish/condition quick-pick), add to wishlist, add to open deck. Card detail pane: all printings of the oracle card with prices per finish (alternate-art gallery grouped by `illustration_id`), legality chips, rulings link.
+
+**Scheduled for a later plan, not yet built:** the type filter, the price-range filter, the finish filter, and the rulings link. The rarity chip is **backend-ready** — `search_cards` already takes a `rarity` and ANDs it in like every other filter, and the IPC request type carries the field; only the chip in the filter row is missing.
 
 ### Collection
 Virtualized grid/table of owned cards with the same filters + sort by name/set/price/date-added/quantity. Inline quantity steppers per finish/condition row. Aggregate header: total cards, unique cards, estimated value (USD/EUR, as-of date). Wishlist view mirrors this; "owned" badges appear in search once a wish is fulfilled.
@@ -156,7 +158,7 @@ Dark card-game aesthetic (Tailwind v4 OKLCH tokens, shadcn/ui components). Deck 
 - **Ingest**: staging-table swap means a crash mid-ingest leaves the previous dataset intact; byte-count verification before parse; per-line parse errors logged and skipped with a count surfaced (not silently swallowed).
 - **User data safety**: user tables never dropped on sync; migrations reconciler flags (never deletes) rows whose card ID vanished; DB backed up (file copy) before schema migrations; WAL survives crashes.
 - **Imports**: preview-then-commit; committing is a single transaction.
-- **Images**: fetch failures render as card-back placeholder with retry; cache is disposable (deleting `data/images` is always safe).
+- **Images**: a fetch failure is an error the tile retries, never a picture; cache is disposable (deleting `data/images` is always safe). **Decided in Plan 2:** the stand-in for a printing with no art, and for a face a card does not physically have, is a neutral drawn SVG at the variant's exact dimensions — never a Magic card back. That artwork is Wizards of the Coast IP and the Scryfall image policy is not a thing to be clever about (see `placeholder_svg` in `src-tauri/src/images.rs`).
 
 ## 9. Testing
 

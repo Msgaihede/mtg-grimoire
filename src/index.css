@@ -75,7 +75,13 @@
     --primary-foreground: var(--color-accent-fg);
     --secondary: var(--color-surface);
     --secondary-foreground: var(--color-text);
-    --muted: var(--color-muted);
+    /* A *surface*, which is what `--muted` means in shadcn's model — the pair is "a subtle
+       panel and the text on it". It used to name the dim text colour on both halves, which
+       made the pair self-cancelling for any component that read it. Nothing generated reads
+       `var(--muted)` today (Tailwind derives `bg-muted` from the palette token below, not
+       from here), so this is correctness for the next vendored component rather than a
+       visual change — and see the palette block for the tripwire it does *not* remove. */
+    --muted: var(--color-surface);
     --muted-foreground: var(--color-muted);
     --accent: var(--color-accent);
     --accent-foreground: var(--color-accent-fg);
@@ -110,7 +116,13 @@
     --primary-foreground: var(--color-accent-fg);
     --secondary: var(--color-surface);
     --secondary-foreground: var(--color-text);
-    --muted: var(--color-muted);
+    /* A *surface*, which is what `--muted` means in shadcn's model — the pair is "a subtle
+       panel and the text on it". It used to name the dim text colour on both halves, which
+       made the pair self-cancelling for any component that read it. Nothing generated reads
+       `var(--muted)` today (Tailwind derives `bg-muted` from the palette token below, not
+       from here), so this is correctness for the next vendored component rather than a
+       visual change — and see the palette block for the tripwire it does *not* remove. */
+    --muted: var(--color-surface);
     --muted-foreground: var(--color-muted);
     --accent: var(--color-accent);
     --accent-foreground: var(--color-accent-fg);
@@ -159,7 +171,15 @@
    `accent` here mean "dim text" and "gold", not "subtle surface" as in stock shadcn.
    When vendoring a component, rewrite its subtle-surface classes
    (`bg-muted`, `bg-accent`) to `bg-surface`; `text-muted-foreground` and
-   `text-accent-foreground` already resolve correctly and need no change. */
+   `text-accent-foreground` already resolve correctly and need no change.
+
+   That rewrite is still required, and pointing the `--muted` semantic variable at a
+   surface (above) does not lift it — a fix that looks like it should. Tailwind builds
+   `bg-muted` *and* `text-muted` from the one `--color-muted` literal below, so the
+   generated rule is `background-color: var(--color-muted)` and never reaches `--muted`
+   at all. Giving `bg-muted` a surface therefore means giving `text-muted` one too, which
+   is the 42 places in `src/` that use it for dim text. Untangling that is a rename of
+   this token, not an edit to the block above. */
 @theme {
   --color-bg: oklch(0.16 0.01 270);
   --color-surface: oklch(0.21 0.012 270);

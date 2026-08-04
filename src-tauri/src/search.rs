@@ -862,6 +862,56 @@ mod tests {
         );
     }
 
+    /// The set picker goes through the same hand-written mirror, and it is the one of these
+    /// DTOs whose drift a reader would never report: a picker whose `cardCount` all arrive
+    /// as `undefined` still looks like a working picker, just one where every set is
+    /// suddenly blank. Whole-value equality rather than field-by-field, so a field added
+    /// here and never mirrored in `src/lib/ipc.ts` fails the test as loudly as a rename.
+    #[test]
+    fn set_summary_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(SetSummary {
+            code: "roe".into(),
+            name: "Rise of the Eldrazi".into(),
+            set_type: Some("expansion".into()),
+            released_at: Some("2010-04-23".into()),
+            card_count: 248,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "code": "roe",
+                "name": "Rise of the Eldrazi",
+                "setType": "expansion",
+                "releasedAt": "2010-04-23",
+                "cardCount": 248
+            })
+        );
+
+        // What `sets` holds for a set `default_cards` carries nothing for: no type, no
+        // release date, no printings. Both optionals arrive as an explicit `null` — no
+        // field here is `skip_serializing_if`, and the TypeScript side declares them
+        // `string | null`, so a key that simply vanished would be a different contract.
+        let sparse = serde_json::to_value(SetSummary {
+            code: "mem".into(),
+            name: "Memorabilia".into(),
+            set_type: None,
+            released_at: None,
+            card_count: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            sparse,
+            serde_json::json!({
+                "code": "mem",
+                "name": "Memorabilia",
+                "setType": null,
+                "releasedAt": null,
+                "cardCount": 0
+            })
+        );
+    }
+
     /// The reason there are two connections. A search must answer while an ingest holds
     /// the write connection for its whole 44 s run — under WAL the reader sees the last
     /// committed snapshot and never waits, and the only thing that used to serialise them

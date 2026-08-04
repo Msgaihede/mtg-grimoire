@@ -1,8 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown } from "lucide-react";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,6 +30,10 @@ const MAX_SETS = 64;
 
 /** Module scope so the scroll effect can depend on it without re-running every render. */
 const optionId = (id: string, index: number) => `${id}-option-${index}`;
+
+/** Exact code, then code prefix, then a name match. Lower sorts first. */
+const rank = (code: string, needle: string): number =>
+  code === needle ? 0 : code.startsWith(needle) ? 1 : 2;
 
 /**
  * A searchable, multi-select set picker.
@@ -75,53 +80,50 @@ export function SetCombobox({
     if (open) inputRef.current?.focus();
   }, [open]);
 
+  // Escape is a keyboard word, and the element it dismissed is about to unmount with the
+  // focus still on it — which drops the caret onto `<body>`, so the next Tab restarts from
+  // the top of the app rather than continuing along the filter row. Called before React
+  // flushes the close, while the input is still mounted. The outside-click below
+  // deliberately does not do this: the reader is already somewhere else.
+  const dismiss = useCallback(() => {
+    setOpen(false);
+    buttonRef.current?.focus();
+  }, []);
+
+  // The innermost open layer: capture phase, and the press is consumed so the card detail
+  // pane underneath does not close on the same one. See `useDismissOnEscape`.
+  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Consumed here, so an outer layer listening for the same key does not close on the
-      // same press: the card detail pane checks `defaultPrevented` before acting on it.
-      e.preventDefault();
-      setOpen(false);
-      // Escape is a keyboard word, and the element it dismissed is about to unmount with
-      // the focus still on it — which drops the caret onto `<body>`, so the next Tab
-      // restarts from the top of the app rather than continuing along the filter row.
-      // Called before React flushes the close, while the input is still mounted.
-      // Outside-click deliberately does not do this: the reader is already somewhere else.
-      buttonRef.current?.focus();
-    };
     const onClick = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    // Escape is listened for in the **capture** phase, which is what actually makes the
-    // `defaultPrevented` handshake above work. Two `window` listeners for the same event
-    // run in registration order, and an outer layer — the card detail pane — was mounted
-    // long before this popup opened, so in the bubble phase it would act on the key first
-    // and read `defaultPrevented` as false. Capture puts the innermost open thing first
-    // regardless of who mounted when.
-    window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onClick);
-    return () => {
-      window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("mousedown", onClick);
-    };
+    return () => window.removeEventListener("mousedown", onClick);
   }, [open]);
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return (
-      (sets.data ?? [])
-        // A set with no printings here can never match a search, so offering it is
-        // offering an empty result. `sets` holds memorabilia and token-only sets that
-        // `default_cards` carries nothing for, and Arena/MTGO sets whose every printing
-        // the search's paper-only default hides again.
-        .filter((s) => s.cardCount > 0)
-        // Name matches anywhere, code from the start: three letters inside a longer code
-        // are a coincidence, three letters inside a set's name are usually what was meant.
-        .filter(
-          (s) => !needle || s.name.toLowerCase().includes(needle) || s.code.startsWith(needle),
-        )
-    );
+    const found = (sets.data ?? [])
+      // A set with no printings here can never match a search, so offering it is
+      // offering an empty result. `sets` holds memorabilia and token-only sets that
+      // `default_cards` carries nothing for, and Arena/MTGO sets whose every printing
+      // the search's paper-only default hides again.
+      .filter((s) => s.cardCount > 0)
+      // Name matches anywhere, code from the start: three letters inside a longer code
+      // are a coincidence, three letters inside a set's name are usually what was meant.
+      .filter((s) => !needle || s.name.toLowerCase().includes(needle) || s.code.startsWith(needle));
+    if (!needle) return found;
+    // Typing a whole set code is an unambiguous request for that set, and without this it
+    // is the one result you cannot reach: "lea" is Limited Edition Alpha, but it also
+    // appears in six League Tokens sets, nine Arena Leagues, Oversized League Prizes and
+    // M15 Pre**relea**se Challenge — seventeen name matches that the cap can push the
+    // exact one out of entirely. Sorted rather than filtered, because the rest are still
+    // real matches and the reader may have meant one of them.
+    //
+    // `sort` is stable, so within each rank the backend's own order survives.
+    return found.sort((a, b) => rank(a.code, needle) - rank(b.code, needle));
   }, [sets.data, query]);
 
   const options = matches.slice(0, MAX_OPTIONS);

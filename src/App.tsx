@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
@@ -45,6 +46,12 @@ export default function App() {
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
 
+  // Stable, because it is the pane's `onDismiss` and therefore a dependency of the
+  // `keydown` listener behind it. An inline arrow is a new function on every render of the
+  // whole app — every sync tick, every keystroke in the search box — and each one tears
+  // the window listener down and adds it back for no change in behaviour.
+  const closeCard = useCallback(() => setSelectedCardId(null), [setSelectedCardId]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <AppShell>
@@ -59,7 +66,7 @@ export default function App() {
               // the first card that was ever opened.
               key={selectedCardId}
               cardId={selectedCardId}
-              onClose={() => setSelectedCardId(null)}
+              onClose={closeCard}
             />
           )}
         </div>

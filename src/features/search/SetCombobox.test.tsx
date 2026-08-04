@@ -205,4 +205,60 @@ describe("SetCombobox", () => {
 
     expect(screen.getByText(/64 sets is the most/i)).toBeInTheDocument();
   });
+
+  /**
+   * Typing a whole set code is an unambiguous request for that set, and it used to be the
+   * one result you could not reach. The live data has seventeen sets whose *name* contains
+   * "lea" — six League Tokens, nine Arena Leagues, Oversized League Prizes, and M15
+   * Pre**relea**se Challenge — every one of them ahead of `lea` itself in release order,
+   * and enough of them to push Limited Edition Alpha off the end of a capped list entirely.
+   *
+   * Ranked rather than filtered: the League sets are still real matches for someone who
+   * meant them, they just are not what "lea" was typed to find.
+   */
+  it("puts an exact code match first, ahead of the sets that merely contain it", async () => {
+    listSets.mockResolvedValue([
+      { code: "l12", name: "League Tokens 2012", setType: "token", releasedAt: "2012-01-01", cardCount: 12 },
+      { code: "pal99", name: "Arena League 1999", setType: "promo", releasedAt: "1999-01-01", cardCount: 9 },
+      { code: "olep", name: "Oversized League Prizes", setType: "memorabilia", releasedAt: "1997-01-01", cardCount: 4 },
+      { code: "lea", name: "Limited Edition Alpha", setType: "core", releasedAt: "1993-08-05", cardCount: 295 },
+    ]);
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.type(screen.getByRole("combobox", { name: /search sets/i }), "lea");
+
+    const options = await screen.findAllByRole("option");
+    expect(options[0]).toHaveTextContent("Limited Edition Alpha");
+    // The rest are still offered, and in the order they arrived: the sort is stable, so
+    // ranking never becomes a second, invisible re-ordering of everything else.
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Limited Edition Alpha"),
+      expect.stringContaining("League Tokens 2012"),
+      expect.stringContaining("Arena League 1999"),
+      expect.stringContaining("Oversized League Prizes"),
+    ]);
+  });
+
+  /**
+   * The middle rank, with the pair that actually collides: `pls` is Planeshift and `plst`
+   * is The List, so typing the whole of one is also typing a prefix of the other. Whoever
+   * typed `pls` meant Planeshift.
+   */
+  it("puts an exact code match ahead of a longer code that starts with it", async () => {
+    listSets.mockResolvedValue([
+      { code: "plst", name: "The List", setType: "masters", releasedAt: "2020-09-26", cardCount: 1400 },
+      { code: "pls", name: "Planeshift", setType: "expansion", releasedAt: "2001-02-05", cardCount: 143 },
+    ]);
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.type(screen.getByRole("combobox", { name: /search sets/i }), "pls");
+
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Planeshift"),
+      expect.stringContaining("The List"),
+    ]);
+  });
 });
