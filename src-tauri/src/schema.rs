@@ -261,8 +261,15 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// killed between its `VACUUM` and its `create_fts` leaves a database whose header says it
 /// is converted and whose index answers with the wrong cards; nothing else would notice,
 /// because the sync that rebuilds the index is the one that ingests and most syncs get a
-/// 304. See [`crate::maintenance::K_FTS_REBUILD_PENDING`]. It costs a `PRAGMA user_version`
-/// read and one `sync_meta` lookup on every launch that does not need it.
+/// 304. See [`crate::maintenance::K_FTS_REBUILD_PENDING`]. It costs one `sync_meta` lookup
+/// on every launch that does not need it.
+///
+/// **It is also the one step here that is not allowed to stop a launch.** Every other
+/// failure in this function means the database cannot be used at all; a rebuild that fails
+/// means search is wrong, which is bad and is not the same thing. Making it fatal would turn
+/// a full disk into an app that refuses to start and tells the user to move a perfectly
+/// good `mtg.db` aside. So it is logged, the debt is left recorded, and the next launch —
+/// or the next sync, through `compact_once` — tries again.
 ///
 /// The drop is not tidiness. The ingest commits its staging load a batch at a time, so a
 /// sync that is killed partway — a closed lid, a pulled stick, a crash — leaves a
@@ -275,7 +282,7 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// This returns those pages to SQLite's freelist, so the next ingest reuses them instead of
 /// growing the file past them — and on an incremental-auto-vacuum database, which is every
 /// database this app creates (see [`crate::db::open`]), the freelist is exactly what
-/// [`crate::maintenance::incremental_vacuum`] hands back to the filesystem after the next
+/// [`crate::maintenance::reclaim_freed_pages`] hands back to the filesystem after the next
 /// swap. Reuse is the part that matters for a USB stick either way: without it a killed
 /// sync's residue and the next sync's staging table both want room at once.
 ///
@@ -286,7 +293,12 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     migrate(conn)?;
-    crate::maintenance::rebuild_fts_if_pending(conn)?;
+    if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
+        eprintln!(
+            "the search index still owes a rebuild from an interrupted compaction, and it \
+             could not be done now: {e}\nSearch results may be wrong until the next sync."
+        );
+    }
     conn.execute_batch("DROP TABLE IF EXISTS cards_staging")
 }
 
@@ -384,6 +396,10 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
         indexes = cards_indexes_sql()
     ))?;
     create_fts(&tx)?;
+    // A rebuild an interrupted compaction was still owed has just been paid off, by this.
+    // Clearing it inside the same transaction is what keeps the two honest: the debt and
+    // the work that discharges it commit together or not at all.
+    crate::sync::set_meta_opt(&tx, crate::maintenance::K_FTS_REBUILD_PENDING, None)?;
     tx.commit()
 }
 
@@ -1156,6 +1172,33 @@ mod tests {
             .query_row("SELECT artist FROM cards WHERE id='new'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(artist, "Christopher Rush");
+    }
+
+    /// A swap rebuilds the search index from scratch, so a rebuild an interrupted compaction
+    /// was still owed has just been paid off by something else. Leaving the marker set would
+    /// cost the next launch a silent rebuild of 116 k rows for work already done.
+    #[test]
+    fn a_swap_settles_a_rebuild_an_interrupted_compaction_owed() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        crate::sync::set_meta(&conn, crate::maintenance::K_FTS_REBUILD_PENDING, "1").unwrap();
+        create_staging(&conn).unwrap();
+        conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
+
+        swap_staging(&conn).unwrap();
+
+        assert!(
+            !crate::maintenance::fts_rebuild_is_pending(&conn),
+            "the swap rebuilt the index, so nothing is owed"
+        );
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "and it is the swap's own index that answers");
     }
 
     /// `image_cache` is not sync data and must outlive the table that is dropped on every

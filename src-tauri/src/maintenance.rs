@@ -22,8 +22,13 @@ use std::sync::Mutex;
 /// common answer is a 304.
 ///
 /// So the flag is written and committed *before* the `VACUUM` and cleared only once
-/// `create_fts` has returned. Whoever finds it set owes the rebuild — [`crate::schema::
-/// prepare_database`] at every launch, `sync::compact_once` at every sync.
+/// `create_fts` has returned. Whoever finds it set owes the rebuild:
+/// [`crate::schema::prepare_database`] at every launch, `sync::compact_once` at every sync,
+/// and [`crate::schema::swap_staging`], which settles the debt simply by doing the work.
+///
+/// It is cleared on the *failure* path too, when the failure was the `VACUUM` itself — that
+/// rolls back, so nothing was desynced and a rebuild would repair damage never done. See
+/// [`convert_to_incremental`].
 pub const K_FTS_REBUILD_PENDING: &str = "fts_rebuild_pending";
 
 /// `sync_meta` key holding why the one-time conversion failed, if it ever did.
@@ -103,8 +108,15 @@ pub fn rebuild_fts_if_pending(conn: &Connection) -> rusqlite::Result<bool> {
 /// sync channel and not a step in `migrate`.
 pub fn convert_to_incremental(conn: &Connection) -> rusqlite::Result<()> {
     crate::sync::set_meta(conn, K_FTS_REBUILD_PENDING, "1")?;
-    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
-    conn.execute_batch("VACUUM;")?;
+    if let Err(e) = vacuum_into_incremental(conn) {
+        // Nothing was desynced, so nothing is owed. A `VACUUM` is atomic: if it failed —
+        // and the usual reason is a disk with no room for the copy it makes — it rolled
+        // back, the rowids are the ones the index already has, and the file is untouched.
+        // Leaving the marker set would order a silent rebuild of 116 k rows at the next
+        // launch to repair damage that was never done.
+        let _ = crate::sync::set_meta_opt(conn, K_FTS_REBUILD_PENDING, None);
+        return Err(e);
+    }
     crate::schema::create_fts(conn)?;
     crate::sync::set_meta_opt(conn, K_FTS_REBUILD_PENDING, None)?;
     if let Err(e) = crate::db::checkpoint_truncate(conn) {
@@ -113,6 +125,16 @@ pub fn convert_to_incremental(conn: &Connection) -> rusqlite::Result<()> {
         eprintln!("the database was compacted, but its journal could not be folded in: {e}");
     }
     Ok(())
+}
+
+/// The half of the conversion that either happens completely or not at all: record the
+/// intention, then `VACUUM`, which is what applies it.
+///
+/// Split out so its failure has one place to be handled. Everything before `create_fts` is
+/// atomic — a failure here leaves the database exactly as it was found, index included.
+fn vacuum_into_incremental(conn: &Connection) -> rusqlite::Result<()> {
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+    conn.execute_batch("VACUUM;")
 }
 
 /// How many pages are waiting to be handed back to the filesystem.
@@ -135,6 +157,13 @@ pub fn freelist_pages(conn: &Connection) -> i64 {
 /// this number exists to buy. Larger chunks amortise slightly better and spend that margin;
 /// smaller ones spend more of the run acquiring the mutex.
 pub const RECLAIM_CHUNK_PAGES: i64 = 2_000;
+
+/// How long the reclaim stands aside between chunks so a waiting writer can get in.
+///
+/// See the loop for why a released mutex is not an available one. Five milliseconds is the
+/// gap at which a waiter reliably wins; it costs ~0.65 s over a full 130-chunk run, which is
+/// 8 % of a reclaim that only happens after a sync the user is already watching.
+const RECLAIM_YIELD: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Hand the pages a swap freed back to the filesystem, a chunk at a time.
 ///
@@ -172,8 +201,8 @@ pub const RECLAIM_CHUNK_PAGES: i64 = 2_000;
 /// still on `auto_vacuum = NONE` would do — though such a database never gets here, because
 /// the mode is checked first.
 ///
-/// `progress` is called once at entry with `(0, total)` and once per chunk that made
-/// headway, ending on `(total, total)`.
+/// `progress` is called once at entry with `(0, total)` and once per chunk, ending on
+/// `(total, total)` however the loop leaves — a phase that stops short still has to stop.
 pub fn reclaim_freed_pages(
     db: &Mutex<Connection>,
     progress: &mut dyn FnMut(i64, i64),
@@ -205,10 +234,24 @@ pub fn reclaim_freed_pages(
             freelist_pages(&conn)
         };
         if now >= left {
+            // A chunk that returned nothing will not do better on the next attempt, so the
+            // phase is over — say so rather than leaving the bar parked mid-way. It reports
+            // the phase's completion, not a claim that every page came back.
+            progress(total, total);
             break;
         }
         left = now;
         progress(total - left, total);
+        if left > 0 {
+            // Releasing the mutex is not the same as handing it over. A `std::sync::Mutex`
+            // is unfair: this thread comes straight back round and re-acquires, and the
+            // window a waiter has to win in is the length of one `emit` — tens of
+            // microseconds. Probed at that gap, 9 of 10 waiters timed out; at 5 ms, none
+            // did. So the loop stands aside deliberately, which is what makes the
+            // between-chunks promise true rather than merely available in principle.
+            // Costs ~0.65 s across the 130-chunk run this was measured on.
+            std::thread::sleep(RECLAIM_YIELD);
+        }
     }
     Ok(())
 }
@@ -383,10 +426,17 @@ mod tests {
     /// Now it takes the lock per chunk and gives it back, so the longest anyone waits is
     /// one chunk (measured ~92 ms for 2 000 pages).
     ///
-    /// The probe runs on another thread, as a command would, and asks with a bound. A take
-    /// only counts once the reclaim has demonstrably started — the first progress call —
-    /// and before it has finished; otherwise an unchunked reclaim would simply make the
-    /// probe wait and then collect its locks from an idle mutex and pass.
+    /// The probe runs on another thread, as a command would, and asks with a bound. Two
+    /// things make its count mean something:
+    ///
+    /// * a take counts only from the first report of a *completed chunk* (`done > 0`). The
+    ///   entry report fires before the loop has taken the connection at all, so counting
+    ///   from there scores wins against an idle mutex and passes whatever the loop does —
+    ///   which is exactly what the first version of this test did.
+    /// * nothing is slowed down to make room. An earlier version slept inside the progress
+    ///   callback, which runs in the released window and so widened the very gap under
+    ///   test. The window here is the production one: an `emit`, and
+    ///   [`RECLAIM_YIELD`].
     #[test]
     fn a_writer_gets_the_connection_between_reclaim_chunks() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -419,28 +469,25 @@ mod tests {
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 while taken.load(Ordering::SeqCst) < 3 && !done.load(Ordering::SeqCst) {
-                    let won =
-                        crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some();
-                    if won && running.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {
-                        taken.fetch_add(1, Ordering::SeqCst);
+                    {
+                        // Blocking, because that is what `sync::lock_db` — every writer in
+                        // the app — actually does. A parked waiter is woken when the lock
+                        // is released, which is the mechanism [`RECLAIM_YIELD`] exists to
+                        // give time to; the polling `lock_for` form cannot see a window
+                        // narrower than its own 20 ms poll and would make this test a
+                        // measurement of the sampling rate instead of the property.
+                        let _guard = crate::db::lock_blocking(&db);
+                        if running.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {
+                            taken.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             });
             let result = reclaim_freed_pages(&db, &mut |done, _| {
-                // `done > 0` and not merely "called": the entry report fires *before* the
-                // loop has taken the connection at all, so counting from there would score
-                // wins against an idle mutex and pass no matter what the loop does. Only
-                // reports from a completed chunk say anything about the loop.
                 if done > 0 {
                     running.store(true, Ordering::SeqCst);
                 }
-                // Stands in for the per-chunk cost this test's database is too small to
-                // have (measured at ~92 ms against the live one) and for the IPC event the
-                // real callback emits. The point is *when* it happens: between chunks, with
-                // the connection released — a reclaim that held the lock across its whole
-                // loop would hold it across this too, and the probe would score zero.
-                std::thread::sleep(std::time::Duration::from_millis(20));
             });
             // Set before any assertion: a panic here must still release the probe.
             done.store(true, Ordering::SeqCst);
@@ -512,8 +559,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Fill a legacy database with 500 cards and delete half, leaving an index that a
-    /// `VACUUM` will desync unless something rebuilds it.
+    /// Fill a legacy database with 500 cards and an index that answers correctly for them.
     fn legacy_database_with_cards(path: &std::path::Path) -> Connection {
         let conn = legacy_database(path);
         for i in 0..500 {
@@ -526,12 +572,17 @@ mod tests {
         }
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
+        conn
+    }
+
+    /// Delete half the cards, leaving 250 rows behind an index that still lists 500 — the
+    /// state a `VACUUM` turns from stale into actively wrong by renumbering the rowids.
+    fn delete_half_the_cards(conn: &Connection) {
         conn.execute(
             "DELETE FROM cards WHERE CAST(substr(id,2) AS INTEGER) % 2 = 0",
             [],
         )
         .unwrap();
-        conn
     }
 
     fn lightning_hits(conn: &Connection) -> i64 {
@@ -559,6 +610,7 @@ mod tests {
         let dir = scratch("killed");
         let path = dir.join("mtg.db");
         let conn = legacy_database_with_cards(&path);
+        delete_half_the_cards(&conn);
 
         // The conversion, killed mid-flight: everything `convert_to_incremental` does up to
         // and including the VACUUM, and then the process dies.
@@ -601,11 +653,79 @@ mod tests {
         let dir = scratch("nopending");
         let path = dir.join("mtg.db");
         let conn = legacy_database_with_cards(&path);
+        delete_half_the_cards(&conn);
 
         convert_to_incremental(&conn).unwrap();
 
         assert!(!fts_rebuild_is_pending(&conn));
         assert_eq!(lightning_hits(&conn), 250);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other end of the marker, and a false positive is not free: a `VACUUM` that fails
+    /// **rolls back**, so the rowids are the ones the index already has and nothing was
+    /// desynced. Leaving the marker set there would order a silent rebuild of 116 k rows at
+    /// the next launch to repair damage that was never done — and, when the reason the
+    /// `VACUUM` failed was a full disk, that rebuild would fail too.
+    ///
+    /// The failure is forced with an open transaction, which SQLite refuses to `VACUUM`
+    /// from. The transaction is committed rather than dropped so that what the function
+    /// wrote and unwrote is actually observable.
+    #[test]
+    fn a_failed_conversion_leaves_no_rebuild_owing_because_it_broke_nothing() {
+        let dir = scratch("failedvacuum");
+        let path = dir.join("mtg.db");
+        let conn = legacy_database_with_cards(&path);
+        assert_eq!(lightning_hits(&conn), 500, "the index starts correct");
+
+        let tx = conn.unchecked_transaction().unwrap();
+        let err = convert_to_incremental(&conn).expect_err("a VACUUM inside a transaction");
+        tx.commit().unwrap();
+
+        assert!(
+            err.to_string().to_lowercase().contains("transaction"),
+            "the failure must be the VACUUM, not something else: {err}"
+        );
+        assert!(
+            needs_conversion(&conn),
+            "a failed conversion converted nothing"
+        );
+        assert!(
+            !fts_rebuild_is_pending(&conn),
+            "and owes no rebuild, because a rolled-back VACUUM desynced nothing"
+        );
+        assert_eq!(lightning_hits(&conn), 500, "the index is untouched");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The second half of the same chain, and the one that reaches the user: `init_state`
+    /// treats a `prepare_database` failure as fatal and tells them to move `mtg.db` aside.
+    /// A rebuild that cannot run is not grounds for that — search being wrong is bad, being
+    /// unable to start is worse, and the disk that refused the rebuild is the same disk the
+    /// suggested remedy would not help with.
+    #[test]
+    fn a_launch_survives_a_repair_it_cannot_carry_out() {
+        let dir = scratch("repairfails");
+        let path = dir.join("mtg.db");
+        let conn = crate::db::open(&path).unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        crate::sync::set_meta(&conn, K_FTS_REBUILD_PENDING, "1").unwrap();
+        // A rebuild needs the table it indexes. Without `cards` there is no way to do the
+        // work, and `migrate` will not put it back — this database is already at head.
+        conn.execute_batch("DROP TABLE cards_fts; DROP TABLE cards;")
+            .unwrap();
+
+        crate::schema::prepare_database(&conn)
+            .expect("a launch must not die on a rebuild it cannot do");
+
+        assert!(
+            fts_rebuild_is_pending(&conn),
+            "the debt stays recorded, so a later launch or sync retries it"
+        );
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
