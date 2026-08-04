@@ -91,6 +91,10 @@ impl Client {
     pub fn new(base_url: String) -> Client {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            // Bounds a dead host, not a slow one. Deliberately *not* an overall request
+            // timeout: a 77 MB bulk download legitimately runs for minutes, and a
+            // `timeout()` here would kill it partway every time.
+            .connect_timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("client");
         Client {
