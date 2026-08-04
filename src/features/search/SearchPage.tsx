@@ -122,11 +122,17 @@ export function SearchPage() {
       latestPage.map((c) => c.id),
       "grid",
     ).catch(() => {});
-    // `latestPage` is deliberately out of the dependency list: it is a fresh array on
-    // every render, and `latestKey` is the part that means "a different page is now the
-    // newest one".
+    // `latestPage` and `view` are both deliberately out of the dependency list.
+    // `latestPage` is a fresh array on every render, and `latestKey` is the part that
+    // means "a different page is now the newest one". `view` is read but not depended on:
+    // it is a guard, not a trigger. Depending on it would make every table→grid toggle
+    // re-send the newest page — 50 keys the grid warmed when they landed and the tiles
+    // will hit from disk anyway — which is the same wasted round trip `latestKey` exists
+    // to avoid. The cost is that a page which arrives *while the table is showing* is
+    // never warmed, not even on the switch back: those tiles fetch as they mount, which
+    // is exactly how the grid behaved before this effect existed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestKey, isPlaceholder, view]);
+  }, [latestKey, isPlaceholder]);
 
   // Paging is driven by the virtualiser's window rather than a scroll handler: it already
   // knows which row is at the bottom, and it recomputes on resize too, which a scroll

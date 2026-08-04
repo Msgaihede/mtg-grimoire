@@ -548,6 +548,22 @@ describe("page image prefetch", () => {
     expect(prefetchImages).not.toHaveBeenCalled();
   });
 
+  /**
+   * `view` guards the effect but does not trigger it. Toggling to the table and back does
+   * not add a page, so re-sending the newest one would be 50 keys the grid already warmed
+   * when they landed — the same wasted round trip the page key exists to avoid.
+   */
+  it("does not re-warm a page when the reader toggles to the table and back", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(screen.getByRole("button", { name: "Table view" }));
+    await userEvent.click(screen.getByRole("button", { name: "Card view" }));
+    await act(async () => {});
+
+    expect(prefetchImages).toHaveBeenCalledTimes(1);
+  });
+
   it("survives a rejected prefetch — it is a warm-up, not a dependency", async () => {
     prefetchImages.mockRejectedValue("database is locked");
     wrap(<SearchPage />);

@@ -4407,9 +4407,14 @@ npm run tauri dev
 ```
 Expected: five mana symbols plus colourless, drawn as real symbols on their printed fills,
 dim until pressed; 0–8+ mana chips in Geist Mono; a set picker that finds "Alpha" by name
-and "lea" by code and shows the Alpha symbol; **Reset all** appearing with a count the
+and shows the Alpha symbol; **Reset all** appearing with a count the
 moment any filter is on and clearing everything in one click. Combining a colour, a set and
 a mana value narrows the results as expected. No external network requests.
+
+> **Corrected in Task 14.** This step originally expected the picker to find a set by its
+> code too. It does *match* on code, but it does not **rank** on it: `lea` returns 18 sets
+> with Limited Edition Alpha last. See the "Set picker ranks name matches over an exact
+> code match" row in the carryover ledger — deferred to Plan 6, with the fix described.
 
 - [x] **Step 18: Commit**
 
@@ -6380,6 +6385,25 @@ pub async fn prefetch_images(
 }
 ```
 
+**SHIPPED with two corrections** (Task 14 review, Finding 1 + a folded minor):
+
+1. `prefetch_keys` **reverses** the batch after the cap, so the loop walks the page's far
+   end first. The grid mounts the *head* of a page as tiles the instant it arrives and each
+   tile issues its own `mtgimg://` request; with no dedup for an in-flight fetch, a prefetch
+   starting at index 0 asks Scryfall for the same bytes twice and spends a permit and a
+   100 ms slot doing it — against the tile the reader is waiting on. Reversed, the two meet
+   in the middle. Pinned by `a_prefetch_batch_starts_at_the_far_end_of_the_page` and
+   `a_capped_batch_reverses_the_ids_it_kept_not_the_ones_it_dropped`.
+2. The loop `break`s on `ImageError::RateLimited`. The gate carries a 429 for the whole
+   application, so once one key earns one it is true of every key left; walking on would be
+   ~99 fast-failing round trips through the read connection and the gate mutex, all of them
+   contending with the tiles on screen. The loop moved out of the command into a testable
+   `warm(cache, client, read, write, keys) -> usize` for exactly this — the command needs a
+   `tauri::State` and a running app, and the abandon rule is the part worth a test
+   (`a_rate_limited_prefetch_batch_is_abandoned_rather_than_walked_to_the_end`).
+
+Full in-flight dedup is **not** here: see the single-flight row in the carryover ledger.
+
 - [x] **Step 4: Register and expose it**
 
 `src-tauri/src/lib.rs`:
@@ -6429,6 +6453,13 @@ newest page (`searchKey | pageCount | first item id`) plus `query.isPlaceholderD
 also keeps a background refetch from re-walking 50 cached images. Two tests in
 `SearchPage.test.tsx` pin it, and both fail against the snippet above.
 
+`view` is also **out** of the dependency list (review, folded minor): it guards the effect
+but must not trigger it, or every table→grid toggle re-sends a page the grid already
+warmed. The accepted cost is that a page landing while the table is showing is never
+warmed, not even on the switch back — those tiles fetch as they mount, exactly as they did
+before this effect existed. Pinned by `does not re-warm a page when the reader toggles to
+the table and back`.
+
 - [x] **Step 6: Run the full verify**
 
 ```powershell
@@ -6448,7 +6479,7 @@ Check each of these and record the result in the commit message:
 |---|---|
 | Ribbon | 48px `bg-surface` row: gold "MTG" mark, view title in Cinzel, status line, **Refresh data**; the 2px WUBRG mana line sits under it and nowhere else |
 | Mana line during a sync | dims and fills left→right behind a gold cap; with `prefers-reduced-motion` forced on (devtools → Rendering → Emulate CSS media feature), no sweep and no spin, but the state is still legible |
-| Filters | mana chips are real symbols on printed fills, dim until pressed; set picker finds "Alpha" by name and "lea" by code with its symbol; 0–8+ chips in mono; **Reset all** shows a count and clears everything |
+| Filters | mana chips are real symbols on printed fills, dim until pressed; set picker finds "Alpha" by name with its symbol (finding it by the code `lea` is a **known gap** — matched but ranked last of 18; see the carryover ledger, deferred to Plan 6); 0–8+ chips in mono; **Reset all** shows a count and clears everything |
 | Filter combination | a colour + a set + a mana value narrows the results, and the count above the list agrees with what is listed |
 | Grid view | opens on card art; tiles fill in as they scroll into view; no layout jump; the rarity gem is a 6px dot, not a badge |
 | Fonts and symbols | devtools network panel shows **zero** requests to any external host — Cinzel, Geist Mono, `mana-font` and `keyrune` all come from the app origin |
@@ -6523,6 +6554,7 @@ Every MUST-DO from `docs/superpowers/notes/plan-1-carryover.md`, and where it we
 | Doc drift: duplicated FTS paragraph, "four fields", "three interpolations" | **Task 7** |
 | Deep-OFFSET paging at 595 ms @ 100k → keyset pagination if the grid pages hard | **Deferred, unchanged.** The grid pages the same `search_cards` the table already does, at the same offsets, so Plan 2 changes nothing about the measurement. Task 14's smoke is where it would show; if it does, keyset paging is a `search.rs` change and belongs with the other search work. |
 | Full collection/wishlist/deck image pre-warm (spec §5) | **Deferred to Plan 3.** There are no collection, wishlist or deck tables yet — a resumable job has nothing to enumerate. Task 14 ships the visible-page prefetch, which is the part that has data today. |
+| Single-flight map for in-flight image fetches (raised in Task 14's review) | **Deferred to Plan 3**, where the pre-warm job makes it load-bearing. Nothing dedups two requests for the same [`ImageKey`] that are in flight at once, so a tile and a prefetch can both fetch the same bytes, and two prefetch loops started by two pages that land together interleave. Task 14 bought most of the win for two lines instead: `prefetch_keys` returns the page **reversed**, so the batch walks away from the tiles the grid has just mounted rather than straight into them, and the loop `break`s on the first `RateLimited` instead of grinding ~99 fast-fails through the gate. What is left is a real dedup — a `Mutex<HashMap<ImageKey, Weak<Shared<…>>>>` in `Cache`, joined rather than re-fetched — which is worth building when a background job is fetching thousands of images beside a live grid, not before. |
 | Set picker ranks name matches over an exact code match (found in Task 14's smoke) | **Deferred to Plan 6.** `SetCombobox.matches` filters on `name.includes(needle) \|\| code.startsWith(needle)` and then keeps `list_sets`' `released_at DESC` order, so typing the code **`lea`** returns 18 sets with Limited Edition Alpha **last** — under seven League Tokens and eight Arena League sets, whose *names* contain "lea". Findable, but not surfaced, and the older the set the worse it gets. The fix is a sort key in `matches` (exact code, then code prefix, then name), not a backend change; it needs a test that pins `lea` → LEA first. Nothing is wrong with the data or the query. |
 | Image cache pruning / "clear cache" control | **Deferred to Plan 6** (settings + distribution). The cache is capped in practice by what the user browses (~1.1 GB worst case for `thumb`), deleting `data/images` is already safe by design, and a button to do it belongs with the rest of the settings screen. |
 

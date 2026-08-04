@@ -620,13 +620,29 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
     )
 }
 
-/// Images one prefetch call will warm. Two pages of results; past that a fast scroll
-/// queues work that competes with the tiles the reader is actually looking at.
+/// Images **one** prefetch call will warm — two pages of results.
+///
+/// A bound on the call, not on the app: nothing stops several of these loops running at
+/// once, and a fast scroll can start one per page that lands. That is survivable rather
+/// than designed — every loop still goes through the same semaphore and the same 100 ms
+/// gate, so concurrent loops share one budget instead of multiplying it. What they do
+/// cost is *ordering*: a later page's warm-up interleaves with an earlier one's. A
+/// single-flight map keyed on [`ImageKey`] is the real answer to both that and to a tile
+/// racing its own prefetch, and it is Plan-3 machinery — see the carryover ledger.
 const MAX_PREFETCH: usize = 100;
 
-/// The keys a prefetch request turns into, validated exactly as a protocol request is.
+/// The keys a prefetch request turns into, validated exactly as a protocol request is,
+/// **furthest-away first**.
+///
+/// The order is the whole point. The grid mounts the head of a page as tiles the instant
+/// it arrives, and every one of those tiles issues its own `mtgimg://` request; nothing
+/// dedups a fetch that is already in flight, so a prefetch starting at index 0 asks
+/// Scryfall for the same bytes a second time and spends a permit and a 100 ms slot doing
+/// it — against the tile the reader is currently staring at. Walking from the far end
+/// means the two meet in the middle instead of colliding at the start, and by the time
+/// the prefetch reaches the head those keys are cache hits.
 pub fn prefetch_keys(card_ids: &[String], variant: Variant) -> Vec<ImageKey> {
-    card_ids
+    let mut keys: Vec<ImageKey> = card_ids
         .iter()
         .filter(|id| is_card_id(id))
         // Front faces only: the back of a double-faced card is not on screen until
@@ -637,7 +653,12 @@ pub fn prefetch_keys(card_ids: &[String], variant: Variant) -> Vec<ImageKey> {
             variant,
         })
         .take(MAX_PREFETCH)
-        .collect()
+        .collect();
+    // After the cap, never before: the cap keeps the first `MAX_PREFETCH` ids of what was
+    // sent, and reversing first would warm the far tail of a long list — nowhere near the
+    // page the reader is on.
+    keys.reverse();
+    keys
 }
 
 /// Warm the cache for a page of results.
@@ -658,17 +679,48 @@ pub async fn prefetch_images(
     let state = state.inner().clone();
     let keys = prefetch_keys(&card_ids, variant);
     tauri::async_runtime::spawn(async move {
-        for key in keys {
-            // The cache's own semaphore and interval gate do the pacing; this loop just
-            // hands it work. A failure here is not worth reporting: the tile will ask
-            // again when it renders.
-            let _ = state
-                .images
-                .get(&state.client, &state.db_read, &state.db, &key)
-                .await;
-        }
+        warm(
+            &state.images,
+            &state.client,
+            &state.db_read,
+            &state.db,
+            keys,
+        )
+        .await;
     });
     Ok(())
+}
+
+/// Walk a batch, stopping at the first rate limit. Returns how many keys were attempted.
+///
+/// Split out of [`prefetch_images`] because that command needs a `tauri::State` and a
+/// running app, and the abandon-on-429 rule is exactly the part worth a test.
+async fn warm(
+    cache: &Cache,
+    client: &scryfall::Client,
+    read: &Mutex<Connection>,
+    write: &Mutex<Connection>,
+    keys: Vec<ImageKey>,
+) -> usize {
+    let mut attempted = 0;
+    for key in keys {
+        // The cache's own semaphore and interval gate do the pacing; this loop just hands
+        // it work.
+        attempted += 1;
+        match cache.get(client, read, write, &key).await {
+            // A rate limit is carried by the shared gate, so it is already true of every
+            // key left in this batch: continuing would be ~99 round trips through the
+            // database and the gate mutex, each failing fast and each contending with the
+            // tiles that are actually on screen. Abandon the batch — the next page that
+            // lands queues a fresh one, and any tile that needed these asks for itself.
+            Err(ImageError::RateLimited { .. }) => break,
+            // Anything else is this key's own problem and not the batch's: a 404 for a URI
+            // Scryfall published, an unreadable row. Not worth reporting either — the tile
+            // will ask again when it renders.
+            _ => {}
+        }
+    }
+    attempted
 }
 
 /// A wait in whole seconds, rounded **up**.
@@ -918,6 +970,45 @@ mod tests {
         );
 
         assert_eq!(keys.len(), 1);
+    }
+
+    /// The reason the batch is walked backwards: the grid mounts the *head* of a page as
+    /// tiles the moment it lands, and each of those tiles issues its own protocol request.
+    /// A prefetch that also started at index 0 would ask for the same key twice — nothing
+    /// dedups an in-flight fetch — and the duplicate spends a permit and a 100 ms slot
+    /// against the tile the reader is waiting on.
+    #[test]
+    fn a_prefetch_batch_starts_at_the_far_end_of_the_page() {
+        let ids: Vec<String> = (0..50)
+            .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
+            .collect();
+
+        let keys = prefetch_keys(&ids, Variant::Grid);
+
+        assert_eq!(keys.len(), 50);
+        assert_eq!(
+            keys[0].card_id, ids[49],
+            "the last card of the page is fetched first"
+        );
+        assert_eq!(
+            keys[49].card_id, ids[0],
+            "the first card — already mounted as a tile — is fetched last"
+        );
+    }
+
+    /// Reversed *after* the cap, not before: the cap keeps the first `MAX_PREFETCH` ids of
+    /// what was sent, and reversing first would silently prefetch the wrong end of a long
+    /// list — the far tail of 500 ids is nowhere near the page the reader is on.
+    #[test]
+    fn a_capped_batch_reverses_the_ids_it_kept_not_the_ones_it_dropped() {
+        let ids: Vec<String> = (0..500)
+            .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
+            .collect();
+
+        let keys = prefetch_keys(&ids, Variant::Grid);
+
+        assert_eq!(keys[0].card_id, ids[MAX_PREFETCH - 1]);
+        assert_eq!(keys[MAX_PREFETCH - 1].card_id, ids[0]);
     }
 
     #[test]
@@ -1338,6 +1429,50 @@ mod tests {
         assert!(
             ahead > Duration::from_secs(25),
             "every tile waits out a 429, not just the one that earned it: {ahead:?}"
+        );
+    }
+
+    /// A prefetch batch is abandoned at the first rate limit rather than walked to the end.
+    ///
+    /// The gate carries a 429 for the whole application, so once one key has earned one it
+    /// is already true of every key left in the batch: the rest would be ~99 round trips
+    /// through the read connection and the gate mutex, every one of them failing fast, and
+    /// every one contending with the tiles the reader is actually looking at.
+    #[tokio::test]
+    async fn a_rate_limited_prefetch_batch_is_abandoned_rather_than_walked_to_the_end() {
+        let f = Fixture::new("prefetch-429");
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/grid/v17.webp");
+            then.status(429).header("retry-after", "30");
+        });
+        let uri = format!("{}/grid/v17.webp", server.base_url());
+        // Ten real cards, all uncached, all pointing at the endpoint that says no.
+        let ids: Vec<String> = (0..10)
+            .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
+            .collect();
+        for id in &ids {
+            f.card(id, &uri);
+        }
+        let client = scryfall::Client::new(server.base_url());
+
+        let attempted = warm(
+            &f.cache,
+            &client,
+            &f.read,
+            &f.write,
+            prefetch_keys(&ids, Variant::Grid),
+        )
+        .await;
+
+        assert_eq!(attempted, 1, "the batch stops at the key that was refused");
+        // One request left the process, not ten: the nine after it never even reached the
+        // gate, let alone the network.
+        mock.assert_calls(1);
+        assert_eq!(
+            f.cached_row(&ids[9]),
+            None,
+            "nothing a refused batch touched is recorded as cached"
         );
     }
 
