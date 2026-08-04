@@ -81,6 +81,9 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub syncing: AtomicBool,
     pub client: scryfall::Client,
+    /// The image cache. Lives here so the `mtgimg://` handler can reach it from an
+    /// `AppHandle` — that handle is the only state the handler is given.
+    pub images: crate::images::Cache,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -300,7 +303,16 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 ///
 /// Shared with [`crate::search`] so that recovery rule lives in exactly one place.
 pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
-    state.db.lock().unwrap_or_else(|e| e.into_inner())
+    lock_conn(&state.db)
+}
+
+/// Lock a connection mutex, recovering from poisoning.
+///
+/// The rule [`lock_db`] and [`lock_db_read`] both apply, in one place, over any mutex —
+/// [`crate::images::Cache`] is handed `&Mutex<Connection>` rather than an `AppState`, so
+/// it needs the rule without the state.
+pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.
@@ -308,7 +320,7 @@ pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
 /// A different mutex from `db`, which is the point: this one is only ever held for the
 /// length of one query, so waiting for it is bounded no matter what the writer is doing.
 pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
-    state.db_read.lock().unwrap_or_else(|e| e.into_inner())
+    lock_conn(&state.db_read)
 }
 
 /// Lock the database only if that can be done now.
@@ -684,6 +696,9 @@ mod tests {
             syncing: AtomicBool::new(syncing),
             // Never called: these tests stop short of the network.
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            // Never touched either — a `Cache` creates nothing until it is asked for an
+            // image, so this directory does not have to exist.
+            images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
         }
     }
 

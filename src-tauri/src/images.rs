@@ -127,6 +127,42 @@ pub fn cache_path(images_dir: &Path, key: &ImageKey) -> Option<PathBuf> {
     )
 }
 
+/// Faces this app will serve. Every physical Magic card has at most two sides, and the
+/// number goes into a file name — an unbounded one is an unbounded directory.
+const MAX_FACE: u8 = 1;
+
+/// `/<variant>/<card_id>/<face>` → a key, or `None`.
+///
+/// The path is attacker-controlled in the sense that matters — it comes out of a URL the
+/// renderer builds and ends up as a filesystem path — so this validates rather than
+/// sanitises: the variant must be one of four literals, the id must look like a Scryfall
+/// UUID (hex and dashes, nothing else, so no separator survives in any encoding), and the
+/// face must be a single digit within range. Anything else is refused, not repaired.
+///
+/// The leading slash is optional because the two platform URL forms differ in *origin*,
+/// not in path (`http://mtgimg.localhost/…` on Windows, `mtgimg://localhost/…`
+/// elsewhere) — a parser that insisted on one shape would be a parser that broke on the
+/// other platform's first run.
+pub fn parse_request_path(path: &str) -> Option<ImageKey> {
+    let mut parts = path.trim_start_matches('/').split('/');
+    let variant = Variant::parse(parts.next()?)?;
+    let card_id = parts.next()?;
+    let face: u8 = parts.next()?.parse().ok()?;
+    // A fourth segment means the URL is not the one this app builds, and guessing at what
+    // it meant is how a path traversal gets in.
+    if parts.next().is_some() {
+        return None;
+    }
+    if face > MAX_FACE || !is_card_id(card_id) {
+        return None;
+    }
+    Some(ImageKey {
+        card_id: card_id.to_owned(),
+        face,
+        variant,
+    })
+}
+
 /// What a placeholder is standing in for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placeholder {
@@ -361,7 +397,7 @@ impl Cache {
             // A short synchronous scope, closed before the first `.await` below: a
             // `MutexGuard` held across one would make this future `!Send` (the protocol
             // spawns it) and would hold the read connection open for a network fetch.
-            let conn = read.lock().unwrap_or_else(|e| e.into_inner());
+            let conn = crate::sync::lock_conn(read);
             match resolve(&conn, key).map_err(ImageError::Db)? {
                 Resolution::Unknown => return Err(ImageError::UnknownCard),
                 Resolution::Missing(kind) => {
@@ -478,6 +514,110 @@ impl Cache {
         let mut next = self.gate.lock().await;
         *next = (*next).max(tokio::time::Instant::now() + penalty);
     }
+}
+
+/// How long the webview may keep an image it has been given.
+///
+/// A day, not a year: the URL is stable across Scryfall re-scanning a card, so an
+/// immutable cache would pin a superseded picture inside the webview until the app is
+/// reinstalled. A day of staleness after a re-scan is invisible; being asked again for
+/// every tile that scrolls past is not.
+const IMAGE_MAX_AGE: &str = "max-age=86400";
+
+/// The HTTP answer for one resolved request.
+///
+/// Separated from [`serve`] because this is the whole contract with the renderer and it is
+/// pure — `serve` itself needs a running Tauri app, and a contract that can only be
+/// exercised by launching one is a contract nothing checks.
+///
+/// The distinction that matters is permanent-versus-retryable. A printing Scryfall has no
+/// art for is a **200** with a placeholder, because there is nothing to retry; a failed
+/// fetch is a **502**, and a rate limit a **503** carrying the wait, so the `<img>` can
+/// report an error and the grid can heal itself. Serving a placeholder for a network
+/// failure would quietly turn a temporary outage into a permanently artless collection.
+fn respond(result: Result<Served, ImageError>) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response, StatusCode};
+
+    match result {
+        Ok(served) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, served.content_type)
+            .header(header::CACHE_CONTROL, IMAGE_MAX_AGE)
+            .body(served.bytes)
+            .expect("image response"),
+        Err(ImageError::UnknownCard) => fail(StatusCode::NOT_FOUND, "no such card", None),
+        Err(ImageError::RateLimited { retry_after_secs }) => fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "rate limited by Scryfall",
+            Some(retry_after_secs),
+        ),
+        Err(e) => fail(StatusCode::BAD_GATEWAY, &e.to_string(), None),
+    }
+}
+
+/// A failure, as the webview sees it.
+///
+/// `no-store` on every one of them. A 404 is *heuristically* cacheable, and the card
+/// behind one can arrive in the next sync — a cached 404 would outlive the thing it was
+/// true about, with no way to invalidate it short of restarting the app. The same applies
+/// to a 503 the whole design expects to be retried.
+fn fail(
+    status: tauri::http::StatusCode,
+    message: &str,
+    retry_after: Option<u64>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response};
+
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "text/plain;charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store");
+    if let Some(secs) = retry_after {
+        builder = builder.header(header::RETRY_AFTER, secs.to_string());
+    }
+    builder
+        .body(message.as_bytes().to_vec())
+        .expect("static response")
+}
+
+/// The answer for a request that arrives before `setup` has managed the state.
+///
+/// The webview and the app's own startup genuinely race at launch, so this is a real
+/// state rather than a defensive impossibility — and a retryable one, in about the time
+/// it takes to read the header.
+fn not_ready() -> tauri::http::Response<Vec<u8>> {
+    fail(
+        tauri::http::StatusCode::SERVICE_UNAVAILABLE,
+        "app is still starting",
+        Some(1),
+    )
+}
+
+/// Answer one `mtgimg://` request.
+///
+/// Only the *path* is ever read: on Windows the origin is `http://mtgimg.localhost/…` and
+/// elsewhere `mtgimg://localhost/…`, so a handler that looked at the host would be a
+/// handler that worked on exactly one platform.
+pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
+    use tauri::Manager;
+
+    let Some(key) = parse_request_path(path) else {
+        return fail(
+            tauri::http::StatusCode::NOT_FOUND,
+            "not an image request",
+            None,
+        );
+    };
+    let Some(state) = app.try_state::<std::sync::Arc<crate::sync::AppState>>() else {
+        return not_ready();
+    };
+
+    respond(
+        state
+            .images
+            .get(&state.client, &state.db_read, &state.db, &key)
+            .await,
+    )
 }
 
 /// A wait in whole seconds, rounded **up**.
@@ -662,6 +802,42 @@ mod tests {
                 "`{bad}` must not become a path"
             );
             assert!(!is_card_id(bad), "`{bad}` must not read as a card id");
+        }
+    }
+
+    #[test]
+    fn a_request_path_parses_into_a_key() {
+        let k = parse_request_path("/grid/0000419b-0bba-4488-8f7a-6194544ce91d/0").unwrap();
+        assert_eq!(k.card_id, "0000419b-0bba-4488-8f7a-6194544ce91d");
+        assert_eq!(k.face, 0);
+        assert_eq!(k.variant, Variant::Grid);
+
+        // Same path with no leading slash: the two platform URL forms differ in origin,
+        // not in path, but a handler that assumed one of them is a handler that breaks on
+        // the other platform's first run.
+        let k = parse_request_path("display/ab000000-0000-0000-0000-000000000001/1").unwrap();
+        assert_eq!(k.face, 1);
+        assert_eq!(k.variant, Variant::Display);
+    }
+
+    /// The path becomes a filesystem path, so everything that is not a Scryfall UUID and
+    /// one of four variant names has to die here. `..` is the obvious attack; a
+    /// percent-encoded separator is the one that gets missed.
+    #[test]
+    fn a_hostile_or_malformed_path_is_refused() {
+        for bad in [
+            "/grid/../../../windows/system32/config/sam/0",
+            "/grid/%2e%2e%2f%2e%2e%2fsecrets/0",
+            "/png/0000419b-0bba-4488-8f7a-6194544ce91d/0",
+            "/grid/0000419b-0bba-4488-8f7a-6194544ce91d",
+            "/grid/0000419b-0bba-4488-8f7a-6194544ce91d/0/extra",
+            "/grid/not a uuid/0",
+            "/grid/0000419b-0bba-4488-8f7a-6194544ce91d/nine",
+            "/grid/0000419b-0bba-4488-8f7a-6194544ce91d/9",
+            "",
+            "/",
+        ] {
+            assert!(parse_request_path(bad).is_none(), "{bad} must be refused");
         }
     }
 
@@ -1316,5 +1492,103 @@ mod tests {
         let write = Mutex::new(Connection::open_in_memory().unwrap());
 
         assert_send(&cache.get(&client, &read, &write, &key(BOLT, 0, Variant::Grid)));
+    }
+
+    fn header<'a>(r: &'a tauri::http::Response<Vec<u8>>, name: &str) -> Option<&'a str> {
+        r.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    /// Bytes, and permission to keep them for a day — not forever. The URL is stable
+    /// across Scryfall re-scanning a card, so an immutable cache would pin a superseded
+    /// picture inside the webview until the app is reinstalled.
+    #[test]
+    fn a_served_image_is_a_200_the_webview_may_cache_for_a_day() {
+        let r = respond(Ok(Served {
+            bytes: vec![0x52, 0x49, 0x46, 0x46],
+            content_type: WEBP,
+        }));
+
+        assert_eq!(r.status(), tauri::http::StatusCode::OK);
+        assert_eq!(header(&r, "content-type"), Some(WEBP));
+        assert_eq!(header(&r, "cache-control"), Some("max-age=86400"));
+        assert_eq!(r.body(), &vec![0x52u8, 0x49, 0x46, 0x46]);
+    }
+
+    /// A printing Scryfall has no art for is a **200**: there is nothing to retry, and a
+    /// failure status would put a broken-image icon where the app has a considered answer.
+    #[test]
+    fn a_placeholder_is_a_200_because_there_is_nothing_to_retry() {
+        let svg = placeholder_svg(Placeholder::NoImage, Variant::Grid);
+        let r = respond(Ok(Served {
+            bytes: svg.clone().into_bytes(),
+            content_type: SVG,
+        }));
+
+        assert_eq!(r.status(), tauri::http::StatusCode::OK);
+        assert_eq!(header(&r, "content-type"), Some(SVG));
+        assert_eq!(r.body(), &svg.into_bytes());
+    }
+
+    /// An id nothing resolves to is a caller error. A 404 rather than a placeholder,
+    /// because a broken link must not be indistinguishable from a card with no art — and
+    /// `no-store`, because the card can arrive in the very next sync and a heuristically
+    /// cached 404 would outlive it.
+    #[test]
+    fn an_unknown_card_is_an_uncacheable_404() {
+        let r = respond(Err(ImageError::UnknownCard));
+
+        assert_eq!(r.status(), tauri::http::StatusCode::NOT_FOUND);
+        assert_eq!(header(&r, "content-type"), Some("text/plain;charset=utf-8"));
+        assert_eq!(header(&r, "cache-control"), Some("no-store"));
+        assert!(header(&r, "retry-after").is_none());
+    }
+
+    /// The one case the grid can heal from on its own, so it is the one case that carries
+    /// instructions: a **503** with the wait in seconds. The number is the *clamped* one
+    /// the fetcher will actually honour — telling the UI to come back sooner than the gate
+    /// opens is how a retry loop walks straight into a Scryfall ban.
+    #[test]
+    fn a_rate_limit_is_a_503_carrying_the_wait_the_fetcher_will_honour() {
+        let r = respond(Err(ImageError::RateLimited {
+            retry_after_secs: 30,
+        }));
+
+        assert_eq!(r.status(), tauri::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            header(&r, "retry-after"),
+            Some("30"),
+            "the header is what the grid schedules its retry from"
+        );
+        assert_eq!(header(&r, "cache-control"), Some("no-store"));
+    }
+
+    /// Everything else is a **502**: the app reached its own cache fine and the far end is
+    /// what failed. Emphatically not a 200 with a placeholder — that would turn a
+    /// five-second outage into a collection that is permanently artless, with no signal
+    /// anywhere that a retry would fix it.
+    #[test]
+    fn every_other_failure_is_a_502_that_says_what_broke() {
+        for e in [
+            ImageError::Fetch("connection reset".into()),
+            ImageError::Io("the disk is full".into()),
+            ImageError::Db("database is locked".into()),
+        ] {
+            let expected = e.to_string();
+            let r = respond(Err(e));
+            assert_eq!(r.status(), tauri::http::StatusCode::BAD_GATEWAY);
+            assert_eq!(header(&r, "cache-control"), Some("no-store"));
+            assert_eq!(String::from_utf8(r.body().clone()).unwrap(), expected);
+        }
+    }
+
+    /// A request that arrives before `setup` has managed the state — the webview and the
+    /// first sync race at launch. Retryable, and the shortest honest wait, because the
+    /// state appears within milliseconds.
+    #[test]
+    fn a_request_before_the_app_has_its_state_is_a_503_worth_retrying_at_once() {
+        let r = not_ready();
+
+        assert_eq!(r.status(), tauri::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(header(&r, "retry-after"), Some("1"));
     }
 }

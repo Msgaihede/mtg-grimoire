@@ -65,6 +65,22 @@ pub fn run() {
             focus_existing_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
+        // (that is Electron): registering the scheme here is what privileges it, and the
+        // CSP in tauri.conf.json is what lets the page load from it. On Windows the origin
+        // is `http://mtgimg.localhost/…` and elsewhere `mtgimg://localhost/…`, so only the
+        // path is ever read.
+        //
+        // Asynchronous, because a cache miss is a network fetch: the synchronous form
+        // would block the webview's resource loader — every other image on the page
+        // included — for the length of one download.
+        .register_asynchronous_uri_scheme_protocol("mtgimg", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(images::serve(&app, &path).await);
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             sync_run,
             sync_status,
@@ -163,12 +179,16 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
     let conn_read = db::open_read_only(&db_path)
         .map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
 
+    // Built before the struct, because `data_dir` is moved into it.
+    let images = images::Cache::new(data_dir.join("images"));
+
     Ok(AppState {
         db: Mutex::new(conn),
         db_read: Mutex::new(conn_read),
         data_dir,
         syncing: AtomicBool::new(false),
         client: scryfall::Client::new(SCRYFALL_API.to_owned()),
+        images,
     })
 }
 

@@ -758,6 +758,7 @@ mod tests {
             data_dir: dir.clone(),
             syncing: AtomicBool::new(true),
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            images: crate::images::Cache::new(dir.join("images")),
         });
 
         // Stands in for the ingest, which holds this exact lock for the length of a sync.
