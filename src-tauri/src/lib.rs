@@ -256,5 +256,13 @@ mod tests {
             !csp.contains("localhost:1420"),
             "dev-only sources leaked into csp: {csp}"
         );
+        // The dev policy is the one under daily pressure — every "just let me load this"
+        // is proposed against it, and a wildcard added here is a wildcard nobody sees
+        // fail. It is also what every UI task is smoke-tested under, so a source that is
+        // wild in dev is a source production has never been exercised without.
+        assert!(
+            !dev.contains('*'),
+            "no wildcard sources belong in devCsp: {dev}"
+        );
     }
 }
