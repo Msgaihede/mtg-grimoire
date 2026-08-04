@@ -52,20 +52,24 @@ const CARDS_COLUMNS: &str = "
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v < 1 {
-        conn.execute_batch(&format!(
-            "BEGIN;
-             CREATE TABLE IF NOT EXISTS cards ({CARDS_COLUMNS});
+        // One transaction for the whole migration, `user_version` bumped last: if any
+        // step fails the database stays at version 0 and the next run retries cleanly.
+        // Bumping it before the FTS table exists would mark the database migrated with
+        // no search index and no path back.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS cards ({CARDS_COLUMNS});
              CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id);
              CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number);
              CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
              CREATE TABLE IF NOT EXISTS sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
                 set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
-             CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             PRAGMA user_version = 1;
-             COMMIT;"
+             CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         ))?;
-        create_fts(conn)?;
+        create_fts(&tx)?;
+        tx.execute_batch("PRAGMA user_version = 1;")?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -100,18 +104,25 @@ pub fn create_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// The FTS table is dropped and rebuilt rather than migrated: external-content FTS5
 /// tracks rows by rowid, and a swapped-in table has entirely new rowids. A full
 /// rebuild is deterministic and cannot leave stale index entries behind.
+///
+/// The whole swap — index drop, table swap, index rebuild — is one transaction, so it
+/// either happens or it doesn't. Anything less can leave the database with no search
+/// index, which `migrate()` will not repair once `user_version` is set. On failure the
+/// [`Transaction`] rolls back as it drops, leaving the connection ready for a retry.
+///
+/// [`Transaction`]: rusqlite::Transaction
 pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
         "DROP TABLE IF EXISTS cards_fts;
-         BEGIN;
          DROP TABLE cards;
          ALTER TABLE cards_staging RENAME TO cards;
          CREATE INDEX idx_cards_oracle ON cards(oracle_id);
          CREATE INDEX idx_cards_set_cn ON cards(set_code, collector_number);
-         CREATE INDEX idx_cards_name ON cards(name);
-         COMMIT;",
+         CREATE INDEX idx_cards_name ON cards(name);",
     )?;
-    create_fts(conn)
+    create_fts(&tx)?;
+    tx.commit()
 }
 
 #[cfg(test)]
@@ -131,6 +142,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 4);
+
+        // Without this the test would still pass while `migrate` re-ran its whole batch
+        // every call (the CREATEs are all `IF NOT EXISTS`), silently rebuilding FTS each
+        // time. The version bump is what makes the rerun a genuine no-op.
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
     }
 
     #[test]
@@ -145,6 +164,72 @@ mod tests {
             .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1);
+
+        // The swapped-in table must carry the same index names as the one it replaced,
+        // or every query planned against `cards` silently loses its index.
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='cards'
+                 AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            idx, 3,
+            "indexes must be recreated under their original names"
+        );
+
+        let staging: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(staging, 0, "staging table is consumed by the rename");
+    }
+
+    /// A swap that fails partway must leave the database exactly as it found it —
+    /// `cards` intact, the search index intact, and no transaction left dangling on
+    /// the connection. Here the failure is a missing `cards_staging`, which trips the
+    /// swap *after* it has already dropped `cards` and `cards_fts`.
+    #[test]
+    fn failed_swap_rolls_back_and_leaves_connection_usable() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute("INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw) VALUES ('old','Old Card','abc','1','en','normal','{}')", []).unwrap();
+
+        assert!(
+            swap_staging(&conn).is_err(),
+            "swap without a staging table must fail"
+        );
+
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "`cards` and its rows must survive a failed swap");
+        let fts: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='cards_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts, 1, "the search index must survive a failed swap");
+
+        // No stuck transaction: a real swap on this same connection must still work.
+        create_staging(&conn).unwrap();
+        conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
+        swap_staging(&conn).unwrap();
         let hits: i64 = conn
             .query_row(
                 "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
