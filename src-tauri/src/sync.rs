@@ -499,9 +499,16 @@ async fn finish_unchanged(
 /// A failure is recorded and never retried automatically: `VACUUM` needs free space about
 /// the size of the database, so the common failure is a disk that will still be full
 /// tomorrow. Plan 6's "Compact database" control is what clears the key and asks again.
+/// Asked of the **write** connection, not `db_read`, and that is the difference between
+/// "once, ever" and "once per sync". `PRAGMA auto_vacuum` is answered from a per-connection
+/// cache of the file header, and a connection refreshes it only when a read transaction
+/// happens to notice the file changed — so immediately after a conversion the read handle
+/// still reports `NONE` and would order the same 30 s `VACUUM` again on the next Refresh of
+/// the session. The connection that ran the `VACUUM` is the one that knows. Pinned by
+/// `maintenance::tests::a_read_only_handle_reports_a_stale_auto_vacuum_after_a_conversion`.
 async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let due = {
-        let conn = lock_db_read(state);
+        let conn = lock_db(state);
         crate::maintenance::needs_conversion(&conn)
             && get_meta(&conn, crate::maintenance::K_AUTO_VACUUM_ERROR).is_none()
     };

@@ -204,6 +204,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Two facts about the app's *second* connection, and the second one is a trap.
+    ///
+    /// The conversion must survive the read-only handle `init_state` opens alongside the
+    /// writer — a `VACUUM` that lost to the app's own reader would be a conversion that can
+    /// never happen. It does survive.
+    ///
+    /// But `PRAGMA auto_vacuum` is answered out of a per-connection cache of the file
+    /// header, refreshed only when a read transaction notices the file changed. So the
+    /// reader goes on reporting `NONE` after a conversion the writer has already finished,
+    /// and corrects itself only at its next real query. That is why `sync::compact_once`
+    /// asks the **write** connection whether a conversion is due: asking the reader would
+    /// order the same 22–37 s `VACUUM` again on the next Refresh of the session.
+    #[test]
+    fn a_read_only_handle_reports_a_stale_auto_vacuum_after_a_conversion() {
+        let dir = scratch("reader");
+        let path = dir.join("mtg.db");
+        let conn = legacy_database(&path);
+        for i in 0..500 {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,search_text,raw)
+                 VALUES (?1,?2,'lea',?1,'en','normal',?2,'{}')",
+                rusqlite::params![format!("c{i}"), format!("Lightning Bolt {i}")],
+            )
+            .unwrap();
+        }
+        // The app's second handle, exactly as `init_state` builds it, and warmed with a
+        // query so it is a real open reader rather than an unused file descriptor.
+        let reader = crate::db::open_read_only(&path).unwrap();
+        let n: i64 = reader
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 500);
+
+        convert_to_incremental(&conn).expect("a VACUUM must not lose to the app's own reader");
+
+        assert!(
+            !needs_conversion(&conn),
+            "the connection that ran the VACUUM knows it ran"
+        );
+        assert!(
+            needs_conversion(&reader),
+            "if this ever stops being stale, `compact_once` may read `db_read` again"
+        );
+        // What clears it: any real query, because that is what re-reads the header.
+        let after: i64 = reader
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, 500, "and the reader still sees every row");
+        assert!(!needs_conversion(&reader));
+
+        drop(reader);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A database this app creates is incremental from its first byte — which is only true
     /// because `db::open` sets the pragma *before* `journal_mode=WAL` writes the header.
     /// Measured live: with WAL first, a new file reads back `auto_vacuum = 0` and stays
