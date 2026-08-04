@@ -21,8 +21,7 @@
 
 use serde_json::Value;
 
-/// One row of `cards`, minus `raw` (the ingest carries the original line separately).
-/// Field order mirrors the `cards` column list in [`crate::schema`].
+/// One row of `cards`. Field order mirrors the `cards` column list in [`crate::schema`].
 #[derive(Debug, Clone)]
 pub struct CardRow {
     pub id: String,
@@ -68,6 +67,11 @@ pub struct CardRow {
     /// (two faces, one physical side, images at the top level) out of the column.
     pub face_image_uris: Option<String>,
     pub search_text: String,
+    /// The original bulk line, stored verbatim so every field this schema does not model
+    /// yet stays recoverable without a re-download. Owned by the row rather than passed
+    /// beside it, because the batch that carries it to the database outlives the loop
+    /// iteration that read it.
+    pub raw: String,
 }
 
 /// A string field, if present and actually a string.
@@ -124,8 +128,16 @@ fn price(v: &Value, k: &str) -> Option<f64> {
 }
 
 impl CardRow {
-    /// None => skip line (not a card object)
+    /// The parse without a line to remember — used by tests and by anything that only
+    /// wants the derived columns. `raw` is then the serialization of `v`.
     pub fn from_json(v: &Value) -> Option<CardRow> {
+        CardRow::from_json_line(v, &v.to_string())
+    }
+
+    /// `None` => skip line (not a card object). `raw` is the line the value was parsed
+    /// from; `v.to_string()` is *not* the same thing (serde re-orders and re-formats), and
+    /// the column's promise is verbatim.
+    pub fn from_json_line(v: &Value, line: &str) -> Option<CardRow> {
         if v.get("object")?.as_str()? != "card" {
             return None;
         }
@@ -222,6 +234,7 @@ impl CardRow {
                 any.then(|| Value::Array(per).to_string())
             }),
             search_text,
+            raw: line.to_owned(),
         })
     }
 }

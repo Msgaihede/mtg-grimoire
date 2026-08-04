@@ -54,25 +54,47 @@ pub fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// How long a user-facing write waits for the write connection before answering "busy".
+///
+/// With the chunked ingest the longest anyone can be behind is one batch of 2 000 rows —
+/// well under a second at the measured 2 600 rows/s. Five seconds is therefore not a
+/// budget for a sync, it is the point at which something has genuinely gone wrong and the
+/// honest answer is to say so rather than to hold a button down.
+pub const WRITE_LOCK_WAIT: Duration = Duration::from_secs(5);
+
+/// Take `mutex`, waiting as long as it takes.
+///
+/// Poisoning means some other thread panicked while holding the lock; the `Connection`
+/// itself survives that (rusqlite rolls an open transaction back as it unwinds), so
+/// refusing to lock ever again would brick every later sync and search for no gain.
+///
+/// This is the *one* definition of that rule — `sync::lock_conn`, `sync::lock_db` and
+/// `sync::lock_db_read` all reach it, and [`lock_for`] applies the same recovery to the
+/// bounded case.
+pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,
 /// long enough that a contended lock is not a spin.
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Take `mutex`, giving up after `timeout` rather than queueing behind whatever holds it.
 ///
-/// The write connection is held for the whole of a 44 s ingest. Callers who cannot pay
-/// that — the exit checkpoint, the image cache's bookkeeping — ask for a bound instead,
-/// because for both of them "could not" is a real answer: skip the checkpoint (the WAL is
-/// a valid journal either way), skip the row (one re-fetch from an unlimited origin).
+/// The ingest no longer holds the write connection for its whole run — it takes and
+/// releases it once per batch — but a bounded ask is still the right shape for callers
+/// who have a real answer for "could not": the exit checkpoint (skip it, the WAL is a
+/// valid journal either way), the image cache's bookkeeping (skip the row, one re-fetch
+/// from an unlimited origin), and the user-facing writes that answer "busy" after
+/// [`WRITE_LOCK_WAIT`] rather than freezing a button.
 ///
 /// A `timeout` of [`Duration::ZERO`] is exactly one `try_lock` with no sleeping at all,
-/// which is what a caller on an async worker thread wants: contention on the *write*
-/// connection means an ingest that will hold it for the next 44 s, so polling for it would
-/// park a pool thread on a lock it was never going to win. The exit checkpoint, which runs
-/// on its own thread with the process already ending, is the caller that can afford to
-/// wait a little.
+/// which is what a caller on an async worker thread wants: a contended write connection
+/// is not worth parking a pool thread on when the work is optional anyway. The exit
+/// checkpoint, which runs on its own thread with the process already ending, is the
+/// caller that can afford to wait a little.
 ///
-/// Poisoning is recovered exactly as `sync::lock_db` does: the panicking thread's
+/// Poisoning is recovered exactly as [`lock_blocking`] does: the panicking thread's
 /// `Connection` survives, and refusing the lock forever would brick the app for no gain.
 pub fn lock_for(
     mutex: &Mutex<Connection>,

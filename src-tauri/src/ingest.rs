@@ -1,9 +1,14 @@
 //! Streaming ingest of a Scryfall bulk-data file (`.jsonl.gz`) into `cards`.
 //!
 //! The file is ~500 MB decompressed, so nothing is ever fully materialized: the
-//! gzip stream is decoded, line-buffered, and parsed one line at a time, and each
-//! row goes straight into `cards_staging` through a single prepared statement.
-//! Peak memory is one line plus SQLite's page cache.
+//! gzip stream is decoded, line-buffered, and parsed one line at a time into a
+//! batch of at most [`BATCH`] rows, which is then written to `cards_staging`
+//! through one cached statement. Peak memory is one batch plus SQLite's page cache.
+//!
+//! The batch is also the unit of *locking*. This module is handed the shared
+//! `Mutex<Connection>` rather than a `Connection`, and takes it once per batch, so
+//! a user write during the daily sync waits one batch instead of one sync. See
+//! [`ingest_gz`].
 //!
 //! Bad input is never fatal. Scryfall's bulk file has held truncated lines and
 //! non-card objects, and one of those must not cost the user their whole card
@@ -17,9 +22,13 @@ use flate2::read::GzDecoder;
 use rusqlite::{params, Connection};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::sync::Mutex;
 
-/// Rows between progress callbacks. Small enough that a stalled ingest is visible
-/// within a second or so, large enough that the callback is not the bottleneck.
+/// Rows per staging transaction, and so also rows between progress callbacks.
+///
+/// Two jobs, deliberately the same number: it is how long another writer can be made
+/// to wait for the connection, and how often a stalled ingest becomes visible. At the
+/// measured 2 600 rows/s both are well under a second.
 const BATCH: u64 = 2000;
 
 /// What an ingest did. `inserted + skipped` is the number of lines read.
@@ -51,58 +60,101 @@ pub enum IngestError {
 /// Lines that are not valid JSON, or that are not card objects, are skipped and
 /// counted — they never abort the ingest. Any other failure (I/O, database)
 /// returns before the swap, so the previous `cards` table is left untouched: the
-/// staging transaction rolls back on drop and `cards_staging` is dropped and
-/// recreated by the next run.
+/// batches that did commit sit in `cards_staging`, which no reader can see and
+/// which the next run drops before it writes a row.
 ///
 /// If *nothing* parsed as a card, this returns [`IngestError::Empty`] without
 /// swapping: an empty result is a failed download, and swapping it in would wipe
 /// a working collection.
 ///
-/// **`conn` must be in autocommit mode.** The staging load runs in a transaction
-/// this function opens itself, and [`schema::swap_staging`] opens one internally
-/// via `unchecked_transaction`, so calling this from inside a caller-held
-/// transaction fails at `BEGIN`. The staging transaction is committed before the
-/// swap begins.
+/// # The connection is taken a batch at a time, not for the whole run
+///
+/// `db` is the shared write connection, and this takes it once per [`BATCH`] rows
+/// and gives it straight back. That is not an optimisation: the ingest is the
+/// app's longest write (~44 s measured), and holding the mutex throughout meant a
+/// user edit during the daily sync was a frozen button. It also bounds the WAL —
+/// autocheckpoint can finally run mid-ingest, where a single 116 k-row transaction
+/// grew a ~1.9 GB transient one.
+///
+/// **The connection must be in autocommit mode when this is called.** Each batch
+/// opens a transaction of its own, and [`schema::swap_staging`] opens one via
+/// `unchecked_transaction`, so calling this from inside a caller-held transaction
+/// fails at `BEGIN`. Every batch is committed before the swap begins.
 pub fn ingest_gz(
-    conn: &mut Connection,
+    db: &Mutex<Connection>,
     gz_path: &Path,
     progress: &mut dyn FnMut(u64),
 ) -> Result<IngestStats, IngestError> {
     // Opened before the database is touched: a missing or unreadable path must not
     // cost the caller the staging table it was about to fill.
     let file = std::fs::File::open(gz_path)?;
-    schema::create_staging(conn)?;
+    {
+        let conn = crate::db::lock_blocking(db);
+        schema::create_staging(&conn)?;
+    }
     let reader = BufReader::new(GzDecoder::new(file));
     let mut stats = IngestStats {
         inserted: 0,
         skipped: 0,
     };
+    let mut batch: Vec<CardRow> = Vec::with_capacity(BATCH as usize);
 
-    // One transaction for the whole staging load: staging is invisible to readers
-    // until the swap, so there is nothing to gain from intermediate commits and a
-    // failure partway through rolls the partial load away for free.
+    for line in reader.lines() {
+        let line = line?;
+        // Parsing happens with the lock *not* held — it is the expensive half of the
+        // loop, and the whole point of chunking is that the connection is free during it.
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            stats.skipped += 1;
+            continue;
+        };
+        let Some(row) = CardRow::from_json_line(&v, &line) else {
+            stats.skipped += 1;
+            continue;
+        };
+        batch.push(row);
+        if batch.len() as u64 >= BATCH {
+            write_batch(db, &mut batch)?;
+            stats.inserted += BATCH;
+            progress(stats.inserted);
+        }
+    }
+    if !batch.is_empty() {
+        stats.inserted += batch.len() as u64;
+        write_batch(db, &mut batch)?;
+    }
+
+    // Nothing parsed as a card: the download is bad, not the collection. Swapping
+    // here would trade a working card database for an empty one, so refuse — and
+    // drop the empty staging table rather than leave it lying around.
+    if stats.inserted == 0 {
+        let conn = crate::db::lock_blocking(db);
+        conn.execute_batch("DROP TABLE IF EXISTS cards_staging")?;
+        return Err(IngestError::Empty {
+            skipped: stats.skipped,
+        });
+    }
+
+    {
+        let conn = crate::db::lock_blocking(db);
+        schema::swap_staging(&conn)?;
+    }
+    progress(stats.inserted);
+    Ok(stats)
+}
+
+/// Commit one batch of parsed rows into `cards_staging`, then let go of the connection.
+///
+/// One transaction per batch rather than one for the whole load. Staging is invisible to
+/// readers until the swap either way, so the transaction is not what protects anyone —
+/// it is a write-batching device, and the *release* between batches is the feature. A
+/// crash partway leaves a partial `cards_staging`, which the next run drops before it
+/// writes anything (see `create_staging`).
+fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), IngestError> {
+    let mut conn = crate::db::lock_blocking(db);
     let tx = conn.transaction()?;
     {
-        let mut stmt = tx.prepare(
-            "INSERT INTO cards_staging (id, oracle_id, name, lang, released_at, set_code, set_name,
-                collector_number, rarity, layout, mana_cost, cmc, type_line, oracle_text, colors,
-                color_identity, legalities, games, finishes, prices, price_usd, price_eur, faces,
-                illustration_id, frame_effects, border_color, full_art, promo, promo_types, digital,
-                is_paper, edhrec_rank, game_changer, image_status, image_updated_at, image_uris,
-                face_image_uris, search_text, raw)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
-                ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39)",
-        )?;
-        for line in reader.lines() {
-            let line = line?;
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-                stats.skipped += 1;
-                continue;
-            };
-            let Some(c) = CardRow::from_json(&v) else {
-                stats.skipped += 1;
-                continue;
-            };
+        let mut stmt = tx.prepare_cached(STAGING_INSERT)?;
+        for c in batch.iter() {
             stmt.execute(params![
                 c.id,
                 c.oracle_id,
@@ -142,32 +194,26 @@ pub fn ingest_gz(
                 c.image_uris,
                 c.face_image_uris,
                 c.search_text,
-                // The original line, stored verbatim: every field this schema does not
-                // model yet stays recoverable without a re-download.
-                line,
+                c.raw,
             ])?;
-            stats.inserted += 1;
-            if stats.inserted.is_multiple_of(BATCH) {
-                progress(stats.inserted);
-            }
         }
     }
     tx.commit()?;
-
-    // Nothing parsed as a card: the download is bad, not the collection. Swapping
-    // here would trade a working card database for an empty one, so refuse — and
-    // drop the empty staging table rather than leave it lying around.
-    if stats.inserted == 0 {
-        conn.execute_batch("DROP TABLE IF EXISTS cards_staging")?;
-        return Err(IngestError::Empty {
-            skipped: stats.skipped,
-        });
-    }
-
-    schema::swap_staging(conn)?;
-    progress(stats.inserted);
-    Ok(stats)
+    batch.clear();
+    Ok(())
 }
+
+/// The staging insert, named once. `prepare_cached` means the per-batch transaction does
+/// not re-plan it 58 times over a full ingest.
+const STAGING_INSERT: &str =
+    "INSERT INTO cards_staging (id, oracle_id, name, lang, released_at, set_code, set_name,
+        collector_number, rarity, layout, mana_cost, cmc, type_line, oracle_text, colors,
+        color_identity, legalities, games, finishes, prices, price_usd, price_eur, faces,
+        illustration_id, frame_effects, border_color, full_art, promo, promo_types, digital,
+        is_paper, edhrec_rank, game_changer, image_status, image_updated_at, image_uris,
+        face_image_uris, search_text, raw)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
+        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39)";
 
 #[cfg(test)]
 mod tests {
@@ -196,6 +242,14 @@ mod tests {
         p
     }
 
+    /// A migrated in-memory database in the shape the ingest is handed now: the shared
+    /// write mutex, not a bare connection.
+    fn mem_db() -> Mutex<Connection> {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        Mutex::new(conn)
+    }
+
     /// A minimal but complete card line, distinct per `i`.
     fn card_line(i: u64) -> String {
         format!(
@@ -205,9 +259,8 @@ mod tests {
 
     #[test]
     fn ingests_fixture_and_swaps() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        conn.execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('stale','Stale','x','1','en','normal','{}')", []).unwrap();
+        let db = mem_db();
+        crate::db::lock_blocking(&db).execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('stale','Stale','x','1','en','normal','{}')", []).unwrap();
         let sample = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/cards_sample.jsonl"
@@ -216,8 +269,9 @@ mod tests {
         let lines: Vec<&str> = sample.lines().collect();
         let p = gz_fixture(&lines);
         let mut ticks = 0u32;
-        let stats = ingest_gz(&mut conn, &p, &mut |_| ticks += 1).unwrap();
+        let stats = ingest_gz(&db, &p, &mut |_| ticks += 1).unwrap();
         assert_eq!(stats.inserted as usize, lines.len());
+        let conn = crate::db::lock_blocking(&db);
         let stale: i64 = conn
             .query_row("SELECT count(*) FROM cards WHERE id='stale'", [], |r| {
                 r.get(0)
@@ -258,14 +312,9 @@ mod tests {
         let bools_2 = r#"{"object":"card","id":"ID2","name":"N2","lang":"en","layout":"normal","set":"x","collector_number":"2","games":["arena"],"finishes":["nonfoil"],"full_art":false,"promo":true,"digital":true,"game_changer":true}"#;
         let bools_3 = r#"{"object":"card","id":"ID3","name":"N3","lang":"en","layout":"normal","set":"x","collector_number":"3","games":["paper"],"finishes":["nonfoil"],"full_art":false,"promo":true,"digital":false,"game_changer":false}"#;
 
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        ingest_gz(
-            &mut conn,
-            &gz_fixture(&[line, bools_2, bools_3]),
-            &mut |_| {},
-        )
-        .unwrap();
+        let db = mem_db();
+        ingest_gz(&db, &gz_fixture(&[line, bools_2, bools_3]), &mut |_| {}).unwrap();
+        let conn = crate::db::lock_blocking(&db);
 
         let expected: [(&str, Option<&str>); 37] = [
             ("id", Some("ID1")),
@@ -368,15 +417,15 @@ mod tests {
     /// columns they are named for.)
     #[test]
     fn ingested_rows_carry_their_image_columns() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let db = mem_db();
         let p = gz_fixture(&[
             r#"{"object":"card","id":"a","name":"Bolt","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false,"image_uris":{"thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp","normal":"n.jpg"}}"#,
             r#"{"object":"card","id":"b","name":"Delver","lang":"en","layout":"transform","set":"x","collector_number":"2","games":["paper"],"finishes":["nonfoil"],"digital":false,"card_faces":[{"name":"Front","image_uris":{"grid":"f0.webp"}},{"name":"Back","image_uris":{"grid":"f1.webp"}}]}"#,
         ]);
 
-        ingest_gz(&mut conn, &p, &mut |_| {}).unwrap();
+        ingest_gz(&db, &p, &mut |_| {}).unwrap();
 
+        let conn = crate::db::lock_blocking(&db);
         let grid: String = conn
             .query_row(
                 "SELECT json_extract(image_uris, '$.grid') FROM cards WHERE id='a'",
@@ -415,45 +464,47 @@ mod tests {
     /// user's whole collection for an empty table, so it must be refused outright.
     #[test]
     fn an_all_skipped_file_refuses_to_swap() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        conn.execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('keep','Keep','x','1','en','normal','{}')", []).unwrap();
+        let db = mem_db();
+        crate::db::lock_blocking(&db).execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('keep','Keep','x','1','en','normal','{}')", []).unwrap();
 
         let p = gz_fixture(&["<html>Service Unavailable</html>", r#"{"object":"token"}"#]);
-        let err = ingest_gz(&mut conn, &p, &mut |_| {}).unwrap_err();
+        let err = ingest_gz(&db, &p, &mut |_| {}).unwrap_err();
         assert!(
             matches!(err, IngestError::Empty { skipped: 2 }),
             "expected Empty {{ skipped: 2 }}, got {err:?}"
         );
 
-        let kept: i64 = conn
-            .query_row("SELECT count(*) FROM cards WHERE id='keep'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(kept, 1, "an empty ingest must not touch the live table");
-        let fts: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name='cards_fts'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(fts, 1, "the search index must survive an empty ingest");
-        let staging: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            staging, 0,
-            "the empty staging table is dropped, not left behind"
-        );
+        {
+            let conn = crate::db::lock_blocking(&db);
+            let kept: i64 = conn
+                .query_row("SELECT count(*) FROM cards WHERE id='keep'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(kept, 1, "an empty ingest must not touch the live table");
+            let fts: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='cards_fts'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(fts, 1, "the search index must survive an empty ingest");
+            let staging: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                staging, 0,
+                "the empty staging table is dropped, not left behind"
+            );
+        }
 
         // The refusal costs the connection nothing: a real ingest still swaps.
-        let stats = ingest_gz(&mut conn, &gz_fixture(&[&card_line(1)]), &mut |_| {}).unwrap();
+        let stats = ingest_gz(&db, &gz_fixture(&[&card_line(1)]), &mut |_| {}).unwrap();
         assert_eq!(stats.inserted, 1);
     }
 
@@ -461,19 +512,22 @@ mod tests {
     /// destroy a staging table that a caller is mid-way through using.
     #[test]
     fn a_missing_file_fails_before_touching_staging() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        crate::schema::create_staging(&conn).unwrap();
-        conn.execute("INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw) VALUES ('half','Half','x','1','en','normal','{}')", []).unwrap();
+        let db = mem_db();
+        {
+            let conn = crate::db::lock_blocking(&db);
+            crate::schema::create_staging(&conn).unwrap();
+            conn.execute("INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw) VALUES ('half','Half','x','1','en','normal','{}')", []).unwrap();
+        }
 
         let missing = std::env::temp_dir().join("mtgtest-does-not-exist.jsonl.gz");
         let _ = std::fs::remove_file(&missing);
-        let err = ingest_gz(&mut conn, &missing, &mut |_| {}).unwrap_err();
+        let err = ingest_gz(&db, &missing, &mut |_| {}).unwrap_err();
         assert!(
             matches!(err, IngestError::Io(_)),
             "expected io error, got {err:?}"
         );
 
+        let conn = crate::db::lock_blocking(&db);
         let staged: i64 = conn
             .query_row("SELECT count(*) FROM cards_staging", [], |r| r.get(0))
             .unwrap();
@@ -487,30 +541,33 @@ mod tests {
     /// one call per BATCH rows plus a final call after the swap — needs a bigger input.
     #[test]
     fn progress_fires_every_batch_and_once_at_the_end() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let db = mem_db();
         let rows: Vec<String> = (0..BATCH + 1).map(card_line).collect();
         let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
         let p = gz_fixture(&lines);
 
         let mut seen: Vec<u64> = Vec::new();
-        let stats = ingest_gz(&mut conn, &p, &mut |n| seen.push(n)).unwrap();
+        let stats = ingest_gz(&db, &p, &mut |n| seen.push(n)).unwrap();
 
         assert_eq!(stats.inserted, BATCH + 1);
         assert_eq!(seen, vec![BATCH, BATCH + 1]);
     }
 
-    /// A read failure partway through the stream must cost the user nothing: the
-    /// staging load rolls back, the swap never runs, and the connection is left
-    /// clean enough to retry on the spot.
+    /// A read failure partway through the stream must cost the user nothing: `cards` is
+    /// untouched, the swap never runs, and the connection is left clean enough to retry
+    /// on the spot.
+    ///
+    /// What it must *not* cost is a rollback of the whole load. Chunking commits each
+    /// batch, so the rows read before the failure survive in `cards_staging` — which is
+    /// harmless in a way worth stating: staging is invisible to every reader until the
+    /// swap, and the next run's `create_staging` drops it before it writes a row.
     #[test]
     fn io_failure_mid_stream_leaves_cards_intact_and_connection_usable() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        conn.execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('stale','Stale','x','1','en','normal','{}')", []).unwrap();
+        let db = mem_db();
+        crate::db::lock_blocking(&db).execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('stale','Stale','x','1','en','normal','{}')", []).unwrap();
 
-        // Enough lines that the cut lands well past the first batch: the rollback
-        // below is only meaningful if rows were already inserted when the read failed.
+        // Enough lines that the cut lands well past the first batch: the assertions
+        // below are only meaningful if rows were already committed when the read failed.
         let rows: Vec<String> = (0..3000).map(card_line).collect();
         let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
         let good = gz_fixture(&lines);
@@ -519,7 +576,7 @@ mod tests {
         std::fs::write(&truncated, &bytes[..bytes.len() * 9 / 10]).unwrap();
 
         let mut seen: Vec<u64> = Vec::new();
-        let err = ingest_gz(&mut conn, &truncated, &mut |n| seen.push(n)).unwrap_err();
+        let err = ingest_gz(&db, &truncated, &mut |n| seen.push(n)).unwrap_err();
         assert!(
             matches!(err, IngestError::Io(_)),
             "expected io error, got {err:?}"
@@ -531,32 +588,110 @@ mod tests {
              and the final progress call must not fire on failure"
         );
 
-        let stale: i64 = conn
-            .query_row("SELECT count(*) FROM cards WHERE id='stale'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(stale, 1, "a failed ingest must not touch the live table");
-        let staged: i64 = conn
-            .query_row("SELECT count(*) FROM cards_staging", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(staged, 0, "the staging load must roll back");
+        {
+            let conn = crate::db::lock_blocking(&db);
+            let stale: i64 = conn
+                .query_row("SELECT count(*) FROM cards WHERE id='stale'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(stale, 1, "a failed ingest must not touch the live table");
+            let cards: i64 = conn
+                .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                cards, 1,
+                "not one staged row may be visible in `cards` — the swap is the only \
+                 thing that makes a load visible, however many transactions filled it"
+            );
+            let staged: i64 = conn
+                .query_row("SELECT count(*) FROM cards_staging", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                staged, BATCH as i64,
+                "the batches that committed before the read failed are still in staging — \
+                 which costs nothing, because staging is invisible until the swap and the \
+                 next run drops it before it writes a row"
+            );
+        }
 
-        // No transaction left open on the connection: a retry must just work.
-        let stats = ingest_gz(&mut conn, &good, &mut |_| {}).unwrap();
+        // No transaction left open on the connection, and the leftover staging rows are
+        // dropped rather than added to: a retry must just work, and land exactly the
+        // rows the file holds.
+        let stats = ingest_gz(&db, &good, &mut |_| {}).unwrap();
         assert_eq!(stats.inserted, rows.len() as u64);
+        let cards: i64 = crate::db::lock_blocking(&db)
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            cards,
+            rows.len() as i64,
+            "the retry must not inherit the failed run's staged rows"
+        );
+    }
+
+    /// The whole point of chunking. Plan 3 writes user rows from commands, and the ingest
+    /// used to hold `AppState.db` for its entire ~44 s run — so an "Add to collection"
+    /// during the daily sync was a frozen button. Now the load commits every `BATCH` rows
+    /// and drops the guard between batches, so the longest anyone waits is one batch.
+    ///
+    /// The probe runs on another thread, as a command would, and asks with a bound. It
+    /// stops when it has three takes *or* when the ingest is over, and that second exit is
+    /// what gives the assertion teeth: if the ingest ever goes back to holding the
+    /// connection throughout, the probe leaves with nothing and this fails, rather than
+    /// waiting out the ingest and then quietly taking its three locks from an idle mutex.
+    #[test]
+    fn a_writer_gets_the_connection_between_batches_of_an_ingest() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let dir = std::env::temp_dir().join("mtgtest-ingest-chunked");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let db = std::sync::Mutex::new(conn);
+
+        // Four batches' worth, so there are three release points to catch.
+        let rows: Vec<String> = (0..BATCH * 4).map(card_line).collect();
+        let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let p = gz_fixture(&lines);
+
+        let taken = AtomicUsize::new(0);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Runs for the length of the ingest, asking the way a command asks.
+                while taken.load(Ordering::SeqCst) < 3 && !done.load(Ordering::SeqCst) {
+                    if crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some() {
+                        taken.fetch_add(1, Ordering::SeqCst);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            });
+            let stats = ingest_gz(&db, &p, &mut |_| {});
+            // Set before any assertion: a panic here must still release the probe, or
+            // the scope would join a thread that never leaves its loop.
+            done.store(true, Ordering::SeqCst);
+            assert_eq!(stats.unwrap().inserted, BATCH * 4);
+        });
+
+        assert!(
+            taken.load(Ordering::SeqCst) >= 3,
+            "a writer must be able to take the connection while the ingest is running"
+        );
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn bad_lines_are_skipped_not_fatal() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let db = mem_db();
         let p = gz_fixture(&[
             r#"{"object":"card","id":"a","name":"Good","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false}"#,
             "NOT JSON",
             r#"{"object":"token"}"#,
         ]);
-        let stats = ingest_gz(&mut conn, &p, &mut |_| {}).unwrap();
+        let stats = ingest_gz(&db, &p, &mut |_| {}).unwrap();
         assert_eq!(stats.inserted, 1);
         assert_eq!(stats.skipped, 2);
     }

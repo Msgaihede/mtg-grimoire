@@ -9,9 +9,10 @@
 //!   restart the app.
 //! * **The database lock is never held across an `.await`.** A `MutexGuard` is `!Send`
 //!   (holding one across an await would not even compile for a spawned future), and a
-//!   lock held for the length of a 77 MB download would block every reader. Locks live
-//!   in short synchronous scopes, or inside a [`tauri::async_runtime::spawn_blocking`]
-//!   closure for the one long blocking operation, the ingest.
+//!   lock held for the length of a 77 MB download would block every writer. Locks live
+//!   in short synchronous scopes only. The one long blocking operation, the ingest, runs
+//!   on a [`tauri::async_runtime::spawn_blocking`] thread and takes the lock itself, one
+//!   batch at a time — this module hands it the mutex, never a guard.
 //! * **The expensive work is paid for once.** The 77 MB download is the costly step, so
 //!   the metadata that makes the *next* check cheap (`bulk_etag`, `bulk_updated_at`) is
 //!   written as soon as the ingest succeeds — before `/sets` is even called. A later
@@ -71,10 +72,11 @@ const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 /// Everything a command or a background sync needs. Managed by Tauri as
 /// `Arc<AppState>` so a spawned sync can own a handle of its own.
 ///
-/// Two connections to one file, deliberately. `db` is the only one that writes and is
-/// held for the whole of a 44 s ingest; `db_read` is opened read-only so searches and
-/// status polls answer from the last committed WAL snapshot instead of queueing behind
-/// that. See [`crate::db::open_read_only`].
+/// Two connections to one file, deliberately. `db` is the only one that writes, and every
+/// writer shares it — the ingest included, which is why it takes the lock a batch at a
+/// time rather than for its whole run. `db_read` is opened read-only so searches and
+/// status polls answer from the last committed WAL snapshot without queueing behind any
+/// writer at all. See [`crate::db::open_read_only`].
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub db_read: Mutex<Connection>,
@@ -312,8 +314,11 @@ pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
 /// The rule [`lock_db`] and [`lock_db_read`] both apply, in one place, over any mutex —
 /// [`crate::images::Cache`] is handed `&Mutex<Connection>` rather than an `AppState`, so
 /// it needs the rule without the state.
+///
+/// A one-line delegate on purpose: the recovery rule has exactly one definition, in
+/// [`crate::db::lock_blocking`], which the ingest also reaches directly.
 pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+    crate::db::lock_blocking(mutex)
 }
 
 /// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.
@@ -560,14 +565,15 @@ async fn do_sync(
     }
 
     // The ingest is a long *blocking* call (minutes of gzip + SQLite), so it runs on a
-    // blocking thread with the lock taken inside the closure — never across an await.
+    // blocking thread rather than on the async runtime — never across an await.
     let joined = {
         let state = state.clone();
         let app = app.clone();
         let gz = gz.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let mut conn = lock_db(&state);
-            ingest::ingest_gz(&mut conn, &gz, &mut |n| {
+            // No lock is taken here any more: the ingest takes it per batch and gives it
+            // back, so a collection edit waits one batch rather than one sync.
+            ingest::ingest_gz(&state.db, &gz, &mut |n| {
                 emit(&app, "ingesting", n, INGEST_TOTAL_ESTIMATE)
             })
         })
@@ -633,11 +639,12 @@ async fn do_sync(
 /// Current sync state for the UI.
 ///
 /// Read through the **read-only** connection, which is what makes the header's numbers
-/// stay live during a sync: the ingest holds the write connection for its whole 44 s run,
-/// and this used to answer `None` for every database-derived field for the whole of it.
-/// Under WAL a reader sees the last committed snapshot without blocking, so mid-sync this
-/// reports the pre-swap figures — which are true, and are what the user is still looking
-/// at in the results list.
+/// stay live during a sync: this used to share the write connection, and so answered
+/// `None` for every database-derived field for the whole of a 44 s ingest. Under WAL a
+/// reader sees the last committed snapshot without blocking, so mid-sync this reports the
+/// pre-swap figures — which are true, and are what the user is still looking at in the
+/// results list. (The ingest now releases the write lock between batches too, but that is
+/// belt to this brace: a poll must not depend on catching a gap.)
 ///
 /// The fields stay `Option` regardless, because the read can still fail outright — this
 /// app runs from a USB stick, and the database going away underneath it is the case they
