@@ -43,47 +43,6 @@ const event = (over: Partial<SyncProgressEvent> = {}): SyncProgressEvent => ({
 /** The listener is registered asynchronously; nothing can be emitted before it lands. */
 const listening = () => vi.waitFor(() => expect(onSyncProgress).toHaveBeenCalled());
 
-describe("the slim variant", () => {
-  it("shows nothing until an event arrives", () => {
-    const { container } = show();
-
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it("names the phase and reports how far along it is", async () => {
-    show();
-    await listening();
-
-    emit(event({ phase: "downloading", done: 5, total: 10 }));
-
-    expect(screen.getByText(/downloading card data/i)).toBeInTheDocument();
-    const bar = screen.getByRole("progressbar", { name: /downloading card data/i });
-    expect(bar).toHaveAttribute("aria-valuenow", "50");
-  });
-
-  it("goes away once the run is done", async () => {
-    show();
-    await listening();
-
-    emit(event({ phase: "ingesting", done: 1000, total: 117_000 }));
-    expect(screen.getByRole("progressbar")).toBeInTheDocument();
-
-    emit(event({ phase: "done", done: 116_568, total: 116_568 }));
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-  });
-
-  /** The header's error banner owns failures; a second copy in the bar would duplicate it. */
-  it("leaves errors to the header", async () => {
-    show();
-    await listening();
-
-    emit(event({ phase: "error", done: 0, total: 0, message: "rate limited by Scryfall" }));
-
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-    expect(screen.queryByText(/rate limited/i)).not.toBeInTheDocument();
-  });
-});
-
 describe("the first-run variant", () => {
   it("takes over the screen when the database is empty", async () => {
     show({ cardCount: 0, busy: true });
@@ -109,13 +68,15 @@ describe("the first-run variant", () => {
    * the screen for it would hide a perfectly good 116 k-card collection.
    */
   it("does not mistake an unreadable count for an empty database", async () => {
-    show({ cardCount: null, busy: true });
+    const { container } = show({ cardCount: null, busy: true });
     await listening();
 
     emit(event({ phase: "ingesting", done: 1, total: 117_000 }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    // An unreadable count is not an empty database, so this renders nothing at all — the
+    // ribbon's mana line is what reports the run.
+    expect(container).toBeEmptyDOMElement();
   });
 
   /**

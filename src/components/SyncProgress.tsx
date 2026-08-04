@@ -1,53 +1,6 @@
-import { useEffect, useState } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { ipc, type SyncPhase, type SyncProgressEvent } from "@/lib/ipc";
+import type { SyncProgressEvent } from "@/lib/ipc";
+import { PHASE_LABEL, useSyncProgress } from "@/lib/useSyncProgress";
 import { cn } from "@/lib/utils";
-
-const PHASE_LABEL: Record<SyncPhase, string> = {
-  checking: "Checking for card data updates",
-  downloading: "Downloading card data",
-  ingesting: "Importing cards",
-  sets: "Updating set list",
-  done: "Card data is up to date",
-  error: "Sync failed",
-};
-
-/**
- * The latest `sync:progress` event, or `null` if none has arrived.
- *
- * Never a complete account of a sync: Tauri drops events nobody is listening for, the
- * startup sync emits its first ones before this component exists, and a run inside the
- * 24 h check window emits none at all. Everything that has to survive that is in
- * `sync_status` instead — which is why `SyncProgress` takes an `error` prop rather than
- * trusting these events to tell it when something went wrong.
- */
-function useSyncProgress(): SyncProgressEvent | null {
-  const [progress, setProgress] = useState<SyncProgressEvent | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onSyncProgress(setProgress)
-      .then((unlisten) => {
-        // `listen` resolves a tick later than the unmount can happen, so the handle has
-        // to be dropped here too — otherwise it outlives the component for the app's
-        // lifetime.
-        if (cancelled) unlisten();
-        else stop = unlisten;
-      })
-      // Registering the listener fails outside a Tauri window (a plain `vite dev`, say).
-      // Losing the fast path for progress is not worth taking the app down for: the
-      // status poll still answers, and it is the reliable half of the pair.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, []);
-
-  return progress;
-}
 
 /** `null` for a phase with no meaningful denominator (`checking`, `sets`, a failure). */
 function percent(e: SyncProgressEvent): number | null {
@@ -83,14 +36,17 @@ function Bar({
       // Omitted, not zeroed, when the total is unknown: `aria-valuenow="0"` would be a
       // claim that no progress has been made.
       {...(value === null ? {} : { "aria-valuenow": value })}
-      // The track sits on `bg-bg` in the slim variant and on a `bg-bg` overlay in the
-      // first-run one, so it has to be the *surface* colour to be visible at all.
+      // The track sits on the first-run overlay's `bg-bg`, so it has to be the *surface*
+      // colour to be visible at all.
       className={cn("h-1 overflow-hidden rounded-full bg-surface", className)}
     >
       <div
         className={cn(
-          "h-full rounded-full bg-accent transition-[width]",
-          value === null && "animate-pulse",
+          "h-full rounded-full bg-accent transition-[width] duration-150 motion-reduce:transition-none",
+          // A full-width bar with nothing moving would read as "finished"; the pulse is
+          // what says the length is unknown. Under reduced motion the label below it is
+          // left to say so instead.
+          value === null && "animate-pulse motion-reduce:animate-none",
         )}
         style={{ width: value === null ? "100%" : `${value}%` }}
       />
@@ -105,17 +61,20 @@ export interface SyncProgressProps {
   error: string | null;
   /** A sync is in flight, or a forced one has been asked for and has not answered yet. */
   busy: boolean;
-  /** Start a forced sync. The same action the header's Refresh button runs. */
+  /** Start a forced sync. The same action the ribbon's Refresh button runs. */
   onRetry: () => void;
 }
 
 /**
- * Sync feedback, in the two shapes it needs.
+ * The first run, and nothing else.
  *
  * `cardCount === 0` — and only `0` — means an empty database, so the app has nothing to
  * show and the first sync gets the whole screen. `null` means the poll could not read
  * the count, which is the normal state *during* every sync; treating it as empty would
  * black out a working 116 k-card app once a day.
+ *
+ * Every other sync is reported by the ribbon's mana line, which is why there is no
+ * second, slimmer bar here any more.
  */
 export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressProps) {
   const progress = useSyncProgress();
@@ -123,20 +82,7 @@ export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressPr
   if (cardCount === 0 && progress?.phase !== "done") {
     return <FirstRun progress={progress} error={error} busy={busy} onRetry={onRetry} />;
   }
-
-  // Failures belong to the header's banner, which is fed by the *persisted* `lastError`
-  // and so survives a reload; repeating them here would print the same sentence twice.
-  if (!progress || progress.phase === "done" || progress.phase === "error") return null;
-
-  const numbers = detail(progress);
-  const label = PHASE_LABEL[progress.phase];
-  return (
-    <div className="flex items-center gap-3 border-b border-border px-5 py-2 text-xs text-muted">
-      <span>{label}</span>
-      <Bar value={percent(progress)} label={label} className="min-w-24 flex-1" />
-      {numbers && <span className="tabular-nums">{numbers}</span>}
-    </div>
-  );
+  return null;
 }
 
 /**
@@ -144,7 +90,7 @@ export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressPr
  * it. Taking the screen is honest about that — the alternative is an empty app that looks
  * broken.
  *
- * Because it covers the header, the header's Refresh button is unreachable underneath,
+ * Because it covers the ribbon, the ribbon's Refresh button is unreachable underneath,
  * so this carries its own. Every way a first run can stall ends here: a failure that
  * arrived as an event, one that only ever reached `lastError` (the startup sync fails
  * before the webview is listening, and Tauri drops the event), and a run throttled by the
@@ -206,7 +152,14 @@ function FirstRun({
         type="button"
         onClick={onRetry}
         disabled={running}
-        className="inline-flex items-center rounded-md border border-border px-4 py-2 text-sm transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+        className={cn(
+          "inline-flex items-center rounded-md border border-border px-4 py-2 text-sm",
+          "transition-colors duration-150 hover:bg-surface",
+          // The only control on screen while a first run is stuck, so its focus ring is
+          // the one that matters most — same gold as the ribbon's.
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
+        )}
       >
         Retry download
       </button>

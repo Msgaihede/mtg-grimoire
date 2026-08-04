@@ -3,15 +3,17 @@ import {
   Heart,
   Layers,
   LibraryBig,
-  RefreshCw,
   Search,
   Settings,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
+import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
+import { manaLineSync } from "@/lib/mana";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { statusLine, useSync } from "@/lib/useSync";
+import { useSyncProgress } from "@/lib/useSyncProgress";
 import { cn } from "@/lib/utils";
 
 const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
@@ -23,21 +25,22 @@ const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
 ];
 
 /**
- * The window: sidebar, header, and whatever view the store points at.
+ * The window: sidebar, ribbon, and whatever view the store points at.
  *
- * Owns the sync status because both things that need it live here — the header's summary
- * line and Refresh button, and the progress overlay — and one poll for the whole app is
- * the point of the arrangement.
+ * Owns the sync status because everything that needs it lives here — the ribbon's summary
+ * line, Refresh button and mana line, and the first-run overlay — and one poll for the
+ * whole app is the point of the arrangement.
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
   const { status, error, refresh, refreshing, upToDate } = useSync();
+  const progress = useSyncProgress();
 
-  const line = statusLine(status);
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.
   const busy = refreshing || status?.syncing === true;
+  const title = NAV.find((n) => n.id === activeView)?.label ?? "";
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
@@ -54,8 +57,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={() => setActiveView(id)}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
-                active ? "bg-bg text-accent" : "text-muted hover:bg-bg/60 hover:text-text",
+                "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
+                "transition-colors duration-150",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                // The gold indicator: a hairline against the item, not a filled pill. The
+                // sidebar is chrome, and chrome does not get to be the loudest thing on a
+                // screen that is about to be full of card art.
+                active
+                  ? "bg-bg text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+                  : "text-muted hover:bg-bg/60 hover:text-text",
               )}
             >
               <Icon className="size-4 shrink-0" aria-hidden="true" />
@@ -66,38 +76,23 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-baseline gap-4 border-b border-border px-5 py-3">
-          <h1 className="font-heading text-base font-medium">MTG Collection Tracker</h1>
-          {/* The data directory is the app's one piece of hidden state — it silently
-              falls back to AppData when the folder beside the exe is not writable, and
-              spec §3 asks for an indicator of which one is live. A tooltip on the line
-              that already summarises the database is where someone would look. */}
-          {line && (
-            <p className="truncate text-xs text-muted" title={status?.dataDir}>
-              {line}
-            </p>
-          )}
-          {/* A Refresh that found nothing new changes nothing on screen, which reads as a
-              button that did not work. Transient: it is the answer to one click. */}
-          {upToDate && !busy && !error && (
-            <p role="status" className="shrink-0 text-xs text-muted">
-              Already up to date
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={busy}
-            aria-busy={busy || undefined}
-            className="ml-auto inline-flex shrink-0 items-center gap-2 self-center rounded-md border border-border px-3 py-1.5 text-sm transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-          >
-            <RefreshCw className={cn("size-4", busy && "animate-spin")} aria-hidden="true" />
-            Refresh
-          </button>
-        </header>
+        {/* The data directory is the app's one piece of hidden state — it silently falls
+            back to AppData when the folder beside the exe is not writable, and spec §3
+            asks for an indicator of which one is live. The ribbon hangs it as a tooltip
+            on the line that already summarises the database. */}
+        <Ribbon
+          title={title}
+          statusLine={statusLine(status)}
+          dataDir={status?.dataDir}
+          busy={busy}
+          upToDate={upToDate}
+          hasError={error !== null}
+          onRefresh={refresh}
+          sync={manaLineSync(progress, busy)}
+        />
 
         {/* Given the whole screen when the database is empty, so it needs the error and
-            the retry action too: it covers this header, Refresh button included. */}
+            the retry action too: it covers the ribbon, Refresh button included. */}
         <SyncProgress
           cardCount={status?.cardCount ?? null}
           error={error}

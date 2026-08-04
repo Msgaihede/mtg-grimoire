@@ -52,11 +52,13 @@ it("renders nav and refresh button", async () => {
     </AppShell>,
   );
 
-  expect(screen.getByText("Search")).toBeInTheDocument();
-  expect(screen.getByText("Collection")).toBeInTheDocument();
-  expect(screen.getByText("Wishlist")).toBeInTheDocument();
-  expect(screen.getByText("Decks")).toBeInTheDocument();
-  expect(screen.getByText("Settings")).toBeInTheDocument();
+  // By role, not by text: the ribbon now renders the active view's title with the same
+  // word the nav item uses, so a bare `getByText("Search")` is ambiguous.
+  expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Collection" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Decks" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   expect(screen.getByText("content")).toBeInTheDocument();
 });
