@@ -12,7 +12,7 @@ const idle: SyncStatus = {
   syncing: false,
 };
 
-/** The whole point of `SyncStatus` having four nullable fields (see `sync::status`). */
+/** The whole point of `SyncStatus` having five nullable fields (see `sync::status`). */
 describe("mergeStatus", () => {
   it("keeps the last known figures when the database was unreadable", () => {
     const busy: SyncStatus = {
@@ -33,6 +33,7 @@ describe("mergeStatus", () => {
     // A `null` here means "could not read", so an error banner the user has not
     // acknowledged must not vanish for the length of an ingest.
     expect(merged.lastError).toBe("rate limited by Scryfall");
+    expect(merged.lastIngestSkipped).toBe(12);
   });
 
   it("always takes syncing and dataDir from the fresh poll", () => {
@@ -45,8 +46,8 @@ describe("mergeStatus", () => {
   });
 
   /**
-   * `card_count` is `Some(..)` for every poll that got the lock, so a non-null count is
-   * the signal that the other three were read too — and a `null` alongside it is a real
+   * `card_count` is `Some(..)` for every poll that read the database, so a non-null count
+   * is the signal that the other four were read too — and a `null` alongside it is a real
    * absence. A successful run clears `last_error`, and that clearance has to land.
    */
   it("accepts a cleared error once the database is readable again", () => {
@@ -56,6 +57,12 @@ describe("mergeStatus", () => {
 
     expect(merged.lastError).toBeNull();
     expect(merged.cardCount).toBe(116_600);
+  });
+
+  it("lets a cleared skip count land once the database is readable again", () => {
+    const cleared: SyncStatus = { ...idle, lastIngestSkipped: null, cardCount: 116_600 };
+
+    expect(mergeStatus(idle, cleared).lastIngestSkipped).toBeNull();
   });
 
   it("takes the first poll as-is", () => {

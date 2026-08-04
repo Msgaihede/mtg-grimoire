@@ -105,8 +105,8 @@ describe("the first-run variant", () => {
   });
 
   /**
-   * `null` is "the database was busy, ask again", not "zero cards" — taking over the
-   * screen for it would hide a perfectly good 116 k-card collection during every sync.
+   * `null` is "the count could not be read, ask again", not "zero cards" — taking over
+   * the screen for it would hide a perfectly good 116 k-card collection.
    */
   it("does not mistake an unreadable count for an empty database", async () => {
     show({ cardCount: null, busy: true });

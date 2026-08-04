@@ -50,8 +50,11 @@ Scryfall as the only external dependency.
   Add columns in a new `if v < N` step in `migrate` with `ALTER TABLE`. (`create_staging`
   derives its layout from `PRAGMA table_info(cards)`, so staging follows automatically.)
 - `cards_fts` is **external-content with no triggers**. Any write to `cards` outside the
-  ingest path needs `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');` — and so does
-  `VACUUM`, which may renumber the rowids the index is keyed on.
+  ingest path needs `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');` **if it touches
+  an indexed column (`name`/`type_line`/`search_text`) or renumbers rowids** — and `VACUUM`
+  does the latter, so it always needs one. A migration that only adds and fills unindexed
+  columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
+  proof).
 - Two connections: `AppState.db` writes, `AppState.db_read` is `SQLITE_OPEN_READ_ONLY`.
   Reads go through `db_read` so a search is not stuck behind a 44 s ingest.
 
@@ -66,6 +69,12 @@ Scryfall as the only external dependency.
   component's `bg-muted`/`bg-accent` surfaces to `bg-surface` (stock `bg-muted` renders
   text on the same colour — a stock `TabsList` has invisible labels). `text-muted-foreground`
   and `text-accent-foreground` already resolve correctly.
+- Card images are served over `mtgimg://` — `<origin>/<variant>/<card_id>/<face>`, where
+  the origin is `http://mtgimg.localhost` on Windows and `mtgimg://localhost` elsewhere.
+  Variants are **WEBP only** (`thumb`/`grid`/`display`/`art`); the JPG/PNG family is never
+  fetched. The handler reads through `db_read`, never the write connection. `app.security.csp`
+  is not `null` any more — a new remote source needs a deliberate edit and the
+  `the_shipped_csp_allows_ipc_and_images_and_nothing_wild` test updated with it.
 - Work on `main`, commit small after each task/step with `feat:`/`fix:`/`chore:`/`test:`.
 - Tests: cover logic that can break (parsers, validation, sync). No ceremony tests.
 

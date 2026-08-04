@@ -87,10 +87,10 @@ export interface SyncOutcome {
 /**
  * What the UI polls.
  *
- * `dataDir` and `syncing` are always answered. The four database-derived fields are
- * `null` whenever the database could not be locked — which for the whole of an ingest
- * it cannot. `null` there means "not readable right now", never "zero" and never
- * "cleared": a UI that renders it literally reports an empty collection mid-sync and
+ * `dataDir` and `syncing` are always answered. The five database-derived fields are
+ * `null` only when the read-only connection could not be used at all; an ingest no
+ * longer blanks them. `null` there means "not readable right now", never "zero" and
+ * never "cleared": a UI that renders it literally reports an empty collection and
  * throws away an error banner the user has not read yet. See `mergeStatus` in
  * `useSync.ts`, which is the one place that resolves this.
  */

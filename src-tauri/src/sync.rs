@@ -35,7 +35,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
@@ -72,9 +72,9 @@ const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 /// `Arc<AppState>` so a spawned sync can own a handle of its own.
 ///
 /// Two connections to one file, deliberately. `db` is the only one that writes and is
-/// held for the whole of a 44 s ingest; `db_read` is opened read-only so searches answer
-/// from the last committed WAL snapshot instead of queueing behind that. See
-/// [`crate::db::open_read_only`].
+/// held for the whole of a 44 s ingest; `db_read` is opened read-only so searches and
+/// status polls answer from the last committed WAL snapshot instead of queueing behind
+/// that. See [`crate::db::open_read_only`].
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub db_read: Mutex<Connection>,
@@ -98,10 +98,11 @@ pub struct SyncOutcome {
 
 /// What the UI polls.
 ///
-/// `syncing` and `data_dir` are always answered. The four database-derived fields are
-/// `None` when the database is busy — which mid-sync it is, for the whole of an ingest
-/// (see [`status`]). `None` there means "not readable right now", never "zero"; a UI
-/// should keep showing its last value rather than render an empty collection.
+/// `syncing` and `data_dir` are always answered. The five database-derived fields are
+/// `None` only when the read-only connection could not be used at all — not, as they once
+/// were, for the whole of every ingest (see [`status`]). `None` there means "not readable
+/// right now", never "zero"; a UI should keep showing its last value rather than render
+/// an empty collection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
@@ -321,20 +322,6 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 /// length of one query, so waiting for it is bounded no matter what the writer is doing.
 pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
     lock_conn(&state.db_read)
-}
-
-/// Lock the database only if that can be done now.
-///
-/// For readers that must answer *during* a sync: the ingest holds the connection for its
-/// whole run, and a poll that waits for it would hang for exactly as long as the thing
-/// it is trying to report on. Poisoning is recovered as in [`lock_db`]; only genuine
-/// contention returns `None`.
-fn try_lock_db(state: &AppState) -> Option<MutexGuard<'_, Connection>> {
-    match state.db.try_lock() {
-        Ok(guard) => Some(guard),
-        Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
 }
 
 /// Upsert `sets`, returning how many rows were written.
@@ -644,33 +631,29 @@ async fn do_sync(
 
 /// Current sync state for the UI.
 ///
-/// Answers without waiting for the database. `syncing` and `data_dir` never needed it;
-/// the rest is read only if the lock is free, because the ingest holds it for its whole
-/// run and a status poll that blocked on it would hang for the length of the sync it was
-/// asking about — parking a thread from the blocking pool on every poll. Mid-sync those
-/// fields come back `None`, which means "not readable right now", not "zero".
+/// Read through the **read-only** connection, which is what makes the header's numbers
+/// stay live during a sync: the ingest holds the write connection for its whole 44 s run,
+/// and this used to answer `None` for every database-derived field for the whole of it.
+/// Under WAL a reader sees the last committed snapshot without blocking, so mid-sync this
+/// reports the pre-swap figures — which are true, and are what the user is still looking
+/// at in the results list.
+///
+/// The fields stay `Option` regardless: a read can still fail (a poisoned lock, a file
+/// that has gone away), and `None` there means "not readable right now", never "zero".
 ///
 /// `card_count` is counted live rather than read from `sync_meta`, so it is right even if
 /// a previous run died before writing its meta.
 pub fn status(state: &AppState) -> SyncStatus {
-    let mut status = SyncStatus {
-        card_count: None,
-        last_check_at: None,
-        bulk_updated_at: None,
-        last_error: None,
-        last_ingest_skipped: None,
+    let conn = lock_db_read(state);
+    SyncStatus {
+        card_count: Some(count_cards(&conn)),
+        last_check_at: get_meta(&conn, K_LAST_CHECK_AT),
+        bulk_updated_at: get_meta(&conn, K_BULK_UPDATED_AT),
+        last_error: get_meta(&conn, K_LAST_ERROR),
+        last_ingest_skipped: get_meta(&conn, K_LAST_INGEST_SKIPPED).and_then(|s| s.parse().ok()),
         data_dir: state.data_dir.display().to_string(),
         syncing: state.syncing.load(Ordering::SeqCst),
-    };
-    if let Some(conn) = try_lock_db(state) {
-        status.card_count = Some(count_cards(&conn));
-        status.last_check_at = get_meta(&conn, K_LAST_CHECK_AT);
-        status.bulk_updated_at = get_meta(&conn, K_BULK_UPDATED_AT);
-        status.last_error = get_meta(&conn, K_LAST_ERROR);
-        status.last_ingest_skipped =
-            get_meta(&conn, K_LAST_INGEST_SKIPPED).and_then(|s| s.parse().ok());
     }
-    status
 }
 
 #[cfg(test)]
@@ -685,21 +668,32 @@ mod tests {
         conn
     }
 
-    fn test_state(conn: Connection, syncing: bool) -> AppState {
-        AppState {
-            db: Mutex::new(conn),
-            // A separate in-memory database, not a second handle on the same one: these
-            // tests exercise `db` only, and `search`'s own tests cover the read path
-            // against a real file, where the two connections can actually share.
-            db_read: Mutex::new(Connection::open_in_memory().unwrap()),
-            data_dir: PathBuf::from("D:\\app\\data"),
-            syncing: AtomicBool::new(syncing),
-            // Never called: these tests stop short of the network.
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-            // Never touched either — a `Cache` creates nothing until it is asked for an
-            // image, so this directory does not have to exist.
-            images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
-        }
+    /// A real file with both connections on it — the shape `init_state` builds — because
+    /// a status that reads through `db_read` cannot be tested against a `db_read` that
+    /// points somewhere else. (An in-memory pair cannot stand in: two in-memory
+    /// connections are two different databases.)
+    fn file_state(name: &str, syncing: bool) -> (AppState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mtgtest-sync-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mtg.db");
+        let conn = crate::db::open(&path).unwrap();
+        schema::migrate(&conn).unwrap();
+        let read = crate::db::open_read_only(&path).unwrap();
+        (
+            AppState {
+                db: Mutex::new(conn),
+                db_read: Mutex::new(read),
+                data_dir: PathBuf::from("D:\\app\\data"),
+                syncing: AtomicBool::new(syncing),
+                // Never called: these tests stop short of the network.
+                client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                // Never touched either — a `Cache` creates nothing until it is asked for
+                // an image, so this directory does not have to exist.
+                images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
+            },
+            dir,
+        )
     }
 
     fn set_row(code: &str, name: &str) -> crate::scryfall::SetRow {
@@ -856,25 +850,30 @@ mod tests {
         assert!(!sets_are_empty(&conn));
     }
 
-    /// The status a UI polls *during* a sync. The ingest holds the database for its
-    /// whole run, so a status call that waited for the lock would hang for exactly as
-    /// long as the run it is reporting on — and park a pool thread per poll.
+    /// The status a UI polls *during* a sync. The ingest holds the write connection for
+    /// its whole run, and the header used to go blank for 44 s a day because of it — the
+    /// read-only connection exists for exactly this, and under WAL it answers from the
+    /// last committed snapshot without waiting for anyone.
     #[test]
-    fn status_answers_even_while_the_database_is_held() {
-        let conn = db();
-        set_meta(&conn, "last_check_at", "1800000000").unwrap();
-        set_meta(&conn, "last_error", "rate limited by Scryfall").unwrap();
-        conn.execute(
-            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
-             VALUES ('x','Lightning Bolt','lea','161','en','normal','{}')",
-            [],
-        )
-        .unwrap();
-        let state = Arc::new(test_state(conn, true));
+    fn status_answers_real_numbers_while_the_write_connection_is_held() {
+        let (state, dir) = file_state("status", true);
+        {
+            let conn = lock_db(&state);
+            set_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
+            set_meta(&conn, K_LAST_ERROR, "rate limited by Scryfall").unwrap();
+            set_meta(&conn, K_LAST_INGEST_SKIPPED, "12").unwrap();
+            conn.execute(
+                "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+                 VALUES ('x','Lightning Bolt','lea','161','en','normal','{}')",
+                [],
+            )
+            .unwrap();
+            crate::db::checkpoint_truncate(&conn).unwrap();
+        }
+        let state = Arc::new(state);
 
-        // Stands in for the ingest, which holds this same lock for minutes — and the
-        // call is made from another thread, as the real poll is. A regression to a
-        // blocking lock then fails here in five seconds instead of hanging the suite.
+        // Stands in for the ingest. Called from another thread, as the real poll is, so a
+        // regression to a blocking lock fails here in five seconds instead of hanging.
         let held = state.db.lock().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         {
@@ -885,26 +884,22 @@ mod tests {
         }
         let busy = rx
             .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("status must answer while the database is held, not queue behind it");
+            .expect("status must not queue behind the writer");
         drop(held);
-        let idle = status(&state);
 
-        assert!(busy.syncing, "the flag is an atomic and needs no lock");
+        assert!(busy.syncing);
         assert_eq!(busy.data_dir, "D:\\app\\data");
         assert_eq!(
-            busy.card_count, None,
-            "unreadable must not be reported as zero cards"
+            busy.card_count,
+            Some(1),
+            "the read connection can count cards while the writer is busy"
         );
-        assert_eq!(busy.last_check_at, None);
-        assert_eq!(busy.last_error, None);
+        assert_eq!(busy.last_check_at.as_deref(), Some("1800000000"));
+        assert_eq!(busy.last_error.as_deref(), Some("rate limited by Scryfall"));
+        assert_eq!(busy.last_ingest_skipped, Some(12));
 
-        assert_eq!(idle.card_count, Some(1));
-        assert_eq!(idle.last_check_at.as_deref(), Some("1800000000"));
-        assert_eq!(
-            idle.last_error.as_deref(),
-            Some("rate limited by Scryfall"),
-            "a failure the startup event could never have delivered is still here"
-        );
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -980,8 +975,8 @@ mod tests {
                 "syncing": true
             })
         );
-        // Mid-sync shape: nothing the database owns is readable, and `cardCount` says
-        // so with `null` rather than lying with a `0` the UI would render as "empty".
+        // The unreadable shape: nothing the database owns could be read, and `cardCount`
+        // says so with `null` rather than lying with a `0` the UI would render as "empty".
         let busy = serde_json::to_value(SyncStatus {
             card_count: None,
             last_check_at: None,
@@ -1068,14 +1063,18 @@ mod tests {
     /// startup sync emits it before the webview is listening, and Tauri drops it.
     #[test]
     fn the_skipped_count_is_readable_from_the_status_long_after_the_event() {
-        let conn = db();
-        set_meta(&conn, K_LAST_INGEST_SKIPPED, "12").unwrap();
-        let state = test_state(conn, false);
+        let (state, dir) = file_state("skipped", false);
+        set_meta(&lock_db(&state), K_LAST_INGEST_SKIPPED, "12").unwrap();
 
         assert_eq!(status(&state).last_ingest_skipped, Some(12));
 
         // No ingest yet is not the same as an ingest that skipped nothing.
-        let fresh = test_state(db(), false);
+        let (fresh, fresh_dir) = file_state("skipped-fresh", false);
         assert_eq!(status(&fresh).last_ingest_skipped, None);
+
+        drop(state);
+        drop(fresh);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh_dir);
     }
 }

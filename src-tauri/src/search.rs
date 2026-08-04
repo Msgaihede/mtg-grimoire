@@ -2,9 +2,10 @@
 //!
 //! The query is assembled from fragments rather than written out once, because every
 //! filter is optional and SQLite plans `col = ?` far better than `(? IS NULL OR col = ?)`.
-//! Only three things are ever interpolated into the SQL string — a colour letter from a
-//! fixed array, a `FROM` clause picked from two literals, and an `ORDER BY` picked from
-//! four — so no user text reaches the parser; everything else is bound.
+//! Only four things are ever interpolated into the SQL string — a colour letter from a
+//! fixed array, a `FROM` clause picked from two literals, an `ORDER BY` picked from four,
+//! and the constant row cap on the count — so no user text reaches the parser; everything
+//! else is bound.
 //!
 //! Two decisions here are about the shape of the answer rather than the filters:
 //!

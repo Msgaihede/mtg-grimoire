@@ -190,9 +190,11 @@ describe("the error banner", () => {
   });
 
   /**
-   * Mid-sync every database-derived field comes back `null`, including `lastError`.
-   * Reading that as "the error is gone" would clear the banner the moment the user hit
-   * Refresh, and blank the card count with it.
+   * A poll that could not read the database at all answers `null` for every
+   * database-derived field, `lastError` included. Reading that as "the error is gone"
+   * would clear a banner the user has not acknowledged, and blank the card count with it.
+   * (An ingest no longer produces this — `sync::status` reads through `db_read` — but an
+   * unusable read connection still can.)
    */
   it("survives a poll that could read nothing", async () => {
     syncStatus.mockResolvedValueOnce(status({ lastError: "rate limited by Scryfall" }));

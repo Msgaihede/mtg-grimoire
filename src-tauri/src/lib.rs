@@ -32,8 +32,8 @@ async fn sync_run(
 ///
 /// `async`, and answered on the blocking pool, because a *sync* command body runs inline
 /// on the IPC thread: this one counts 116 k rows and reads four meta keys, which is small
-/// but not free, and a UI is expected to poll it. `sync::status` itself never waits on the
-/// database — mid-sync it reports what it can and leaves the rest `None`.
+/// but not free, and a UI is expected to poll it. `sync::status` reads through the
+/// read-only connection, so a poll never queues behind an ingest — see `sync::status`.
 #[tauri::command]
 async fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> Result<sync::SyncStatus, String> {
     let state = state.inner().clone();
@@ -114,6 +114,14 @@ pub fn run() {
         });
 }
 
+/// How long the exit handler will wait for the write connection.
+///
+/// Quitting mid-ingest is the case this bounds: the sync holds the lock for up to ~44 s,
+/// and a window-less process sitting on a lock is a process the user believes has already
+/// quit. Five seconds covers every ordinary contention (a search, a status poll) and
+/// gives up on the one that would be visible.
+const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Fold the write-ahead log back into `mtg.db` on the way out.
 ///
 /// The app holds its connection open for its whole life, so nothing ever checkpoints the
@@ -129,9 +137,24 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
     let Some(state) = app.try_state::<Arc<AppState>>() else {
         return;
     };
-    // The *write* connection: a read-only handle may not checkpoint.
-    let conn = sync::lock_db(&state);
-    let _ = db::checkpoint_truncate(&conn);
+    // The *write* connection: a read-only handle may not checkpoint. Bounded, because
+    // the alternative is parking a window-less process for the length of an ingest — and
+    // a skipped checkpoint costs disk space, never data. The WAL is a complete journal
+    // and the next launch replays it.
+    //
+    // Bound to a local rather than matched in tail position: the guard borrows from
+    // `state`, and a `match` at the end of the body would still hold it when `state` is
+    // dropped.
+    let held = db::lock_for(&state.db, EXIT_CHECKPOINT_WAIT);
+    match held {
+        Some(conn) => {
+            let _ = db::checkpoint_truncate(&conn);
+        }
+        None => eprintln!(
+            "skipped the exit checkpoint: a sync still holds the database. \
+             The write-ahead log will be folded in on the next launch."
+        ),
+    }
 }
 
 /// Resolve the data directory, open the database and migrate it.

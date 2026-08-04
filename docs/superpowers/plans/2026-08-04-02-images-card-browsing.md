@@ -2087,7 +2087,7 @@ Five parked items from Plan 1, all small, all here because Plan 2 is the plan th
 - Produces: `sync::status` reading through `db_read` (all five database-derived fields populated on every poll, mid-sync included); `try_lock_db` deleted; `checkpoint_on_exit` bounded; `mergeStatus` carrying `lastIngestSkipped`.
 - Unchanged on purpose: the `SyncStatus` DTO shape. `cardCount` stays `Option<i64>`/`number | null` — a read that genuinely fails must still be able to say "unknown", and `mergeStatus` stays as the one place that resolves it.
 
-- [ ] **Step 1: Rewrite the status test** — in `sync.rs`'s `mod tests`, `test_state` currently gives `db_read` *a different in-memory database*, which is exactly what a status test can no longer tolerate. Add a two-connection helper and replace `status_answers_even_while_the_database_is_held`:
+- [x] **Step 1: Rewrite the status test** — in `sync.rs`'s `mod tests`, `test_state` currently gives `db_read` *a different in-memory database*, which is exactly what a status test can no longer tolerate. Add a two-connection helper and replace `status_answers_even_while_the_database_is_held`:
 
 ```rust
     /// A real file with both connections on it — the shape `init_state` builds — because
@@ -2171,7 +2171,7 @@ The two other tests that call `status(&state)` (`…last_ingest_skipped, Some(12
 `fresh` case around `sync.rs:1060`) keep working — move them onto `file_state` too if they
 were relying on `test_state`'s separate read database.
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib sync
@@ -2179,7 +2179,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib sync
 Expected: `assertion 'left == right' failed: left: None, right: Some(1)` — `status` is
 still reading through `try_lock_db`.
 
-- [ ] **Step 3: Route `status` through `db_read`** — in `sync.rs`, replace the body of `status`:
+- [x] **Step 3: Route `status` through `db_read`** — in `sync.rs`, replace the body of `status`:
 
 ```rust
 /// Current sync state for the UI.
@@ -2210,11 +2210,11 @@ pub fn status(state: &AppState) -> SyncStatus {
 }
 ```
 
-- [ ] **Step 4: Delete `try_lock_db`** — it had exactly one caller. Remove the function and
+- [x] **Step 4: Delete `try_lock_db`** — it had exactly one caller. Remove the function and
 the now-unused `TryLockError` import; `db::lock_for` is the bounded variant anything else
 should reach for.
 
-- [ ] **Step 5: Bound the exit checkpoint** — in `src-tauri/src/lib.rs`, replace
+- [x] **Step 5: Bound the exit checkpoint** — in `src-tauri/src/lib.rs`, replace
 `checkpoint_on_exit`'s body:
 
 ```rust
@@ -2246,7 +2246,7 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
 }
 ```
 
-- [ ] **Step 6: Complete `mergeStatus`** — in `src/lib/useSync.ts`:
+- [x] **Step 6: Complete `mergeStatus`** — in `src/lib/useSync.ts`:
 
 ```ts
 /**
@@ -2281,7 +2281,7 @@ export function mergeStatus(prev: SyncStatus | null, next: SyncStatus): SyncStat
 }
 ```
 
-- [ ] **Step 7: Test the merge** — in `src/lib/useSync.test.ts`, extend the first case:
+- [x] **Step 7: Test the merge** — in `src/lib/useSync.test.ts`, extend the first case:
 
 ```ts
     expect(merged.lastError).toBe("rate limited by Scryfall");
@@ -2298,7 +2298,7 @@ and add:
   });
 ```
 
-- [ ] **Step 8: Fix the doc drift** — four one-line corrections:
+- [x] **Step 8: Fix the doc drift** — four one-line corrections:
 
 1. `src-tauri/src/schema.rs`, `swap_staging`'s doc comment: delete the **second** copy of the
    paragraph beginning *"The FTS table is dropped and rebuilt rather than migrated"* (it
@@ -2326,7 +2326,7 @@ and add:
    picked from two literals, an `ORDER BY` picked from four, and the constant row cap on
    the count"*.
 
-- [ ] **Step 9: Update CLAUDE.md** — two edits.
+- [x] **Step 9: Update CLAUDE.md** — two edits.
 
 Narrow the FTS rule to what it actually guards (the carryover adjudicated this; Task 2 ships
 the evidence). Replace the `cards_fts` bullet under **Hard rules — database**:
@@ -2351,7 +2351,7 @@ and add to **Hard rules**, after the shadcn bullet:
   `the_shipped_csp_allows_ipc_and_images_and_nothing_wild` test updated with it.
 ```
 
-- [ ] **Step 10: Verify and commit**
+- [x] **Step 10: Verify and commit**
 
 ```powershell
 npm run verify

@@ -11,14 +11,16 @@ export const UP_TO_DATE_MS = 5_000;
 /**
  * Fold a fresh poll into what the UI already knows.
  *
- * `sync::status` answers without waiting for the database lock, so during an ingest —
- * which holds it for minutes — all four database-derived fields come back `null`. That
- * is "not readable right now", not "zero" and not "cleared". Rendering it literally
- * would blank the card count and throw away an error banner every time a sync starts.
+ * Since `sync::status` reads through the read-only connection this is no longer a
+ * once-a-day event — mid-sync polls now carry real numbers. It stays because the fields
+ * are still nullable and a read can still fail (a poisoned lock, a file that moved), and
+ * a `null` there means "not readable right now", not "zero" and not "cleared": rendering
+ * it literally would blank the card count and throw away an error banner the user has
+ * not read yet.
  *
- * `cardCount` is the discriminator: `status()` fills it in for *every* poll that got the
- * lock (a failed count reads as 0, never as `None`), so a non-null count means the whole
- * group was read and its nulls are real — including a `lastError` that the run just
+ * `cardCount` is the discriminator: `status()` fills it in for *every* poll that read the
+ * database (a failed count reads as 0, never as `None`), so a non-null count means the
+ * whole group was read and its nulls are real — including a `lastError` the last run
  * cleared, which must be allowed to land.
  */
 export function mergeStatus(prev: SyncStatus | null, next: SyncStatus): SyncStatus {
@@ -29,6 +31,11 @@ export function mergeStatus(prev: SyncStatus | null, next: SyncStatus): SyncStat
     lastCheckAt: prev?.lastCheckAt ?? null,
     bulkUpdatedAt: prev?.bulkUpdatedAt ?? null,
     lastError: prev?.lastError ?? null,
+    // Carried like the rest. Nothing rendered it when this function was written, so its
+    // absence was invisible; the card detail pane and the settings view will render it,
+    // and a count that blinked to "unknown" on an unreadable poll would read as an
+    // ingest that suddenly stopped skipping lines.
+    lastIngestSkipped: prev?.lastIngestSkipped ?? null,
   };
 }
 

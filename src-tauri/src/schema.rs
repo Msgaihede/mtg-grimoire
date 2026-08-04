@@ -265,10 +265,6 @@ fn cards_column_defs(conn: &Connection) -> rusqlite::Result<String> {
 /// tracks rows by rowid, and a swapped-in table has entirely new rowids. A full
 /// rebuild is deterministic and cannot leave stale index entries behind.
 ///
-/// The FTS table is dropped and rebuilt rather than migrated: external-content FTS5
-/// tracks rows by rowid, and a swapped-in table has entirely new rowids. A full
-/// rebuild is deterministic and cannot leave stale index entries behind.
-///
 /// The whole swap — index drop, table swap, index rebuild — is one transaction, so it
 /// either happens or it doesn't. Anything less can leave the database with no search
 /// index, which `migrate()` will not repair once `user_version` is set. On failure the
