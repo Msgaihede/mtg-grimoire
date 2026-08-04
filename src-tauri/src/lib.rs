@@ -84,7 +84,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_run,
             sync_status,
-            search::search_cards
+            search::search_cards,
+            search::list_sets
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the

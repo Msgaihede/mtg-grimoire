@@ -4,8 +4,8 @@
 //! filter is optional and SQLite plans `col = ?` far better than `(? IS NULL OR col = ?)`.
 //! Only four things are ever interpolated into the SQL string — a colour letter from a
 //! fixed array, a `FROM` clause picked from two literals, an `ORDER BY` picked from four,
-//! and the constant row cap on the count — so no user text reaches the parser; everything
-//! else is bound.
+//! and the constant row cap on the count — plus two `?`-placeholder lists whose *length*
+//! is the only thing they carry. No user text reaches the parser; everything else is bound.
 //!
 //! Two decisions here are about the shape of the answer rather than the filters:
 //!
@@ -40,6 +40,12 @@ pub struct SearchRequest {
     /// Colour identity filter, e.g. `"WU"`. `"C"` means colourless only.
     pub colors: Option<String>,
     pub set_code: Option<String>,
+    /// Set codes to include. ORed with each other, ANDed with every other filter — two
+    /// sets means "printed in either", which is what a multi-select means everywhere else.
+    pub sets: Option<Vec<String>>,
+    /// Mana-value chips. 0–7 match `cmc` exactly; [`MANA_VALUE_OPEN_ENDED`] means "or
+    /// more". A card with no `cmc` matches none of them.
+    pub mana_values: Option<Vec<u8>>,
     pub rarity: Option<String>,
     /// Defaults to true: digital-only printings are hidden unless asked for.
     pub paper_only: Option<bool>,
@@ -95,6 +101,15 @@ const TOTAL_CAP: i64 = 5_000;
 /// The five colour-identity letters, in WUBRG order. Interpolated into SQL, so it must
 /// stay a hard-coded list — see [`run_search`].
 const COLORS: [&str; 5] = ["W", "U", "B", "R", "G"];
+
+/// Sets one request will filter on. The picker is a multi-select over ~1 050 sets; past a
+/// few dozen the filter has stopped narrowing anything, and this is what bounds the
+/// generated placeholder list.
+const MAX_SET_FILTER: usize = 64;
+
+/// The last mana-value chip, which is open-ended: "8" means 8 *or more*, because the tail
+/// past Emrakul is a handful of cards nobody filters by exact cost.
+const MANA_VALUE_OPEN_ENDED: u8 = 8;
 
 /// Columns of `cards` in name order, the default for a browse.
 ///
@@ -186,6 +201,56 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         wheres.push("c.set_code = ?".into());
         params.push(Box::new(s.to_owned()));
     }
+
+    // OR within, AND without. Blank entries are dropped rather than matched: a picker's
+    // cleared state sends `[]`, and some send `[""]`.
+    if let Some(sets) = req.sets.as_deref() {
+        let picked: Vec<String> = sets
+            .iter()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .take(MAX_SET_FILTER)
+            .collect();
+        if !picked.is_empty() {
+            let holes = vec!["?"; picked.len()].join(",");
+            wheres.push(format!("c.set_code IN ({holes})"));
+            for code in picked {
+                params.push(Box::new(code));
+            }
+        }
+    }
+
+    // Discrete chips, not a range: 0–7 are exact and 8 is open-ended. `cmc` is REAL and
+    // nullable — a fractional un-card cost matches no chip, and a card with no cost at all
+    // matches none either, because `NULL IN (…)` and `NULL >= 8` are both NULL. That is
+    // the right answer: "mana value 3" is a claim about a card that has one.
+    if let Some(values) = req.mana_values.as_deref() {
+        let mut exact: Vec<f64> = Vec::new();
+        let mut open_ended = false;
+        for v in values {
+            if *v >= MANA_VALUE_OPEN_ENDED {
+                open_ended = true;
+            } else {
+                exact.push(f64::from(*v));
+            }
+        }
+        let mut alternatives: Vec<String> = Vec::new();
+        if !exact.is_empty() {
+            let holes = vec!["?"; exact.len()].join(",");
+            alternatives.push(format!("c.cmc IN ({holes})"));
+            for v in exact {
+                params.push(Box::new(v));
+            }
+        }
+        if open_ended {
+            // A constant from the line above, never a request value.
+            alternatives.push(format!("c.cmc >= {MANA_VALUE_OPEN_ENDED}.0"));
+        }
+        if !alternatives.is_empty() {
+            wheres.push(format!("({})", alternatives.join(" OR ")));
+        }
+    }
+
     if let Some(r) = nonblank(&req.rarity) {
         wheres.push("c.rarity = ?".into());
         params.push(Box::new(r.to_owned()));
@@ -299,6 +364,62 @@ pub async fn search_cards(
     tauri::async_runtime::spawn_blocking(move || run_search(&lock_db_read(&state), &req))
         .await
         .map_err(|e| format!("search could not be run: {e}"))?
+}
+
+/// One row of the set picker.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSummary {
+    /// Lowercase, as `cards.set_code` stores it — the value the filter sends back.
+    pub code: String,
+    pub name: String,
+    pub set_type: Option<String>,
+    pub released_at: Option<String>,
+    /// Printings of this set in the local database.
+    ///
+    /// Not decoration: `sets` carries every set Scryfall knows, including memorabilia and
+    /// token-only sets that `default_cards` holds nothing for. A picker over 1 050 rows is
+    /// only usable if it can put the ones with cards first, and it needs this to do it.
+    pub card_count: i64,
+}
+
+/// Every set, newest first, for the search filter's picker.
+///
+/// One grouped pass over `cards` rather than a correlated count per set: 1 050 subqueries
+/// against a 116 k-row table is a visible pause on a control that opens instantly.
+pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.code, s.name, s.set_type, s.released_at, coalesce(n.cards, 0)
+             FROM sets s
+             LEFT JOIN (SELECT set_code, count(*) AS cards FROM cards GROUP BY set_code) n
+                    ON n.set_code = s.code
+             ORDER BY s.released_at DESC, s.name ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SetSummary {
+                code: r.get(0)?,
+                name: r.get(1)?,
+                set_type: r.get(2)?,
+                released_at: r.get(3)?,
+                card_count: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// The set list, for the search filter. Read-only connection, blocking pool — as
+/// [`search_cards`] is, and for the same reason.
+#[tauri::command]
+pub async fn list_sets(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<SetSummary>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_list_sets(&lock_db_read(&state)))
+        .await
+        .map_err(|e| format!("set list could not be read: {e}"))?
 }
 
 #[cfg(test)]
@@ -924,5 +1045,217 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    /// Four printings across three sets with known mana values, including a NULL one —
+    /// `cmc` is nullable and reversible cards genuinely have none.
+    #[rustfmt::skip]
+    fn seeded_costs() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let rows: [(&str, &str, &str, Option<f64>, &str); 4] = [
+            ("1", "Lightning Bolt",  "lea", Some(1.0),  "R"),
+            ("2", "Wrath of God",    "lea", Some(4.0),  "W"),
+            ("3", "Emrakul",         "roe", Some(15.0), ""),
+            ("4", "Jinnie Fay",      "sld", None,       "G"),
+        ];
+        for (id, name, set, cmc, ci) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,color_identity,
+                    legalities,is_paper,search_text,raw)
+                 VALUES (?1,?2,?3,'1','en','normal',?4,?5,'{\"modern\":\"legal\"}',1,?2,'{}')",
+                rusqlite::params![id, name, set, cmc, ci],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        conn
+    }
+
+    fn names(r: &SearchResponse) -> Vec<&str> {
+        r.items.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    /// Two sets means "either", not "both" — the latter is always empty, and a filter that
+    /// can only ever return nothing is a filter nobody would ship.
+    #[test]
+    fn several_sets_are_ored_together() {
+        let conn = seeded_costs();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sets: Some(vec!["lea".into(), "roe".into()]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(r.total, 3);
+        assert_eq!(names(&r), ["Emrakul", "Lightning Bolt", "Wrath of God"]);
+    }
+
+    /// The chips are discrete: 8 is the open-ended one, and everything below it is an
+    /// exact match. `cast(cmc as int)` would put a 0.5 un-card under "0", which is a
+    /// different claim than the one the chip makes.
+    #[test]
+    fn mana_value_chips_match_exactly_except_the_open_ended_one() {
+        let conn = seeded_costs();
+
+        let one = run_search(
+            &conn,
+            &SearchRequest {
+                mana_values: Some(vec![1]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(names(&one), ["Lightning Bolt"]);
+
+        let eight_plus = run_search(
+            &conn,
+            &SearchRequest {
+                mana_values: Some(vec![8]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(names(&eight_plus), ["Emrakul"], "8 means 8 or more");
+
+        let either = run_search(
+            &conn,
+            &SearchRequest {
+                mana_values: Some(vec![1, 4]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(either.total, 2);
+    }
+
+    /// A card with no mana value is not a card with a mana value of zero. `NULL IN (…)`
+    /// and `NULL >= 8` are both NULL, so this falls out of SQL's own semantics — the test
+    /// is here so a later rewrite into `coalesce(cmc, 0)` fails loudly.
+    #[test]
+    fn a_null_mana_value_matches_no_chip() {
+        let conn = seeded_costs();
+        for chips in [vec![0u8], vec![8], vec![0, 1, 2, 3, 4, 5, 6, 7, 8]] {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    mana_values: Some(chips.clone()),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(
+                !names(&r).contains(&"Jinnie Fay"),
+                "chips {chips:?} matched a NULL cmc"
+            );
+        }
+    }
+
+    /// Filters AND, including the new ones, and the capped count has to agree with the
+    /// page — they share one `WHERE`, and this is what proves it stays that way.
+    #[test]
+    fn the_new_filters_combine_with_the_old_ones_and_the_count_agrees() {
+        let conn = seeded_costs();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sets: Some(vec!["lea".into()]),
+                mana_values: Some(vec![1, 4]),
+                colors: Some("W".into()),
+                format: Some("modern".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(names(&r), ["Wrath of God"]);
+        assert_eq!(r.total, 1, "the count subquery must carry the same filters");
+    }
+
+    /// A picker whose "clear" state sends `[]` or `[""]` must not become a filter that
+    /// matches nothing.
+    #[test]
+    fn empty_filter_lists_are_not_filters() {
+        let conn = seeded_costs();
+        let all = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .total;
+
+        for req in [
+            SearchRequest {
+                sets: Some(vec![]),
+                limit: 50,
+                ..Default::default()
+            },
+            SearchRequest {
+                sets: Some(vec!["".into(), "  ".into()]),
+                limit: 50,
+                ..Default::default()
+            },
+            SearchRequest {
+                mana_values: Some(vec![]),
+                limit: 50,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(run_search(&conn, &req).unwrap().total, all);
+        }
+    }
+
+    /// `invoke` matches by name and serde renames to camelCase; a field the frontend
+    /// spells differently deserializes to `None` with no error anywhere.
+    #[test]
+    fn the_request_deserializes_the_names_the_frontend_sends() {
+        let req: SearchRequest = serde_json::from_str(
+            r#"{"text":"bolt","sets":["lea","2ed"],"manaValues":[0,8],"paperOnly":true,"limit":50,"offset":0}"#,
+        )
+        .unwrap();
+
+        assert_eq!(req.sets.unwrap(), vec!["lea".to_owned(), "2ed".to_owned()]);
+        assert_eq!(req.mana_values.unwrap(), vec![0u8, 8]);
+    }
+
+    /// What the set picker is built from: every set, newest first, with the number of
+    /// printings the local database actually holds for it.
+    #[test]
+    fn list_sets_reports_every_set_newest_first_with_its_card_count() {
+        let conn = seeded_costs();
+        conn.execute_batch(
+            "INSERT INTO sets (code, name, set_type, released_at) VALUES
+                ('lea','Limited Edition Alpha','core','1993-08-05'),
+                ('roe','Rise of the Eldrazi','expansion','2010-04-23'),
+                ('sld','Secret Lair Drop','box','2019-12-02'),
+                ('tok','Token Set','token','2021-01-01');",
+        )
+        .unwrap();
+
+        let sets = run_list_sets(&conn).unwrap();
+
+        assert_eq!(sets.len(), 4);
+        assert_eq!(
+            sets.iter().map(|s| s.code.as_str()).collect::<Vec<_>>(),
+            ["tok", "sld", "roe", "lea"],
+            "newest first"
+        );
+        assert_eq!(sets[3].card_count, 2, "two Alpha printings are in `cards`");
+        // A set the local database has no printings for still appears — it is the count
+        // that lets the picker decide, not this function.
+        assert_eq!(sets[0].card_count, 0);
     }
 }
