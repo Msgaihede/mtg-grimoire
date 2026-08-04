@@ -8,6 +8,10 @@ export const PHASE_LABEL: Record<SyncPhase, string> = {
   downloading: "Downloading card data",
   ingesting: "Importing cards",
   sets: "Updating set list",
+  // Once per database, ever: the one-time conversion to incremental auto-vacuum. It rides
+  // the mana line like every other phase, with no denominator — `VACUUM` reports no
+  // progress of any kind, so claiming a fraction would be an invention.
+  compacting: "Compacting database…",
   done: "Card data is up to date",
   error: "Sync failed",
 };

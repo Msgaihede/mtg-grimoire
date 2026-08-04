@@ -3,6 +3,7 @@ pub mod card_row;
 pub mod db;
 pub mod images;
 pub mod ingest;
+pub mod maintenance;
 pub mod paths;
 pub mod schema;
 pub mod scryfall;

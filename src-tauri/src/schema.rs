@@ -239,7 +239,11 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 ///
 /// `search_text` is the haystack column: ingest concatenates oracle text plus every
 /// face's name and text into it.
-fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
+///
+/// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
+/// index pointing at the wrong rows, and the failure is silent — see
+/// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
+pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "DROP TABLE IF EXISTS cards_fts;
          CREATE VIRTUAL TABLE cards_fts USING fts5(
@@ -261,10 +265,17 @@ fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// for days while every launch adds nothing but reads around it.
 ///
 /// This returns those pages to SQLite's freelist, so the next ingest reuses them instead of
-/// growing the file past them. It does **not** shrink `mtg.db`: only `VACUUM` does that, and
-/// `VACUUM` renumbers rowids, which would owe the external-content FTS index a full rebuild
-/// at every startup. Reuse is the part that matters for a USB stick — without it a killed
+/// growing the file past them — and on an incremental-auto-vacuum database, which is every
+/// database this app creates (see [`crate::db::open`]), the freelist is exactly what
+/// [`crate::maintenance::incremental_vacuum`] hands back to the filesystem after the next
+/// swap. Reuse is the part that matters for a USB stick either way: without it a killed
 /// sync's residue and the next sync's staging table both want room at once.
+///
+/// What startup deliberately does *not* do is `VACUUM`. It rewrites the whole file — minutes
+/// on the measured 2.02 GB database, before there is a window to say so in — and it renumbers
+/// rowids, which owes the external-content FTS index a full rebuild. The one conversion that
+/// does need a `VACUUM` runs after a sync instead, once per database: see
+/// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     migrate(conn)?;
     conn.execute_batch("DROP TABLE IF EXISTS cards_staging")

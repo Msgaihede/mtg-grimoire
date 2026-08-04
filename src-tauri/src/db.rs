@@ -20,10 +20,17 @@ const JOURNAL_SIZE_LIMIT: i64 = 64 * 1024 * 1024;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 /// Open (or create) the SQLite database at `path` with the app's standard PRAGMAs:
-/// WAL journalling, `synchronous = NORMAL`, foreign-key enforcement, a bounded WAL file
-/// and a busy timeout.
+/// incremental auto-vacuum, WAL journalling, `synchronous = NORMAL`, foreign-key
+/// enforcement, a bounded WAL file and a busy timeout.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
+    // FIRST, before any statement writes a page. On a database that does not exist yet
+    // this is free and permanent; once `journal_mode=WAL` has materialised the file it is
+    // a no-op that only a full `VACUUM` can apply (measured live while planning: WAL
+    // first leaves a brand-new database on `auto_vacuum = 0` through every reopen).
+    // Incremental rather than full: the return of freed pages is then something the app
+    // asks for after a swap, not something SQLite pays for on every commit.
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -243,11 +250,17 @@ mod tests {
         let busy: i64 = conn
             .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
             .unwrap();
+        // Set before WAL materialises the file, or it is a silent no-op that only a full
+        // `VACUUM` can apply afterwards — see `crate::maintenance`.
+        let auto_vacuum: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+            .unwrap();
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(mode.to_lowercase(), "wal");
+        assert_eq!(auto_vacuum, 2, "auto_vacuum must be INCREMENTAL (2)");
         assert_eq!(synchronous, 1, "synchronous should be NORMAL (1)");
         assert_eq!(foreign_keys, 1, "foreign_keys should be ON");
         assert_eq!(journal_limit, JOURNAL_SIZE_LIMIT);

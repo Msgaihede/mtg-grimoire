@@ -220,7 +220,14 @@ export interface SyncStatus {
 }
 
 /** The phases `sync.rs` emits, and the only values `SyncProgressEvent.phase` takes. */
-export type SyncPhase = "checking" | "downloading" | "ingesting" | "sets" | "done" | "error";
+export type SyncPhase =
+  | "checking"
+  | "downloading"
+  | "ingesting"
+  | "sets"
+  | "compacting"
+  | "done"
+  | "error";
 
 /**
  * Payload of the `sync:progress` event.

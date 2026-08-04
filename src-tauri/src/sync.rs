@@ -125,7 +125,7 @@ pub struct SyncStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    /// `checking` | `downloading` | `ingesting` | `sets` | `done` | `error`.
+    /// `checking` | `downloading` | `ingesting` | `sets` | `compacting` | `done` | `error`.
     pub phase: String,
     pub done: u64,
     pub total: u64,
@@ -478,8 +478,58 @@ async fn finish_unchanged(
         let conn = lock_db(state);
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
+    compact_once(state, app).await;
     emit_done(app, card_count, None);
     Ok(unchanged(card_count))
+}
+
+/// Convert this database to incremental auto-vacuum, once, ever.
+///
+/// Runs here rather than in `migrate` because it is minutes of work on a large file and
+/// `migrate` runs before there is a window to say so in. Runs *after* the sync rather than
+/// before it because a sync is the one moment the user has already been told the app is
+/// busy with the database — and because compacting a file that is about to be rewritten
+/// would be work done twice.
+///
+/// Called from **both** paths that finish a run: the one that ingested and
+/// [`finish_unchanged`]. The ETag makes 304 the common answer, so a legacy database whose
+/// owner syncs daily and always hears "already up to date" would otherwise never reach a
+/// compaction that is only ever going to happen once.
+///
+/// A failure is recorded and never retried automatically: `VACUUM` needs free space about
+/// the size of the database, so the common failure is a disk that will still be full
+/// tomorrow. Plan 6's "Compact database" control is what clears the key and asks again.
+async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
+    let due = {
+        let conn = lock_db_read(state);
+        crate::maintenance::needs_conversion(&conn)
+            && get_meta(&conn, crate::maintenance::K_AUTO_VACUUM_ERROR).is_none()
+    };
+    if !due {
+        return;
+    }
+    emit(app, "compacting", 0, 0);
+    let state = state.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_db(&state);
+        let result = crate::maintenance::convert_to_incremental(&conn);
+        if let Err(e) = &result {
+            let _ = set_meta(
+                &conn,
+                crate::maintenance::K_AUTO_VACUUM_ERROR,
+                &e.to_string(),
+            );
+        }
+        result
+    })
+    .await;
+    match joined {
+        Ok(Ok(())) => {}
+        // Neither failure is the sync's failure: the cards are ingested and stored either
+        // way, and a database that did not compact is a database that works.
+        Ok(Err(e)) => eprintln!("database compaction failed: {e}"),
+        Err(e) => eprintln!("database compaction task failed: {e}"),
+    }
 }
 
 async fn do_sync(
@@ -598,6 +648,19 @@ async fn do_sync(
     };
     let _ = std::fs::remove_file(&gz);
 
+    {
+        // The swap has just freed an entire copy of `cards`, and returning those pages is
+        // the difference between a file that plateaus and one that grows by ~1 GB per
+        // refresh. Measured at 12.1 s for 1.02 GB on the live database — page movement, so
+        // it costs what it hands back — with the write connection held throughout. That is
+        // affordable *here* and nowhere else: the user has already been told a sync is
+        // running, and the swap that just ran held the same lock.
+        let conn = lock_db(state);
+        if let Err(e) = crate::maintenance::incremental_vacuum(&conn) {
+            eprintln!("could not return freed pages after the swap: {e}");
+        }
+    }
+
     let card_count = stats.inserted as i64;
     {
         // Written before `/sets` is called, not after: the download is the expensive
@@ -628,6 +691,7 @@ async fn do_sync(
         let conn = lock_db(state);
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
+    compact_once(state, app).await;
     emit_done(app, card_count, Some(stats.skipped));
     Ok(SyncOutcome {
         updated: true,
