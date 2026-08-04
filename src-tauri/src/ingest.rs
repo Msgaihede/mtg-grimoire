@@ -60,8 +60,9 @@ pub enum IngestError {
 /// Lines that are not valid JSON, or that are not card objects, are skipped and
 /// counted — they never abort the ingest. Any other failure (I/O, database)
 /// returns before the swap, so the previous `cards` table is left untouched: the
-/// batches that did commit sit in `cards_staging`, which no reader can see and
-/// which the next run drops before it writes a row.
+/// batches that did commit sit in `cards_staging`, which no reader can see, and
+/// which both the next run ([`schema::create_staging`]) and the next launch
+/// ([`schema::prepare_database`]) drop before anything else happens.
 ///
 /// If *nothing* parsed as a card, this returns [`IngestError::Empty`] without
 /// swapping: an empty result is a failed download, and swapping it in would wipe
@@ -107,14 +108,19 @@ pub fn ingest_gz(
             stats.skipped += 1;
             continue;
         };
-        let Some(row) = CardRow::from_json_line(&v, &line) else {
+        // `line` is moved, not borrowed: it becomes the row's `raw`, and nothing here
+        // wants it afterwards.
+        let Some(row) = CardRow::from_json_line(&v, line) else {
             stats.skipped += 1;
             continue;
         };
         batch.push(row);
         if batch.len() as u64 >= BATCH {
+            // Counted from the batch, exactly as the tail flush below does, rather than
+            // from `BATCH` — the count must not depend on the condition above having
+            // tripped at precisely the batch size. Before the write, because it clears.
+            stats.inserted += batch.len() as u64;
             write_batch(db, &mut batch)?;
-            stats.inserted += BATCH;
             progress(stats.inserted);
         }
     }
@@ -146,9 +152,12 @@ pub fn ingest_gz(
 ///
 /// One transaction per batch rather than one for the whole load. Staging is invisible to
 /// readers until the swap either way, so the transaction is not what protects anyone —
-/// it is a write-batching device, and the *release* between batches is the feature. A
-/// crash partway leaves a partial `cards_staging`, which the next run drops before it
-/// writes anything (see `create_staging`).
+/// it is a write-batching device, and the *release* between batches is the feature.
+///
+/// What that costs is a crash partway leaving a *committed* `cards_staging` — invisible,
+/// but real bytes. Two places drop it: [`schema::create_staging`] before the next run
+/// writes anything, and [`schema::prepare_database`] at the next launch, which is the one
+/// that matters because a throttled sync may not run for days.
 fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), IngestError> {
     let mut conn = crate::db::lock_blocking(db);
     let tx = conn.transaction()?;
@@ -635,11 +644,15 @@ mod tests {
     /// during the daily sync was a frozen button. Now the load commits every `BATCH` rows
     /// and drops the guard between batches, so the longest anyone waits is one batch.
     ///
-    /// The probe runs on another thread, as a command would, and asks with a bound. It
-    /// stops when it has three takes *or* when the ingest is over, and that second exit is
-    /// what gives the assertion teeth: if the ingest ever goes back to holding the
-    /// connection throughout, the probe leaves with nothing and this fails, rather than
-    /// waiting out the ingest and then quietly taking its three locks from an idle mutex.
+    /// The probe runs on another thread, as a command would, and asks with a bound. What
+    /// makes the count mean something is *when* a take is allowed to count: only between
+    /// the first progress callback (the first batch has committed, so the ingest is
+    /// demonstrably mid-run and using the connection) and the ingest returning. A take won
+    /// before the ingest got going, or in the instant after it finished, is discarded.
+    ///
+    /// Without that window the assertion is decoration: an ingest that held the connection
+    /// from end to end would simply make the probe wait, and it would then collect three
+    /// locks from an idle mutex and pass. With it, the same regression scores zero.
     #[test]
     fn a_writer_gets_the_connection_between_batches_of_an_ingest() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -651,33 +664,41 @@ mod tests {
         crate::schema::migrate(&conn).unwrap();
         let db = std::sync::Mutex::new(conn);
 
-        // Four batches' worth, so there are three release points to catch.
-        let rows: Vec<String> = (0..BATCH * 4).map(card_line).collect();
+        // Eight batches' worth. Only the seven release points *after* the first batch
+        // count, so the run has to have plenty of them left once counting opens.
+        let rows: Vec<String> = (0..BATCH * 8).map(card_line).collect();
         let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
         let p = gz_fixture(&lines);
 
         let taken = AtomicUsize::new(0);
+        let ingesting = AtomicBool::new(false);
         let done = AtomicBool::new(false);
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 // Runs for the length of the ingest, asking the way a command asks.
                 while taken.load(Ordering::SeqCst) < 3 && !done.load(Ordering::SeqCst) {
-                    if crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some() {
+                    let won =
+                        crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some();
+                    if won && ingesting.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {
                         taken.fetch_add(1, Ordering::SeqCst);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             });
-            let stats = ingest_gz(&db, &p, &mut |_| {});
+            // The first progress call is the first committed batch: from here the ingest
+            // is unambiguously running, and every lock it gives up is one it chose to.
+            let stats = ingest_gz(&db, &p, &mut |_| ingesting.store(true, Ordering::SeqCst));
             // Set before any assertion: a panic here must still release the probe, or
             // the scope would join a thread that never leaves its loop.
             done.store(true, Ordering::SeqCst);
-            assert_eq!(stats.unwrap().inserted, BATCH * 4);
+            assert_eq!(stats.unwrap().inserted, BATCH * 8);
         });
 
         assert!(
             taken.load(Ordering::SeqCst) >= 3,
-            "a writer must be able to take the connection while the ingest is running"
+            "a writer must be able to take the connection while the ingest is running, \
+             and took it {} times",
+            taken.load(Ordering::SeqCst)
         );
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);

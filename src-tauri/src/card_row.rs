@@ -128,16 +128,26 @@ fn price(v: &Value, k: &str) -> Option<f64> {
 }
 
 impl CardRow {
-    /// The parse without a line to remember — used by tests and by anything that only
-    /// wants the derived columns. `raw` is then the serialization of `v`.
+    /// The parse without a line to remember, where `raw` is the serialization of `v`.
+    ///
+    /// Test-only, and deliberately so: production reads a line and parses it, so it always
+    /// has the verbatim bytes and must pass them. This exists because most of the parser's
+    /// tests are about the *derived* columns and have no interest in `raw` — building the
+    /// line back out of the `Value` keeps their call shape a single argument.
+    #[cfg(test)]
     pub fn from_json(v: &Value) -> Option<CardRow> {
-        CardRow::from_json_line(v, &v.to_string())
+        CardRow::from_json_line(v, v.to_string())
     }
 
-    /// `None` => skip line (not a card object). `raw` is the line the value was parsed
-    /// from; `v.to_string()` is *not* the same thing (serde re-orders and re-formats), and
-    /// the column's promise is verbatim.
-    pub fn from_json_line(v: &Value, line: &str) -> Option<CardRow> {
+    /// `None` => skip line (not a card object).
+    ///
+    /// `line` is taken **by value**: it is the row's `raw`, the caller has no use for it
+    /// afterwards, and a full ingest moves 117 k of them at ~5 KB each — half a gigabyte
+    /// of memcpy to copy what was about to be dropped.
+    ///
+    /// It is also the line the value was parsed *from*, not `v.to_string()`: serde
+    /// re-orders and re-formats, and the column's promise is verbatim.
+    pub fn from_json_line(v: &Value, line: String) -> Option<CardRow> {
         if v.get("object")?.as_str()? != "card" {
             return None;
         }
@@ -234,7 +244,7 @@ impl CardRow {
                 any.then(|| Value::Array(per).to_string())
             }),
             search_text,
-            raw: line.to_owned(),
+            raw: line,
         })
     }
 }

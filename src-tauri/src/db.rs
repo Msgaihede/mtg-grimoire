@@ -177,10 +177,11 @@ mod tests {
         assert_eq!(decomposed, 1, "combining marks must be folded away");
     }
 
-    /// Two callers need the write lock *without* being willing to wait out a 44 s
-    /// ingest: the exit checkpoint (which would park a window-less process the user
-    /// believes has quit) and the image cache's bookkeeping (which would hold a picture
-    /// hostage to a sync). Both have a correct answer for "could not".
+    /// Some callers need the write lock *without* queueing for it behind whatever holds
+    /// it: the exit checkpoint (which would park a window-less process the user believes
+    /// has quit), the image cache's bookkeeping (which would hold a picture hostage to a
+    /// write), and the user-facing writes that answer "busy" rather than freeze a button.
+    /// Each has a correct answer for "could not".
     #[test]
     fn lock_for_gives_up_instead_of_waiting_out_an_ingest() {
         let mutex = std::sync::Mutex::new(Connection::open_in_memory().unwrap());
@@ -203,7 +204,7 @@ mod tests {
 
         // Zero is a plain `try_lock`, and not sleeping is the whole point of it: the image
         // cache asks from an async worker thread, where even one 20 ms poll is a pool
-        // thread parked on a lock that an ingest is going to hold for another 44 seconds.
+        // thread parked on a lock, for a row it is perfectly happy to skip.
         let started = std::time::Instant::now();
         assert!(lock_for(&mutex, Duration::ZERO).is_none());
         assert!(

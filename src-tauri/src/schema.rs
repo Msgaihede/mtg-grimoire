@@ -187,6 +187,27 @@ fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// Everything a freshly opened database needs before the app touches it: the schema is
+/// brought to head, and any `cards_staging` an interrupted ingest left behind is dropped.
+///
+/// The drop is not tidiness. The ingest commits its staging load a batch at a time, so a
+/// sync that is killed partway — a closed lid, a pulled stick, a crash — leaves a
+/// *committed* staging table holding most of a card database: measured against the ~880 MB
+/// `mtg.db`, that is several hundred megabytes. Nothing reclaims it on its own, because the
+/// only other `DROP` is inside [`create_staging`], and the next launch's sync short-circuits
+/// on its stored ETag until Scryfall rotates the bulk file — so the residue can sit there
+/// for days while every launch adds nothing but reads around it.
+///
+/// This returns those pages to SQLite's freelist, so the next ingest reuses them instead of
+/// growing the file past them. It does **not** shrink `mtg.db`: only `VACUUM` does that, and
+/// `VACUUM` renumbers rowids, which would owe the external-content FTS index a full rebuild
+/// at every startup. Reuse is the part that matters for a USB stick — without it a killed
+/// sync's residue and the next sync's staging table both want room at once.
+pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
+    migrate(conn)?;
+    conn.execute_batch("DROP TABLE IF EXISTS cards_staging")
+}
+
 /// Create a fresh, empty `cards_staging` table with the exact `cards` layout.
 /// A bulk sync fills this, then calls [`swap_staging`], so `cards` is never
 /// left half-written if the download fails.
@@ -310,6 +331,56 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, 2);
+    }
+
+    /// A killed sync leaves a *committed* staging table now that the ingest chunks its
+    /// load — several hundred megabytes of it, on the database of an app that ships on a
+    /// USB stick. Nothing else would drop it for days: `create_staging` is the only other
+    /// `DROP`, and it does not run until the sync stops short-circuiting on its stored
+    /// ETag, which waits on Scryfall rotating the bulk file.
+    ///
+    /// A real file rather than `:memory:`, because the residue this is about is disk.
+    #[test]
+    fn startup_drops_the_staging_table_a_killed_ingest_left_behind() {
+        let dir = std::env::temp_dir().join("mtgtest-schema-residue");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mtg.db");
+
+        // The state a killed ingest leaves: a migrated database, a swap that never ran,
+        // and committed rows in staging.
+        {
+            let conn = crate::db::open(&path).unwrap();
+            prepare_database(&conn).unwrap();
+            create_staging(&conn).unwrap();
+            conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('half','Half Ingested','x','1','en','normal','{}')", []).unwrap();
+        }
+
+        // The next launch, which is `init_state`'s one act of database preparation.
+        let conn = crate::db::open(&path).unwrap();
+        prepare_database(&conn).unwrap();
+
+        let staging: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(staging, 0, "crash residue must not survive a launch");
+        // And the launch is still a launch: the schema it was there to prepare is intact.
+        let tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE name IN ('cards','sets','sync_meta','cards_fts')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 4);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

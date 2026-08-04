@@ -123,10 +123,9 @@ pub fn run() {
 ///
 /// Nothing short-lived contends for `db` any more: searches and status polls read through
 /// `db_read`, and the image cache's bookkeeping asks with a zero timeout it is content to
-/// lose. What is left is the sync, which holds the connection for the whole of a ~44 s
-/// ingest — so in practice this wait is either instant or longer than anyone will stand
-/// for, and five seconds is simply where it stops trying. A window-less process still
-/// sitting on a lock is a process the user believes has already quit.
+/// lose. What is left is the sync, which now takes the connection one batch at a time — so
+/// this wait is nearly always instant, and five seconds is simply where it stops trying. A
+/// window-less process still sitting on a lock is a process the user believes has quit.
 const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Fold the write-ahead log back into `mtg.db` on the way out.
@@ -195,7 +194,7 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
 
     let db_path = data_dir.join("mtg.db");
     let conn = db::open(&db_path).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
-    schema::migrate(&conn).map_err(|e| {
+    schema::prepare_database(&conn).map_err(|e| {
         format!(
             "MTG Collection Tracker could not prepare its database at {}: {e}\n\
              The file may be from a newer version of the app, or damaged. Moving it \
@@ -203,9 +202,9 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
             db_path.display()
         )
     })?;
-    // Opened after `migrate`, and only after: a read-only connection to a file that has
-    // no tables yet would be a handle that can never be made useful. Same error message
-    // as the write connection — if this fails, the folder is the reason.
+    // Opened after `prepare_database`, and only after: a read-only connection to a file
+    // that has no tables yet would be a handle that can never be made useful. Same error
+    // message as the write connection — if this fails, the folder is the reason.
     let conn_read = db::open_read_only(&db_path)
         .map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
 
