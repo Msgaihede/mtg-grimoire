@@ -108,9 +108,9 @@ pub fn ingest_gz(
             stats.skipped += 1;
             continue;
         };
-        // `line` is moved, not borrowed: it becomes the row's `raw`, and nothing here
-        // wants it afterwards.
-        let Some(row) = CardRow::from_json_line(&v, line) else {
+        // `line` is borrowed: since v3 the row's `raw` is a gzip buffer of its own, so
+        // there is nothing left here to hand over.
+        let Some(row) = CardRow::from_json_line(&v, &line) else {
             stats.skipped += 1;
             continue;
         };
@@ -202,6 +202,7 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
                 c.image_updated_at,
                 c.image_uris,
                 c.face_image_uris,
+                c.artist,
                 c.search_text,
                 c.raw,
             ])?;
@@ -220,9 +221,9 @@ const STAGING_INSERT: &str =
         color_identity, legalities, games, finishes, prices, price_usd, price_eur, faces,
         illustration_id, frame_effects, border_color, full_art, promo, promo_types, digital,
         is_paper, edhrec_rank, game_changer, image_status, image_updated_at, image_uris,
-        face_image_uris, search_text, raw)
+        face_image_uris, artist, search_text, raw)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
-        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39)";
+        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40)";
 
 #[cfg(test)]
 mod tests {
@@ -298,7 +299,7 @@ mod tests {
         assert_eq!(ticks, 1, "the final progress call always fires");
     }
 
-    /// The 39-parameter INSERT is positional, and SQLite columns are dynamically typed:
+    /// The 40-parameter INSERT is positional, and SQLite columns are dynamically typed:
     /// two transposed parameters would still insert without complaint and only show
     /// up much later as wrong data. So read a fully-populated row back and check
     /// every column against the value its name promises. Every text value is distinct
@@ -313,7 +314,7 @@ mod tests {
         // sorts keys or preserves input order. The lone `card_faces` entry is what pushes
         // `search_text` ("ORACLE FACENAME") apart from `oracle_text` ("ORACLE"), and it
         // carries images of its own so `face_image_uris` is populated too.
-        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"}}"#;
+        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"},"artist":"ARTIST"}"#;
         // Five boolean columns cannot be told apart by one row — with two values to
         // go round, some pair always matches. These two extra rows give each boolean a
         // distinct pattern across the three: full_art 100, promo 011, digital 010,
@@ -364,8 +365,8 @@ mod tests {
             ("game_changer", Some("1")),
             ("image_status", Some("lowres")),
             ("image_updated_at", Some("2021-02-03T00:00:00Z")),
+            ("artist", Some("ARTIST")),
             ("search_text", Some("ORACLE FACENAME")),
-            ("raw", Some(line)),
         ];
 
         // CAST so REAL and INTEGER columns come back as text too — this compares the
@@ -399,6 +400,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!((top.as_str(), face.as_str()), ("TOPGRID", "FACEGRID"));
+
+        // `raw` is a gzip BLOB from v3, so it cannot be compared as a text column with the
+        // rest. Decompressed it is still the verbatim line, which is the whole promise.
+        let stored: Vec<u8> = conn
+            .query_row(
+                "SELECT CAST(raw AS BLOB) FROM cards WHERE id='ID1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(crate::card_row::raw_json(&stored).as_deref(), Some(line));
 
         // (full_art, promo, digital, game_changer, is_paper) per row — read down the
         // columns and every boolean has its own signature, so a transposed pair fails.

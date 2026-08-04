@@ -66,12 +66,54 @@ pub struct CardRow {
     /// images. `None` when no face has any, which keeps `split`/`adventure`/`flip`
     /// (two faces, one physical side, images at the top level) out of the column.
     pub face_image_uris: Option<String>,
+    /// Who drew it. A column of its own since v3: it is one short string per row, and
+    /// reading it back out of `raw` on every card-detail query was the last thing keeping
+    /// that blob in the hot path. Top level first, then the front face — a reversible card
+    /// has no top-level artist.
+    pub artist: Option<String>,
     pub search_text: String,
-    /// The original bulk line, stored verbatim so every field this schema does not model
-    /// yet stays recoverable without a re-download. Owned by the row rather than passed
-    /// beside it, because the batch that carries it to the database outlives the loop
-    /// iteration that read it.
-    pub raw: String,
+    /// The original bulk line, gzipped. `raw` is 61% of the database (622 MB of 1 021 MB
+    /// measured live) and nothing reads it at runtime any more, so it is stored the way an
+    /// archive is stored. Written into a column *declared* `TEXT NOT NULL` — SQLite's TEXT
+    /// affinity leaves a BLOB a BLOB, so the storage class is honest even though the
+    /// declaration is v1's and frozen.
+    pub raw: Vec<u8>,
+}
+
+/// A bulk line, gzipped for storage.
+///
+/// `Compression::fast` rather than the default: level 1 runs at roughly ten times the
+/// throughput of level 6 on this kind of text and gives up perhaps a tenth of the ratio,
+/// and this runs 116 568 times inside a sync the user is watching. A compressor that
+/// somehow fails hands back the plain bytes — [`raw_json`] reads both, so the fallback
+/// costs disk rather than correctness.
+pub fn gzip_raw(line: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    if enc.write_all(line.as_bytes()).is_err() {
+        return line.as_bytes().to_vec();
+    }
+    enc.finish().unwrap_or_else(|_| line.as_bytes().to_vec())
+}
+
+/// The stored `raw` bytes as JSON text, whichever way they were written.
+///
+/// A gzip member always begins `1f 8b`; a Scryfall card line always begins `{`. That is
+/// the whole discriminator, and it is what lets a database that has migrated to v3 but not
+/// yet synced — every row still plain text — be read by the same code as one that has.
+///
+/// Read the column with `CAST(raw AS BLOB)`: rusqlite will not hand a TEXT value out as
+/// `Vec<u8>`, and the cast is free for a value that is already a BLOB.
+pub fn raw_json(stored: &[u8]) -> Option<String> {
+    use std::io::Read;
+    if stored.starts_with(&[0x1f, 0x8b]) {
+        let mut out = String::new();
+        flate2::read::GzDecoder::new(stored)
+            .read_to_string(&mut out)
+            .ok()?;
+        return Some(out);
+    }
+    String::from_utf8(stored.to_vec()).ok()
 }
 
 /// A string field, if present and actually a string.
@@ -136,18 +178,19 @@ impl CardRow {
     /// line back out of the `Value` keeps their call shape a single argument.
     #[cfg(test)]
     pub fn from_json(v: &Value) -> Option<CardRow> {
-        CardRow::from_json_line(v, v.to_string())
+        CardRow::from_json_line(v, &v.to_string())
     }
 
     /// `None` => skip line (not a card object).
     ///
-    /// `line` is taken **by value**: it is the row's `raw`, the caller has no use for it
-    /// afterwards, and a full ingest moves 117 k of them at ~5 KB each — half a gigabyte
-    /// of memcpy to copy what was about to be dropped.
+    /// `line` is borrowed, not moved. It used to be moved because it *became* the row's
+    /// `raw` and copying 117 k lines of ~5 KB was half a gigabyte of pointless memcpy;
+    /// since v3 `raw` is [`gzip_raw`]'s output — a buffer of its own either way — so
+    /// taking ownership would buy nothing and only constrain the caller.
     ///
-    /// It is also the line the value was parsed *from*, not `v.to_string()`: serde
-    /// re-orders and re-formats, and the column's promise is verbatim.
-    pub fn from_json_line(v: &Value, line: String) -> Option<CardRow> {
+    /// It is the line the value was parsed *from*, not `v.to_string()`: serde re-orders
+    /// and re-formats, and the column's promise is verbatim — gzipped, but verbatim.
+    pub fn from_json_line(v: &Value, line: &str) -> Option<CardRow> {
         if v.get("object")?.as_str()? != "card" {
             return None;
         }
@@ -243,8 +286,9 @@ impl CardRow {
                 let any = per.iter().any(|x| !x.is_null());
                 any.then(|| Value::Array(per).to_string())
             }),
+            artist: pick("artist"),
             search_text,
-            raw: line,
+            raw: gzip_raw(line),
         })
     }
 }
@@ -557,5 +601,48 @@ mod tests {
         // Neither: the art series printing, which is what the placeholder path keys on.
         let art = row(&rows, "Sheoldred");
         assert_eq!((&art.image_uris, &art.face_image_uris), (&None, &None));
+    }
+
+    /// The column is declared `TEXT NOT NULL` by a frozen v1 constant and now holds gzip.
+    /// SQLite's TEXT affinity converts *numbers* to text and leaves a BLOB alone, so the
+    /// storage class stays honest — and this is the test that says so, because the failure
+    /// mode of the alternative (silent UTF-8 mangling of a compressed stream) is a `raw`
+    /// column that no longer decompresses.
+    #[test]
+    fn raw_is_stored_as_a_blob_and_reads_back_byte_for_byte() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let line = r#"{"object":"card","id":"x","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161","artist":"Christopher Rush"}"#;
+        let row = CardRow::from_json_line(&serde_json::from_str(line).unwrap(), line).unwrap();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,artist,raw)
+             VALUES (?1,?2,'lea','161','en','normal',?3,?4)",
+            rusqlite::params![row.id, row.name, row.artist, row.raw],
+        )
+        .unwrap();
+
+        let (kind, stored): (String, Vec<u8>) = conn
+            .query_row(
+                "SELECT typeof(raw), CAST(raw AS BLOB) FROM cards WHERE id='x'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "blob", "a gzip member must not be stored as text");
+        assert_eq!(raw_json(&stored).as_deref(), Some(line), "verbatim, still");
+        assert_eq!(row.artist.as_deref(), Some("Christopher Rush"));
+        // Worth the ~4× it claims: the sample line is small, so this is the weak form of
+        // the claim, and Task 14's smoke measures the real one.
+        assert!(row.raw.len() < line.len(), "compressed, not merely wrapped");
+    }
+
+    /// A database that has migrated to v3 but has not synced yet holds plain-text `raw` in
+    /// every row, and the same reader has to serve both.
+    #[test]
+    fn raw_json_reads_a_row_written_before_the_gzip_switch() {
+        let line = r#"{"object":"card","name":"Lightning Bolt"}"#;
+        assert_eq!(raw_json(line.as_bytes()).as_deref(), Some(line));
+        assert_eq!(raw_json(&gzip_raw(line)).as_deref(), Some(line));
+        assert_eq!(raw_json(&[0x1f, 0x8b, 0x00, 0x01]), None, "truncated gzip");
     }
 }

@@ -8,6 +8,9 @@
 //! turning the `prices` blob into a per-finish figure. Both are domain logic, and
 //! CLAUDE.md puts domain logic in TypeScript where the tests are fast — Rust hands over
 //! the JSON and the frontend decides what it means.
+//!
+//! Nothing here reads `raw`: `artist` has had a column of its own since schema v3, which
+//! was the last thing this module took out of that blob.
 
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -27,12 +30,6 @@ use std::sync::Arc;
 /// [`PrintingsResponse::total`] reports the full count so a capped list can say what it is
 /// a truncation of.
 const MAX_PRINTINGS: usize = 400;
-
-/// `artist` has no column of its own — it is one string, and a v3 migration for it would
-/// cost more than reading it back out of the JSON already stored. The face fallback
-/// matters: on a reversible card there is no top-level artist.
-const ARTIST_SQL: &str =
-    "coalesce(json_extract(raw, '$.artist'), json_extract(faces, '$[0].artist'))";
 
 /// The rows a printings list is about, stated once because the page and the count must
 /// agree — a `total` taken over a wider `WHERE` than the page is exactly the lie the
@@ -140,13 +137,11 @@ pub struct PrintingsResponse {
 /// off, and answering `None` for a row that plainly exists would look like a broken
 /// database rather than a policy.
 pub fn get_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, String> {
-    let sql = format!(
-        "SELECT id, oracle_id, name, set_code, set_name, collector_number, rarity, layout, lang,
-                mana_cost, cmc, type_line, oracle_text, illustration_id, {ARTIST_SQL},
+    let sql = "SELECT id, oracle_id, name, set_code, set_name, collector_number, rarity, layout,
+                lang, mana_cost, cmc, type_line, oracle_text, illustration_id, artist,
                 released_at, legalities, prices, finishes, image_status, faces
-         FROM cards WHERE id = ?1"
-    );
-    conn.query_row(&sql, params![id], |r| {
+         FROM cards WHERE id = ?1";
+    conn.query_row(sql, params![id], |r| {
         let faces: Option<String> = r.get(20)?;
         Ok(CardDetail {
             id: r.get(0)?,
@@ -227,7 +222,7 @@ pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<PrintingsRes
     }
     let sql = format!(
         "SELECT id, set_code, set_name, collector_number, released_at, rarity, illustration_id,
-                {ARTIST_SQL}, lang, finishes, prices, promo, full_art, frame_effects,
+                artist, lang, finishes, prices, promo, full_art, frame_effects,
                 border_color, layout
          FROM cards WHERE {PRINTINGS_WHERE}
          ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
@@ -312,20 +307,23 @@ mod tests {
             conn.execute(
                 "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
                     released_at, illustration_id, rarity, type_line, oracle_text, mana_cost,
-                    legalities, finishes, prices, search_text, raw)
+                    legalities, finishes, prices, artist, search_text, raw)
                  VALUES (?1, ?2, 'Lightning Bolt', ?3, ?4, 'en', 'normal', ?5, ?6, 'common',
                     'Instant', 'Lightning Bolt deals 3 damage to any target.', '{R}',
                     '{\"modern\":\"legal\",\"vintage\":\"restricted\",\"standard\":\"not_legal\"}',
                     '[\"nonfoil\",\"foil\"]',
                     '{\"usd\":\"5.00\",\"usd_foil\":\"40.00\",\"usd_etched\":null,\"eur\":\"4.20\",\"eur_foil\":\"35.00\",\"tix\":\"0.03\"}',
-                    'Lightning Bolt', json_object('artist','Christopher Rush'))",
+                    'Christopher Rush', 'Lightning Bolt', '{}')",
                 rusqlite::params![id, oracle, set, cn, released, illus],
             )
             .unwrap();
         }
         conn.execute(
+            // No top-level artist in the source JSON — a transform carries it per face —
+            // so the `artist` column holds what `CardRow`'s front-face fallback resolved
+            // at parse time, which is the whole reason that fallback exists.
             "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
-                faces, search_text, raw)
+                faces, artist, search_text, raw)
              VALUES ('dfc','o2','Delver of Secrets // Insectile Aberration','isd','51','en',
                 'transform',
                 json_array(
@@ -334,7 +332,7 @@ mod tests {
                               'mana_cost','{U}','artist','Nils Hamm'),
                   json_object('name','Insectile Aberration','type_line','Creature — Human Insect',
                               'oracle_text','Flying','mana_cost','','artist','Nils Hamm')),
-                'Delver', '{}')",
+                'Nils Hamm', 'Delver', '{}')",
             [],
         )
         .unwrap();
@@ -363,7 +361,7 @@ mod tests {
         // Blobs, not fields: legalities has 23 keys and grows, prices are decimal strings.
         assert!(c.legalities.as_deref().unwrap().contains("\"vintage\""));
         assert!(c.prices.as_deref().unwrap().contains("usd_foil"));
-        // No column for it; the image policy needs it on this pane.
+        // Its own column since v3; the image policy needs it on this pane.
         assert_eq!(c.artist.as_deref(), Some("Christopher Rush"));
         assert!(c.faces.is_empty(), "a single-faced card has no faces");
     }
@@ -379,10 +377,10 @@ mod tests {
         assert_eq!(c.faces[0].name, "Delver of Secrets");
         assert_eq!(c.faces[1].name, "Insectile Aberration");
         assert_eq!(c.faces[1].artist.as_deref(), Some("Nils Hamm"));
-        // This row has no top-level artist — only faces do — so the card-level credit can
-        // only come from the coalesce's face branch. Scryfall's image policy requires the
-        // credit line wherever art is shown, and without this the branch could be deleted
-        // with every test still green.
+        // The card-level credit is still there for a card whose JSON has none at the top
+        // level: the fallback runs once, at parse time (`CardRow`'s `pick`) or in the v3
+        // backfill, and the column carries the answer. Scryfall's image policy requires
+        // the credit line wherever art is shown, so this must never come back empty.
         assert_eq!(c.artist.as_deref(), Some("Nils Hamm"));
         // Scryfall gives a transform's back face `"mana_cost": ""`, which is not the same
         // as having a cost of nothing to render — a `Some("")` here is a cost pill on the

@@ -94,13 +94,44 @@ fn webp_json_object(src: &str) -> String {
     format!("json_object({})", pairs.join(", "))
 }
 
+/// `raw` as JSON text, or NULL when it is not JSON at all. **Every migration step that
+/// reads `raw` reads it through this.**
+///
+/// From the first post-v3 sync `raw` is a gzip BLOB (see [`crate::card_row::gzip_raw`]),
+/// and SQLite reads a BLOB argument to `json_extract`/`json_type`/`json_each` as JSONB —
+/// a gzip member is not valid JSONB, so the call is a hard `malformed JSON` **error** that
+/// fails the whole migration, not the NULL one might expect.
+///
+/// Three things about the shape, each of them the reason for the next:
+/// * The guard is a `CASE`, because only `CASE` promises to evaluate one branch.
+/// * The `CASE` wraps the **argument**, not the call, so the same expression serves
+///   `json_each` in a `FROM` clause, where there is no call to wrap. Every JSON function
+///   answers NULL — or no rows — to a NULL argument, which is what makes that work.
+/// * It is not a `WHERE` term. `WHERE json_valid(raw) AND json_extract(raw, …)` looks
+///   equivalent and is not: the planner orders `WHERE` terms as it likes, so evaluating
+///   the unguarded one *is* the error.
+///
+/// No database can be in that state when these steps run — one with gzip rows is already
+/// past v3 — but the guard is what makes that a fact rather than an argument.
+/// `the_v3_backfill_steps_over_a_row_whose_raw_is_not_json` walks the whole ladder over
+/// such a row, which is why v2 is guarded too and not only the step that introduced gzip.
+fn json_raw(col: &str) -> String {
+    format!("CASE WHEN json_valid(CAST({col} AS TEXT)) = 1 THEN CAST({col} AS TEXT) END")
+}
+
+/// The head schema version — what [`migrate`] walks a database up to, and what
+/// `migrate_is_idempotent_and_creates_tables` pins. Named because three tests and the
+/// final `PRAGMA user_version` write all have to mean the same number.
+pub const SCHEMA_VERSION: i64 = 3;
+
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
 /// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
 ///
-/// **Adding a column later:** leave [`CARDS_COLUMNS`] alone and add a new `if v < 3`
-/// block with an `ALTER TABLE cards ADD COLUMN`, the way `v < 2` below does. The v1
-/// `CREATE` describes what version 1 built; a fresh install replays the whole history, so
-/// a column added to v1 would make the later `ALTER` fail on new machines only.
+/// **Adding a column later:** leave [`CARDS_COLUMNS`] alone and add a new `if v < N`
+/// block with an `ALTER TABLE cards ADD COLUMN`, the way `v < 2` and `v < 3` below do.
+/// The v1 `CREATE` describes what version 1 built; a fresh install replays the whole
+/// history, so a column added to v1 would make the later `ALTER` fail on new machines
+/// only.
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v < 1 {
@@ -147,27 +178,58 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              ) WITHOUT ROWID;",
         )?;
 
-        // Backfill from `raw`, which every row already carries verbatim. Restricted to
-        // rows that have something to give so the UPDATE does not rewrite 116 k pages to
-        // store `{"thumb":null,…}` four times over.
+        // Backfill from `raw`, which every row already carries verbatim — through
+        // [`json_raw`], so a `raw` that is not JSON text is skipped rather than fatal.
+        // Restricted to rows that have something to give so the UPDATE does not rewrite
+        // 116 k pages to store `{"thumb":null,…}` four times over.
+        let raw = json_raw("raw");
         tx.execute_batch(&format!(
             "UPDATE cards SET image_uris = {top}
-             WHERE json_extract(raw, '$.image_uris') IS NOT NULL;",
-            top = webp_json_object("raw")
+             WHERE json_extract({raw}, '$.image_uris') IS NOT NULL;",
+            top = webp_json_object(&raw)
         ))?;
         tx.execute_batch(&format!(
             "UPDATE cards SET face_image_uris = (
                 SELECT json_group_array(json(
                     CASE WHEN json_extract(f.value, '$.image_uris') IS NULL
                          THEN 'null' ELSE {face} END))
-                FROM json_each(cards.raw, '$.card_faces') f)
-             WHERE json_type(raw, '$.card_faces') = 'array'
-               AND EXISTS (SELECT 1 FROM json_each(cards.raw, '$.card_faces') g
+                FROM json_each({qualified}, '$.card_faces') f)
+             WHERE json_type({raw}, '$.card_faces') = 'array'
+               AND EXISTS (SELECT 1 FROM json_each({qualified}, '$.card_faces') g
                            WHERE json_extract(g.value, '$.image_uris') IS NOT NULL);",
-            face = webp_json_object("f.value")
+            face = webp_json_object("f.value"),
+            qualified = json_raw("cards.raw")
         ))?;
 
         tx.execute_batch("PRAGMA user_version = 2;")?;
+        tx.commit()?;
+    }
+    if v < 3 {
+        let tx = conn.unchecked_transaction()?;
+        // One nullable, unindexed column. No entry in `CARDS_INDEXES` (nothing here is
+        // indexed), no edit to `CARDS_COLUMNS` (frozen), and no FTS rebuild — the index
+        // covers name/type_line/search_text, none of which this touches, and an UPDATE
+        // renumbers no rowid. `the_v3_backfill_leaves_the_search_index_answering` is the
+        // evidence, exactly as v2's twin was.
+        tx.execute_batch("ALTER TABLE cards ADD COLUMN artist TEXT;")?;
+
+        // Read out of the JSON already on disk rather than re-downloading 77 MB. Two
+        // sources because Scryfall has two: a reversible card carries no top-level artist,
+        // only `card_faces[0].artist`.
+        //
+        // [`json_raw`] is the guard, and this is the step that makes it necessary: from
+        // the first post-v3 sync `raw` is a gzip BLOB, which `json_extract` answers with a
+        // hard error rather than a NULL. `faces` needs none — it is written as compact
+        // JSON or not at all, and `json_extract` over a NULL is a NULL.
+        tx.execute_batch(&format!(
+            "UPDATE cards
+                SET artist = coalesce(json_extract({raw}, '$.artist'),
+                                      json_extract(faces, '$[0].artist'))
+              WHERE artist IS NULL;",
+            raw = json_raw("raw")
+        ))?;
+
+        tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         tx.commit()?;
     }
     Ok(())
@@ -330,7 +392,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     /// A killed sync leaves a *committed* staging table now that the ingest chunks its
@@ -637,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_reaches_version_2_and_adds_the_image_columns() {
+    fn migrate_reaches_the_head_version_and_adds_the_image_columns() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         migrate(&conn).unwrap(); // still idempotent
@@ -645,7 +707,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, SCHEMA_VERSION);
 
         let columns: Vec<String> = table_info(&conn, "cards")
             .into_iter()
@@ -876,6 +938,124 @@ mod tests {
             })
             .unwrap();
         assert_eq!(uris, "{\"grid\":\"g.webp\"}");
+    }
+
+    /// Carryover 2a: the artist gets a column of its own, backfilled out of the JSON that
+    /// is already on disk. The face fallback is not decoration — a reversible card has no
+    /// top-level artist at all, and the credit line Scryfall's image policy requires is
+    /// rendered from this.
+    #[test]
+    fn the_v3_step_backfills_artist_out_of_raw_and_faces() {
+        let conn = v1_database();
+        insert_raw(
+            &conn,
+            "top",
+            "Lightning Bolt",
+            r#"{"object":"card","artist":"Christopher Rush"}"#,
+        );
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, faces, raw)
+             VALUES ('rev','Reversible','sld','1','en','reversible_card',
+                json_array(json_object('name','Front','artist','Nils Hamm')), '{\"object\":\"card\"}')",
+            [],
+        )
+        .unwrap();
+        insert_raw(&conn, "none", "No Credit", r#"{"object":"card"}"#);
+
+        migrate(&conn).unwrap();
+
+        let artist = |id: &str| -> Option<String> {
+            conn.query_row("SELECT artist FROM cards WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(artist("top").as_deref(), Some("Christopher Rush"));
+        assert_eq!(
+            artist("rev").as_deref(),
+            Some("Nils Hamm"),
+            "a reversible card's credit is on its front face"
+        );
+        assert_eq!(artist("none"), None, "absent is absent, not empty");
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// Same rule as v2: the step writes one new, unindexed column and renumbers no rowid,
+    /// so it deliberately does not rebuild the FTS index — and this is the evidence that
+    /// search still answers afterwards.
+    #[test]
+    fn the_v3_backfill_leaves_the_search_index_answering() {
+        let conn = v1_database();
+        insert_raw(
+            &conn,
+            "bolt",
+            "Lightning Bolt",
+            r#"{"object":"card","artist":"Christopher Rush"}"#,
+        );
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "the FTS index must survive the v3 backfill");
+    }
+
+    /// The backfill reads `raw` as JSON, and from the first post-v3 sync `raw` is a gzip
+    /// BLOB that `json_extract` answers with a hard `malformed JSON` error rather than a
+    /// NULL. No database can be in that state when this step runs (a database with gzip
+    /// rows is already past 3), but the guard is what makes that a fact rather than an
+    /// argument — and it costs one `json_valid`.
+    #[test]
+    fn the_v3_backfill_steps_over_a_row_whose_raw_is_not_json() {
+        let conn = v1_database();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES ('gz','Compressed','tst','1','en','normal', ?1)",
+            [crate::card_row::gzip_raw(
+                r#"{"object":"card","artist":"Rebecca Guay"}"#,
+            )],
+        )
+        .unwrap();
+
+        migrate(&conn).expect("a non-JSON `raw` must not fail the migration");
+
+        let artist: Option<String> = conn
+            .query_row("SELECT artist FROM cards WHERE id='gz'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(artist, None, "skipped, not guessed at");
+    }
+
+    /// A column added by a migration has to survive the sync that drops and recreates the
+    /// table it is on — which it does only because `create_staging` derives its layout from
+    /// the live table *and* the ingest writes the column. The second half is the one that
+    /// fails silently: staging would clone the column and every row would come back NULL.
+    #[test]
+    fn the_artist_column_survives_a_staging_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_staging(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards_staging
+                (id, name, set_code, collector_number, lang, layout, raw, artist)
+             VALUES ('new','Lightning Bolt','lea','161','en','normal','{}','Christopher Rush')",
+            [],
+        )
+        .unwrap();
+        swap_staging(&conn).unwrap();
+
+        let artist: String = conn
+            .query_row("SELECT artist FROM cards WHERE id='new'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(artist, "Christopher Rush");
     }
 
     /// `image_cache` is not sync data and must outlive the table that is dropped on every
