@@ -72,21 +72,25 @@ pub struct CardRow {
     /// has no top-level artist.
     pub artist: Option<String>,
     pub search_text: String,
-    /// The original bulk line, gzipped. `raw` is 61% of the database (622 MB of 1 021 MB
-    /// measured live) and nothing reads it at runtime any more, so it is stored the way an
-    /// archive is stored. Written into a column *declared* `TEXT NOT NULL` — SQLite's TEXT
-    /// affinity leaves a BLOB a BLOB, so the storage class is honest even though the
-    /// declaration is v1's and frozen.
+    /// The original bulk line, gzipped. `raw` is far and away the largest column in the
+    /// database — 622 MB of it, measured live over 116 568 rows, in a `mtg.db` of 2 018 MB
+    /// — and nothing reads it at runtime any more, so it is stored the way an archive is
+    /// stored: gzip takes those 622 MB to roughly 236 MB. Written into a column *declared*
+    /// `TEXT NOT NULL` — SQLite's TEXT affinity leaves a BLOB a BLOB, so the storage class
+    /// is honest even though the declaration is v1's and frozen.
     pub raw: Vec<u8>,
 }
 
 /// A bulk line, gzipped for storage.
 ///
-/// `Compression::fast` rather than the default: level 1 runs at roughly ten times the
-/// throughput of level 6 on this kind of text and gives up perhaps a tenth of the ratio,
-/// and this runs 116 568 times inside a sync the user is watching. A compressor that
-/// somehow fails hands back the plain bytes — [`raw_json`] reads both, so the fallback
-/// costs disk rather than correctness.
+/// `Compression::fast` rather than the default, and this runs 116 568 times inside a sync
+/// the user is watching. Measured over 5 828 real bulk lines: level 1 compresses 2.64:1 at
+/// roughly **twice** the throughput of level 6, which manages 2.93:1 — so the default buys
+/// about a tenth more ratio (236 MB against 212 MB across the corpus) for double the time.
+/// Level 1 costs ~3.4 s over a full ingest; level 6 would cost ~7.1 s.
+///
+/// A compressor that somehow fails hands back the plain bytes — [`raw_json`] reads both,
+/// so the fallback costs disk rather than correctness.
 pub fn gzip_raw(line: &str) -> Vec<u8> {
     use std::io::Write;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -631,8 +635,9 @@ mod tests {
         assert_eq!(kind, "blob", "a gzip member must not be stored as text");
         assert_eq!(raw_json(&stored).as_deref(), Some(line), "verbatim, still");
         assert_eq!(row.artist.as_deref(), Some("Christopher Rush"));
-        // Worth the ~4× it claims: the sample line is small, so this is the weak form of
-        // the claim, and Task 14's smoke measures the real one.
+        // The weak form of the claim: this sample line is far too short to reach the
+        // 2.64:1 measured across 5 828 real bulk lines (gzip's header alone is 18 bytes),
+        // so all that is checked here is that compression happened at all.
         assert!(row.raw.len() < line.len(), "compressed, not merely wrapped");
     }
 

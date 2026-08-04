@@ -15,8 +15,9 @@ Scryfall as the only external dependency.
   `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
   folder to force a clean first-run sync. All three locations are gitignored.
 - A cold sync takes ~45 s (77 MB download + streaming ingest + FTS rebuild) and yields
-  ~116.5 k cards / ~1 050 sets. `mtg.db` is ~880 MB, two thirds of it the `raw` JSON
-  column.
+  ~116.5 k cards / ~1 050 sets. `mtg.db` measures ~2 GB before compaction (Task 3 shrinks
+  it); `raw` is much the largest column at 622 MB, which schema v3's gzip takes to ~236 MB
+  on the first sync after the migration.
 - The app never closes its SQLite connection, so a `mtg.db-wal` the size of the ingest
   (~857 MB) used to outlive the process. `RunEvent::Exit` now runs
   `PRAGMA wal_checkpoint(TRUNCATE)`, and `journal_size_limit` caps the file at 64 MB.
@@ -84,6 +85,18 @@ Scryfall as the only external dependency.
 - `CARDS_COLUMNS` is **frozen**: it is what schema v1 created, not what `cards` is now.
   Add columns in a new `if v < N` step in `migrate` with `ALTER TABLE`. (`create_staging`
   derives its layout from `PRAGMA table_info(cards)`, so staging follows automatically.)
+- **`raw` is a gzip BLOB from schema v3 on, and a bare `json_extract(raw, …)` is a hard
+  error, not a NULL.** SQLite reads a BLOB argument to `json_extract`/`json_type`/
+  `json_each` as JSONB; a gzip member is not valid JSONB, so the call raises
+  `malformed JSON` and fails the whole migration for every user who has synced since v3.
+  Any migration reading `raw` goes through **`schema::json_raw`** (Rust reads use
+  `card_row::raw_json` with `CAST(raw AS BLOB)`). The guard must sit **inside** the
+  expression, wrapping the *argument* — never as a `WHERE` term, because the planner
+  orders `WHERE` terms as it likes and evaluating the unguarded one *is* the error. This
+  is invisible to tests: fixture databases hold text `raw`, so an unguarded `if v < 4`
+  passes every test and breaks only in the field. v2 and v3 are both guarded; the ladder
+  is walked over a gzip row by
+  `schema::tests::the_v3_backfill_steps_over_a_row_whose_raw_is_not_json`.
 - `cards_fts` is **external-content with no triggers**. Any write to `cards` outside the
   ingest path needs `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');` **if it touches
   an indexed column (`name`/`type_line`/`search_text`) or renumbers rowids** — and `VACUUM`

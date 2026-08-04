@@ -887,6 +887,86 @@ mod tests {
         }
     }
 
+    /// The same trap as the image columns, one version later. The v3 backfill coalesces
+    /// `raw`'s `$.artist` with the `faces` *column*'s `$[0].artist`; `CardRow`'s `pick`
+    /// does top level then front face at parse time. A database holds backfilled rows
+    /// until its next sync and ingested rows after it, so a disagreement would change a
+    /// card's credit line under a reader that had already seen it — and that credit line
+    /// is what Scryfall's image policy requires wherever art is shown.
+    #[test]
+    fn the_artist_backfill_and_the_ingest_agree() {
+        let card = |id: &str, rest: &str| {
+            format!(
+                r#"{{"object":"card","id":"{id}","name":"{id}","lang":"en","layout":"normal","set":"tst","collector_number":"1"{rest}}}"#
+            )
+        };
+        let cases: Vec<(&str, String)> = vec![
+            ("top", card("top", r#","artist":"Christopher Rush""#)),
+            // What the fallback is for: a reversible card has no top-level artist at all.
+            (
+                "faces",
+                card(
+                    "faces",
+                    r#","card_faces":[{"name":"F0","artist":"Nils Hamm"},{"name":"F1","artist":"Someone Else"}]"#,
+                ),
+            ),
+            // Both present and deliberately different, so a fallback that fires anyway shows.
+            (
+                "both",
+                card(
+                    "both",
+                    r#","artist":"Top Artist","card_faces":[{"name":"F0","artist":"Face Artist"}]"#,
+                ),
+            ),
+            // Faces, but the front one is uncredited: the answer is absent, not face 1's.
+            (
+                "gap",
+                card(
+                    "gap",
+                    r#","card_faces":[{"name":"F0"},{"name":"F1","artist":"Back Artist"}]"#,
+                ),
+            ),
+            ("none", card("none", "")),
+        ];
+
+        let parse = |raw: &str| {
+            crate::card_row::CardRow::from_json(&serde_json::from_str(raw).unwrap()).unwrap()
+        };
+        let conn = v1_database();
+        for (id, raw) in &cases {
+            // Exactly the columns a v1 ingest left behind — the verbatim line *and* the
+            // faces blob, because the backfill reads `$[0].artist` out of that column and
+            // not out of `raw`. A row inserted without it would pass while testing nothing.
+            conn.execute(
+                "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, faces, raw)
+                 VALUES (?1, ?1, 'tst', '1', 'en', 'normal', ?2, ?3)",
+                rusqlite::params![id, parse(raw).faces, raw],
+            )
+            .unwrap();
+        }
+        migrate(&conn).unwrap();
+
+        for (id, raw) in &cases {
+            let backfilled: Option<String> = conn
+                .query_row("SELECT artist FROM cards WHERE id = ?1", [*id], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(backfilled, parse(raw).artist, "artist disagrees for `{id}`");
+        }
+
+        // Agreement on five NULLs would also pass, so pin the two branches that carry the
+        // rule: the top level wins where both exist, and a face credit is found where it
+        // is the only one.
+        let artist = |id: &str| -> Option<String> {
+            conn.query_row("SELECT artist FROM cards WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(artist("faces").as_deref(), Some("Nils Hamm"));
+        assert_eq!(artist("both").as_deref(), Some("Top Artist"));
+        assert_eq!(artist("gap"), None, "the front face is uncredited");
+    }
+
     /// `cards_fts` is external-content with no triggers, so CLAUDE.md requires a rebuild
     /// after writes to `cards` outside the ingest. The v2 backfill writes only new,
     /// unindexed columns and renumbers no rowid, so it deliberately does not rebuild —
