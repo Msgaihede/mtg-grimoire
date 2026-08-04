@@ -54,6 +54,16 @@ and `Accept: application/json;q=0.9,*/*;q=0.8` on API calls. 403 without them.
 
 **Artist credit (Scryfall policy, binding):** *"When using the `art_crop`, list the artist name and copyright elsewhere in the same interface presenting the art crop, or use the full card image elsewhere in the same interface."* The search art-grid renders **full card images** (`grid`/`thumb`), which carry the printed artist name, so it complies by construction. The card detail pane renders `display` **and** must print `artist` plus the line `Card images © Wizards of the Coast · Data © Scryfall` (spec §10 wording). Any future `art`-variant surface inherits the same requirement. Never distort, skew, blur, desaturate, recolor or watermark a card image, and never crop off the copyright or artist name.
 
+**Frontend design — binding.** Every UI task in this plan opens by invoking the **`frontend-design` skill**, and `docs/superpowers/specs/2026-08-04-visual-design-direction.md` is a specification, not a mood board: implementers **execute** its palette, type roles, mana line, ribbon layout and filter specs, and spend their judgment on detail quality (spacing, focus states, contrast) rather than on the direction. CLAUDE.md carries the same rule. Concretely:
+
+- **Colour appears only where it carries Magic meaning** — mana, colour identity, rarity, card art. Chrome stays quiet: no gradients, no glows, no five-colour anything except the one signature.
+- **The mana line** (2px W→U→B→R→G under the global ribbon) is that signature. It is never repeated elsewhere, and it is the app's **only** progress bar — during a sync it fills left→right behind a gold cap.
+- **The global ribbon owns global actions.** Refresh, sync status and future settings live in a 48px `bg-surface` row, never in a view. Filters live with their view.
+- **Type roles:** Cinzel (`@fontsource/cinzel`, 500/600) for view titles, hero copy and section headers **only**, never body text and **never below 18px**; Geist for everything else; Geist Mono for collector numbers, prices and counts.
+- **Symbol fonts are bundled, never a CDN**: `mana-font` (mana symbols) and `keyrune` (set symbols) are npm packages imported through Vite. The CSP has no remote source, and adding one to load a font would be a violation of both this rule and Task 1's test.
+- **Motion budget:** 150 ms ease on chip/nav state, the sync sweep on the mana line, nothing else. Every animation respects `prefers-reduced-motion`.
+- **Quality floor, unannounced:** visible gold focus ring on every interactive element, AA contrast on all text, works down to 1024px width. Copy is sentence case with verbs on buttons ("Refresh data", "Reset all").
+
 **Prices:** decimal **strings** in the `prices` JSON blob, 6 keys (`usd, usd_foil, usd_etched, eur, eur_foil, tix` — `eur_etched` does not exist in the data). Per-finish valuation reads the blob by finish (`nonfoil→usd`, `foil→usd_foil`, `etched→usd_etched`). **`price_usd` is a display/sort fallback chain and must not be used for a finish price.** `tix` is never summed with fiat. Prices are always labelled with an as-of date.
 
 **Process:** all work on `main`, one commit per task, message style `feat:`/`fix:`/`chore:`/`test:`, with the trailer:
@@ -69,6 +79,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 ```
 mtg-collection/
 ├── CLAUDE.md                                   # M: narrow the FTS-rebuild rule; add mtgimg/CSP note (T7)
+├── package.json                                # M: cinzel, geist-mono, mana-font, keyrune (T8)
 ├── src-tauri/
 │   ├── Cargo.toml                              # M: tauri-plugin-single-instance, tokio sync/time (T1, T5)
 │   ├── tauri.conf.json                         # M: csp + devCsp (T1)
@@ -81,30 +92,50 @@ mtg-collection/
 │       ├── ingest.rs                           # M: 39-param insert (T3)
 │       ├── scryfall.rs                         # M: fetch_image, RateLimited{retry_after_secs}, NotFound,
 │       │                                       #    sets page cap (T4)
-│       ├── sync.rs                             # M: AppState.images, status via db_read, lock_for (T6, T7)
-│       ├── search.rs                           # M: doc drift "four interpolations" (T7)
+│       ├── sync.rs                             # M: AppState.images, status via db_read, lock_conn (T6, T7)
+│       ├── search.rs                           # M: doc drift (T7); sets[]/manaValues[] filters +
+│       │                                       #    SetSummary + list_sets command (T9)
 │       ├── images.rs                           # NEW: variants, cache paths, URI resolution, fetch+store,
-│       │                                       #      placeholders, request parsing, serve() (T5, T6, T11)
-│       ├── card.rs                             # NEW: card_detail + card_printings commands (T9)
+│       │                                       #      placeholders, request parsing, serve() (T5, T6, T14)
+│       ├── card.rs                             # NEW: card_detail + card_printings commands (T12)
 │       └── tests/fixtures/cards_sample.jsonl   # M: image_uris on the fixture lines (T3)
 ├── src/
-│   ├── App.tsx                                 # M: mount the card detail pane (T10)
-│   ├── lib/ipc.ts                              # M: CardDetail/Printing DTOs + 3 commands; doc drift (T7, T9)
-│   ├── lib/images.ts                           # NEW: mtgimg URL builder, variants, aspect ratio (T8)
-│   ├── lib/images.test.ts                      # NEW
-│   ├── lib/store.ts                            # M: searchView + selectedCardId (T8, T10)
+│   ├── index.css                               # M: font imports + mana/pie/rarity tokens, sweep keyframes (T8)
+│   ├── App.tsx                                 # M: mount the card detail pane (T13)
+│   ├── lib/ipc.ts                              # M: CardDetail/Printing/SetSummary DTOs, 4 new commands,
+│   │                                           #    sets[]/manaValues[] on SearchRequest (T7, T9, T10, T12)
+│   ├── lib/mana.ts + .test.ts                  # NEW: WUBRG keys, mana-font classes, the line gradient,
+│   │                                           #      manaLineSync (T8)
+│   ├── lib/rarity.ts + .test.ts                # NEW: rarity gem colours (T8)
+│   ├── lib/keyrune.ts + .test.ts               # NEW: set-symbol class from a set code (T10)
+│   ├── lib/useSyncProgress.ts                  # NEW: PHASE_LABEL + the sync:progress listener, moved out
+│   │                                           #      of SyncProgress so ribbon and overlay share one (T8)
+│   ├── lib/images.ts + .test.ts                # NEW: mtgimg URL builder, variants, aspect ratio (T11)
+│   ├── lib/store.ts                            # M: searchView (T11) + selectedCardId (T13)
 │   ├── lib/useSync.ts                          # M: mergeStatus carries lastIngestSkipped (T7)
-│   ├── features/search/SearchPage.tsx          # M: view toggle, grid branch, prefetch (T8, T11)
-│   ├── features/search/CardGrid.tsx            # NEW: virtualized 5:7 art tiles
-│   ├── features/search/CardGrid.test.tsx       # NEW
-│   ├── features/card/CardDetailPane.tsx        # NEW: faces, flip, printings, legality chips, credit
-│   ├── features/card/CardDetailPane.test.tsx   # NEW
-│   ├── features/card/printings.ts              # NEW: illustration grouping, finish prices, legality chips
-│   └── features/card/printings.test.ts         # NEW
+│   ├── components/Ribbon.tsx + .test.tsx        # NEW: the 48px global row — app mark, view title,
+│   │                                           #      sync status, Refresh data (T8)
+│   ├── components/ManaLine.tsx + .test.tsx      # NEW: the signature rule, and the app's only
+│   │                                           #      progress bar (T8)
+│   ├── components/AppShell.tsx + .test.tsx      # M: header removed, ribbon mounted, gold sidebar
+│   │                                           #    indicator; nav assertions de-ambiguated (T8)
+│   ├── components/SyncProgress.tsx + .test.tsx  # M: reduced to the first-run overlay — the mana line
+│   │                                           #    is now the app's only in-place progress bar (T8)
+│   ├── features/search/FilterBar.tsx + .test    # NEW: mana chips, mana-value chips, format, Reset all (T10)
+│   ├── features/search/SetCombobox.tsx + .test  # NEW: searchable multi-select over `sets` (T10)
+│   ├── features/search/useCardSearch.ts        # M: sets/manaValues state, toggleIn, activeFilterCount,
+│   │                                           #    resetAll (T10)
+│   ├── features/search/useCardSearch.test.ts   # NEW: the new pure filter helpers (T10)
+│   ├── features/search/SearchPage.tsx          # M: FilterBar swap (T10); view toggle, grid branch,
+│   │                                           #    prefetch (T11, T14)
+│   ├── features/search/CardGrid.tsx + .test     # NEW: virtualized 5:7 art tiles with rarity gems (T11)
+│   ├── features/card/CardDetailPane.tsx +.test  # NEW: faces, flip, printings, legality chips, credit (T13)
+│   └── features/card/printings.ts + .test.ts    # NEW: illustration grouping, finish prices,
+│                                               #      legality chips, faceCount (T13)
 └── docs/superpowers/plans/2026-08-04-02-images-card-browsing.md   # this file
 ```
 
-Later plans build on: `images.rs` (pre-warm job, deck covers), `card.rs` (collection badges on printings), `src/lib/images.ts` (every view that shows a card).
+Later plans build on: `images.rs` (pre-warm job, deck covers), `card.rs` (collection badges on printings), `src/lib/images.ts` (every view that shows a card), `src/lib/mana.ts` + `src/lib/rarity.ts` (every view that shows a colour, a cost or a rarity), and `Ribbon.tsx` (settings, import/export and every future global action).
 
 ---
 
@@ -2332,7 +2363,2063 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 8: The art-grid view on the search page
+
+### Task 8: Visual foundation and the global ribbon
+
+> **Invoke the `frontend-design` skill before writing any of this task; `docs/superpowers/specs/2026-08-04-visual-design-direction.md` is binding — execute it, don't invent.** Palette, type roles, the mana line and the ribbon layout are all specified there. Spend judgment on detail quality (spacing, focus states, contrast), not on the direction.
+
+This is the first UI task, and it comes after the Rust work on purpose: Task 7 changes what `sync::status` reports and how `mergeStatus` folds it, and the ribbon's mana line is driven by exactly that. Building the ribbon first would mean building it twice.
+
+**Files:**
+- Modify: `package.json`, `src/index.css`, `src/components/AppShell.tsx`, `src/components/AppShell.test.tsx`, `src/components/SyncProgress.tsx`, `src/components/SyncProgress.test.tsx`
+- Create: `src/lib/mana.ts`, `src/lib/mana.test.ts`, `src/lib/rarity.ts`, `src/lib/rarity.test.ts`, `src/lib/useSyncProgress.ts`, `src/components/ManaLine.tsx`, `src/components/ManaLine.test.tsx`, `src/components/Ribbon.tsx`, `src/components/Ribbon.test.tsx`
+
+**Interfaces:**
+- Consumes: `useSync()` → `{ status, error, refresh, refreshing, upToDate }` and `statusLine(status)` from `src/lib/useSync.ts`; `SyncProgressEvent { phase, done, total, message }` and `SyncPhase` from `src/lib/ipc.ts`; `useAppStore` → `{ activeView, setActiveView }`; `cn` from `@/lib/utils`.
+- Produces:
+
+```ts
+// src/lib/mana.ts
+export const MANA_KEYS = ["W", "U", "B", "R", "G", "C"] as const;
+export type ManaKey = (typeof MANA_KEYS)[number];
+export const MANA_LINE_KEYS = ["W", "U", "B", "R", "G"] as const;  // no C in the line
+/** The `mana-font` class pair for one symbol: `"ms ms-w"`. */
+export function manaSymbolClass(key: ManaKey): string;
+/** The five-colour gradient, as a CSS `linear-gradient(...)` value. */
+export const MANA_LINE_GRADIENT: string;
+export interface ManaLineSync { value: number | null; label: string }
+export function manaLineSync(progress: SyncProgressEvent | null, busy: boolean): ManaLineSync | null;
+
+// src/lib/rarity.ts
+/** The CSS colour for a rarity gem or tinted label. Unknown rarities get the border colour. */
+export function rarityColor(rarity: string | null): string;
+
+// src/lib/useSyncProgress.ts
+export const PHASE_LABEL: Record<SyncPhase, string>;      // moved out of SyncProgress.tsx
+export function useSyncProgress(): SyncProgressEvent | null;
+
+// src/components/ManaLine.tsx
+export function ManaLine({ sync }: { sync: ManaLineSync | null }): JSX.Element;
+
+// src/components/Ribbon.tsx
+export interface RibbonProps {
+  title: string; statusLine: string | null; dataDir: string | undefined;
+  busy: boolean; upToDate: boolean; hasError: boolean;
+  onRefresh: () => void; sync: ManaLineSync | null;
+}
+export function Ribbon(props: RibbonProps): JSX.Element;
+```
+
+**Packages** — verified live on the npm registry at authoring time, and all four are **bundled by Vite, never a CDN** (the CSP has no remote source and never will):
+
+| package | version | entry | what it gives |
+|---|---|---|---|
+| `@fontsource/cinzel` | 5.3.0 | `500.css`, `600.css` subpaths | display face; static weights, which is what the direction asks for |
+| `@fontsource-variable/geist-mono` | 5.3.0 | `index.css` | the data face (`--font-mono`) |
+| `mana-font` | 1.18.0 | `css/mana.css` | `.ms` + `.ms-w/u/b/r/g/c`, `.ms-cost`, `.ms-shadow`; fonts in `fonts/` (woff/ttf/eot/svg — the shipped CSS does **not** reference the woff2 that is also in the tarball; woff is fine in WebView2) |
+| `keyrune` | 3.19.0 | `css/keyrune.css` | `.ss` + 441 `.ss-<setcode>` classes (e.g. `.ss-lea`), rarity modifiers, woff2 |
+
+Two things to know about `mana-font/css/mana.css` before wiring it: it also declares an `MPlantin` `@font-face` this app does not use (harmless, and the file only loads when a glyph needs it), and `.ms` defines its own `--ms-mana-*` variables whose values differ slightly from the direction doc's fills (`#fdfbce` vs `#FFFBD5`). **The direction doc wins** — chips are filled from our tokens, and the font supplies the glyph only.
+
+- [ ] **Step 1: Install**
+
+```powershell
+npm i @fontsource/cinzel @fontsource-variable/geist-mono mana-font keyrune
+```
+Expected: four packages added, no peer warnings. Confirm the resolved versions are ≥ the table above.
+
+- [ ] **Step 2: Write the failing token/helper tests** — create `src/lib/mana.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import type { SyncProgressEvent } from "@/lib/ipc";
+import { MANA_KEYS, MANA_LINE_GRADIENT, manaLineSync, manaSymbolClass } from "@/lib/mana";
+
+const event = (over: Partial<SyncProgressEvent> = {}): SyncProgressEvent => ({
+  phase: "ingesting",
+  done: 0,
+  total: 0,
+  message: null,
+  ...over,
+});
+
+describe("manaSymbolClass", () => {
+  /** `mana-font` keys its glyphs on lowercase letters; the app spells colours WUBRG. */
+  it("names the mana-font glyph for every chip, colourless included", () => {
+    expect(manaSymbolClass("W")).toBe("ms ms-w");
+    expect(manaSymbolClass("C")).toBe("ms ms-c");
+    expect(MANA_KEYS).toHaveLength(6);
+  });
+});
+
+describe("MANA_LINE_GRADIENT", () => {
+  /** The signature element. Five colours, in WUBRG order, and no colourless — the line is
+   *  the colour pie, not the filter row. */
+  it("runs W→U→B→R→G in order", () => {
+    const order = ["--color-mana-w", "--color-mana-u", "--color-mana-b", "--color-mana-r", "--color-mana-g"];
+    const positions = order.map((token) => MANA_LINE_GRADIENT.indexOf(token));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    expect(MANA_LINE_GRADIENT).not.toContain("--color-mana-c");
+  });
+});
+
+describe("manaLineSync", () => {
+  it("is null when nothing is running — the line is then just the line", () => {
+    expect(manaLineSync(null, false)).toBeNull();
+    expect(manaLineSync(event({ phase: "ingesting", done: 5, total: 10 }), false)).toBeNull();
+  });
+
+  it("reports a fraction when the phase has a denominator", () => {
+    const sync = manaLineSync(event({ phase: "downloading", done: 5, total: 10 }), true);
+
+    expect(sync?.value).toBe(0.5);
+    expect(sync?.label).toMatch(/downloading/i);
+  });
+
+  /**
+   * `checking` and `sets` carry no total, and a run throttled by the 24 h window emits no
+   * event at all while `sync_run` is still in flight. Both are "busy, length unknown" —
+   * a `value` of 0 would claim no progress had been made.
+   */
+  it("is indeterminate when the phase has no denominator, and while no event has arrived", () => {
+    expect(manaLineSync(event({ phase: "checking" }), true)?.value).toBeNull();
+    expect(manaLineSync(null, true)?.value).toBeNull();
+  });
+
+  it("treats a finished or failed run as not running", () => {
+    expect(manaLineSync(event({ phase: "done", done: 9, total: 9 }), true)?.value).toBeNull();
+    expect(manaLineSync(event({ phase: "error" }), true)?.value).toBeNull();
+  });
+
+  it("never runs past the end", () => {
+    expect(manaLineSync(event({ phase: "ingesting", done: 130_000, total: 117_000 }), true)?.value).toBe(1);
+  });
+});
+```
+
+- [ ] **Step 3: Run and watch it fail**
+
+```powershell
+npm run test:run -- src/lib/mana.test.ts
+```
+Expected: `Failed to resolve import "@/lib/mana"`.
+
+- [ ] **Step 4: Implement the mana module** — create `src/lib/mana.ts`:
+
+```ts
+/**
+ * Magic's colour pie, as the interface uses it.
+ *
+ * The direction doc's thesis: colour appears only where it carries Magic meaning. This
+ * module is the whole of that vocabulary — the five (plus colourless) symbol keys, the
+ * `mana-font` class names that draw them, and the gradient behind the app's one signature
+ * element. Nothing else in the app invents a colour.
+ */
+import type { SyncPhase, SyncProgressEvent } from "@/lib/ipc";
+import { PHASE_LABEL } from "@/lib/useSyncProgress";
+
+/** The filter chips: WUBRG plus colourless. */
+export const MANA_KEYS = ["W", "U", "B", "R", "G", "C"] as const;
+export type ManaKey = (typeof MANA_KEYS)[number];
+
+/**
+ * The mana line is the colour *pie*, not the filter row — five colours, no colourless.
+ * WUBRG order is not a preference: it is the order the symbols are printed in.
+ */
+export const MANA_LINE_KEYS = ["W", "U", "B", "R", "G"] as const;
+
+export const MANA_LABEL: Record<ManaKey, string> = {
+  W: "White",
+  U: "Blue",
+  B: "Black",
+  R: "Red",
+  G: "Green",
+  C: "Colorless",
+};
+
+/**
+ * The `mana-font` classes that draw one symbol.
+ *
+ * The glyph comes from the bundled font; the *fill* comes from our own tokens, because
+ * `mana-font`'s built-in `--ms-mana-*` values are a shade off the direction doc's
+ * (`#fdfbce` where the doc says `#FFFBD5`) and the doc is what is binding.
+ */
+export function manaSymbolClass(key: ManaKey): string {
+  return `ms ms-${key.toLowerCase()}`;
+}
+
+/**
+ * The signature: a soft W→U→B→R→G blend, written against the theme tokens so the line and
+ * the chips can never drift apart.
+ */
+export const MANA_LINE_GRADIENT = `linear-gradient(90deg, var(--color-mana-w) 0%, var(--color-mana-u) 25%, var(--color-mana-b) 50%, var(--color-mana-r) 75%, var(--color-mana-g) 100%)`;
+
+/** What the mana line is showing, or `null` when it is just a line. */
+export interface ManaLineSync {
+  /** 0–1, or `null` for a phase with no denominator. */
+  value: number | null;
+  label: string;
+}
+
+/**
+ * Fold a sync into what the line should draw.
+ *
+ * `busy` decides, not the event: a run inside the 24 h check window emits nothing at all,
+ * and Tauri drops the events emitted before the webview started listening — so an event
+ * is evidence of progress, never of running. `done` and `error` are terminal phases whose
+ * event can outlive the run by a poll interval, so they read as indeterminate rather than
+ * as a full or empty bar.
+ */
+export function manaLineSync(
+  progress: SyncProgressEvent | null,
+  busy: boolean,
+): ManaLineSync | null {
+  if (!busy) return null;
+  const phase: SyncPhase | null =
+    progress && progress.phase !== "done" && progress.phase !== "error" ? progress.phase : null;
+  if (!phase || !progress) return { value: null, label: "Syncing card data" };
+  return {
+    value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
+    label: PHASE_LABEL[phase],
+  };
+}
+```
+
+- [ ] **Step 5: Extract the progress listener** — create `src/lib/useSyncProgress.ts` by moving `PHASE_LABEL` and `useSyncProgress` out of `src/components/SyncProgress.tsx` verbatim, exporting both. Two components need them now (the ribbon's line and the first-run overlay), and a second `listen` registration for the same event would be a second subscription for the life of the app.
+
+- [ ] **Step 5b: The rarity gem** — create `src/lib/rarity.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { rarityColor } from "@/lib/rarity";
+
+describe("rarityColor", () => {
+  it("maps the four rarities the direction names", () => {
+    expect(rarityColor("common")).toBe("var(--color-rarity-common)");
+    expect(rarityColor("mythic")).toBe("var(--color-rarity-mythic)");
+  });
+
+  /**
+   * Scryfall also emits `special` and `bonus`, and `rarity` is nullable. Neither has a
+   * token, and inventing one would be a colour claim the direction did not make — the
+   * border colour reads as "no rarity stated", which is the truth.
+   */
+  it("makes no colour claim about a rarity it has no token for", () => {
+    expect(rarityColor("special")).toBe("var(--color-border)");
+    expect(rarityColor("bonus")).toBe("var(--color-border)");
+    expect(rarityColor(null)).toBe("var(--color-border)");
+  });
+});
+```
+
+then `src/lib/rarity.ts`:
+
+```ts
+/**
+ * Rarity, as a colour.
+ *
+ * Four tokens and a fallback. The direction spends its colour budget on mana and card
+ * art, so a rarity gets a 6px gem or a tinted word — never a filled badge, which at
+ * mythic orange would out-shout the art it sits under.
+ */
+export function rarityColor(rarity: string | null): string {
+  switch (rarity) {
+    case "common":
+      return "var(--color-rarity-common)";
+    case "uncommon":
+      return "var(--color-rarity-uncommon)";
+    case "rare":
+      return "var(--color-rarity-rare)";
+    case "mythic":
+      return "var(--color-rarity-mythic)";
+    // `special` and `bonus` exist in the data and have no token of their own.
+    default:
+      return "var(--color-border)";
+  }
+}
+```
+
+```powershell
+npm run test:run -- src/lib/rarity.test.ts
+```
+Expected: 2 passed.
+
+- [ ] **Step 6: Run the mana tests**
+
+```powershell
+npm run test:run -- src/lib/mana.test.ts
+```
+Expected: 8 passed.
+
+- [ ] **Step 7: Extend the theme** — in `src/index.css`.
+
+Add to the import block at the top, after the existing `@fontsource-variable/geist` line (CSS `@import` rules must all precede other rules, and Vite resolves bare package specifiers here — this is the same mechanism the Geist import already uses):
+
+```css
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource/cinzel/500.css";
+@import "@fontsource/cinzel/600.css";
+@import "mana-font/css/mana.css";
+@import "keyrune/css/keyrune.css";
+```
+
+In the `@theme inline` block, repoint the display face — this is the one hook that makes every existing `font-heading` usage Cinzel at once:
+
+```css
+    --font-heading: 'Cinzel', Georgia, serif;
+    --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+```
+
+And extend the app-palette `@theme` block at the bottom with the direction doc's values, verbatim:
+
+```css
+  /* The five colours, as printed symbols are filled. Mana UI only — chips, pips, the
+     line. Never a panel, never a border, never text. Glyphs sit on these in near-black,
+     exactly like a real symbol. */
+  --color-mana-w: #FFFBD5;
+  --color-mana-u: #AAE0FA;
+  --color-mana-b: #CBC2BF;
+  --color-mana-r: #F9AA8F;
+  --color-mana-g: #9BD3AE;
+  --color-mana-c: #C8C4BF;
+
+  /* Frame/pie deeps — saturated enough to carry meaning at 1px. For identity pips and,
+     later, charts. Not interchangeable with the fills above. */
+  --color-pie-w: #F8E7B9;
+  --color-pie-u: #0E68AB;
+  --color-pie-b: #3B3A3E;
+  --color-pie-r: #D3202A;
+  --color-pie-g: #00733E;
+  --color-pie-gold: #D9B95C;
+  --color-pie-c: #C8C4BF;
+
+  /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
+  --color-rarity-common: #9AA0A6;
+  --color-rarity-uncommon: #B3C7CE;
+  --color-rarity-rare: #BFA35A;
+  --color-rarity-mythic: #E86A33;
+
+  /* The one animation in the app: the mana line's sweep while a sync has no denominator.
+     Held to 150ms elsewhere per the direction's motion budget. */
+  --animate-mana-sweep: mana-sweep 1.6s ease-in-out infinite;
+```
+
+and after the `@theme` block:
+
+```css
+@keyframes mana-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+```
+
+- [ ] **Step 8: Write the failing ManaLine test** — create `src/components/ManaLine.test.tsx`:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { ManaLine } from "./ManaLine";
+
+describe("ManaLine", () => {
+  /**
+   * At rest it is decoration — the app's signature, carrying no information a screen
+   * reader could use. Announcing a 0% progress bar on every screen would be noise.
+   */
+  it("is a silent rule when nothing is syncing", () => {
+    const { container } = render(<ManaLine sync={null} />);
+
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(container.firstChild).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("becomes the progress bar during a sync", () => {
+    render(<ManaLine sync={{ value: 0.42, label: "Downloading card data" }} />);
+
+    const bar = screen.getByRole("progressbar", { name: "Downloading card data" });
+    expect(bar).toHaveAttribute("aria-valuenow", "42");
+    expect(bar).toHaveAttribute("aria-valuemin", "0");
+    expect(bar).toHaveAttribute("aria-valuemax", "100");
+  });
+
+  /** `aria-valuenow="0"` would be a claim that no progress has been made; omitting it is
+   *  ARIA's way of saying the length is unknown. */
+  it("omits the value when the phase has no denominator", () => {
+    render(<ManaLine sync={{ value: null, label: "Checking for card data updates" }} />);
+
+    const bar = screen.getByRole("progressbar", { name: /checking/i });
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+  });
+});
+```
+
+- [ ] **Step 9: Run and watch it fail**
+
+```powershell
+npm run test:run -- src/components/ManaLine.test.tsx
+```
+Expected: `Failed to resolve import "./ManaLine"`.
+
+- [ ] **Step 10: Implement** — create `src/components/ManaLine.tsx`:
+
+```tsx
+import { MANA_LINE_GRADIENT, type ManaLineSync } from "@/lib/mana";
+import { cn } from "@/lib/utils";
+
+/**
+ * The app's signature, and its only progress bar.
+ *
+ * A 2px W→U→B→R→G rule under the ribbon, present on every screen. During a sync the rule
+ * dims and a full-strength copy of itself fills across it behind a gold cap — the one
+ * place where the identity element and a functional one are the same element. It is never
+ * repeated anywhere else in the app, which is what makes it a signature rather than a
+ * motif.
+ */
+export function ManaLine({ sync }: { sync: ManaLineSync | null }) {
+  if (!sync) {
+    return (
+      <div
+        aria-hidden="true"
+        className="h-0.5 w-full shrink-0"
+        style={{ background: MANA_LINE_GRADIENT }}
+      />
+    );
+  }
+
+  const percent = sync.value === null ? null : Math.round(sync.value * 100);
+  return (
+    <div
+      role="progressbar"
+      aria-label={sync.label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      // Omitted rather than zeroed when the length is unknown — see the test.
+      {...(percent === null ? {} : { "aria-valuenow": percent })}
+      className="relative h-0.5 w-full shrink-0 overflow-hidden"
+    >
+      {/* The line itself, held back so the fill reads as progress across it. */}
+      <div
+        className="absolute inset-0 opacity-30"
+        style={{ background: MANA_LINE_GRADIENT }}
+      />
+      {percent === null ? (
+        // No denominator: a short segment sweeps instead of a bar filling. Suppressed
+        // under prefers-reduced-motion, where the dimmed line alone says "busy".
+        <div
+          className="absolute inset-y-0 left-0 w-1/3 animate-mana-sweep motion-reduce:animate-none motion-reduce:hidden"
+          style={{ background: MANA_LINE_GRADIENT }}
+        />
+      ) : (
+        <div
+          className="absolute inset-y-0 left-0 transition-[width] duration-150 ease-out motion-reduce:transition-none"
+          style={{ width: `${percent}%`, background: MANA_LINE_GRADIENT }}
+        >
+          {/* The gold cap: the accent colour marking the leading edge, so the boundary
+              between done and not-done is legible against five shifting hues. */}
+          <span className={cn("absolute inset-y-0 right-0 w-0.5 bg-accent")} />
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 11: Run it**
+
+```powershell
+npm run test:run -- src/components/ManaLine.test.tsx
+```
+Expected: 3 passed.
+
+- [ ] **Step 12: Write the failing Ribbon test** — create `src/components/Ribbon.test.tsx`:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { Ribbon, type RibbonProps } from "./Ribbon";
+
+const props = (over: Partial<RibbonProps> = {}): RibbonProps => ({
+  title: "Search",
+  statusLine: "116,568 cards · data from 2026-08-03",
+  dataDir: "D:\\app\\data",
+  busy: false,
+  upToDate: false,
+  hasError: false,
+  onRefresh: vi.fn(),
+  sync: null,
+  ...over,
+});
+
+describe("Ribbon", () => {
+  /** Global actions live here now, not in a view — that is the whole point of the row. */
+  it("carries the view title, the status line and Refresh", () => {
+    render(<Ribbon {...props()} />);
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
+    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toHaveAttribute(
+      "title",
+      "D:\\app\\data",
+    );
+    expect(screen.getByRole("button", { name: /refresh/i })).toBeEnabled();
+  });
+
+  it("runs and then refuses a second sync while one is in flight", async () => {
+    const onRefresh = vi.fn();
+    const { rerender } = render(<Ribbon {...props({ onRefresh })} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+
+    rerender(<Ribbon {...props({ onRefresh, busy: true })} />);
+    expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
+  });
+
+  it("says a Refresh found nothing, and only when there is nothing louder to say", () => {
+    const { rerender } = render(<Ribbon {...props({ upToDate: true })} />);
+    expect(screen.getByText(/already up to date/i)).toBeInTheDocument();
+
+    // An error banner is showing below; repeating a cheerful line beside it is noise.
+    rerender(<Ribbon {...props({ upToDate: true, hasError: true })} />);
+    expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+  });
+
+  it("hands the sync to the mana line", () => {
+    render(<Ribbon {...props({ busy: true, sync: { value: 0.5, label: "Importing cards" } })} />);
+
+    expect(screen.getByRole("progressbar", { name: "Importing cards" })).toHaveAttribute(
+      "aria-valuenow",
+      "50",
+    );
+  });
+});
+```
+
+- [ ] **Step 13: Run and watch it fail**
+
+```powershell
+npm run test:run -- src/components/Ribbon.test.tsx
+```
+Expected: `Failed to resolve import "./Ribbon"`.
+
+- [ ] **Step 14: Implement** — create `src/components/Ribbon.tsx`:
+
+```tsx
+import { RefreshCw } from "lucide-react";
+import { ManaLine } from "@/components/ManaLine";
+import type { ManaLineSync } from "@/lib/mana";
+import { cn } from "@/lib/utils";
+
+export interface RibbonProps {
+  /** The active view's name. The one string in the chrome set in Cinzel. */
+  title: string;
+  /** Already formatted by `statusLine`, or `null` before the first poll answers. */
+  statusLine: string | null;
+  /** Tooltip on the status line: which data folder is live (spec §3). */
+  dataDir: string | undefined;
+  /** A sync is running — this window's Refresh, or the one spawned at startup. */
+  busy: boolean;
+  /** The last Refresh came back with nothing new. */
+  upToDate: boolean;
+  /** An error banner is showing below; the ribbon stays out of its way. */
+  hasError: boolean;
+  onRefresh: () => void;
+  /** Drives the mana line. `null` when nothing is running. */
+  sync: ManaLineSync | null;
+}
+
+/**
+ * The global ribbon: one 48px row that owns every action which is not about the view
+ * below it.
+ *
+ * Refresh and the sync status used to live in a per-view header, which made them look
+ * like properties of whatever was on screen. They are properties of the *app*, so they
+ * belong in one place that never changes — and the mana line beneath is what marks that
+ * place as the app's edge rather than the content's.
+ */
+export function Ribbon({
+  title,
+  statusLine,
+  dataDir,
+  busy,
+  upToDate,
+  hasError,
+  onRefresh,
+  sync,
+}: RibbonProps) {
+  return (
+    <div className="shrink-0">
+      <div className="flex h-12 items-center gap-3 bg-surface px-4">
+        {/* The mark, not the product name: the window title bar already says that in full,
+            and 48px of vertical space is not where a five-word name earns its keep. */}
+        <span aria-hidden="true" className="font-heading text-lg leading-none text-accent">
+          MTG
+        </span>
+        <span aria-hidden="true" className="h-4 w-px bg-border" />
+        {/* Cinzel's only job in the chrome, and never below 18px — the direction is
+            explicit that the display face is for titles, not for interface text. */}
+        <h1 className="truncate font-heading text-lg leading-none">{title}</h1>
+
+        <div className="ml-auto flex min-w-0 items-center gap-3">
+          {upToDate && !busy && !hasError && (
+            <p role="status" className="shrink-0 text-xs text-muted">
+              Already up to date
+            </p>
+          )}
+          {statusLine && (
+            <p className="truncate text-xs text-muted" title={dataDir}>
+              {statusLine}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={busy}
+            aria-busy={busy || undefined}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm",
+              "transition-colors duration-150 hover:bg-bg",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
+            )}
+          >
+            <RefreshCw
+              className={cn("size-4", busy && "animate-spin motion-reduce:animate-none")}
+              aria-hidden="true"
+            />
+            Refresh data
+          </button>
+        </div>
+      </div>
+      <ManaLine sync={sync} />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 15: Run it**
+
+```powershell
+npm run test:run -- src/components/Ribbon.test.tsx
+```
+Expected: 4 passed.
+
+- [ ] **Step 16: Restructure `AppShell`** — `src/components/AppShell.tsx`:
+
+1. Delete the whole `<header>` block; the app mark, status line, "Already up to date" and Refresh button now live in `Ribbon`.
+2. Render `<Ribbon …/>` in its place, fed from the hooks `AppShell` already owns:
+
+```tsx
+export function AppShell({ children }: { children: ReactNode }) {
+  const activeView = useAppStore((s) => s.activeView);
+  const setActiveView = useAppStore((s) => s.setActiveView);
+  const { status, error, refresh, refreshing, upToDate } = useSync();
+  const progress = useSyncProgress();
+
+  // Either this window started the sync or something else did (the run spawned at
+  // startup, most often). A second `sync_run` would only be refused.
+  const busy = refreshing || status?.syncing === true;
+  const title = NAV.find((n) => n.id === activeView)?.label ?? "";
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-bg text-text">
+      <nav aria-label="Views" className="flex w-52 shrink-0 flex-col gap-1 border-r border-border bg-surface p-3">
+        {NAV.map(({ id, label, Icon }) => {
+          const active = id === activeView;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveView(id)}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
+                "transition-colors duration-150",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                // The gold indicator: a hairline against the item, not a filled pill. The
+                // sidebar is chrome, and chrome does not get to be the loudest thing on a
+                // screen that is about to be full of card art.
+                active
+                  ? "bg-bg text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+                  : "text-muted hover:bg-bg/60 hover:text-text",
+              )}
+            >
+              <Icon className="size-4 shrink-0" aria-hidden="true" />
+              {label}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Ribbon
+          title={title}
+          statusLine={statusLine(status)}
+          dataDir={status?.dataDir}
+          busy={busy}
+          upToDate={upToDate}
+          hasError={error !== null}
+          onRefresh={refresh}
+          sync={manaLineSync(progress, busy)}
+        />
+
+        {/* Given the whole screen when the database is empty, so it needs the error and
+            the retry action too: it covers the ribbon, Refresh button included. */}
+        <SyncProgress cardCount={status?.cardCount ?? null} error={error} busy={busy} onRetry={refresh} />
+
+        {error && (
+          <div
+            role="alert"
+            className="flex shrink-0 items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-sm text-destructive"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0">{error}</span>
+          </div>
+        )}
+
+        <main className="min-h-0 flex-1 overflow-auto p-5">{children}</main>
+      </div>
+    </div>
+  );
+}
+```
+
+3. Imports: drop `RefreshCw`, add `Ribbon`, `manaLineSync`, `useSyncProgress`.
+
+- [ ] **Step 17: Reduce `SyncProgress` to the first-run overlay** — `src/components/SyncProgress.tsx`:
+
+1. Delete `PHASE_LABEL` and `useSyncProgress` (they moved in Step 5) and import them from `@/lib/useSyncProgress`.
+2. Delete the slim in-line bar entirely — the branch that returns the `<div className="flex items-center gap-3 border-b …">`. The mana line is now the app's only progress bar, and two of them on one screen is exactly the kind of repetition the direction's boldness budget forbids. `SyncProgress` becomes:
+
+```tsx
+export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressProps) {
+  const progress = useSyncProgress();
+
+  // `cardCount === 0` — and only `0` — means an empty database, so the app has nothing to
+  // show and the first sync gets the whole screen. `null` means the poll could not read
+  // the count; treating that as empty would black out a working 116 k-card app.
+  //
+  // Every other sync is reported by the ribbon's mana line, which is why there is no
+  // second, slimmer bar here any more.
+  if (cardCount === 0 && progress?.phase !== "done") {
+    return <FirstRun progress={progress} error={error} busy={busy} onRetry={onRetry} />;
+  }
+  return null;
+}
+```
+
+3. `FirstRun` keeps its own `Bar` (it is a full-screen hero, not the chrome) and its `<h2 className="font-heading text-2xl">` now renders in Cinzel automatically — check it still reads well at that size and leave it.
+
+- [ ] **Step 18: Fix the tests the restructure breaks** — three edits, no more:
+
+1. `src/components/AppShell.test.tsx`, first test: `screen.getByText("Search")` is now ambiguous, because the ribbon renders the active view's title with the same word. Switch all five nav assertions to the role query the last test in the file already uses:
+
+```tsx
+  expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Collection" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Decks" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+```
+
+2. `src/components/SyncProgress.test.tsx`: delete `describe("the slim variant", …)` in full — all four of its tests describe a component that no longer exists. The behaviour they covered now lives in `ManaLine.test.tsx` and `Ribbon.test.tsx`.
+
+3. `src/components/SyncProgress.test.tsx`, `"does not mistake an unreadable count for an empty database"`: it asserts the slim bar is present. Keep the test, change the assertion to what the component now promises:
+
+```tsx
+    const { container } = render(/* …unchanged… */);
+    emit(event({ phase: "ingesting", done: 1, total: 117_000 }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // An unreadable count is not an empty database, so this renders nothing at all — the
+    // ribbon's mana line is what reports the run.
+    expect(container).toBeEmptyDOMElement();
+```
+
+- [ ] **Step 19: Verify**
+
+```powershell
+npm run verify
+```
+Expected: green. `App.test.tsx` needs no change — it queries `heading … level: 2`, and the ribbon's title is an `h1`.
+
+- [ ] **Step 20: Manual smoke**
+
+```powershell
+npm run tauri dev
+```
+Expected: a 48px `bg-surface` ribbon with the gold "MTG" mark, the view title in Cinzel, the status line and **Refresh data** on the right, and a 2px WUBRG line beneath it. During a Refresh the line dims and fills left→right behind a gold cap. The sidebar's active item shows a gold hairline. Fonts are served from the app origin — check the devtools network panel for **zero** requests to any external host, and the console for zero CSP violations.
+
+- [ ] **Step 21: Commit**
+
+```powershell
+git add -A
+git commit -m "feat: visual foundation — mana tokens, Cinzel display face, global ribbon with the mana line
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9: Set and mana-value filters in `search_cards`, and a `list_sets` command
+
+The backend half of the filter expansion. No UI here — Task 10 spends its whole budget on the chips.
+
+**Files:**
+- Modify: `src-tauri/src/search.rs`, `src-tauri/src/lib.rs` (command registration)
+
+**Interfaces:**
+- Consumes: `run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchResponse, String>` and its `wheres`/`params`/`where_sql` assembly; `sync::{lock_db_read, AppState}`; the `sets` table (`code` PK, `name`, `arena_code`, `mtgo_code`, `set_type`, `released_at`, `icon_svg_uri`).
+- Produces:
+
+```rust
+pub struct SearchRequest {
+    // …every existing field, unchanged…
+    /// Set codes, ORed together and ANDed with everything else.
+    pub sets: Option<Vec<String>>,
+    /// Discrete mana values. 0–7 match `cmc` exactly; 8 means "8 or more".
+    pub mana_values: Option<Vec<u8>>,
+}
+
+pub struct SetSummary {
+    pub code: String, pub name: String, pub set_type: Option<String>,
+    pub released_at: Option<String>, pub card_count: i64,
+}
+pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String>;
+#[tauri::command] pub async fn list_sets(state) -> Result<Vec<SetSummary>, String>;
+```
+
+- `setCode` (the existing single-set field) stays: it is the one-set shorthand and is already tested. The UI stops sending it in Task 10 and sends `sets` instead; both AND together if a caller sends both.
+- No new index: `idx_cards_set_cn` already leads on `set_code`, and `cmc` filters run over whatever the other predicates leave.
+
+- [ ] **Step 1: Write the failing tests** — add to `search.rs`'s `mod tests`. The existing `seeded()` has three rows and no `cmc`, so add a second fixture rather than disturbing it:
+
+```rust
+    /// Four printings across three sets with known mana values, including a NULL one —
+    /// `cmc` is nullable and reversible cards genuinely have none.
+    #[rustfmt::skip]
+    fn seeded_costs() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let rows: [(&str, &str, &str, Option<f64>, &str); 4] = [
+            ("1", "Lightning Bolt",  "lea", Some(1.0),  "R"),
+            ("2", "Wrath of God",    "lea", Some(4.0),  "W"),
+            ("3", "Emrakul",         "roe", Some(15.0), ""),
+            ("4", "Jinnie Fay",      "sld", None,       "G"),
+        ];
+        for (id, name, set, cmc, ci) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,color_identity,
+                    legalities,is_paper,search_text,raw)
+                 VALUES (?1,?2,?3,'1','en','normal',?4,?5,'{\"modern\":\"legal\"}',1,?2,'{}')",
+                rusqlite::params![id, name, set, cmc, ci],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        conn
+    }
+
+    fn names(r: &SearchResponse) -> Vec<&str> {
+        r.items.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    /// Two sets means "either", not "both" — the latter is always empty, and a filter that
+    /// can only ever return nothing is a filter nobody would ship.
+    #[test]
+    fn several_sets_are_ored_together() {
+        let conn = seeded_costs();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sets: Some(vec!["lea".into(), "roe".into()]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(r.total, 3);
+        assert_eq!(names(&r), ["Emrakul", "Lightning Bolt", "Wrath of God"]);
+    }
+
+    /// The chips are discrete: 8 is the open-ended one, and everything below it is an
+    /// exact match. `cast(cmc as int)` would put a 0.5 un-card under "0", which is a
+    /// different claim than the one the chip makes.
+    #[test]
+    fn mana_value_chips_match_exactly_except_the_open_ended_one() {
+        let conn = seeded_costs();
+
+        let one = run_search(&conn, &SearchRequest { mana_values: Some(vec![1]), limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(names(&one), ["Lightning Bolt"]);
+
+        let eight_plus = run_search(&conn, &SearchRequest { mana_values: Some(vec![8]), limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(names(&eight_plus), ["Emrakul"], "8 means 8 or more");
+
+        let either = run_search(&conn, &SearchRequest { mana_values: Some(vec![1, 4]), limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(either.total, 2);
+    }
+
+    /// A card with no mana value is not a card with a mana value of zero. `NULL IN (…)`
+    /// and `NULL >= 8` are both NULL, so this falls out of SQL's own semantics — the test
+    /// is here so a later rewrite into `coalesce(cmc, 0)` fails loudly.
+    #[test]
+    fn a_null_mana_value_matches_no_chip() {
+        let conn = seeded_costs();
+        for chips in [vec![0u8], vec![8], vec![0, 1, 2, 3, 4, 5, 6, 7, 8]] {
+            let r = run_search(&conn, &SearchRequest { mana_values: Some(chips.clone()), limit: 50, ..Default::default() }).unwrap();
+            assert!(!names(&r).contains(&"Jinnie Fay"), "chips {chips:?} matched a NULL cmc");
+        }
+    }
+
+    /// Filters AND, including the new ones, and the capped count has to agree with the
+    /// page — they share one `WHERE`, and this is what proves it stays that way.
+    #[test]
+    fn the_new_filters_combine_with_the_old_ones_and_the_count_agrees() {
+        let conn = seeded_costs();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sets: Some(vec!["lea".into()]),
+                mana_values: Some(vec![1, 4]),
+                colors: Some("W".into()),
+                format: Some("modern".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(names(&r), ["Wrath of God"]);
+        assert_eq!(r.total, 1, "the count subquery must carry the same filters");
+    }
+
+    /// A picker whose "clear" state sends `[]` or `[""]` must not become a filter that
+    /// matches nothing.
+    #[test]
+    fn empty_filter_lists_are_not_filters() {
+        let conn = seeded_costs();
+        let all = run_search(&conn, &SearchRequest { limit: 50, ..Default::default() }).unwrap().total;
+
+        for req in [
+            SearchRequest { sets: Some(vec![]), limit: 50, ..Default::default() },
+            SearchRequest { sets: Some(vec!["".into(), "  ".into()]), limit: 50, ..Default::default() },
+            SearchRequest { mana_values: Some(vec![]), limit: 50, ..Default::default() },
+        ] {
+            assert_eq!(run_search(&conn, &req).unwrap().total, all);
+        }
+    }
+
+    /// `invoke` matches by name and serde renames to camelCase; a field the frontend
+    /// spells differently deserializes to `None` with no error anywhere.
+    #[test]
+    fn the_request_deserializes_the_names_the_frontend_sends() {
+        let req: SearchRequest = serde_json::from_str(
+            r#"{"text":"bolt","sets":["lea","2ed"],"manaValues":[0,8],"paperOnly":true,"limit":50,"offset":0}"#,
+        )
+        .unwrap();
+
+        assert_eq!(req.sets.unwrap(), vec!["lea".to_owned(), "2ed".to_owned()]);
+        assert_eq!(req.mana_values.unwrap(), vec![0u8, 8]);
+    }
+
+    /// What the set picker is built from: every set, newest first, with the number of
+    /// printings the local database actually holds for it.
+    #[test]
+    fn list_sets_reports_every_set_newest_first_with_its_card_count() {
+        let conn = seeded_costs();
+        conn.execute_batch(
+            "INSERT INTO sets (code, name, set_type, released_at) VALUES
+                ('lea','Limited Edition Alpha','core','1993-08-05'),
+                ('roe','Rise of the Eldrazi','expansion','2010-04-23'),
+                ('sld','Secret Lair Drop','box','2019-12-02'),
+                ('tok','Token Set','token','2021-01-01');",
+        )
+        .unwrap();
+
+        let sets = run_list_sets(&conn).unwrap();
+
+        assert_eq!(sets.len(), 4);
+        assert_eq!(
+            sets.iter().map(|s| s.code.as_str()).collect::<Vec<_>>(),
+            ["tok", "sld", "roe", "lea"],
+            "newest first"
+        );
+        assert_eq!(sets[3].card_count, 2, "two Alpha printings are in `cards`");
+        // A set the local database has no printings for still appears — it is the count
+        // that lets the picker decide, not this function.
+        assert_eq!(sets[0].card_count, 0);
+    }
+```
+
+- [ ] **Step 2: Run and watch them fail**
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --lib search
+```
+Expected: compile errors — `struct SearchRequest has no field named sets`, `cannot find function run_list_sets`.
+
+- [ ] **Step 3: Extend the request** — in `src-tauri/src/search.rs`, add to `SearchRequest` after `set_code`:
+
+```rust
+    /// Set codes to include. ORed with each other, ANDed with every other filter — two
+    /// sets means "printed in either", which is what a multi-select means everywhere else.
+    pub sets: Option<Vec<String>>,
+    /// Mana-value chips. 0–7 match `cmc` exactly; [`MANA_VALUE_OPEN_ENDED`] means "or
+    /// more". A card with no `cmc` matches none of them.
+    pub mana_values: Option<Vec<u8>>,
+```
+
+`#[serde(rename_all = "camelCase", default)]` is already on the struct, so these arrive as
+`sets` and `manaValues` and default to `None` when omitted. `Default` derives too, which
+the tests rely on.
+
+Add the constants beside `COLORS`:
+
+```rust
+/// Sets one request will filter on. The picker is a multi-select over ~1 050 sets; past a
+/// few dozen the filter has stopped narrowing anything, and this is what bounds the
+/// generated placeholder list.
+const MAX_SET_FILTER: usize = 64;
+
+/// The last mana-value chip, which is open-ended: "8" means 8 *or more*, because the tail
+/// past Emrakul is a handful of cards nobody filters by exact cost.
+const MANA_VALUE_OPEN_ENDED: u8 = 8;
+```
+
+- [ ] **Step 4: Build the two clauses** — in `run_search`, after the existing `set_code` block:
+
+```rust
+    // OR within, AND without. Blank entries are dropped rather than matched: a picker's
+    // cleared state sends `[]`, and some send `[""]`.
+    if let Some(sets) = req.sets.as_deref() {
+        let picked: Vec<String> = sets
+            .iter()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .take(MAX_SET_FILTER)
+            .collect();
+        if !picked.is_empty() {
+            let holes = vec!["?"; picked.len()].join(",");
+            wheres.push(format!("c.set_code IN ({holes})"));
+            for code in picked {
+                params.push(Box::new(code));
+            }
+        }
+    }
+
+    // Discrete chips, not a range: 0–7 are exact and 8 is open-ended. `cmc` is REAL and
+    // nullable — a fractional un-card cost matches no chip, and a card with no cost at all
+    // matches none either, because `NULL IN (…)` and `NULL >= 8` are both NULL. That is
+    // the right answer: "mana value 3" is a claim about a card that has one.
+    if let Some(values) = req.mana_values.as_deref() {
+        let mut exact: Vec<f64> = Vec::new();
+        let mut open_ended = false;
+        for v in values {
+            if *v >= MANA_VALUE_OPEN_ENDED {
+                open_ended = true;
+            } else {
+                exact.push(f64::from(*v));
+            }
+        }
+        let mut alternatives: Vec<String> = Vec::new();
+        if !exact.is_empty() {
+            let holes = vec!["?"; exact.len()].join(",");
+            alternatives.push(format!("c.cmc IN ({holes})"));
+            for v in exact {
+                params.push(Box::new(v));
+            }
+        }
+        if open_ended {
+            // A constant from the line above, never a request value.
+            alternatives.push(format!("c.cmc >= {MANA_VALUE_OPEN_ENDED}.0"));
+        }
+        if !alternatives.is_empty() {
+            wheres.push(format!("({})", alternatives.join(" OR ")));
+        }
+    }
+```
+
+Both clauses go in `wheres` and both push onto `params` **before** the `LIMIT`/`OFFSET`
+pushes at the end, so the count subquery — which shares `where_sql` and runs first, while
+`params` still holds exactly the filters — picks them up with no further change.
+
+- [ ] **Step 5: Update the module doc, again** — Task 7 corrected it from "three" to "four";
+this task adds structure of its own. In `search.rs`'s module comment:
+
+```rust
+//! Only four things are ever interpolated into the SQL string — a colour letter from a
+//! fixed array, a `FROM` clause picked from two literals, an `ORDER BY` picked from four,
+//! and the constant row cap on the count — plus two `?`-placeholder lists whose *length*
+//! is the only thing they carry. No user text reaches the parser; everything else is bound.
+```
+
+- [ ] **Step 6: Add `list_sets`** — at the end of `search.rs`, before `mod tests`:
+
+```rust
+/// One row of the set picker.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSummary {
+    /// Lowercase, as `cards.set_code` stores it — the value the filter sends back.
+    pub code: String,
+    pub name: String,
+    pub set_type: Option<String>,
+    pub released_at: Option<String>,
+    /// Printings of this set in the local database.
+    ///
+    /// Not decoration: `sets` carries every set Scryfall knows, including memorabilia and
+    /// token-only sets that `default_cards` holds nothing for. A picker over 1 050 rows is
+    /// only usable if it can put the ones with cards first, and it needs this to do it.
+    pub card_count: i64,
+}
+
+/// Every set, newest first, for the search filter's picker.
+///
+/// One grouped pass over `cards` rather than a correlated count per set: 1 050 subqueries
+/// against a 116 k-row table is a visible pause on a control that opens instantly.
+pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.code, s.name, s.set_type, s.released_at, coalesce(n.cards, 0)
+             FROM sets s
+             LEFT JOIN (SELECT set_code, count(*) AS cards FROM cards GROUP BY set_code) n
+                    ON n.set_code = s.code
+             ORDER BY s.released_at DESC, s.name ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SetSummary {
+                code: r.get(0)?,
+                name: r.get(1)?,
+                set_type: r.get(2)?,
+                released_at: r.get(3)?,
+                card_count: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// The set list, for the search filter. Read-only connection, blocking pool — as
+/// [`search_cards`] is, and for the same reason.
+#[tauri::command]
+pub async fn list_sets(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<SetSummary>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_list_sets(&lock_db_read(&state)))
+        .await
+        .map_err(|e| format!("set list could not be read: {e}"))?
+}
+```
+
+- [ ] **Step 7: Register it** — in `src-tauri/src/lib.rs`'s `generate_handler!`, after
+`search::search_cards`:
+
+```rust
+            search::list_sets,
+```
+
+- [ ] **Step 8: Run the tests**
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --lib search
+```
+Expected: all search tests pass, including the seven new ones. The five pre-existing ones
+are untouched — every new field defaults to `None`.
+
+- [ ] **Step 9: Verify and commit**
+
+```powershell
+npm run verify
+git add -A
+git commit -m "feat: multi-set and mana-value search filters, plus a list_sets command
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 10: The filter bar — mana chips, set picker, mana values, Reset all
+
+> **Invoke the `frontend-design` skill before writing any of this task; `docs/superpowers/specs/2026-08-04-visual-design-direction.md` is binding — execute it, don't invent.** The filter section of that document is a specification, not a suggestion: real mana symbols on authentic fills, pressed = full fill + ring, unpressed = the same chip dimmed, a searchable multi-select set combobox with keyrune glyphs, 0–8+ mana-value chips, and **Reset all** with a count badge whenever a filter is on.
+
+**Files:**
+- Create: `src/lib/keyrune.ts`, `src/lib/keyrune.test.ts`, `src/features/search/FilterBar.tsx`, `src/features/search/FilterBar.test.tsx`, `src/features/search/SetCombobox.tsx`, `src/features/search/SetCombobox.test.tsx`, `src/features/search/useCardSearch.test.ts`
+- Modify: `src/lib/ipc.ts`, `src/lib/ipc.test.ts`, `src/features/search/useCardSearch.ts`, `src/features/search/SearchPage.tsx`
+
+**Interfaces:**
+- Consumes: `MANA_KEYS`, `MANA_LABEL`, `manaSymbolClass` from `@/lib/mana` (Task 8); `SetSummary` and the extended `SearchRequest` from Task 9; `useInfiniteQuery`/`useQuery` from TanStack Query.
+- Produces:
+
+```ts
+// src/lib/ipc.ts
+export interface SetSummary { code: string; name: string; setType: string | null;
+                              releasedAt: string | null; cardCount: number }
+// SearchRequest gains: sets?: string[]; manaValues?: number[];
+// ipc gains: listSets: () => invoke<SetSummary[]>("list_sets")
+
+// src/lib/keyrune.ts
+export function setGlyphClass(code: string): string;      // "ss ss-lea"
+
+// src/features/search/useCardSearch.ts
+export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
+export function toggleIn<T>(list: readonly T[], value: T): T[];
+export function activeFilterCount(f: FilterState): number;
+export type CardSearch = ReturnType<typeof useCardSearch>;
+// COLOR_KEYS / COLOR_LABEL / ColorKey become re-exports of mana.ts's MANA_* (Step 5)
+// the hook gains: sets, toggleSet, manaValues, toggleManaValue, resetAll, activeCount
+
+// src/features/search/FilterBar.tsx
+export function FilterBar({ search }: { search: CardSearch }): JSX.Element;
+// src/features/search/SetCombobox.tsx
+export function SetCombobox({ selected, onToggle }: {
+  selected: readonly string[]; onToggle: (code: string) => void }): JSX.Element;
+```
+
+- **One WUBRG vocabulary.** `useCardSearch` currently declares its own `COLOR_KEYS` / `ColorKey` / `COLOR_LABEL`, which are the same six letters in the same order as `mana.ts`'s `MANA_KEYS` / `ManaKey` / `MANA_LABEL`. Step 5 collapses them onto one definition — two lists that must stay identical will not.
+- **Colour chips keep subset semantics.** `toggleColor`'s existing rule stands: `C` is exclusive both ways, because the backend reads `colors === "C"` as colourless-only and anything else as subset-of-these-letters, under which `"WC"` would silently mean plain `"W"`. Do not "fix" this while restyling it.
+
+- [ ] **Step 1: Mirror the DTOs** — in `src/lib/ipc.ts`, add to `SearchRequest`:
+
+```ts
+  /** Set codes. ORed with each other, ANDed with every other filter. */
+  sets?: string[];
+  /** Mana-value chips: 0–7 match exactly, 8 means "8 or more". */
+  manaValues?: number[];
+```
+
+add the summary type:
+
+```ts
+/** One row of the set picker. */
+export interface SetSummary {
+  /** Lowercase, as `cards.set_code` stores it — this is what the filter sends back. */
+  code: string;
+  name: string;
+  setType: string | null;
+  releasedAt: string | null;
+  /** Printings of this set in the local database; `0` for sets `default_cards` omits. */
+  cardCount: number;
+}
+```
+
+and to the `ipc` object:
+
+```ts
+  /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
+  listSets: () => invoke<SetSummary[]>("list_sets"),
+```
+
+- [ ] **Step 2: Pin the wire shape on both sides** — in `src/lib/ipc.test.ts`, inside the
+existing argument-name `describe`:
+
+```ts
+  it("sends the new filters under the names Rust deserializes", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+
+    await ipc.searchCards({ sets: ["lea"], manaValues: [1, 8], limit: 50, offset: 0 });
+
+    // `search.rs` renames to camelCase, so `manaValues` — not `mana_values` — is the
+    // spelling that lands in `SearchRequest.mana_values`.
+    expect(invoke).toHaveBeenCalledWith("search_cards", {
+      req: { sets: ["lea"], manaValues: [1, 8], limit: 50, offset: 0 },
+    });
+  });
+
+  it("takes no arguments for the set list", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.listSets();
+    expect(invoke).toHaveBeenCalledWith("list_sets");
+  });
+```
+
+- [ ] **Step 3: Write the failing helper tests** — create `src/lib/keyrune.test.ts` and
+`src/features/search/useCardSearch.test.ts`:
+
+```ts
+// src/lib/keyrune.test.ts
+import { describe, expect, it } from "vitest";
+import { setGlyphClass } from "@/lib/keyrune";
+
+describe("setGlyphClass", () => {
+  it("names the keyrune class for a set code", () => {
+    expect(setGlyphClass("LEA")).toBe("ss ss-lea");
+    expect(setGlyphClass("neo")).toBe("ss ss-neo");
+  });
+
+  /**
+   * keyrune ships 441 set classes and Scryfall knows ~1 050 sets, so a miss is routine.
+   * A missing class has no `::before` content, so the span collapses to nothing — the
+   * fallback is built into the font, not into a lookup table this app would have to
+   * maintain. Codes with characters no class could have are still refused, so nothing
+   * odd reaches a class attribute.
+   */
+  it("refuses anything that is not a plain set code", () => {
+    expect(setGlyphClass("")).toBe("");
+    expect(setGlyphClass("a b")).toBe("");
+    expect(setGlyphClass("../x")).toBe("");
+  });
+});
+```
+
+```ts
+// src/features/search/useCardSearch.test.ts
+import { describe, expect, it } from "vitest";
+import { activeFilterCount, toggleColor, toggleIn } from "./useCardSearch";
+
+describe("toggleIn", () => {
+  it("adds what is missing and removes what is there", () => {
+    expect(toggleIn([1, 2], 3)).toEqual([1, 2, 3]);
+    expect(toggleIn([1, 2], 2)).toEqual([1]);
+  });
+});
+
+describe("activeFilterCount", () => {
+  const none = { text: "", format: "", colors: [], sets: [], manaValues: [] };
+
+  it("is zero when nothing is filtered", () => {
+    expect(activeFilterCount(none)).toBe(0);
+  });
+
+  /**
+   * Each *kind* of filter counts once, however many values it holds: the badge tells the
+   * reader how many things Reset all is about to clear, and "3" for three colours in one
+   * chip row would be a different, less useful claim.
+   */
+  it("counts each kind of filter once", () => {
+    expect(activeFilterCount({ ...none, colors: ["W", "U", "B"] })).toBe(1);
+    expect(activeFilterCount({ ...none, sets: ["lea", "roe"] })).toBe(1);
+    expect(activeFilterCount({ ...none, text: "bolt", format: "modern", manaValues: [1] })).toBe(3);
+  });
+
+  /** Whitespace is not a search. */
+  it("ignores a blank search box", () => {
+    expect(activeFilterCount({ ...none, text: "   " })).toBe(0);
+  });
+});
+
+/** Unchanged behaviour, pinned here because Task 10 restyles the chips it belongs to. */
+describe("toggleColor", () => {
+  it("keeps C exclusive in both directions", () => {
+    expect(toggleColor(["W", "U"], "C")).toEqual(["C"]);
+    expect(toggleColor(["C"], "W")).toEqual(["W"]);
+  });
+});
+```
+
+- [ ] **Step 4: Run and watch them fail**
+
+```powershell
+npm run test:run -- src/lib/keyrune.test.ts src/features/search/useCardSearch.test.ts
+```
+Expected: unresolved `@/lib/keyrune`, and `toggleIn`/`activeFilterCount` not exported.
+
+- [ ] **Step 5: Implement the helpers** — create `src/lib/keyrune.ts`:
+
+```ts
+/**
+ * Set symbols, from the bundled `keyrune` icon font.
+ *
+ * The class is a pure function of the set code, which is why it is derived here rather
+ * than sent by Rust: a CSS class name is presentation, and the data layer has no business
+ * knowing one.
+ */
+
+/** Set codes are lowercase alphanumerics; anything else is not one and gets no glyph. */
+const SET_CODE = /^[a-z0-9]+$/;
+
+/**
+ * The `keyrune` classes for a set's symbol, or `""` when there is nothing safe to render.
+ *
+ * keyrune ships 441 sets and Scryfall knows ~1 050, so a code with no glyph is routine
+ * rather than exceptional — and it needs no handling: a class with no `::before` rule
+ * renders nothing and occupies nothing. Call sites still show the code as text, so the
+ * set is always identifiable with or without its symbol.
+ */
+export function setGlyphClass(code: string): string {
+  const key = code.trim().toLowerCase();
+  return SET_CODE.test(key) ? `ss ss-${key}` : "";
+}
+```
+
+and extend `src/features/search/useCardSearch.ts`. First, collapse the duplicated colour
+vocabulary onto `mana.ts` — replace the `COLOR_KEYS`, `ColorKey` and `COLOR_LABEL`
+declarations with re-exports, so the chips and the filter can never disagree about what
+"the five colours" are or what order they go in:
+
+```ts
+// The filter's colours and the interface's mana symbols are the same six letters in the
+// same order, and `colorParam` depends on that order to make "U then W" and "W then U"
+// the same query key. One definition, re-exported under the name the filter code uses.
+export { MANA_KEYS as COLOR_KEYS, MANA_LABEL as COLOR_LABEL } from "@/lib/mana";
+export type ColorKey = ManaKey;
+
+/** The whole of what `FilterBar` consumes — named so the component and its test agree. */
+export type CardSearch = ReturnType<typeof useCardSearch>;
+
+/** The mana-value chips. The last one is open-ended — see `MANA_VALUE_OPEN_ENDED`. */
+export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+/** Add or remove one value. The order values were picked in is not information. */
+export function toggleIn<T>(list: readonly T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+export interface FilterState {
+  text: string;
+  format: string;
+  colors: readonly string[];
+  sets: readonly string[];
+  manaValues: readonly number[];
+}
+
+/**
+ * How many *kinds* of filter are on.
+ *
+ * Kinds, not values: this number captions a Reset all button, and its job is to tell the
+ * reader how much is about to change. Three colours in one chip row is one thing that is
+ * on, not three.
+ */
+export function activeFilterCount(f: FilterState): number {
+  return [
+    f.text.trim().length > 0,
+    f.format.length > 0,
+    f.colors.length > 0,
+    f.sets.length > 0,
+    f.manaValues.length > 0,
+  ].filter(Boolean).length;
+}
+```
+
+then add the state and actions inside `useCardSearch`:
+
+```ts
+  const [sets, setSets] = useState<readonly string[]>([]);
+  const [manaValues, setManaValues] = useState<readonly number[]>([]);
+```
+
+```ts
+  // Sorted before they reach the key: picking two sets in either order is the same search
+  // and must not cost a second round trip.
+  const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
+  const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+
+  const queryKey = [
+    "cards",
+    "search",
+    debouncedText,
+    format,
+    colorsParam ?? "",
+    setsParam?.join(",") ?? "",
+    manaParam?.join(",") ?? "",
+  ];
+```
+
+with `sets: setsParam, manaValues: manaParam` added to the `ipc.searchCards({…})` call, and
+returned from the hook:
+
+```ts
+    sets,
+    toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    manaValues,
+    toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    activeCount: activeFilterCount({ text, format, colors, sets, manaValues }),
+    /** Clear every filter at once, including the search box. */
+    resetAll: () => {
+      setText("");
+      setFormat("");
+      setColors([]);
+      setSets([]);
+      setManaValues([]);
+    },
+```
+
+Also extend `unfiltered` — it decides whether an empty result means "the database is empty"
+or "nothing matched", and two more filters can now make it wrong:
+
+```ts
+    unfiltered: !debouncedText && !format && !colorsParam && !setsParam && !manaParam,
+```
+
+- [ ] **Step 6: Run the helper tests**
+
+```powershell
+npm run test:run -- src/lib/keyrune.test.ts src/features/search/useCardSearch.test.ts
+```
+Expected: 7 passed.
+
+- [ ] **Step 7: Write the failing filter-bar tests** — create
+`src/features/search/FilterBar.test.tsx`:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { FilterBar } from "./FilterBar";
+
+const search = (over: Record<string, unknown> = {}) =>
+  ({
+    text: "",
+    setText: vi.fn(),
+    format: "",
+    setFormat: vi.fn(),
+    colors: [] as string[],
+    toggleColor: vi.fn(),
+    sets: [] as string[],
+    toggleSet: vi.fn(),
+    manaValues: [] as number[],
+    toggleManaValue: vi.fn(),
+    activeCount: 0,
+    resetAll: vi.fn(),
+    ...over,
+  }) as unknown as Parameters<typeof FilterBar>[0]["search"];
+
+vi.mock("./SetCombobox", () => ({
+  SetCombobox: () => <div data-testid="set-combobox" />,
+}));
+
+describe("FilterBar", () => {
+  /**
+   * The direction is explicit: real symbols, not letters in circles. The glyph comes from
+   * the bundled `mana-font`, so the class is the assertion — a letter `W` rendered as text
+   * would pass a text query and be exactly the generic thing this replaced.
+   */
+  it("draws the colour filter with real mana symbols", () => {
+    render(<FilterBar search={search()} />);
+
+    const white = screen.getByRole("button", { name: "White" });
+    expect(white.querySelector(".ms.ms-w")).not.toBeNull();
+    expect(white).toHaveAttribute("aria-pressed", "false");
+    // Colourless is a chip like the others, not an afterthought.
+    expect(screen.getByRole("button", { name: "Colorless" }).querySelector(".ms.ms-c")).not.toBeNull();
+  });
+
+  it("shows which colours are on", () => {
+    render(<FilterBar search={search({ colors: ["U"] })} />);
+
+    expect(screen.getByRole("button", { name: "Blue" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Red" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("toggles a colour", async () => {
+    const toggleColor = vi.fn();
+    render(<FilterBar search={search({ toggleColor })} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Green" }));
+
+    expect(toggleColor).toHaveBeenCalledWith("G");
+  });
+
+  it("offers mana values 0 through 8 or more", async () => {
+    const toggleManaValue = vi.fn();
+    render(<FilterBar search={search({ toggleManaValue })} />);
+
+    expect(screen.getByRole("button", { name: "Mana value 0" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mana value 8 or more" })).toHaveTextContent("8+");
+
+    await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
+
+    expect(toggleManaValue).toHaveBeenCalledWith(3);
+  });
+
+  /** Nothing to reset, nothing to say — an always-visible Reset is a control that is
+   *  disabled most of the time, which reads as broken. */
+  it("hides Reset all until something is filtered", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
+  });
+
+  it("counts what Reset all would clear, and clears it", async () => {
+    const resetAll = vi.fn();
+    render(<FilterBar search={search({ activeCount: 3, colors: ["W"], resetAll })} />);
+
+    const reset = screen.getByRole("button", { name: /reset all/i });
+    expect(reset).toHaveTextContent("3");
+
+    await userEvent.click(reset);
+
+    expect(resetAll).toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 8: Run and watch it fail**
+
+```powershell
+npm run test:run -- src/features/search/FilterBar.test.tsx
+```
+Expected: `Failed to resolve import "./FilterBar"`.
+
+- [ ] **Step 9: Implement the filter bar** — create `src/features/search/FilterBar.tsx`:
+
+```tsx
+import { RotateCcw } from "lucide-react";
+import { MANA_KEYS, MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
+import { cn } from "@/lib/utils";
+import { SetCombobox } from "./SetCombobox";
+import { FORMATS, MANA_VALUES, type CardSearch } from "./useCardSearch";
+
+/**
+ * Every filter the search view offers, in one row.
+ *
+ * The colour chips are the app's one deliberate splash of colour and the reason the rest
+ * of the chrome stays grey: a real mana symbol on its authentic printed fill is
+ * recognisable at 32px to anyone who has held a card, in a way that a letter in a coloured
+ * circle is not. Everything else here is quiet on purpose.
+ */
+export function FilterBar({ search }: { search: CardSearch }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <label htmlFor="card-search-text" className="sr-only">
+        Search cards
+      </label>
+      <input
+        id="card-search-text"
+        type="search"
+        value={search.text}
+        onChange={(e) => search.setText(e.target.value)}
+        placeholder="Search cards…"
+        className="min-w-56 flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm placeholder:text-muted focus:border-accent focus:outline-none"
+      />
+
+      <div role="group" aria-label="Color identity" className="flex gap-1">
+        {MANA_KEYS.map((key) => (
+          <ManaChip
+            key={key}
+            symbol={key}
+            pressed={search.colors.includes(key)}
+            onClick={() => search.toggleColor(key)}
+          />
+        ))}
+      </div>
+
+      <div role="group" aria-label="Mana value" className="flex gap-1">
+        {MANA_VALUES.map((value) => {
+          const open = value === MANA_VALUES[MANA_VALUES.length - 1];
+          const on = search.manaValues.includes(value);
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => search.toggleManaValue(value)}
+              aria-pressed={on}
+              aria-label={open ? `Mana value ${value} or more` : `Mana value ${value}`}
+              className={cn(
+                "size-8 rounded-md border font-mono text-xs tabular-nums",
+                "transition-colors duration-150",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                on
+                  ? "border-accent text-accent"
+                  : "border-border text-muted hover:text-text",
+              )}
+            >
+              {open ? `${value}+` : value}
+            </button>
+          );
+        })}
+      </div>
+
+      <SetCombobox selected={search.sets} onToggle={search.toggleSet} />
+
+      <label htmlFor="card-search-format" className="sr-only">
+        Format
+      </label>
+      <select
+        id="card-search-format"
+        value={search.format}
+        onChange={(e) => search.setFormat(e.target.value)}
+        className="rounded-md border border-border bg-surface px-2 py-2 text-sm transition-colors duration-150 focus:border-accent focus:outline-none"
+      >
+        <option value="">Any format</option>
+        {FORMATS.map((f) => (
+          <option key={f.value} value={f.value}>
+            {f.label}
+          </option>
+        ))}
+      </select>
+
+      {/* Only when there is something to clear. A control that spends most of its life
+          disabled teaches the reader to stop looking at it. */}
+      {search.activeCount > 0 && (
+        <button
+          type="button"
+          onClick={search.resetAll}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-2 text-sm text-muted transition-colors duration-150 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <RotateCcw className="size-3.5" aria-hidden="true" />
+          Reset all
+          <span className="rounded-full bg-accent px-1.5 font-mono text-[0.7rem] text-accent-foreground">
+            {search.activeCount}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One colour chip: the printed symbol, on the printed fill.
+ *
+ * Pressed is the card's own colour at full strength with a gold ring; unpressed is the
+ * same chip dimmed rather than a different chip, so the row reads as one control with
+ * some of it switched on — and so a colourblind reader has the symbol's *shape*, which is
+ * what Wizards designed it to carry, and not only the hue.
+ */
+function ManaChip({
+  symbol,
+  pressed,
+  onClick,
+}: {
+  symbol: ManaKey;
+  pressed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={pressed}
+      aria-label={MANA_LABEL[symbol]}
+      title={MANA_LABEL[symbol]}
+      style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
+      className={cn(
+        "grid size-8 place-items-center rounded-full text-[0.95rem] text-black",
+        "transition-[opacity,box-shadow] duration-150",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+        pressed
+          ? "opacity-100 ring-2 ring-accent ring-offset-2 ring-offset-bg"
+          : "opacity-40 hover:opacity-70",
+      )}
+    >
+      {/* The glyph itself comes from the bundled `mana-font`; the fill is ours, because
+          the font's own `--ms-mana-*` values are a shade off the direction doc's. */}
+      <i className={manaSymbolClass(symbol)} aria-hidden="true" />
+    </button>
+  );
+}
+```
+
+- [ ] **Step 10: Run it**
+
+```powershell
+npm run test:run -- src/features/search/FilterBar.test.tsx
+```
+Expected: 6 passed.
+
+- [ ] **Step 11: Write the failing combobox test** — create
+`src/features/search/SetCombobox.test.tsx`:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
+import type { SetSummary } from "@/lib/ipc";
+
+const listSets = vi.fn();
+vi.mock("@/lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ipc")>()),
+  ipc: { listSets },
+}));
+import { SetCombobox } from "./SetCombobox";
+
+const sets: SetSummary[] = [
+  { code: "lea", name: "Limited Edition Alpha", setType: "core", releasedAt: "1993-08-05", cardCount: 295 },
+  { code: "neo", name: "Kamigawa: Neon Dynasty", setType: "expansion", releasedAt: "2022-02-18", cardCount: 512 },
+  { code: "tok", name: "Token Set", setType: "token", releasedAt: "2021-01-01", cardCount: 0 },
+];
+
+function wrap(ui: React.ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+describe("SetCombobox", () => {
+  it("finds a set by name and by code, and shows its symbol", async () => {
+    listSets.mockResolvedValue(sets);
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    const box = screen.getByRole("textbox", { name: /set/i });
+
+    await userEvent.type(box, "neon");
+    expect(await screen.findByRole("option", { name: /Kamigawa: Neon Dynasty/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Alpha/ })).not.toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "lea");
+    const alpha = await screen.findByRole("option", { name: /Alpha/ });
+    // The keyrune glyph, from the bundled font — a set is recognised by its symbol long
+    // before its three-letter code.
+    expect(alpha.querySelector(".ss.ss-lea")).not.toBeNull();
+  });
+
+  /** `sets` carries every set Scryfall knows, including token-only ones `default_cards`
+   *  holds nothing for. A picker full of sets that can never match is a worse picker. */
+  it("leaves out sets the local database has no printings for", async () => {
+    listSets.mockResolvedValue(sets);
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+
+    expect(await screen.findByRole("option", { name: /Alpha/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Token Set/ })).not.toBeInTheDocument();
+  });
+
+  it("picks a set and shows it as picked", async () => {
+    listSets.mockResolvedValue(sets);
+    const onToggle = vi.fn();
+    const { rerender } = wrap(<SetCombobox selected={[]} onToggle={onToggle} />);
+
+    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
+    expect(onToggle).toHaveBeenCalledWith("lea");
+
+    rerender(<SetCombobox selected={["lea"]} onToggle={onToggle} />);
+    expect(screen.getByRole("combobox", { name: /set/i })).toHaveTextContent("1 set");
+  });
+
+  it("closes on Escape", async () => {
+    listSets.mockResolvedValue(sets);
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    expect(await screen.findByRole("listbox")).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 12: Run and watch it fail**
+
+```powershell
+npm run test:run -- src/features/search/SetCombobox.test.tsx
+```
+Expected: `Failed to resolve import "./SetCombobox"`.
+
+- [ ] **Step 13: Implement the combobox** — create `src/features/search/SetCombobox.tsx`:
+
+```tsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ChevronDown } from "lucide-react";
+import { ipc, type SetSummary } from "@/lib/ipc";
+import { setGlyphClass } from "@/lib/keyrune";
+import { cn } from "@/lib/utils";
+
+/**
+ * Options rendered at once.
+ *
+ * There are ~1 050 sets and the list is filtered as the reader types, so anything past
+ * the first screenful is scrolled past rather than read. Capping keeps the popup out of
+ * the virtualiser's territory — a 1 050-row `<ul>` inside a dropdown is a jank source for
+ * a control that is open for two seconds.
+ */
+const MAX_OPTIONS = 50;
+
+/**
+ * A searchable, multi-select set picker.
+ *
+ * Hand-rolled rather than pulled from a component library: Radix has no combobox, and the
+ * alternative (`cmdk`) is a dependency for one control. The ARIA wiring here is the whole
+ * of what that dependency would have provided.
+ */
+export function SetCombobox({
+  selected,
+  onToggle,
+}: {
+  selected: readonly string[];
+  onToggle: (code: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // One call per session: the set list changes at most once a sync, and the picker has to
+  // open instantly.
+  const sets = useQuery({
+    queryKey: ["sets"],
+    queryFn: () => ipc.listSets(),
+    staleTime: Infinity,
+  });
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onClick);
+    };
+  }, [open]);
+
+  const options = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return (sets.data ?? [])
+      // A set with no printings here can never match a search, so offering it is offering
+      // an empty result. `sets` holds memorabilia and token-only sets that
+      // `default_cards` carries nothing for.
+      .filter((s) => s.cardCount > 0)
+      .filter((s) => !needle || s.name.toLowerCase().includes(needle) || s.code.includes(needle))
+      .slice(0, MAX_OPTIONS);
+  }, [sets.data, query]);
+
+  const label =
+    selected.length === 0 ? "Any set" : `${selected.length} set${selected.length === 1 ? "" : "s"}`;
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        role="combobox"
+        aria-label="Set"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-2 text-sm",
+          "transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          selected.length > 0 ? "border-accent text-accent" : "border-border text-muted hover:text-text",
+        )}
+      >
+        {label}
+        <ChevronDown className="size-3.5" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-72 rounded-md border border-border bg-surface p-2 shadow-lg">
+          <input
+            ref={inputRef}
+            type="search"
+            aria-label="Set"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search sets…"
+            className="mb-2 w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm placeholder:text-muted focus:border-accent focus:outline-none"
+          />
+          <ul role="listbox" aria-multiselectable="true" className="max-h-64 overflow-auto">
+            {options.length === 0 && (
+              <li className="px-2 py-3 text-center text-xs text-muted">
+                {sets.isPending ? "Loading sets…" : "No sets match that."}
+              </li>
+            )}
+            {options.map((s) => (
+              <Option key={s.code} set={s} picked={selected.includes(s.code)} onToggle={onToggle} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Option({
+  set,
+  picked,
+  onToggle,
+}: {
+  set: SetSummary;
+  picked: boolean;
+  onToggle: (code: string) => void;
+}) {
+  const glyph = setGlyphClass(set.code);
+  return (
+    <li
+      role="option"
+      aria-selected={picked}
+      tabIndex={0}
+      onClick={() => onToggle(set.code)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle(set.code);
+        }
+      }}
+      className={cn(
+        "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-150",
+        picked ? "bg-bg text-accent" : "text-text hover:bg-bg/60",
+      )}
+    >
+      {/* keyrune covers 441 of ~1 050 sets; a code it has no glyph for renders nothing at
+          all, which is why the code below is always shown as text too. */}
+      {glyph && <i className={cn(glyph, "w-4 shrink-0 text-center")} aria-hidden="true" />}
+      <span className="min-w-0 flex-1 truncate">{set.name}</span>
+      <span className="shrink-0 font-mono text-xs text-muted">{set.code.toUpperCase()}</span>
+    </li>
+  );
+}
+```
+
+- [ ] **Step 14: Run it**
+
+```powershell
+npm run test:run -- src/features/search/SetCombobox.test.tsx
+```
+Expected: 4 passed.
+
+- [ ] **Step 15: Swap the filter bar into `SearchPage`** — in
+`src/features/search/SearchPage.tsx`, replace the whole inline filter `<div className="flex
+flex-wrap items-center gap-3">…</div>` (the search input, format select and colour group)
+with `<FilterBar search={search} />`, keeping the view-layout toggle where it is — that is
+a display control, not a filter, and belongs beside the results rather than in the filter
+row. Delete the now-unused `COLOR_KEYS`/`COLOR_LABEL`/`FORMATS` imports from `SearchPage`.
+
+If `SearchPage.test.tsx` asserts on the format `<select>` or the colour buttons by their
+old shape, point those assertions at the new roles (`getByRole("button", { name: "Blue" })`,
+`getByLabelText(/format/i)` still works — the label moved to `sr-only` but is still
+associated).
+
+- [ ] **Step 16: Verify**
+
+```powershell
+npm run verify
+```
+Expected: green.
+
+- [ ] **Step 17: Manual smoke**
+
+```powershell
+npm run tauri dev
+```
+Expected: five mana symbols plus colourless, drawn as real symbols on their printed fills,
+dim until pressed; 0–8+ mana chips in Geist Mono; a set picker that finds "Alpha" by name
+and "lea" by code and shows the Alpha symbol; **Reset all** appearing with a count the
+moment any filter is on and clearing everything in one click. Combining a colour, a set and
+a mana value narrows the results as expected. No external network requests.
+
+- [ ] **Step 18: Commit**
+
+```powershell
+git add -A
+git commit -m "feat: mana-symbol colour chips, set picker, mana-value chips and Reset all
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+```
+
+---
+### Task 11: The art-grid view on the search page
+
+> **Invoke the `frontend-design` skill before writing any of this task; `docs/superpowers/specs/2026-08-04-visual-design-direction.md` is binding — execute it, don't invent.** Two clauses of that document govern this view in particular: *"Card art is the loudest element on any screen that has it; UI must not compete"* — so the tile chrome is a caption and a focus ring, nothing more — and the rarity treatment, which is a **small gem dot or tinted text**, never a filled badge.
 
 The search page currently has one shape: a table. This adds the other one spec §7 asks for — a virtualized grid of 5:7 card frames — and the URL helper every future view will use to name an image.
 
@@ -2341,7 +4428,7 @@ The search page currently has one shape: a table. This adds the other one spec �
 - Modify: `src/lib/store.ts`, `src/features/search/SearchPage.tsx`
 
 **Interfaces:**
-- Consumes: `CardSummary { id, name, setCode, setName, collectorNumber, rarity, typeLine, manaCost, priceUsd, layout }` from `src/lib/ipc.ts`; `useCardSearch()` → `{ text, setText, format, setFormat, colors, toggleColor, query, rows, searchKey, total, totalIsCapped, unfiltered }`; `needsNextPage(lastRenderedIndex, loadedCount)`; `useVirtualizer` from `@tanstack/react-virtual`; `cn` from `@/lib/utils`.
+- Consumes: `CardSummary { id, name, setCode, setName, collectorNumber, rarity, typeLine, manaCost, priceUsd, layout }` from `src/lib/ipc.ts`; `useCardSearch()` → `{ text, setText, format, setFormat, colors, toggleColor, sets, toggleSet, manaValues, toggleManaValue, activeCount, resetAll, query, rows, searchKey, total, totalIsCapped, unfiltered }` (the last six added in Task 10); `needsNextPage(lastRenderedIndex, loadedCount)`; `rarityColor` from `@/lib/rarity` (Task 8); `useVirtualizer` from `@tanstack/react-virtual`; `cn` from `@/lib/utils`.
 - Produces:
 
 ```ts
@@ -2550,6 +4637,7 @@ import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { CardSummary } from "@/lib/ipc";
+import { rarityColor } from "@/lib/rarity";
 import { needsNextPage } from "./useCardSearch";
 
 /** Tile width in px. A `grid` image is 488 px wide, so this is a downscale, never a blowup. */
@@ -2677,8 +4765,18 @@ function Tile({ card, onSelect }: { card: CardSummary; onSelect: (id: string) =>
         style={{ aspectRatio: CARD_ASPECT }}
         className="w-full rounded-lg bg-surface object-cover transition-transform group-hover:scale-[1.02]"
       />
-      <span className="truncate text-xs text-muted">
-        {card.setCode.toUpperCase()} · {card.collectorNumber}
+      <span className="flex items-center gap-1.5 truncate font-mono text-xs text-muted">
+        {/* The rarity gem: 6px of colour, and the only colour in the tile chrome. A filled
+            badge here would compete with the art, which the direction forbids outright. */}
+        <span
+          aria-hidden="true"
+          title={card.rarity ?? undefined}
+          className="size-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: rarityColor(card.rarity) }}
+        />
+        <span className="truncate">
+          {card.setCode.toUpperCase()} · {card.collectorNumber}
+        </span>
       </span>
     </button>
   );
@@ -2782,8 +4880,8 @@ and inside `AppState` / the `create` call:
         ))}
 ```
 
-`selectCard` is `useAppStore((s) => s.setSelectedCardId)`, added in Task 10; until then
-pass `() => {}` and leave a `// Task 10` marker.
+`selectCard` is `useAppStore((s) => s.setSelectedCardId)`, added in Task 13; until then
+pass `() => {}` and leave a `// Task 13` marker.
 
 The table branch keeps its own paging effect; the grid drives paging through
 `onNeedNextPage` because its "last rendered index" is a row of tiles, not a row of data.
@@ -2800,7 +4898,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Card detail and printings commands
+### Task 12: Card detail and printings commands
 
 Two read-only commands, shaped like `search_cards`: pure functions over a `Connection` with a thin `#[tauri::command]` wrapper that runs them on the blocking pool against `db_read`. Grouping by illustration and per-finish pricing are **not** here — that is domain logic, and CLAUDE.md puts domain logic in TypeScript.
 
@@ -3238,7 +5336,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 10: The card detail pane
+### Task 13: The card detail pane
+
+> **Invoke the `frontend-design` skill before writing any of this task; `docs/superpowers/specs/2026-08-04-visual-design-direction.md` is binding — execute it, don't invent.** Four of its rules land here: Geist **Mono** for collector numbers, prices and counts (with `tabular-nums`); rarity as a **gem dot or tinted text**, never a filled badge; Cinzel for section headers **only** and never below 18px — the card's *name* is content, so it stays in Geist; and the artist/copyright line is set in the muted text colour at the pane's foot, legible but never competing with the art above it.
 
 Spec §7's "card detail pane": the `display` image with a face flip, every printing grouped by illustration with per-finish prices, legality chips, and the artist and copyright line the image policy requires. The grouping and pricing are pure TypeScript with their own tests — that is the CLAUDE.md boundary in practice.
 
@@ -3247,7 +5347,7 @@ Spec §7's "card detail pane": the `display` image with a face flip, every print
 - Modify: `src/lib/ipc.ts`, `src/lib/ipc.test.ts`, `src/lib/store.ts`, `src/App.tsx`, `src/features/search/SearchPage.tsx`
 
 **Interfaces:**
-- Consumes: the Rust DTOs from Task 9 (field names must match `rename_all = "camelCase"` exactly), `cardImageUrl` / `CARD_ASPECT` (Task 8), `useQuery` from TanStack Query, `queryClient` from `@/lib/query`.
+- Consumes: the Rust DTOs from Task 12 (field names must match `rename_all = "camelCase"` exactly), `cardImageUrl` / `CARD_ASPECT` (Task 11), `useQuery` from TanStack Query, `queryClient` from `@/lib/query`.
 - Produces:
 
 ```ts
@@ -3801,6 +5901,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type Printing } from "@/lib/ipc";
+import { rarityColor } from "@/lib/rarity";
 import { cn } from "@/lib/utils";
 import {
   faceCount,
@@ -3874,7 +5975,9 @@ export function CardDetailPane({
       className="flex w-96 shrink-0 flex-col gap-4 overflow-auto border-l border-border bg-surface p-4"
     >
       <div className="flex items-start gap-2">
-        <h2 className="min-w-0 flex-1 font-heading text-base">
+        {/* The card's name is content, not a section header, so it stays in Geist —
+            Cinzel is for view titles and hero copy, and never below 18px. */}
+        <h2 className="min-w-0 flex-1 text-base font-medium">
           {card.data?.name ?? (card.isPending ? "Loading…" : "Card")}
         </h2>
         <button
@@ -3959,15 +6062,26 @@ function Facts({ card }: { card: CardDetail }) {
         {card.manaCost && <span className="ml-2 text-xs">{card.manaCost}</span>}
       </p>
       <p className="text-xs text-muted">
-        {(card.setName ?? card.setCode.toUpperCase())} · #{card.collectorNumber}
-        {card.rarity && <> · {card.rarity}</>}
+        <span className="font-mono">
+          {card.setName ?? card.setCode.toUpperCase()} · #{card.collectorNumber}
+        </span>
+        {/* Rarity as tinted text rather than a filled badge — the direction budgets colour
+            for mana and art, and a rarity is a footnote. */}
+        {card.rarity && (
+          <>
+            {" · "}
+            <span className="capitalize" style={{ color: rarityColor(card.rarity) }}>
+              {card.rarity}
+            </span>
+          </>
+        )}
       </p>
       {card.oracleText && <p className="whitespace-pre-line text-xs">{card.oracleText}</p>}
       <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
         {finishes.map((f) => (
           <div key={f} className="flex gap-1">
             <dt className="text-muted">{FINISH_LABEL[f]}</dt>
-            <dd className="tabular-nums">{price(finishPrice(card.prices, f))}</dd>
+            <dd className="font-mono tabular-nums">{price(finishPrice(card.prices, f))}</dd>
           </div>
         ))}
       </dl>
@@ -4028,13 +6142,13 @@ function Printings({
                   p.id === currentId ? "bg-bg text-text" : "text-muted",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">
+                <span className="min-w-0 flex-1 truncate font-mono">
                   {p.setCode.toUpperCase()} · {p.collectorNumber}
                   {p.releasedAt && <> · {p.releasedAt.slice(0, 4)}</>}
                 </span>
                 {/* Per finish, from the blob — never one number standing for both. */}
                 {parseFinishes(p.finishes).map((f) => (
-                  <span key={f} className="shrink-0 tabular-nums" title={FINISH_LABEL[f]}>
+                  <span key={f} className="shrink-0 font-mono tabular-nums" title={FINISH_LABEL[f]}>
                     {price(finishPrice(p.prices, f))}
                   </span>
                 ))}
@@ -4073,7 +6187,7 @@ Expected: 16 passed.
   setSelectedCardId: (selectedCardId) => set({ selectedCardId }),
 ```
 
-2. `src/features/search/SearchPage.tsx`: replace the Task 8 `// Task 10` marker with
+2. `src/features/search/SearchPage.tsx`: replace the Task 11 `// Task 13` marker with
    `const selectCard = useAppStore((s) => s.setSelectedCardId);` and make the **table**
    rows selectable too — the row `<div>` gains `onClick={() => selectCard(card.id)}`, plus
    `tabIndex={0}` and `onKeyDown` for Enter/Space so the table is not mouse-only.
@@ -4119,7 +6233,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 11: Page prefetch, full verify, manual smoke, plan wrap
+### Task 14: Page prefetch, full verify, manual smoke, plan wrap
 
 The grid's overscan already mounts two rows of off-screen `<img>` tags, which fills the
 cache for the next scroll. This adds the other half: when a page of results lands, tell
@@ -4302,7 +6416,13 @@ Check each of these and record the result in the commit message:
 
 | | expected |
 |---|---|
-| Grid view | opens on card art; tiles fill in as they scroll into view; no layout jump |
+| Ribbon | 48px `bg-surface` row: gold "MTG" mark, view title in Cinzel, status line, **Refresh data**; the 2px WUBRG mana line sits under it and nowhere else |
+| Mana line during a sync | dims and fills left→right behind a gold cap; with `prefers-reduced-motion` forced on (devtools → Rendering → Emulate CSS media feature), no sweep and no spin, but the state is still legible |
+| Filters | mana chips are real symbols on printed fills, dim until pressed; set picker finds "Alpha" by name and "lea" by code with its symbol; 0–8+ chips in mono; **Reset all** shows a count and clears everything |
+| Filter combination | a colour + a set + a mana value narrows the results, and the count above the list agrees with what is listed |
+| Grid view | opens on card art; tiles fill in as they scroll into view; no layout jump; the rarity gem is a 6px dot, not a badge |
+| Fonts and symbols | devtools network panel shows **zero** requests to any external host — Cinzel, Geist Mono, `mana-font` and `keyrune` all come from the app origin |
+| 1024px width | shrink the window to its `minWidth`: the ribbon, filter bar and grid all still work, nothing overflows horizontally |
 | Devtools console | zero CSP violations; no 4xx/5xx on `mtgimg` requests except for cards you know have no art |
 | Cache on disk | `src-tauri/target/debug/data/images/grid/<xx>/…webp` files appear; `SELECT count(*) FROM image_cache` climbs with them |
 | Scroll a long browse | images keep up; the app stays responsive (the pacer is 6 in flight, 100 ms apart) |
@@ -4349,9 +6469,30 @@ Every MUST-DO from `docs/superpowers/notes/plan-1-carryover.md`, and where it we
 | Error taxonomy: `RateLimited` flattens to a string; real 30 s 429 backoff | **Task 4** (`RateLimited { retry_after_secs }`, `NotFound`), **Task 5** (the gate pays the penalty), **Task 6** (503 + `Retry-After`) |
 | Exit checkpoint blocks on the write mutex → bounded try_lock retry | **Task 7** (`db::lock_for`, added in Task 5) |
 | Doc drift: duplicated FTS paragraph, "four fields", "three interpolations" | **Task 7** |
-| Deep-OFFSET paging at 595 ms @ 100k → keyset pagination if the grid pages hard | **Deferred, unchanged.** The grid pages the same `search_cards` the table already does, at the same offsets, so Plan 2 changes nothing about the measurement. Task 11's smoke is where it would show; if it does, keyset paging is a `search.rs` change and belongs with the other search work. |
-| Full collection/wishlist/deck image pre-warm (spec §5) | **Deferred to Plan 3.** There are no collection, wishlist or deck tables yet — a resumable job has nothing to enumerate. Task 11 ships the visible-page prefetch, which is the part that has data today. |
+| Deep-OFFSET paging at 595 ms @ 100k → keyset pagination if the grid pages hard | **Deferred, unchanged.** The grid pages the same `search_cards` the table already does, at the same offsets, so Plan 2 changes nothing about the measurement. Task 14's smoke is where it would show; if it does, keyset paging is a `search.rs` change and belongs with the other search work. |
+| Full collection/wishlist/deck image pre-warm (spec §5) | **Deferred to Plan 3.** There are no collection, wishlist or deck tables yet — a resumable job has nothing to enumerate. Task 14 ships the visible-page prefetch, which is the part that has data today. |
 | Image cache pruning / "clear cache" control | **Deferred to Plan 6** (settings + distribution). The cache is capped in practice by what the user browses (~1.1 GB worst case for `thumb`), deleting `data/images` is already safe by design, and a button to do it belongs with the rest of the settings screen. |
+
+### Visual direction coverage (`2026-08-04-visual-design-direction.md`, binding)
+
+| Direction | Landed |
+|---|---|
+| Palette tokens: mana fills, pie deeps, rarity | **Task 8** (`src/index.css` `@theme`) |
+| Type: Cinzel display 500/600, Geist body, Geist Mono data | **Task 8** (tokens + `--font-heading`), applied in **10**, **11**, **13** |
+| The mana line — always present, never repeated, doubles as the sync sweep, gold cap, reduced-motion respected | **Task 8** (`ManaLine`) |
+| Global ribbon owns Refresh + sync status; filters stay with their view | **Task 8** (`Ribbon`, `AppShell` restructure) |
+| Sidebar gold active indicator | **Task 8** |
+| Colour filter: real `mana-font` symbols on authentic fills, C included, pressed = full fill + ring | **Task 10** |
+| Set filter: searchable multi-select with `keyrune` glyphs | **Tasks 9 + 10** (`list_sets`, `SetCombobox`) |
+| Mana-value chips 0–7 and 8+, multi-select, mono numerals | **Tasks 9 + 10** |
+| Format filter restyled | **Task 10** |
+| All filters combine; **Reset all** with a count badge when ≥1 is active | **Tasks 9 + 10** |
+| Rarity as a gem dot or tinted text, never a badge | **Task 8** (`rarity.ts`), used in **11** and **13** |
+| Card art is the loudest element; UI must not compete | **Task 11** (tile chrome is a caption and a focus ring) |
+| Motion budget: 150 ms transitions, the sweep, nothing else; `prefers-reduced-motion` honoured | **Task 8**, checked in **Task 14**'s smoke |
+| Quality floor: gold focus ring, AA contrast, works at 1024px | every UI task; the width and reduced-motion checks are in **Task 14**'s smoke |
+| Symbol/display fonts bundled, never a CDN | **Task 8** (npm + Vite), enforced by **Task 1**'s CSP test and checked in **Task 14**'s smoke |
+
 
 ---
 
@@ -4369,6 +6510,9 @@ Every MUST-DO from `docs/superpowers/notes/plan-1-carryover.md`, and where it we
    (Moxfield CSV, native CSV, Excel, Arena/MTGO text), PDF deck sheets.
 6. **Polish & distribution** — deck covers using the `art` variant (**with the artist
    credit the policy requires**), a "clear image cache" control, licenses screen,
-   settings, overlay focus management, portable build + ZIP artifact, e2e smoke, and the
-   second-sync file-growth decision (post-swap `VACUUM` — which REQUIRES `create_fts`
-   after — versus shrinking `raw`).
+   settings (which slots into the ribbon beside Refresh, not into a view), overlay focus
+   management, portable build + ZIP artifact, e2e smoke, and the second-sync file-growth
+   decision (post-swap `VACUUM` — which REQUIRES `create_fts` after — versus shrinking
+   `raw`). The `--chart-*` tokens are still stock greys and near-invisible on the dark
+   background; the direction doc's **pie deeps** (`--color-pie-*`, shipped in Task 8) are
+   what the value-stats charts should be built from.
