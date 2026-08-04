@@ -4,6 +4,7 @@ pub mod ingest;
 pub mod paths;
 pub mod schema;
 pub mod scryfall;
+pub mod search;
 pub mod sync;
 
 use std::path::Path;
@@ -44,7 +45,11 @@ async fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> Result<sync::Syn
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sync_run, sync_status])
+        .invoke_handler(tauri::generate_handler![
+            sync_run,
+            sync_status,
+            search::search_cards
+        ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
             // user as an escaped one-line panic, which turns a multi-line message naming
