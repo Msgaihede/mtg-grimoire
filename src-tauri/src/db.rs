@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 /// Ceiling on the write-ahead log *file* after a checkpoint, in bytes.
 ///
@@ -51,6 +52,38 @@ pub fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(conn)
+}
+
+/// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,
+/// long enough that a contended lock is not a spin.
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Take `mutex`, giving up after `timeout` rather than queueing behind whatever holds it.
+///
+/// The write connection is held for the whole of a 44 s ingest. Callers who cannot pay
+/// that — the exit checkpoint, the image cache's bookkeeping — ask for a bound instead,
+/// because for both of them "could not" is a real answer: skip the checkpoint (the WAL is
+/// a valid journal either way), skip the row (one re-fetch from an unlimited origin).
+///
+/// Poisoning is recovered exactly as `sync::lock_db` does: the panicking thread's
+/// `Connection` survives, and refusing the lock forever would brick the app for no gain.
+pub fn lock_for(
+    mutex: &Mutex<Connection>,
+    timeout: Duration,
+) -> Option<MutexGuard<'_, Connection>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(LOCK_POLL_INTERVAL);
+            }
+        }
+    }
 }
 
 /// Fold the write-ahead log back into the database and truncate the `-wal` file to zero.
@@ -113,6 +146,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(decomposed, 1, "combining marks must be folded away");
+    }
+
+    /// Two callers need the write lock *without* being willing to wait out a 44 s
+    /// ingest: the exit checkpoint (which would park a window-less process the user
+    /// believes has quit) and the image cache's bookkeeping (which would hold a picture
+    /// hostage to a sync). Both have a correct answer for "could not".
+    #[test]
+    fn lock_for_gives_up_instead_of_waiting_out_an_ingest() {
+        let mutex = std::sync::Mutex::new(Connection::open_in_memory().unwrap());
+
+        let taken = lock_for(&mutex, Duration::from_millis(50));
+        assert!(taken.is_some(), "an uncontended lock is taken immediately");
+
+        let started = std::time::Instant::now();
+        let blocked = lock_for(&mutex, Duration::from_millis(50));
+        assert!(blocked.is_none(), "a held lock must not be waited out");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "giving up took {:?}",
+            started.elapsed()
+        );
+
+        drop(taken);
+        assert!(lock_for(&mutex, Duration::from_millis(50)).is_some());
     }
 
     /// A scratch directory of its own per test — these all touch real files, and the
