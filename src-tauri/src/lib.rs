@@ -1,3 +1,4 @@
+pub mod card;
 pub mod card_row;
 pub mod db;
 pub mod images;
@@ -85,7 +86,9 @@ pub fn run() {
             sync_run,
             sync_status,
             search::search_cards,
-            search::list_sets
+            search::list_sets,
+            card::card_detail,
+            card::card_printings
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
