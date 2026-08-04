@@ -2023,6 +2023,7 @@ dependencies = [
 name = "mtg-collection-tracker"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "rusqlite",
  "serde",
  "serde_json",
