@@ -23,6 +23,10 @@ Scryfall as the only external dependency.
   decimal strings. `legalities` is JSON (23 keys, grows). Finishes: enum, never boolean.
 - npm `xlsx` is banned (CVEs). TypeScript stays on 6.0.x until TS 7.1.
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).
+  The app palette maps `muted`/`accent` to **text** colours, so rewrite a vendored
+  component's `bg-muted`/`bg-accent` surfaces to `bg-surface` (stock `bg-muted` renders
+  text on the same colour — a stock `TabsList` has invisible labels). `text-muted-foreground`
+  and `text-accent-foreground` already resolve correctly.
 - Work on `main`, commit small after each task/step with `feat:`/`fix:`/`chore:`/`test:`.
 - Tests: cover logic that can break (parsers, validation, sync). No ceremony tests.
 

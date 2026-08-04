@@ -1,50 +1,56 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { AppShell } from "@/components/AppShell";
+import { queryClient } from "@/lib/query";
+import { useAppStore, type ViewId } from "@/lib/store";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+/** What each view says while it is still a placeholder. */
+const BLURB: Record<ViewId, { title: string; body: string }> = {
+  search: {
+    title: "Card search",
+    body: "The search box, filters and result grid land in the next task — the database and the search_cards command behind them are already in place.",
+  },
+  collection: {
+    title: "Collection",
+    body: "Owned cards, quantities and value. Coming in a later plan.",
+  },
+  wishlist: {
+    title: "Wishlist",
+    body: "Cards you are hunting for, with owned badges in search. Coming in a later plan.",
+  },
+  decks: {
+    title: "Decks",
+    body: "Deckbuilder, format validation and deck stats. Coming in a later plan.",
+  },
+  settings: {
+    title: "Settings",
+    body: "Data folder, sync behaviour, import and export. Coming in a later plan.",
+  },
+};
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
+function ActiveView() {
+  const activeView = useAppStore((s) => s.activeView);
+  const { title, body } = BLURB[activeView];
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <section className="mx-auto max-w-prose py-16 text-center">
+      <h2 className="font-heading text-xl">{title}</h2>
+      <p className="mt-2 text-sm text-muted">{body}</p>
+    </section>
   );
 }
 
-export default App;
+/**
+ * The whole app.
+ *
+ * `QueryClientProvider` is here rather than in `main.tsx` so that any test can render
+ * `<App />` and get the real caching behaviour; `AppShell` deliberately needs no
+ * provider of its own (see `useSync`).
+ */
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppShell>
+        <ActiveView />
+      </AppShell>
+    </QueryClientProvider>
+  );
+}
