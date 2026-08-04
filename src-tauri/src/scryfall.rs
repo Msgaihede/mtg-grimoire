@@ -1,6 +1,6 @@
 //! Async HTTP client for the two Scryfall hosts this app talks to.
 //!
-//! Three operations, each with a rule that is easy to get wrong:
+//! Four operations, each with a rule that is easy to get wrong:
 //!
 //! * **Update check** — `GET /bulk-data/default_cards` with the stored weak ETag in
 //!   `If-None-Match`. A 304 is the common case and costs zero bytes, which is the
@@ -9,14 +9,20 @@
 //!   reqwest's `gzip` feature is deliberately absent from `Cargo.toml`; enabling it
 //!   would transparently decompress the body and hand the ingest a file that is
 //!   neither valid gzip nor the size the API promised.
-//! * **Sets** — `GET /sets`, following `has_more`/`next_page`.
+//! * **Sets** — `GET /sets`, following `has_more`/`next_page`, bounded by
+//!   [`MAX_SET_PAGES`]: a `next_page` chain that cycles A→B→A defeats the
+//!   self-reference guard and would otherwise page forever.
+//! * **Images** — one card image from the `cards.scryfall.io` file origin. A 404 there
+//!   is permanent, so it gets its own variant rather than looking like a transient
+//!   failure a caller would retry.
 //!
 //! Every request to `api.scryfall.com` must carry a real `User-Agent` *and* an
 //! `Accept` header; Cloudflare answers 403 without them, so the UA is pinned on the
 //! client itself and [`Client::api_get`] is the only way this module builds an API
 //! request. The API host is rate limited (a 429 locks the caller out for 30 seconds,
-//! and Scryfall bans repeat offenders), so 429 gets its own error variant for callers
-//! to back off on. The file origins under `*.scryfall.io` are explicitly unlimited.
+//! and Scryfall bans repeat offenders), so 429 gets its own error variant carrying the
+//! duration the caller must wait — a bare marker leaves it guessing. The file origins
+//! under `*.scryfall.io` are explicitly unlimited.
 
 use std::path::Path;
 
@@ -35,6 +41,15 @@ const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";
 /// complete silence, though, is a connection that is not coming back.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// What Scryfall says a 429 costs: "your access being limited for 30 seconds". The floor
+/// when the response carries no `Retry-After` of its own.
+pub const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
+
+/// Pages `fetch_sets` will follow before it stops. ~1 050 sets arrive in a handful of
+/// pages; a `next_page` chain that cycles A→B→A slips past the `next == url` guard and
+/// would otherwise run until the process is killed.
+pub const MAX_SET_PAGES: usize = 20;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ScryfallError {
     #[error("http request failed: {0}")]
@@ -47,9 +62,15 @@ pub enum ScryfallError {
     #[error("downloaded {actual} bytes, expected {expected}")]
     SizeMismatch { expected: u64, actual: u64 },
     /// HTTP 429. Scryfall limits access for 30 seconds and escalates to bans, so the
-    /// caller must back off rather than retry immediately.
-    #[error("rate limited by Scryfall; back off before retrying")]
-    RateLimited,
+    /// caller must back off — and needs the number to back off *by*, which is why this
+    /// carries one instead of being a bare marker.
+    #[error("rate limited by Scryfall; retry after {retry_after_secs}s")]
+    RateLimited { retry_after_secs: u64 },
+    /// HTTP 404 from a file origin: the resource is not coming, now or later. Separated
+    /// from `Unexpected` so a caller can stop retrying instead of hammering a URI that
+    /// will never answer.
+    #[error("not found")]
+    NotFound,
     #[error("unexpected response from Scryfall: {0}")]
     Unexpected(String),
 }
@@ -153,7 +174,9 @@ impl Client {
         let resp = req.send().await?;
         match resp.status().as_u16() {
             304 => Ok(BulkCheck::NotModified),
-            429 => Err(ScryfallError::RateLimited),
+            429 => Err(ScryfallError::RateLimited {
+                retry_after_secs: retry_after_secs(&resp),
+            }),
             200 => {
                 let etag = resp
                     .headers()
@@ -257,7 +280,11 @@ impl Client {
                 )
             }
             200 => (tokio::fs::File::create(dest).await?, 0),
-            429 => return Err(ScryfallError::RateLimited),
+            429 => {
+                return Err(ScryfallError::RateLimited {
+                    retry_after_secs: retry_after_secs(&resp),
+                })
+            }
             s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
         };
 
@@ -284,15 +311,20 @@ impl Client {
         Ok(())
     }
 
-    /// All sets, following `has_more`/`next_page` to the end.
+    /// All sets, following `has_more`/`next_page` to the end — or to
+    /// [`MAX_SET_PAGES`], whichever comes first.
     pub async fn fetch_sets(&self) -> Result<Vec<SetRow>, ScryfallError> {
         let mut url = format!("{}/sets", self.base_url);
         let mut out = Vec::new();
-        loop {
+        for _ in 0..MAX_SET_PAGES {
             let resp = self.api_get(&url).send().await?;
             match resp.status().as_u16() {
                 200 => {}
-                429 => return Err(ScryfallError::RateLimited),
+                429 => {
+                    return Err(ScryfallError::RateLimited {
+                        retry_after_secs: retry_after_secs(&resp),
+                    })
+                }
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
             let v = json_body(resp).await?;
@@ -320,6 +352,27 @@ impl Client {
         }
         Ok(out)
     }
+
+    /// The bytes of one card image from `cards.scryfall.io`.
+    ///
+    /// A file origin, not the API: no `Accept` header (the `User-Agent` pinned on the
+    /// client rides along regardless), and Scryfall documents `*.scryfall.io` as having
+    /// no rate limits. The ≤10/s the spec still asks for is paced by `images::Cache`,
+    /// which is where the request *rate* is known — this call does exactly one fetch.
+    ///
+    /// Buffered, not streamed: the largest variant this app stores is ~93 KB, and a file
+    /// that small does not repay the complexity streaming buys the 77 MB bulk download.
+    pub async fn fetch_image(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
+        let resp = self.get_from(uri, None).await?;
+        match resp.status().as_u16() {
+            200 => Ok(resp.bytes().await?.to_vec()),
+            404 => Err(ScryfallError::NotFound),
+            429 => Err(ScryfallError::RateLimited {
+                retry_after_secs: retry_after_secs(&resp),
+            }),
+            s => Err(ScryfallError::Unexpected(format!("status {s}"))),
+        }
+    }
 }
 
 /// First byte of a `Content-Range: bytes 400-999/1000` header.
@@ -329,6 +382,16 @@ impl Client {
 fn content_range_start(value: &str) -> Option<u64> {
     let range = value.trim().strip_prefix("bytes")?.trim_start();
     range.split('-').next()?.trim().parse().ok()
+}
+
+/// The backoff a 429 asks for: `Retry-After` when it is a plain seconds count, and
+/// Scryfall's documented 30 s otherwise.
+fn retry_after_secs(resp: &reqwest::Response) -> u64 {
+    resp.headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(RATE_LIMIT_BACKOFF_SECS)
 }
 
 /// Parse a response body as JSON.
@@ -636,10 +699,54 @@ mod tests {
         assert_eq!(content_range_start("items 400-999/1000"), None);
     }
 
-    /// 429 is not a generic failure: Scryfall locks the caller out for 30 seconds and
-    /// bans repeat offenders, so it has to reach the caller as something to back off on.
     #[tokio::test]
-    async fn rate_limiting_is_reported_as_its_own_error() {
+    async fn an_image_comes_back_as_bytes() {
+        let server = MockServer::start();
+        let body = vec![0x52u8, 0x49, 0x46, 0x46, 7, 7, 7, 7];
+        server.mock(|when, then| {
+            // The file origin needs no `Accept`, but the User-Agent is not optional
+            // anywhere: "Do not allow HTTP libraries to choose the header for you."
+            when.method(GET)
+                .path("/grid/front/0/0/x.webp")
+                .header("user-agent", USER_AGENT);
+            then.status(200)
+                .header("content-type", "image/webp")
+                .body(body.clone());
+        });
+        let c = Client::new(server.base_url());
+
+        let bytes = c
+            .fetch_image(&format!("{}/grid/front/0/0/x.webp", server.base_url()))
+            .await
+            .unwrap();
+
+        assert_eq!(bytes, body);
+    }
+
+    /// 404 from the CDN is permanent — a URI Scryfall gave us for an image it does not
+    /// have. Retrying it forever is the failure mode this variant exists to prevent.
+    #[tokio::test]
+    async fn a_missing_image_is_not_a_retryable_failure() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/gone.webp");
+            then.status(404);
+        });
+        let c = Client::new(server.base_url());
+
+        assert!(matches!(
+            c.fetch_image(&format!("{}/gone.webp", server.base_url()))
+                .await,
+            Err(ScryfallError::NotFound)
+        ));
+    }
+
+    /// Scryfall limits access for 30 seconds on a 429 and bans repeat offenders, so the
+    /// number has to reach the caller — a bare "rate limited" marker is something a
+    /// caller can only guess at. `Retry-After` is honoured when sent; 30 s is the
+    /// documented floor when it is not.
+    #[tokio::test]
+    async fn rate_limiting_carries_the_backoff_the_caller_must_wait() {
         let server = MockServer::start();
         server.mock(|when, then| {
             when.method(GET).path("/bulk-data/default_cards");
@@ -649,15 +756,58 @@ mod tests {
             when.method(GET).path("/sets");
             then.status(429);
         });
+        server.mock(|when, then| {
+            when.method(GET).path("/slow.webp");
+            then.status(429).header("retry-after", "45");
+        });
         let c = Client::new(server.base_url());
+
         assert!(matches!(
             c.check_bulk_update(None).await,
-            Err(ScryfallError::RateLimited)
+            Err(ScryfallError::RateLimited {
+                retry_after_secs: 30
+            })
         ));
         assert!(matches!(
             c.fetch_sets().await,
-            Err(ScryfallError::RateLimited)
+            Err(ScryfallError::RateLimited {
+                retry_after_secs: 30
+            })
         ));
+        assert!(matches!(
+            c.fetch_image(&format!("{}/slow.webp", server.base_url()))
+                .await,
+            Err(ScryfallError::RateLimited {
+                retry_after_secs: 45
+            })
+        ));
+    }
+
+    /// A `next_page` chain that walks A→B→A is not a loop the `next == url` guard can
+    /// see. There are ~1 050 sets across a handful of pages, so twenty is an order of
+    /// magnitude of headroom and still a bound.
+    #[tokio::test]
+    async fn set_pagination_stops_at_the_page_cap() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/sets").query_param("page", "2");
+            then.status(200).json_body(serde_json::json!({
+                "has_more": true,
+                "next_page": format!("{}/sets?page=1", server.base_url()),
+                "data": [{"code":"b","name":"B"}]}));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/sets");
+            then.status(200).json_body(serde_json::json!({
+                "has_more": true,
+                "next_page": format!("{}/sets?page=2", server.base_url()),
+                "data": [{"code":"a","name":"A"}]}));
+        });
+        let c = Client::new(server.base_url());
+
+        let sets = c.fetch_sets().await.unwrap();
+
+        assert_eq!(sets.len(), MAX_SET_PAGES, "the cap, not an infinite loop");
     }
 
     #[tokio::test]
