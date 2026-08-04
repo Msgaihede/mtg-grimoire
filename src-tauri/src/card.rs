@@ -16,12 +16,16 @@ use std::sync::Arc;
 
 /// Printings returned for one oracle card. A bound on a pane, not a pager.
 ///
-/// Measured against the live database (116 k rows): exactly five oracle cards exceed it,
-/// and they are the five basic lands — Forest at 946, the rest between 907 and 925. Seven
-/// cards in the whole library have more than 100 printings. So this truncates the newest
-/// 400 out of a list nobody scrolls, and never touches a real card. Ordered newest-first
-/// *before* the cap, so what a truncated list drops is the oldest printings, not an
-/// arbitrary slice.
+/// Measured against the live database (116 k rows), counting **paper only** as
+/// [`PRINTINGS_WHERE`] does: exactly five oracle cards exceed this, and they are the five
+/// basic lands — Forest at 862, then Mountain 840, Swamp 832, Island 827, Plains 818.
+/// Seven cards in the whole library have more than 100 paper printings. So the cap
+/// truncates a list nobody scrolls and never touches a real card.
+///
+/// Two things keep the truncation honest: the `ORDER BY` runs *before* the `LIMIT`, so
+/// what is dropped is the oldest printings rather than an arbitrary slice, and
+/// [`PrintingsResponse::total`] reports the full count so a capped list can say what it is
+/// a truncation of.
 const MAX_PRINTINGS: usize = 400;
 
 /// `artist` has no column of its own — it is one string, and a v3 migration for it would
@@ -29,6 +33,18 @@ const MAX_PRINTINGS: usize = 400;
 /// matters: on a reversible card there is no top-level artist.
 const ARTIST_SQL: &str =
     "coalesce(json_extract(raw, '$.artist'), json_extract(faces, '$[0].artist'))";
+
+/// The rows a printings list is about, stated once because the page and the count must
+/// agree — a `total` taken over a wider `WHERE` than the page is exactly the lie the
+/// `total` was added to prevent.
+///
+/// **Paper only.** Measured against the live database: 6 533 oracle cards have both paper
+/// and digital printings (Lightning Bolt: 62 paper, 9 digital), and the digital ones are
+/// MTGO and Arena rows that cannot be owned in paper and carry no paper price. Left in,
+/// this pane would offer a reader an Arena printing to record as a copy they own and
+/// render its price as `—`. `search` already defaults to paper for the same reason, and
+/// the spec tracks a paper collection.
+const PRINTINGS_WHERE: &str = "oracle_id = ?1 AND is_paper = 1";
 
 /// One physical side of a card, for the flip control and the credit line.
 #[derive(Debug, Serialize)]
@@ -100,7 +116,29 @@ pub struct Printing {
     pub layout: String,
 }
 
+/// A printings list and the size of the list it was taken from.
+///
+/// `total` exists because [`MAX_PRINTINGS`] truncates silently otherwise: Forest has 862
+/// paper printings, and a pane that returns 400 of them with no way to say so tells the
+/// reader those 400 are all there are. With this it can caption "400 of 862". Mirrors
+/// [`crate::search::SearchResponse`], minus its cap flag — see [`list_printings`] for why
+/// this count needs no ceiling.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintingsResponse {
+    /// Newest first, at most [`MAX_PRINTINGS`] of them.
+    pub items: Vec<Printing>,
+    /// Every paper printing of this oracle card, counted in full. `items.len() < total`
+    /// means the list was truncated.
+    pub total: i64,
+}
+
 /// One printing by id, or `None` if there is no such row.
+///
+/// Deliberately **not** filtered to paper, unlike [`list_printings`]: an id asked for by
+/// name has to resolve. A digital printing can be reached from a search with `paperOnly`
+/// off, and answering `None` for a row that plainly exists would look like a broken
+/// database rather than a policy.
 pub fn get_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, String> {
     let sql = format!(
         "SELECT id, oracle_id, name, set_code, set_name, collector_number, rarity, layout, lang,
@@ -149,16 +187,19 @@ fn parse_faces(json: Option<&str>) -> Vec<CardFace> {
         .map(|faces| {
             faces
                 .iter()
-                .filter_map(|f| {
-                    Some(CardFace {
-                        name: f.get("name")?.as_str()?.to_owned(),
-                        type_line: str_field(f, "type_line"),
-                        oracle_text: str_field(f, "oracle_text"),
-                        // Present but empty on a transform's back, which is not the same
-                        // as absent and should not render as a cost of `{}`.
-                        mana_cost: str_field(f, "mana_cost").filter(|s| !s.is_empty()),
-                        artist: str_field(f, "artist"),
-                    })
+                .map(|f| CardFace {
+                    // Defaulted, never dropped. The flip control addresses faces by
+                    // index, so a face skipped here would shift every face after it —
+                    // the back of a three-face card rendering as its middle, silently
+                    // and only for the malformed rows nobody is looking at. A nameless
+                    // face is a broken face, not a missing one.
+                    name: str_field(f, "name").unwrap_or_default(),
+                    type_line: str_field(f, "type_line"),
+                    oracle_text: str_field(f, "oracle_text"),
+                    // Present but empty on a transform's back, which is not the same
+                    // as absent and should not render as a cost of `{}`.
+                    mana_cost: str_field(f, "mana_cost").filter(|s| !s.is_empty()),
+                    artist: str_field(f, "artist"),
                 })
                 .collect()
         })
@@ -169,20 +210,26 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_owned)
 }
 
-/// Every printing of one oracle card, newest first.
+/// Every **paper** printing of one oracle card, newest first, plus how many there are.
 ///
 /// A blank `oracle_id` returns nothing rather than matching: `oracle_id` is NULLABLE
 /// (reversible cards have none), and a query that let `''` through would be one `IS NULL`
 /// away from returning every such card in the database as a "printing" of each other.
-pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<Vec<Printing>, String> {
+///
+/// Two statements over one `WHERE`: the page, and an uncapped count so a truncated list
+/// can say what it is a truncation *of*. The count is cheap in a way
+/// [`crate::search::run_search`]'s is not — `idx_cards_oracle` narrows it to one card's
+/// printings (946 rows at the very worst) instead of scanning toward 116 k — so there is
+/// nothing here to cap and no `total_is_capped` to report.
+pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<PrintingsResponse, String> {
     if oracle_id.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(PrintingsResponse::default());
     }
     let sql = format!(
         "SELECT id, set_code, set_name, collector_number, released_at, rarity, illustration_id,
                 {ARTIST_SQL}, lang, finishes, prices, promo, full_art, frame_effects,
                 border_color, layout
-         FROM cards WHERE oracle_id = ?1
+         FROM cards WHERE {PRINTINGS_WHERE}
          ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
          LIMIT ?2"
     );
@@ -209,8 +256,17 @@ pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<Vec<Printing
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())
+    let items = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    let total = conn
+        .query_row(
+            &format!("SELECT count(*) FROM cards WHERE {PRINTINGS_WHERE}"),
+            params![oracle_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(PrintingsResponse { items, total })
 }
 
 /// One printing in full. Read-only connection, blocking pool — see [`crate::search::search_cards`].
@@ -225,12 +281,12 @@ pub async fn card_detail(
         .map_err(|e| format!("card could not be read: {e}"))?
 }
 
-/// Every printing of one oracle card. Read-only connection, blocking pool.
+/// Every paper printing of one oracle card. Read-only connection, blocking pool.
 #[tauri::command]
 pub async fn card_printings(
     state: tauri::State<'_, Arc<AppState>>,
     oracle_id: String,
-) -> Result<Vec<Printing>, String> {
+) -> Result<PrintingsResponse, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || list_printings(&lock_db_read(&state), &oracle_id))
         .await
@@ -241,8 +297,9 @@ pub async fn card_printings(
 mod tests {
     use super::*;
 
-    /// Three printings of one oracle card — two sharing an illustration, one with its own
-    /// — plus a double-faced card, which is the shape `faces` has to survive.
+    /// Three paper printings of one oracle card — two sharing an illustration, one with
+    /// its own — plus an MTGO printing of the same card that must never be offered as a
+    /// copy to own, and a double-faced card, which is the shape `faces` has to survive.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
@@ -281,6 +338,17 @@ mod tests {
             [],
         )
         .unwrap();
+        // Same oracle card, digital-only: an MTGO printing, dated newest of all so that a
+        // query which forgets `is_paper` puts it at the very top of the list rather than
+        // somewhere a test might miss it.
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                released_at, illustration_id, rarity, is_paper, digital, search_text, raw)
+             VALUES ('p4-mtgo','o1','Lightning Bolt','pmtg1','7','en','normal','2014-06-16',
+                'art-a','common', 0, 1, 'Lightning Bolt', '{}')",
+            [],
+        )
+        .unwrap();
         conn
     }
 
@@ -311,6 +379,11 @@ mod tests {
         assert_eq!(c.faces[0].name, "Delver of Secrets");
         assert_eq!(c.faces[1].name, "Insectile Aberration");
         assert_eq!(c.faces[1].artist.as_deref(), Some("Nils Hamm"));
+        // This row has no top-level artist — only faces do — so the card-level credit can
+        // only come from the coalesce's face branch. Scryfall's image policy requires the
+        // credit line wherever art is shown, and without this the branch could be deleted
+        // with every test still green.
+        assert_eq!(c.artist.as_deref(), Some("Nils Hamm"));
         // Scryfall gives a transform's back face `"mana_cost": ""`, which is not the same
         // as having a cost of nothing to render — a `Some("")` here is a cost pill on the
         // back of every DFC in the game.
@@ -329,7 +402,7 @@ mod tests {
     #[test]
     fn printings_come_back_newest_first_with_their_art_identity() {
         let conn = seeded();
-        let all = list_printings(&conn, "o1").unwrap();
+        let all = list_printings(&conn, "o1").unwrap().items;
 
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].set_code, "m10", "newest first");
@@ -348,7 +421,87 @@ mod tests {
     #[test]
     fn an_unknown_oracle_id_returns_nothing() {
         let conn = seeded();
-        assert!(list_printings(&conn, "").unwrap().is_empty());
-        assert!(list_printings(&conn, "o-none").unwrap().is_empty());
+        for absent in ["", "o-none"] {
+            let r = list_printings(&conn, absent).unwrap();
+            assert!(r.items.is_empty(), "{absent}");
+            assert_eq!(r.total, 0, "{absent}");
+        }
+    }
+
+    /// This pane offers printings as copies to record, so a digital one is an offer to own
+    /// something that does not physically exist — and it would price as `—`, because there
+    /// is no paper price for an MTGO row. 6 533 oracle cards in the live database have both
+    /// kinds, so this is the common case, not an edge.
+    #[test]
+    fn digital_printings_are_not_offered_as_copies_to_own() {
+        let conn = seeded();
+        let r = list_printings(&conn, "o1").unwrap();
+
+        assert_eq!(r.items.len(), 3, "the MTGO printing does not belong here");
+        assert!(
+            !r.items.iter().any(|p| p.id == "p4-mtgo"),
+            "a digital printing reached the printings list: {:?}",
+            r.items.iter().map(|p| &p.id).collect::<Vec<_>>()
+        );
+        // It is dated newest of the four, so a missing `is_paper` shows up as the wrong
+        // row at the top rather than as a count that happens to match.
+        assert_eq!(r.items[0].id, "p3");
+        // The count is taken over the same rows as the page: a `total` of 4 here would be
+        // the pane reporting a printing it refuses to show.
+        assert_eq!(r.total, 3, "the count must agree with the filter");
+    }
+
+    /// Asked for by id, a digital printing still resolves — a search with `paperOnly` off
+    /// can reach one, and answering `None` for a row that plainly exists reads as a broken
+    /// database. The paper rule belongs to the printings list, not to "show me this card".
+    #[test]
+    fn a_digital_printing_still_opens_when_it_is_asked_for_by_id() {
+        let conn = seeded();
+        let c = get_card(&conn, "p4-mtgo").unwrap().unwrap();
+        assert_eq!(c.set_code, "pmtg1");
+    }
+
+    /// The number a truncated list is a truncation *of*. Without it a capped pane says
+    /// "400 printings" when there are 946, and nothing on the wire contradicts it.
+    #[test]
+    fn the_total_counts_past_the_page_so_a_capped_list_can_say_so() {
+        let conn = seeded();
+        for n in 0..MAX_PRINTINGS + 5 {
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
+                    layout, released_at, search_text, raw)
+                 VALUES (?1, 'o3', 'Forest', 'set', ?2, 'en', 'normal', '2020-01-01', 'Forest', '{}')",
+                rusqlite::params![format!("f{n}"), n.to_string()],
+            )
+            .unwrap();
+        }
+        let r = list_printings(&conn, "o3").unwrap();
+
+        assert_eq!(r.items.len(), MAX_PRINTINGS, "the page is capped");
+        assert_eq!(r.total, MAX_PRINTINGS as i64 + 5, "the count is not");
+    }
+
+    /// A face with no name must not be dropped: the flip control addresses faces by index,
+    /// so dropping one silently renumbers every face after it and shows the wrong side.
+    #[test]
+    fn a_nameless_face_keeps_its_place_rather_than_shifting_the_rest() {
+        let faces = parse_faces(Some(
+            r#"[{"name":"Front","artist":"A"},{"artist":"B"},{"name":"Back","artist":"C"}]"#,
+        ));
+
+        assert_eq!(faces.len(), 3, "no face is dropped");
+        assert_eq!(faces[0].name, "Front");
+        assert_eq!(faces[1].name, "");
+        assert_eq!(faces[2].name, "Back", "still the third face");
+        assert_eq!(faces[2].artist.as_deref(), Some("C"));
+    }
+
+    /// Unparseable and non-array blobs are no faces rather than an error — a card whose
+    /// face data is broken is still a card worth showing.
+    #[test]
+    fn a_face_blob_that_makes_no_sense_is_no_faces_and_no_error() {
+        assert!(parse_faces(None).is_empty());
+        assert!(parse_faces(Some("not json")).is_empty());
+        assert!(parse_faces(Some(r#"{"name":"an object, not an array"}"#)).is_empty());
     }
 }
