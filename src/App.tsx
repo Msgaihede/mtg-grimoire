@@ -1,14 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { SearchPage } from "@/features/search/SearchPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore, type ViewId } from "@/lib/store";
 
 /** What each view says while it is still a placeholder. */
-const BLURB: Record<ViewId, { title: string; body: string }> = {
-  search: {
-    title: "Card search",
-    body: "The search box, filters and result grid land in the next task — the database and the search_cards command behind them are already in place.",
-  },
+const BLURB: Record<Exclude<ViewId, "search">, { title: string; body: string }> = {
   collection: {
     title: "Collection",
     body: "Owned cards, quantities and value. Coming in a later plan.",
@@ -29,6 +26,8 @@ const BLURB: Record<ViewId, { title: string; body: string }> = {
 
 function ActiveView() {
   const activeView = useAppStore((s) => s.activeView);
+  if (activeView === "search") return <SearchPage />;
+
   const { title, body } = BLURB[activeView];
   return (
     <section className="mx-auto max-w-prose py-16 text-center">

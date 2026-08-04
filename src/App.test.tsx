@@ -9,7 +9,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncStatus,
     syncRun: vi.fn(),
     onSyncProgress: vi.fn().mockResolvedValue(() => {}),
-    searchCards: vi.fn(),
+    // The search view is live now, so opening on it fires a real query; an unresolved
+    // mock would surface here as a query error rather than as the routing this file tests.
+    searchCards: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   },
 }));
 
