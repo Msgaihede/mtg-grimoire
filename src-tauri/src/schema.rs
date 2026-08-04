@@ -75,13 +75,32 @@ fn cards_indexes_sql() -> String {
     CARDS_INDEXES.join(";\n") + ";"
 }
 
+/// The image variants stored as real columns, WEBP only.
+///
+/// Scryfall's `image_uris` carries eleven keys; seven of them are the legacy JPG/PNG
+/// family the docs mark as *replaced*, and `png` alone would be 161 GB across the
+/// library. Storing four of eleven keeps the column at roughly 400 bytes a row (~47 MB
+/// over 116 k printings) instead of 1.3 KB, and `raw` still holds every key that was
+/// dropped, so nothing is unrecoverable.
+pub const IMAGE_VARIANTS: [&str; 4] = ["thumb", "grid", "display", "art"];
+
+/// `json_object('thumb', json_extract(<src>, '$.image_uris.thumb'), …)` for the four
+/// variants. Built rather than written out so the list has one definition.
+fn webp_json_object(src: &str) -> String {
+    let pairs: Vec<String> = IMAGE_VARIANTS
+        .iter()
+        .map(|k| format!("'{k}', json_extract({src}, '$.image_uris.{k}')"))
+        .collect();
+    format!("json_object({})", pairs.join(", "))
+}
+
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
 /// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
 ///
-/// **Adding a column later:** leave [`CARDS_COLUMNS`] alone and add a `if v < 2` block
-/// with an `ALTER TABLE cards ADD COLUMN`. The v1 `CREATE` describes what version 1
-/// built; a fresh install replays the whole history, so a column added to v1 would make
-/// the v2 `ALTER` fail on new machines only.
+/// **Adding a column later:** leave [`CARDS_COLUMNS`] alone and add a new `if v < 3`
+/// block with an `ALTER TABLE cards ADD COLUMN`, the way `v < 2` below does. The v1
+/// `CREATE` describes what version 1 built; a fresh install replays the whole history, so
+/// a column added to v1 would make the later `ALTER` fail on new machines only.
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v < 1 {
@@ -101,6 +120,54 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ))?;
         create_fts(&tx)?;
         tx.execute_batch("PRAGMA user_version = 1;")?;
+        tx.commit()?;
+    }
+    if v < 2 {
+        let tx = conn.unchecked_transaction()?;
+        // Two nullable columns and a table that is not `cards`, so: no entry in
+        // `CARDS_INDEXES` (nothing here is indexed), no edit to `CARDS_COLUMNS` (frozen —
+        // a fresh install replays v1 and then this step, exactly as an upgrade does), and
+        // no FTS rebuild (the index covers name/type_line/search_text, none of which this
+        // touches, and an UPDATE renumbers no rowid — `the_v2_backfill_leaves_the_search_
+        // index_answering` is the evidence).
+        tx.execute_batch(
+            "ALTER TABLE cards ADD COLUMN image_uris TEXT;
+             ALTER TABLE cards ADD COLUMN face_image_uris TEXT;
+             CREATE TABLE IF NOT EXISTS image_cache (
+                card_id TEXT NOT NULL,
+                face INTEGER NOT NULL,
+                variant TEXT NOT NULL,
+                -- The exact URI the bytes on disk came from, cache-buster and all.
+                -- Scryfall's `?<epoch>` equals `image_updated_at`, so a URI that no
+                -- longer matches *is* the invalidation signal, with no clock to trust.
+                source_uri TEXT NOT NULL,
+                bytes INTEGER NOT NULL,
+                fetched_at INTEGER NOT NULL,
+                PRIMARY KEY (card_id, face, variant)
+             ) WITHOUT ROWID;",
+        )?;
+
+        // Backfill from `raw`, which every row already carries verbatim. Restricted to
+        // rows that have something to give so the UPDATE does not rewrite 116 k pages to
+        // store `{"thumb":null,…}` four times over.
+        tx.execute_batch(&format!(
+            "UPDATE cards SET image_uris = {top}
+             WHERE json_extract(raw, '$.image_uris') IS NOT NULL;",
+            top = webp_json_object("raw")
+        ))?;
+        tx.execute_batch(&format!(
+            "UPDATE cards SET face_image_uris = (
+                SELECT json_group_array(json(
+                    CASE WHEN json_extract(f.value, '$.image_uris') IS NULL
+                         THEN 'null' ELSE {face} END))
+                FROM json_each(cards.raw, '$.card_faces') f)
+             WHERE json_type(raw, '$.card_faces') = 'array'
+               AND EXISTS (SELECT 1 FROM json_each(cards.raw, '$.card_faces') g
+                           WHERE json_extract(g.value, '$.image_uris') IS NOT NULL);",
+            face = webp_json_object("f.value")
+        ))?;
+
+        tx.execute_batch("PRAGMA user_version = 2;")?;
         tx.commit()?;
     }
     Ok(())
@@ -241,11 +308,12 @@ mod tests {
 
         // Without this the test would still pass while `migrate` re-ran its whole batch
         // every call (the CREATEs are all `IF NOT EXISTS`), silently rebuilding FTS each
-        // time. The version bump is what makes the rerun a genuine no-op.
+        // time. The version bump is what makes the rerun a genuine no-op — so this tracks
+        // the *current* head version, not the version that first created these tables.
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]
@@ -470,5 +538,208 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1);
+    }
+
+    /// A database that stopped at version 1 — what every machine that ran Plan 1 has on
+    /// disk. Built from the frozen v1 constant rather than by calling `migrate`, because
+    /// `migrate` now runs straight through to 2 and there is no way back.
+    fn v1_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE cards ({CARDS_COLUMNS});
+             {indexes}
+             CREATE TABLE sets (
+                code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
+                set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
+             CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             PRAGMA user_version = 1;",
+            indexes = cards_indexes_sql()
+        ))
+        .unwrap();
+        create_fts(&conn).unwrap();
+        conn
+    }
+
+    fn insert_raw(conn: &Connection, id: &str, name: &str, raw: &str) {
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, search_text, raw)
+             VALUES (?1, ?2, 'tst', '1', 'en', 'normal', ?2, ?3)",
+            rusqlite::params![id, name, raw],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migrate_reaches_version_2_and_adds_the_image_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // still idempotent
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+
+        let columns: Vec<String> = table_info(&conn, "cards")
+            .into_iter()
+            .map(|(name, ..)| name)
+            .collect();
+        assert!(columns.contains(&"image_uris".to_owned()), "{columns:?}");
+        assert!(
+            columns.contains(&"face_image_uris".to_owned()),
+            "{columns:?}"
+        );
+
+        let cache: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='image_cache'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cache, 1);
+    }
+
+    /// The whole point of the step: 112 324 printings already on disk carry their image
+    /// URIs only inside `raw`, and re-downloading 77 MB to recover something already
+    /// stored would be absurd. The backfill reads them back out with `json_extract`.
+    #[test]
+    fn the_v2_step_backfills_image_uris_out_of_raw() {
+        let conn = v1_database();
+        insert_raw(
+            &conn,
+            "top",
+            "Lightning Bolt",
+            r#"{"object":"card","image_uris":{"small":"s.jpg","normal":"n.jpg","thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp","png":"p.png"}}"#,
+        );
+        insert_raw(
+            &conn,
+            "dfc",
+            "Delver of Secrets",
+            r#"{"object":"card","card_faces":[{"name":"Delver","image_uris":{"thumb":"f0t.webp","grid":"f0g.webp","display":"f0d.webp","art":"f0a.webp"}},{"name":"Aberration","image_uris":{"thumb":"f1t.webp","grid":"f1g.webp","display":"f1d.webp","art":"f1a.webp"}}]}"#,
+        );
+        insert_raw(&conn, "none", "No Art At All", r#"{"object":"card"}"#);
+
+        migrate(&conn).unwrap();
+
+        let top: String = conn
+            .query_row("SELECT image_uris FROM cards WHERE id='top'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let top: serde_json::Value = serde_json::from_str(&top).unwrap();
+        assert_eq!(top["grid"], "g.webp");
+        assert_eq!(top["art"], "a.webp");
+        // WEBP only: the deprecated JPG/PNG family is never stored.
+        assert!(top.get("normal").is_none(), "{top}");
+        assert!(top.get("png").is_none(), "{top}");
+
+        let face: String = conn
+            .query_row(
+                "SELECT face_image_uris FROM cards WHERE id='dfc'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let face: serde_json::Value = serde_json::from_str(&face).unwrap();
+        assert_eq!(face[0]["display"], "f0d.webp");
+        assert_eq!(face[1]["display"], "f1d.webp");
+        let top_of_dfc: Option<String> = conn
+            .query_row("SELECT image_uris FROM cards WHERE id='dfc'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            top_of_dfc, None,
+            "a transform has no top-level image object"
+        );
+
+        // The 162 printings with no images anywhere: both columns stay NULL, which is what
+        // the placeholder path keys on.
+        let (u, f): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT image_uris, face_image_uris FROM cards WHERE id='none'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((u, f), (None, None));
+    }
+
+    /// `cards_fts` is external-content with no triggers, so CLAUDE.md requires a rebuild
+    /// after writes to `cards` outside the ingest. The v2 backfill writes only new,
+    /// unindexed columns and renumbers no rowid, so it deliberately does not rebuild —
+    /// and this is the evidence that the index is still intact afterwards.
+    #[test]
+    fn the_v2_backfill_leaves_the_search_index_answering() {
+        let conn = v1_database();
+        insert_raw(
+            &conn,
+            "bolt",
+            "Lightning Bolt",
+            r#"{"object":"card","image_uris":{"grid":"g.webp"}}"#,
+        );
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "the FTS index must survive the v2 backfill");
+    }
+
+    /// Staging derives its layout from the live table, so the columns a later migration
+    /// adds have to survive a sync without anyone editing `create_staging`. This is that
+    /// promise, checked against the columns this plan actually adds.
+    #[test]
+    fn the_image_columns_survive_a_staging_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_staging(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards_staging
+                (id, name, set_code, collector_number, lang, layout, raw, image_uris)
+             VALUES ('new','Lightning Bolt','lea','161','en','normal','{}','{\"grid\":\"g.webp\"}')",
+            [],
+        )
+        .unwrap();
+        swap_staging(&conn).unwrap();
+
+        let uris: String = conn
+            .query_row("SELECT image_uris FROM cards WHERE id='new'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(uris, "{\"grid\":\"g.webp\"}");
+    }
+
+    /// `image_cache` is not sync data and must outlive the table that is dropped on every
+    /// refresh — which is exactly why it carries no foreign key to `cards.id`.
+    #[test]
+    fn image_cache_rows_survive_the_swap_that_drops_cards() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
+             VALUES ('bolt', 0, 'grid', 'https://cards.scryfall.io/grid/front/b/o/bolt.webp?17', 62000, 1800000000)",
+            [],
+        )
+        .unwrap();
+
+        create_staging(&conn).unwrap();
+        conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('bolt','Lightning Bolt','2ed','162','en','normal','{}')", []).unwrap();
+        swap_staging(&conn).expect("a sync must not be blocked by the image cache");
+
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM image_cache", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 }
