@@ -10,6 +10,7 @@
  *
  * Sources, verified field by field:
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
+ * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`      — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -73,6 +74,90 @@ export interface SearchResponse {
    * a caption should read `5,000+`.
    */
   totalIsCapped: boolean;
+}
+
+/** One physical side of a card. Empty for single-faced printings. */
+export interface CardFace {
+  /**
+   * `""` for a face whose blob carried no name. Rust defaults it rather than dropping the
+   * face, because a flip control addresses faces by *index* and a dropped face silently
+   * renumbers every face after it.
+   */
+  name: string;
+  typeLine: string | null;
+  oracleText: string | null;
+  /** Absent *and* empty both mean "no cost" — a transform's back sends `""`. */
+  manaCost: string | null;
+  /** Per face: a double-faced card's two sides are not always the same illustrator. */
+  artist: string | null;
+}
+
+/** Everything the detail pane renders about one printing. */
+export interface CardDetail {
+  id: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  rarity: string | null;
+  layout: string;
+  lang: string;
+  manaCost: string | null;
+  cmc: number | null;
+  typeLine: string | null;
+  oracleText: string | null;
+  illustrationId: string | null;
+  /** Required by Scryfall's image policy wherever art is shown. */
+  artist: string | null;
+  releasedAt: string | null;
+  /** JSON: 23 legality keys and growing. Parse it, never index fixed fields. */
+  legalities: string | null;
+  /** JSON: six keys, decimal **strings**. A finish price is a lookup in here. */
+  prices: string | null;
+  finishes: string | null;
+  imageStatus: string | null;
+  faces: CardFace[];
+}
+
+/** One row of the "all printings" list. */
+export interface Printing {
+  id: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  releasedAt: string | null;
+  rarity: string | null;
+  /** Two printings differ in *art* iff this differs. `variation` is 0.09% true and useless. */
+  illustrationId: string | null;
+  artist: string | null;
+  /** Scryfall's two-letter code. Every language is listed; `en` is merely the common one. */
+  lang: string;
+  finishes: string | null;
+  prices: string | null;
+  promo: boolean;
+  fullArt: boolean;
+  frameEffects: string | null;
+  borderColor: string | null;
+  layout: string;
+}
+
+/**
+ * A page of printings and the size of the list it was taken from.
+ *
+ * `card::list_printings` caps the page at 400 rows, so `items.length < total` is the whole
+ * signal that a list was truncated — and the only thing standing between a caption reading
+ * "400 printings" and the 862 paper printings Forest actually has.
+ *
+ * No `totalIsCapped` twin of {@link SearchResponse}'s, deliberately: that count scans
+ * toward 116 k rows on every keystroke, while this one is narrowed by `idx_cards_oracle`
+ * to a single card's printings, so it is counted in full every time.
+ */
+export interface PrintingsResponse {
+  /** Newest first. Paper only — digital printings cannot be owned in paper and have no
+   *  paper price, so the backend filters them out and the count agrees with the page. */
+  items: Printing[];
+  total: number;
 }
 
 /** One row of the set picker. */
@@ -154,6 +239,10 @@ export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
   listSets: () => invoke<SetSummary[]>("list_sets"),
+  /** One printing in full, or `null` when no row has that id. */
+  cardDetail: (id: string) => invoke<CardDetail | null>("card_detail", { id }),
+  /** Every paper printing of the oracle card, newest first, capped at 400 with a full count. */
+  cardPrintings: (oracleId: string) => invoke<PrintingsResponse>("card_printings", { oracleId }),
   /** `force` skips the 24 h throttle. Rejects if a sync is already running. */
   syncRun: (force: boolean) => invoke<SyncOutcome>("sync_run", { force }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),

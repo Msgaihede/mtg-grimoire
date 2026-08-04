@@ -106,7 +106,7 @@ beforeEach(() => {
   listSets.mockReset().mockResolvedValue([ALPHA]);
   // The view opens on the art grid, which has no columns to assert on. Everything below
   // except the layout toggle's own describe is about the table, so it says so.
-  useAppStore.setState({ searchView: "table" });
+  useAppStore.setState({ searchView: "table", selectedCardId: null });
 });
 
 afterEach(() => {
@@ -372,6 +372,28 @@ describe("SearchPage", () => {
     expect(searchCards).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * The table is the view for comparing prices, and picking one of the rows you are
+   * comparing is the next thing a reader does. A row that only answers a mouse would make
+   * this half of the app keyboard-inaccessible — the art grid's tiles are buttons and have
+   * always answered both.
+   */
+  it("opens the clicked row's card, from the mouse and from the keyboard", async () => {
+    searchCards.mockResolvedValue(page([BOLT, SPARSE]));
+    wrap(<SearchPage />);
+
+    await userEvent.click(await screen.findByText("Lightning Bolt"));
+    expect(useAppStore.getState().selectedCardId).toBe("1");
+
+    // Enter on the focused row, not a click on it: the row is a `div`, so nothing about it
+    // answers a keyboard unless this handler does.
+    const second = screen.getByText("Nameless Race").closest('[role="row"]') as HTMLElement;
+    second.focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(useAppStore.getState().selectedCardId).toBe("2");
+  });
+
   it("keeps the loaded rows when a later page fails, and offers a retry", async () => {
     viewportHeight = 2400;
     searchCards
@@ -418,6 +440,14 @@ describe("the result layout toggle", () => {
     await userEvent.click(screen.getByRole("button", { name: "Card view" }));
 
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+
+  it("opens the clicked tile's card", async () => {
+    wrap(<SearchPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Lightning Bolt/ }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("1");
   });
 
   it("says which layout is showing", async () => {

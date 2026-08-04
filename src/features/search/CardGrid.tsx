@@ -67,11 +67,14 @@ export function CardGrid({
   onSelect,
   onNeedNextPage,
   searchKey,
+  selectedId = null,
 }: {
   rows: CardSummary[];
   onSelect: (cardId: string) => void;
   onNeedNextPage: () => void;
   searchKey: string;
+  /** The card the detail pane is showing, so the wall can say which one that is. */
+  selectedId?: string | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -156,7 +159,13 @@ export function CardGrid({
             {rows.slice(v.index * columns, v.index * columns + columns).map((card, i) => (
               // Keyed by slot rather than by card id: two pages fetched either side of a
               // sync can carry one printing twice, and a duplicate key drops a card.
-              <Tile key={`${v.index}-${i}`} card={card} width={tileWidth} onSelect={onSelect} />
+              <Tile
+                key={`${v.index}-${i}`}
+                card={card}
+                width={tileWidth}
+                onSelect={onSelect}
+                selected={card.id === selectedId}
+              />
             ))}
           </div>
         ))}
@@ -186,10 +195,12 @@ function Tile({
   card,
   width,
   onSelect,
+  selected,
 }: {
   card: CardSummary;
   width: number;
   onSelect: (id: string) => void;
+  selected: boolean;
 }) {
   const [state, setState] = useState<TileState>("showing");
   const [attempt, setAttempt] = useState(0);
@@ -237,7 +248,13 @@ function Tile({
       className={cn("group flex shrink-0 flex-col gap-1 rounded-lg text-left", FOCUS)}
     >
       <span
-        className="block w-full overflow-hidden rounded-lg bg-surface"
+        className={cn(
+          "block w-full overflow-hidden rounded-lg bg-surface",
+          // Which card the open pane is about. A ring, because gold says "focus" as an
+          // outline and "state" as a ring everywhere else in the app — and it hugs the
+          // art rather than standing off it, so the wall keeps its rhythm.
+          selected && "ring-2 ring-accent",
+        )}
         style={{ aspectRatio: CARD_ASPECT }}
       >
         {state === "showing" ? (

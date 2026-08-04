@@ -74,6 +74,23 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.listSets();
     expect(invoke).toHaveBeenCalledWith("list_sets");
   });
+
+  it("sends a card id under `id` and an oracle id under `oracleId`", async () => {
+    invoke.mockResolvedValue(null);
+    await ipc.cardDetail("p1");
+    expect(invoke).toHaveBeenCalledWith("card_detail", { id: "p1" });
+
+    invoke.mockResolvedValue({ items: [], total: 0 });
+    const printings = await ipc.cardPrintings("o1");
+    // Tauri maps a camelCase key onto the `oracle_id` parameter; spelling it
+    // `oracle_id` here would be the runtime deserialization error no type can catch.
+    expect(invoke).toHaveBeenCalledWith("card_printings", { oracleId: "o1" });
+    // Not a bare array: `card::list_printings` caps the page at 400 and answers
+    // `PrintingsResponse`, whose `total` is the only thing that says a list was truncated.
+    // A mirror typed as `Printing[]` would read `.length` as the whole story and the
+    // compiler would agree with it.
+    expect(printings).toEqual({ items: [], total: 0 });
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {

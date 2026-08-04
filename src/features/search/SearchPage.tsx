@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
+import { ManaText } from "@/components/ManaText";
 import { ipcError, type CardSummary } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,15 @@ const HEADER_HEIGHT = 36;
 /** The five columns, shared by the header row and every body row so they stay aligned. */
 const GRID = "grid grid-cols-[minmax(0,1fr)_8rem_minmax(0,16rem)_6rem_6rem] items-center gap-3";
 
+/**
+ * Keyboard focus on a row, in the shape the rest of the app uses — an outline, never a
+ * ring (see `FilterBar`'s `FOCUS`). The offset is *negative* here: rows are stacked
+ * flush inside a scroller, and an outline standing 2px off one would be drawn over its
+ * neighbours and clipped at the top and bottom of the list.
+ */
+const ROW_FOCUS =
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 /** Prices are the one column worth aligning on the decimal point; absent is an em dash. */
@@ -28,7 +38,9 @@ function Row({ card }: { card: CardSummary }) {
     <>
       <span role="cell" className="flex min-w-0 items-baseline gap-2">
         <span className="truncate">{card.name}</span>
-        {card.manaCost && <span className="shrink-0 text-xs text-muted">{card.manaCost}</span>}
+        {/* The printed symbols, from the bundled font — the same rule as the detail pane:
+            a cost is read as symbols, and `{1}{W}{U}` is a wire format. */}
+        <ManaText source={card.manaCost} className="shrink-0 text-xs" />
       </span>
       {/* `setName` is nullable and the code is not, so the code is what is shown; the
           full name rides along as the tooltip when there is one. */}
@@ -174,6 +186,10 @@ function Results({
   // Read here rather than taken as a prop: the layout is the result area's own business,
   // and the page above it only needs to know which pager is live.
   const view = useAppStore((s) => s.searchView);
+  // Opening a card is a store write and nothing else — `App` owns the pane, so the list
+  // never has to know whether one is open, only which card is in it.
+  const selectCard = useAppStore((s) => s.setSelectedCardId);
+  const selectedCardId = useAppStore((s) => s.selectedCardId);
 
   // query-core keeps `data` when a fetch fails, so `isError` arrives with every page that
   // did load still in hand. Reading it as "show the error instead" would throw away 400
@@ -226,9 +242,8 @@ function Results({
           <CardGrid
             rows={rows}
             searchKey={searchKey}
-            // Task 13: opening a card is the detail panel's job, and it has nowhere to
-            // go until that lands.
-            onSelect={() => {}}
+            selectedId={selectedCardId}
+            onSelect={selectCard}
             onNeedNextPage={() => {
               if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
                 void query.fetchNextPage();
@@ -285,9 +300,27 @@ function Results({
                     key={v.key}
                     role="row"
                     aria-rowindex={v.index + 2}
+                    // A row opens the card, from the mouse and from the keyboard both — the
+                    // table is the view for comparing prices, and being unable to open the
+                    // one you picked would make it a dead end for anyone not using a mouse.
+                    tabIndex={0}
+                    onClick={() => selectCard(card.id)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      // Space scrolls the container it is pressed in, which would jump the
+                      // list by a screen at the same time as opening the card.
+                      e.preventDefault();
+                      selectCard(card.id);
+                    }}
                     className={cn(
                       GRID,
-                      "absolute inset-x-0 top-0 border-b border-border/50 px-3 text-sm",
+                      "absolute inset-x-0 top-0 cursor-pointer border-b border-border/50 px-3",
+                      "text-sm transition-colors duration-150 motion-reduce:transition-none",
+                      ROW_FOCUS,
+                      // Which row the open pane is about. A quiet surface rather than gold:
+                      // forty rows are on screen and the one being read is already the one
+                      // beside the pane.
+                      card.id === selectedCardId ? "bg-surface text-text" : "hover:bg-surface/60",
                     )}
                     // `start` is measured from the scroll container, which the header shares;
                     // this div begins below it, so the header's height comes back off.

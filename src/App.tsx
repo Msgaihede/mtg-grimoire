@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { SearchPage } from "@/features/search/SearchPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore, type ViewId } from "@/lib/store";
@@ -35,12 +36,33 @@ function ActiveView() {
  * `QueryClientProvider` is here rather than in `main.tsx` so that any test can render
  * `<App />` and get the real caching behaviour; `AppShell` deliberately needs no
  * provider of its own (see `useSync`).
+ *
+ * The card pane is docked *beside* the view rather than drawn over it: the list it came
+ * from stays live, scrollable and clickable, so opening a second card is one click rather
+ * than a dismiss and a hunt.
  */
 export default function App() {
+  const selectedCardId = useAppStore((s) => s.selectedCardId);
+  const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
+
   return (
     <QueryClientProvider client={queryClient}>
       <AppShell>
-        <ActiveView />
+        <div className="flex h-full min-h-0 gap-4">
+          <div className="min-w-0 flex-1">
+            <ActiveView />
+          </div>
+          {selectedCardId && (
+            <CardDetailPane
+              // Remounted per card, which is what makes the pane's opening behaviour —
+              // focus, scroll, the front face — belong to the card in it rather than to
+              // the first card that was ever opened.
+              key={selectedCardId}
+              cardId={selectedCardId}
+              onClose={() => setSelectedCardId(null)}
+            />
+          )}
+        </div>
       </AppShell>
     </QueryClientProvider>
   );

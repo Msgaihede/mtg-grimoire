@@ -11,6 +11,9 @@ interface AppState {
   setActiveView: (view: ViewId) => void;
   searchView: SearchView;
   setSearchView: (view: SearchView) => void;
+  /** The printing the detail pane is showing, or `null` when it is closed. */
+  selectedCardId: string | null;
+  setSelectedCardId: (id: string | null) => void;
 }
 
 /**
@@ -23,9 +26,13 @@ interface AppState {
  */
 export const useAppStore = create<AppState>((set) => ({
   activeView: "search",
-  setActiveView: (activeView) => set({ activeView }),
+  // Leaving the view closes the card: the detail pane belongs to the list that opened it,
+  // and a card sitting beside the Decks placeholder is a pane with nothing to be next to.
+  setActiveView: (activeView) => set({ activeView, selectedCardId: null }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   searchView: "grid",
   setSearchView: (searchView) => set({ searchView }),
+  selectedCardId: null,
+  setSelectedCardId: (selectedCardId) => set({ selectedCardId }),
 }));
