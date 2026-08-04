@@ -3,9 +3,14 @@ import { create } from "zustand";
 /** The five top-level destinations in the sidebar. */
 export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
 
+/** How the search results are laid out. */
+export type SearchView = "table" | "grid";
+
 interface AppState {
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
+  searchView: SearchView;
+  setSearchView: (view: SearchView) => void;
 }
 
 /**
@@ -19,4 +24,8 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   activeView: "search",
   setActiveView: (activeView) => set({ activeView }),
+  // Art by default: this is a card app, and the table is the view you switch to when you
+  // are comparing prices rather than looking at cards.
+  searchView: "grid",
+  setSearchView: (searchView) => set({ searchView }),
 }));

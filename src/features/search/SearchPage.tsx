@@ -1,7 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ipcError, type CardSummary } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
 import { needsNextPage, useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -56,6 +58,7 @@ export function SearchPage() {
   const search = useCardSearch();
   const { query, rows, searchKey } = search;
   const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
+  const view = useAppStore((s) => s.searchView);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -84,6 +87,10 @@ export function SearchPage() {
   // knows which row is at the bottom, and it recomputes on resize too, which a scroll
   // event never fires for.
   useEffect(() => {
+    // The table's window, so only the table's paging. While the grid is showing, this
+    // virtualiser has no scroll element to measure and its idea of the bottom row is a
+    // leftover — the grid pages itself, through `onNeedNextPage`.
+    if (view !== "table") return;
     // `isFetchNextPageError` is a stop, not a detail: a failed page leaves `hasNextPage`
     // true with the reader still at the bottom, so without it this effect re-fires on
     // every render — a tight retry loop against a database that is already saying no.
@@ -91,6 +98,7 @@ export function SearchPage() {
     if (!hasNextPage || isFetchingNextPage || isFetchNextPageError) return;
     if (needsNextPage(lastRendered, rows.length)) void fetchNextPage();
   }, [
+    view,
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
@@ -162,7 +170,10 @@ function Results({
   virtualRows: VirtualItem[];
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
-  const { query, rows, total, totalIsCapped } = search;
+  const { query, rows, total, totalIsCapped, searchKey } = search;
+  // Read here rather than taken as a prop: the layout is the result area's own business,
+  // and the page above it only needs to know which pager is live.
+  const view = useAppStore((s) => s.searchView);
 
   // query-core keeps `data` when a fetch fails, so `isError` arrives with every page that
   // did load still in hand. Reading it as "show the error instead" would throw away 400
@@ -210,68 +221,88 @@ function Results({
         </div>
       )}
 
-      {!empty && (
-        <div
-          ref={scrollRef}
-          role="table"
-          aria-label="Search results"
-          // The header row plus every match, not just the rows currently in the DOM —
-          // otherwise a virtualised list tells assistive tech the database holds 20 cards.
-          // `-1` is ARIA's "the total is unknown", which is exactly what a capped count
-          // is: 5 000 would be a smaller lie than 20, but still a lie.
-          aria-rowcount={totalIsCapped ? -1 : total + 1}
-          tabIndex={0}
-          className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
-        >
-          {/* Sticky inside the scroll container rather than sitting above it: a header
+      {!empty &&
+        (view === "grid" ? (
+          <CardGrid
+            rows={rows}
+            searchKey={searchKey}
+            // Task 13: opening a card is the detail panel's job, and it has nowhere to
+            // go until that lands.
+            onSelect={() => {}}
+            onNeedNextPage={() => {
+              if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
+                void query.fetchNextPage();
+              }
+            }}
+          />
+        ) : (
+          <div
+            ref={scrollRef}
+            role="table"
+            aria-label="Search results"
+            // The header row plus every match, not just the rows currently in the DOM —
+            // otherwise a virtualised list tells assistive tech the database holds 20 cards.
+            // `-1` is ARIA's "the total is unknown", which is exactly what a capped count
+            // is: 5 000 would be a smaller lie than 20, but still a lie.
+            aria-rowcount={totalIsCapped ? -1 : total + 1}
+            tabIndex={0}
+            className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
+          >
+            {/* Sticky inside the scroll container rather than sitting above it: a header
               outside the scroller is wider than the rows by exactly the scrollbar, and
               the columns drift apart by that much as soon as the list overflows. */}
-          <div
-            role="row"
-            aria-rowindex={1}
-            style={{ height: HEADER_HEIGHT }}
-            className={cn(
-              GRID,
-              "sticky top-0 z-10 border-b border-border bg-surface px-3 text-xs text-muted",
-            )}
-          >
-            <span role="columnheader">Name</span>
-            <span role="columnheader">Set</span>
-            <span role="columnheader">Type</span>
-            <span role="columnheader">Rarity</span>
-            <span role="columnheader" className="text-right">
-              Price
-            </span>
-          </div>
+            <div
+              role="row"
+              aria-rowindex={1}
+              style={{ height: HEADER_HEIGHT }}
+              className={cn(
+                GRID,
+                "sticky top-0 z-10 border-b border-border bg-surface px-3 text-xs text-muted",
+              )}
+            >
+              <span role="columnheader">Name</span>
+              <span role="columnheader">Set</span>
+              <span role="columnheader">Type</span>
+              <span role="columnheader">Rarity</span>
+              <span role="columnheader" className="text-right">
+                Price
+              </span>
+            </div>
 
-          {/* Holds the scrollbar open to the full list height while the rows inside it are
+            {/* Holds the scrollbar open to the full list height while the rows inside it are
               positioned absolutely. */}
-          <div role="rowgroup" style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-            {virtualRows.map((v) => {
-              const card = rows[v.index];
-              return (
-                // Keyed by row position, not by card id: two pages fetched either side of
-                // a sync can carry the same printing twice, and duplicate keys would be a
-                // React warning plus a dropped row.
-                <div
-                  key={v.key}
-                  role="row"
-                  aria-rowindex={v.index + 2}
-                  className={cn(
-                    GRID,
-                    "absolute inset-x-0 top-0 border-b border-border/50 px-3 text-sm",
-                  )}
-                  // `start` is measured from the scroll container, which the header shares;
-                  // this div begins below it, so the header's height comes back off.
-                  style={{ height: v.size, transform: `translateY(${v.start - HEADER_HEIGHT}px)` }}
-                >
-                  <Row card={card} />
-                </div>
-              );
-            })}
+            <div
+              role="rowgroup"
+              style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+            >
+              {virtualRows.map((v) => {
+                const card = rows[v.index];
+                return (
+                  // Keyed by row position, not by card id: two pages fetched either side of
+                  // a sync can carry the same printing twice, and duplicate keys would be a
+                  // React warning plus a dropped row.
+                  <div
+                    key={v.key}
+                    role="row"
+                    aria-rowindex={v.index + 2}
+                    className={cn(
+                      GRID,
+                      "absolute inset-x-0 top-0 border-b border-border/50 px-3 text-sm",
+                    )}
+                    // `start` is measured from the scroll container, which the header shares;
+                    // this div begins below it, so the header's height comes back off.
+                    style={{
+                      height: v.size,
+                      transform: `translateY(${v.start - HEADER_HEIGHT}px)`,
+                    }}
+                  >
+                    <Row card={card} />
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        ))}
     </div>
   );
 }

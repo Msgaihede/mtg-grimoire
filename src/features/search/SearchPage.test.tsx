@@ -15,6 +15,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { SearchPage } from "./SearchPage";
+import { useAppStore } from "@/lib/store";
 import { needsNextPage, nextOffset } from "./useCardSearch";
 
 const BOLT: CardSummary = {
@@ -103,6 +104,9 @@ beforeEach(() => {
   scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
   listSets.mockReset().mockResolvedValue([ALPHA]);
+  // The view opens on the art grid, which has no columns to assert on. Everything below
+  // except the layout toggle's own describe is about the table, so it says so.
+  useAppStore.setState({ searchView: "table" });
 });
 
 afterEach(() => {
@@ -390,6 +394,66 @@ describe("SearchPage", () => {
 
     await waitFor(() => expect(screen.getByText("Card 50")).toBeInTheDocument());
     expect(screen.queryByText(/could not load more cards/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("the result layout toggle", () => {
+  /** The store as the app boots, so the default under test is the shipped one. */
+  beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+
+  it("opens on the art grid and keeps the table one click away", async () => {
+    wrap(<SearchPage />);
+
+    // Art first: a card app's default view of a card is the card.
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Table view" }));
+
+    // The table is the view for comparing prices, which is the one thing art cannot show.
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByText("$400.50")).toBeInTheDocument();
+    expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Card view" }));
+
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+
+  it("says which layout is showing", async () => {
+    wrap(<SearchPage />);
+
+    expect(screen.getByRole("button", { name: "Card view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Table view" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Table view" }));
+
+    expect(screen.getByRole("button", { name: "Table view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * The summary line, the error banner and the empty state belong to the result *area*,
+   * not to either layout — a reader who switches views to see whether that helps must not
+   * lose the sentence explaining why there is nothing there.
+   */
+  it("keeps the count and the empty state the same in both layouts", async () => {
+    searchCards.mockResolvedValue(page([], 0));
+    wrap(<SearchPage />);
+
+    expect(await screen.findByText(/card database is empty/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Table view" }));
+
+    expect(screen.getByText(/card database is empty/i)).toBeInTheDocument();
   });
 });
 
