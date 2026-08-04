@@ -9,9 +9,17 @@ const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the page and asks for the set list on the way up, so the
 // mock has to answer it — a missing `listSets` is a rejected query, not a compile error.
 const listSets = vi.hoisted(() => vi.fn());
+const prefetchImages = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { searchCards, listSets, syncStatus: vi.fn(), syncRun: vi.fn(), onSyncProgress: vi.fn() },
+  ipc: {
+    searchCards,
+    listSets,
+    prefetchImages,
+    syncStatus: vi.fn(),
+    syncRun: vi.fn(),
+    onSyncProgress: vi.fn(),
+  },
 }));
 
 import { SearchPage } from "./SearchPage";
@@ -104,6 +112,7 @@ beforeEach(() => {
   scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
   listSets.mockReset().mockResolvedValue([ALPHA]);
+  prefetchImages.mockReset().mockResolvedValue(undefined);
   // The view opens on the art grid, which has no columns to assert on. Everything below
   // except the layout toggle's own describe is about the table, so it says so.
   useAppStore.setState({ searchView: "table", selectedCardId: null });
@@ -484,6 +493,66 @@ describe("the result layout toggle", () => {
     await userEvent.click(screen.getByRole("button", { name: "Table view" }));
 
     expect(screen.getByText(/card database is empty/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The other half of the grid's prefetch. Its overscan mounts two rows of off-screen
+ * `<img>`s, which warms the next *scroll*; this warms the next *page*, before a single
+ * tile of it is mounted.
+ */
+describe("page image prefetch", () => {
+  beforeEach(() => useAppStore.setState({ searchView: "grid", selectedCardId: null }));
+
+  it("warms the front faces of the page that just landed, at grid size", async () => {
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], "grid"));
+  });
+
+  /**
+   * The case `pageCount` alone cannot see. `keepPreviousData` holds the old pages on
+   * screen while the new search is in flight, so a one-page search followed by another
+   * one-page search never moves the count — and the page the reader actually asked for
+   * would be the one that never got warmed.
+   */
+  it("warms a new search's first page even when the page count did not change", async () => {
+    searchCards.mockResolvedValueOnce(page([BOLT])).mockResolvedValue(page([SPARSE]));
+    wrap(<SearchPage />);
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], "grid"));
+
+    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "race");
+
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["2"], "grid"));
+  });
+
+  it("asks once per page, not once per render", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledTimes(1));
+
+    // Re-renders that add no page must cost nothing: the whole point of the key is that a
+    // background refetch of pages already in hand does not re-walk 50 cached images.
+    await act(async () => {});
+    await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
+
+    // One more for the filtered page, and no repeat of the first.
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not warm anything for the table, which shows no art", async () => {
+    useAppStore.setState({ searchView: "table" });
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+    expect(prefetchImages).not.toHaveBeenCalled();
+  });
+
+  it("survives a rejected prefetch — it is a warm-up, not a dependency", async () => {
+    prefetchImages.mockRejectedValue("database is locked");
+    wrap(<SearchPage />);
+
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
   });
 });
 

@@ -293,7 +293,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `image_cache(card_id, face, variant) → source_uri, bytes, fetched_at` — `WITHOUT ROWID`, **no FK to `cards.id`**.
 - Not produced: any new index on `cards`, any FTS rebuild.
 
-- [ ] **Step 1: Write the failing tests** — add to `schema.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing tests** — add to `schema.rs`'s `mod tests`:
 
 ```rust
     /// A database that stopped at version 1 — what every machine that ran Plan 1 has on
@@ -484,14 +484,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib schema
 ```
 Expected: the five new tests fail (`assertion failed: version == 2`, `no such column: image_uris`, …); the five pre-existing schema tests still pass.
 
-- [ ] **Step 3: Add the v2 step** — in `src-tauri/src/schema.rs`, add after the `if v < 1 { … }` block inside `migrate`, and add the two constants above it:
+- [x] **Step 3: Add the v2 step** — in `src-tauri/src/schema.rs`, add after the `if v < 1 { … }` block inside `migrate`, and add the two constants above it:
 
 ```rust
 /// The image variants stored as real columns, WEBP only.
@@ -567,14 +567,14 @@ fn webp_json_object(src: &str) -> String {
 
 Note the `json(...)` wrapper inside `json_group_array`: SQLite drops the JSON subtype when a value passes through a `CASE`, and without it every face object would be stored as an escaped *string* rather than an object.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib schema
 ```
 Expected: all ten schema tests pass.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```powershell
 npm run verify
@@ -597,7 +597,7 @@ The backfill catches the database that already exists; this catches every sync f
 - Consumes: `schema::IMAGE_VARIANTS` (Task 2), `CardRow::from_json(v: &serde_json::Value) -> Option<CardRow>`.
 - Produces: `CardRow.image_uris: Option<String>`, `CardRow.face_image_uris: Option<String>` — same JSON shapes the v2 backfill writes, so a backfilled row and an ingested row are indistinguishable. The `cards_staging` insert goes from 37 to **39** bound parameters.
 
-- [ ] **Step 1: Write the failing tests** — add to `card_row.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing tests** — add to `card_row.rs`'s `mod tests`:
 
 ```rust
     #[test]
@@ -658,14 +658,14 @@ The backfill catches the database that already exists; this catches every sync f
     }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib card_row
 ```
 Expected: five failures, `no field `image_uris` on type `CardRow`` (a compile error is a fine red).
 
-- [ ] **Step 3: Implement** — in `src-tauri/src/card_row.rs`, add two fields to the struct immediately after `pub image_updated_at: Option<String>,`:
+- [x] **Step 3: Implement** — in `src-tauri/src/card_row.rs`, add two fields to the struct immediately after `pub image_updated_at: Option<String>,`:
 
 ```rust
     /// The four WEBP variants from the top-level `image_uris`, as compact JSON.
@@ -715,7 +715,7 @@ and populate them in the returned `CardRow`, after `image_updated_at: s(v, "imag
             }),
 ```
 
-- [ ] **Step 4: Extend the ingest insert** — in `src-tauri/src/ingest.rs`, add the two columns to the statement and the two values to `params!`:
+- [x] **Step 4: Extend the ingest insert** — in `src-tauri/src/ingest.rs`, add the two columns to the statement and the two values to `params!`:
 
 ```rust
             "INSERT INTO cards_staging (id, oracle_id, name, lang, released_at, set_code, set_name,
@@ -735,7 +735,7 @@ and in the `params![…]` list, between `c.image_updated_at,` and `c.search_text
                 c.face_image_uris,
 ```
 
-- [ ] **Step 5: Add an ingest test** — in `ingest.rs`'s `mod tests`:
+- [x] **Step 5: Add an ingest test** — in `ingest.rs`'s `mod tests`:
 
 ```rust
     /// The ingest and the v2 backfill must produce byte-identical columns, or a card's
@@ -770,16 +770,16 @@ and in the `params![…]` list, between `c.image_updated_at,` and `c.search_text
     }
 ```
 
-- [ ] **Step 6: Update the fixture file** — in `src-tauri/tests/fixtures/cards_sample.jsonl`, give every line a realistic image shape so the shared fixture keeps covering the gotchas: top-level `image_uris` (all eleven keys) on the `normal`/`split`/`meld` lines, `card_faces[].image_uris` on the `transform`/`reversible_card` lines, and **no image keys at all** on the `art_series` line. Use the real URL shape, e.g. `"grid": "https://cards.scryfall.io/grid/front/0/0/0000419b-0bba-4488-8f7a-6194544ce91d.webp?1783910776"`.
+- [x] **Step 6: Update the fixture file** — in `src-tauri/tests/fixtures/cards_sample.jsonl`, give every line a realistic image shape so the shared fixture keeps covering the gotchas: top-level `image_uris` (all eleven keys) on the `normal`/`split`/`meld` lines, `card_faces[].image_uris` on the `transform`/`reversible_card` lines, and **no image keys at all** on the `art_series` line. Use the real URL shape, e.g. `"grid": "https://cards.scryfall.io/grid/front/0/0/0000419b-0bba-4488-8f7a-6194544ce91d.webp?1783910776"`.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 Expected: all pass, including the pre-existing `ingests_fixture_and_swaps` (the fixture line count is unchanged).
 
-- [ ] **Step 8: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 ```powershell
 npm run verify
@@ -826,7 +826,7 @@ impl Client {
 
 - Callers to update: three `429 => Err(ScryfallError::RateLimited)` sites (`check_bulk_update` line ~156, `download` line ~260, `fetch_sets` line ~295) and the test `rate_limiting_is_reported_as_its_own_error`.
 
-- [ ] **Step 1: Write the failing tests** — add to `scryfall.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing tests** — add to `scryfall.rs`'s `mod tests`:
 
 ```rust
     #[tokio::test]
@@ -940,16 +940,16 @@ impl Client {
     }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib scryfall
 ```
 Expected: compile errors on `RateLimited { retry_after_secs }` and `fetch_image`.
 
-- [ ] **Step 3: Delete the superseded test** — remove `rate_limiting_is_reported_as_its_own_error` in full (`scryfall.rs` ~line 639–661). `rate_limiting_carries_the_backoff_the_caller_must_wait` covers everything it did and one thing more.
+- [x] **Step 3: Delete the superseded test** — remove `rate_limiting_is_reported_as_its_own_error` in full (`scryfall.rs` ~line 639–661). `rate_limiting_carries_the_backoff_the_caller_must_wait` covers everything it did and one thing more.
 
-- [ ] **Step 4: Reshape the error** — in `scryfall.rs`, add beside `READ_TIMEOUT`:
+- [x] **Step 4: Reshape the error** — in `scryfall.rs`, add beside `READ_TIMEOUT`:
 
 ```rust
 /// What Scryfall says a 429 costs: "your access being limited for 30 seconds". The floor
@@ -991,7 +991,7 @@ fn retry_after_secs(resp: &reqwest::Response) -> u64 {
 }
 ```
 
-- [ ] **Step 5: Update the three call sites** — each currently reads `429 => Err(ScryfallError::RateLimited)` or `429 => return Err(ScryfallError::RateLimited)`. In all three the `resp` is still owned at that point, so:
+- [x] **Step 5: Update the three call sites** — each currently reads `429 => Err(ScryfallError::RateLimited)` or `429 => return Err(ScryfallError::RateLimited)`. In all three the `resp` is still owned at that point, so:
 
 ```rust
             429 => Err(ScryfallError::RateLimited {
@@ -1001,9 +1001,9 @@ fn retry_after_secs(resp: &reqwest::Response) -> u64 {
 
 in `check_bulk_update`, and the `return Err(…)` form in `download` and `fetch_sets`.
 
-- [ ] **Step 6: Cap the set pager** — in `fetch_sets`, change `loop {` to `for _ in 0..MAX_SET_PAGES {`. The `break`s inside stay exactly as they are; the `for` supplies the ceiling the `loop` lacked.
+- [x] **Step 6: Cap the set pager** — in `fetch_sets`, change `loop {` to `for _ in 0..MAX_SET_PAGES {`. The `break`s inside stay exactly as they are; the `for` supplies the ceiling the `loop` lacked.
 
-- [ ] **Step 7: Add `fetch_image`** — after `fetch_sets`, inside `impl Client`:
+- [x] **Step 7: Add `fetch_image`** — after `fetch_sets`, inside `impl Client`:
 
 ```rust
     /// The bytes of one card image from `cards.scryfall.io`.
@@ -1028,14 +1028,14 @@ in `check_bulk_update`, and the `return Err(…)` form in `download` and `fetch_
     }
 ```
 
-- [ ] **Step 8: Run the tests**
+- [x] **Step 8: Run the tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib scryfall
 ```
 Expected: every scryfall test passes, including the four new ones.
 
-- [ ] **Step 9: Verify and commit**
+- [x] **Step 9: Verify and commit**
 
 ```powershell
 npm run verify
@@ -1094,7 +1094,7 @@ and in `db.rs`:
 pub fn lock_for(mutex: &Mutex<Connection>, timeout: Duration) -> Option<MutexGuard<'_, Connection>>;
 ```
 
-- [ ] **Step 1: Add the tokio features** — in `src-tauri/Cargo.toml`:
+- [x] **Step 1: Add the tokio features** — in `src-tauri/Cargo.toml`:
 
 ```toml
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
@@ -1102,7 +1102,7 @@ tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
 
 `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the pacer and the 429 penalty are made of.
 
-- [ ] **Step 2: Write the failing `db::lock_for` test** — add to `db.rs`'s `mod tests`:
+- [x] **Step 2: Write the failing `db::lock_for` test** — add to `db.rs`'s `mod tests`:
 
 ```rust
     /// Two callers need the write lock *without* being willing to wait out a 44 s
@@ -1130,14 +1130,14 @@ tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
     }
 ```
 
-- [ ] **Step 3: Run it and watch it fail**
+- [x] **Step 3: Run it and watch it fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib db::tests::lock_for
 ```
 Expected: `cannot find function 'lock_for' in this scope`.
 
-- [ ] **Step 4: Implement `lock_for`** — in `src-tauri/src/db.rs`, extend the imports to `use std::sync::{Mutex, MutexGuard, TryLockError};` and `use std::time::{Duration, Instant};`, then add:
+- [x] **Step 4: Implement `lock_for`** — in `src-tauri/src/db.rs`, extend the imports to `use std::sync::{Mutex, MutexGuard, TryLockError};` and `use std::time::{Duration, Instant};`, then add:
 
 ```rust
 /// How long `lock_for` sleeps between attempts. Short enough that the wait is invisible,
@@ -1173,16 +1173,16 @@ pub fn lock_for(
 }
 ```
 
-- [ ] **Step 5: Run it**
+- [x] **Step 5: Run it**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib db::tests::lock_for
 ```
 Expected: `test result: ok. 1 passed`.
 
-- [ ] **Step 6: Register the module** — in `src-tauri/src/lib.rs`, add `pub mod images;` to the module list (after `pub mod ingest;`).
+- [x] **Step 6: Register the module** — in `src-tauri/src/lib.rs`, add `pub mod images;` to the module list (after `pub mod ingest;`).
 
-- [ ] **Step 7: Write the failing images tests** — create `src-tauri/src/images.rs` containing only this test module for now:
+- [x] **Step 7: Write the failing images tests** — create `src-tauri/src/images.rs` containing only this test module for now:
 
 ```rust
 #[cfg(test)]
@@ -1383,14 +1383,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 8: Run and watch them fail**
+- [x] **Step 8: Run and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib images
 ```
 Expected: compile errors naming `Variant`, `ImageKey`, `Resolution`, `Placeholder`, `cache_path`, `resolve`, `is_current`, `record`, `placeholder_svg`.
 
-- [ ] **Step 9: Write the module header** — at the top of `src-tauri/src/images.rs`, above the test module:
+- [x] **Step 9: Write the module header** — at the top of `src-tauri/src/images.rs`, above the test module:
 
 ```rust
 //! The permanent, disposable image cache and the resolution rule behind it.
@@ -1431,7 +1431,7 @@ pub const WEBP: &str = "image/webp";
 pub const SVG: &str = "image/svg+xml";
 ```
 
-- [ ] **Step 10: Implement `Variant`, `ImageKey` and `cache_path`**
+- [x] **Step 10: Implement `Variant`, `ImageKey` and `cache_path`**
 
 ```rust
 /// The image sizes this app stores. WEBP only — the JPG/PNG family Scryfall's own docs
@@ -1502,7 +1502,7 @@ pub fn cache_path(images_dir: &Path, key: &ImageKey) -> PathBuf {
 }
 ```
 
-- [ ] **Step 11: Implement resolution and bookkeeping**
+- [x] **Step 11: Implement resolution and bookkeeping**
 
 ```rust
 /// What a placeholder is standing in for.
@@ -1596,7 +1596,7 @@ pub fn record(conn: &Connection, key: &ImageKey, uri: &str, bytes: usize) -> rus
 }
 ```
 
-- [ ] **Step 12: Implement the placeholders**
+- [x] **Step 12: Implement the placeholders**
 
 ```rust
 /// A placeholder, drawn rather than shipped.
@@ -1632,7 +1632,7 @@ pub fn placeholder_svg(kind: Placeholder, variant: Variant) -> String {
 }
 ```
 
-- [ ] **Step 13: Implement `Cache`**
+- [x] **Step 13: Implement `Cache`**
 
 ```rust
 /// What the protocol hands back.
@@ -1773,14 +1773,14 @@ impl Cache {
 }
 ```
 
-- [ ] **Step 14: Run the tests**
+- [x] **Step 14: Run the tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib images
 ```
 Expected: the ten images tests pass.
 
-- [ ] **Step 15: Verify and commit**
+- [x] **Step 15: Verify and commit**
 
 ```powershell
 npm run verify
@@ -1822,7 +1822,7 @@ pub struct AppState {
 - URL shape: `<origin>/<variant>/<card_id>/<face>` — e.g. `http://mtgimg.localhost/grid/0000419b-0bba-4488-8f7a-6194544ce91d/0`.
 - Status codes: `200` bytes or placeholder · `404` unknown card or unparseable path · `503` + `Retry-After` on a rate limit · `502` on any other fetch failure. A retryable failure must *not* be a 200 with a placeholder body, or the UI has no way to try again.
 
-- [ ] **Step 1: Write the failing parser tests** — add to `images.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing parser tests** — add to `images.rs`'s `mod tests`:
 
 ```rust
     #[test]
@@ -1862,14 +1862,14 @@ pub struct AppState {
     }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib images
 ```
 Expected: `cannot find function 'parse_request_path'`.
 
-- [ ] **Step 3: Implement the parser** — in `images.rs`, after `cache_path`:
+- [x] **Step 3: Implement the parser** — in `images.rs`, after `cache_path`:
 
 ```rust
 /// Faces this app will serve. Every physical Magic card has at most two sides, and the
@@ -1913,14 +1913,14 @@ fn is_card_id(s: &str) -> bool {
 }
 ```
 
-- [ ] **Step 4: Run the parser tests**
+- [x] **Step 4: Run the parser tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib images
 ```
 Expected: all twelve images tests pass.
 
-- [ ] **Step 5: Give `AppState` the cache** — in `src-tauri/src/sync.rs`, add the field and the shared read-lock helper:
+- [x] **Step 5: Give `AppState` the cache** — in `src-tauri/src/sync.rs`, add the field and the shared read-lock helper:
 
 ```rust
     pub client: scryfall::Client,
@@ -1944,7 +1944,7 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 
 then rewrite `lock_db` and `lock_db_read` as `lock_conn(&state.db)` / `lock_conn(&state.db_read)`, and replace the inline `read.lock().unwrap_or_else(…)` in `images::Cache::get` (Task 5 Step 13) with `crate::sync::lock_conn(read)`.
 
-- [ ] **Step 6: Fix the two `AppState` construction sites** — the field is not optional, so both fail to compile until it exists:
+- [x] **Step 6: Fix the two `AppState` construction sites** — the field is not optional, so both fail to compile until it exists:
 
 `lib.rs::init_state`, in the returned struct:
 
@@ -1961,7 +1961,7 @@ then rewrite `lock_db` and `lock_db_read` as `lock_conn(&state.db)` / `lock_conn
             images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
 ```
 
-- [ ] **Step 7: Implement `serve`** — in `images.rs`, after `Cache`:
+- [x] **Step 7: Implement `serve`** — in `images.rs`, after `Cache`:
 
 ```rust
 /// Answer one `mtgimg://` request.
@@ -2021,7 +2021,7 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
 }
 ```
 
-- [ ] **Step 8: Register the protocol** — in `src-tauri/src/lib.rs`, add to the builder chain after the plugins and before `.invoke_handler(…)`:
+- [x] **Step 8: Register the protocol** — in `src-tauri/src/lib.rs`, add to the builder chain after the plugins and before `.invoke_handler(…)`:
 
 ```rust
         // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
@@ -2042,7 +2042,7 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
         })
 ```
 
-- [ ] **Step 9: Verify and smoke it**
+- [x] **Step 9: Verify and smoke it**
 
 ```powershell
 npm run verify
@@ -2064,7 +2064,7 @@ img.src = "http://mtgimg.localhost/grid/" +
 ```
 Expected: `OK 488 x 680` on the second attempt at the latest (the first fetches), no CSP violation, and a new file under `src-tauri/target/debug/data/images/grid/00/`. A bad id logs `FAILED` with a 404 in the network panel, not a hang.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```powershell
 git add -A
@@ -2421,14 +2421,14 @@ export function Ribbon(props: RibbonProps): JSX.Element;
 
 Two things to know about `mana-font/css/mana.css` before wiring it: it also declares an `MPlantin` `@font-face` this app does not use (harmless, and the file only loads when a glyph needs it), and `.ms` defines its own `--ms-mana-*` variables whose values differ slightly from the direction doc's fills (`#fdfbce` vs `#FFFBD5`). **The direction doc wins** — chips are filled from our tokens, and the font supplies the glyph only.
 
-- [ ] **Step 1: Install**
+- [x] **Step 1: Install**
 
 ```powershell
 npm i @fontsource/cinzel @fontsource-variable/geist-mono mana-font keyrune
 ```
 Expected: four packages added, no peer warnings. Confirm the resolved versions are ≥ the table above.
 
-- [ ] **Step 2: Write the failing token/helper tests** — create `src/lib/mana.test.ts`:
+- [x] **Step 2: Write the failing token/helper tests** — create `src/lib/mana.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -2498,14 +2498,14 @@ describe("manaLineSync", () => {
 });
 ```
 
-- [ ] **Step 3: Run and watch it fail**
+- [x] **Step 3: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/lib/mana.test.ts
 ```
 Expected: `Failed to resolve import "@/lib/mana"`.
 
-- [ ] **Step 4: Implement the mana module** — create `src/lib/mana.ts`:
+- [x] **Step 4: Implement the mana module** — create `src/lib/mana.ts`:
 
 ```ts
 /**
@@ -2586,9 +2586,9 @@ export function manaLineSync(
 }
 ```
 
-- [ ] **Step 5: Extract the progress listener** — create `src/lib/useSyncProgress.ts` by moving `PHASE_LABEL` and `useSyncProgress` out of `src/components/SyncProgress.tsx` verbatim, exporting both. Two components need them now (the ribbon's line and the first-run overlay), and a second `listen` registration for the same event would be a second subscription for the life of the app.
+- [x] **Step 5: Extract the progress listener** — create `src/lib/useSyncProgress.ts` by moving `PHASE_LABEL` and `useSyncProgress` out of `src/components/SyncProgress.tsx` verbatim, exporting both. Two components need them now (the ribbon's line and the first-run overlay), and a second `listen` registration for the same event would be a second subscription for the life of the app.
 
-- [ ] **Step 5b: The rarity gem** — create `src/lib/rarity.test.ts`:
+- [x] **Step 5b: The rarity gem** — create `src/lib/rarity.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -2645,14 +2645,14 @@ npm run test:run -- src/lib/rarity.test.ts
 ```
 Expected: 2 passed.
 
-- [ ] **Step 6: Run the mana tests**
+- [x] **Step 6: Run the mana tests**
 
 ```powershell
 npm run test:run -- src/lib/mana.test.ts
 ```
 Expected: 8 passed.
 
-- [ ] **Step 7: Extend the theme** — in `src/index.css`.
+- [x] **Step 7: Extend the theme** — in `src/index.css`.
 
 Add to the import block at the top, after the existing `@fontsource-variable/geist` line (CSS `@import` rules must all precede other rules, and Vite resolves bare package specifiers here — this is the same mechanism the Geist import already uses):
 
@@ -2714,7 +2714,7 @@ and after the `@theme` block:
 }
 ```
 
-- [ ] **Step 8: Write the failing ManaLine test** — create `src/components/ManaLine.test.tsx`:
+- [x] **Step 8: Write the failing ManaLine test** — create `src/components/ManaLine.test.tsx`:
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -2753,14 +2753,14 @@ describe("ManaLine", () => {
 });
 ```
 
-- [ ] **Step 9: Run and watch it fail**
+- [x] **Step 9: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/components/ManaLine.test.tsx
 ```
 Expected: `Failed to resolve import "./ManaLine"`.
 
-- [ ] **Step 10: Implement** — create `src/components/ManaLine.tsx`:
+- [x] **Step 10: Implement** — create `src/components/ManaLine.tsx`:
 
 ```tsx
 import { MANA_LINE_GRADIENT, type ManaLineSync } from "@/lib/mana";
@@ -2824,14 +2824,14 @@ export function ManaLine({ sync }: { sync: ManaLineSync | null }) {
 }
 ```
 
-- [ ] **Step 11: Run it**
+- [x] **Step 11: Run it**
 
 ```powershell
 npm run test:run -- src/components/ManaLine.test.tsx
 ```
 Expected: 3 passed.
 
-- [ ] **Step 12: Write the failing Ribbon test** — create `src/components/Ribbon.test.tsx`:
+- [x] **Step 12: Write the failing Ribbon test** — create `src/components/Ribbon.test.tsx`:
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -2895,14 +2895,14 @@ describe("Ribbon", () => {
 });
 ```
 
-- [ ] **Step 13: Run and watch it fail**
+- [x] **Step 13: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/components/Ribbon.test.tsx
 ```
 Expected: `Failed to resolve import "./Ribbon"`.
 
-- [ ] **Step 14: Implement** — create `src/components/Ribbon.tsx`:
+- [x] **Step 14: Implement** — create `src/components/Ribbon.tsx`:
 
 ```tsx
 import { RefreshCw } from "lucide-react";
@@ -2997,14 +2997,14 @@ export function Ribbon({
 }
 ```
 
-- [ ] **Step 15: Run it**
+- [x] **Step 15: Run it**
 
 ```powershell
 npm run test:run -- src/components/Ribbon.test.tsx
 ```
 Expected: 4 passed.
 
-- [ ] **Step 16: Restructure `AppShell`** — `src/components/AppShell.tsx`:
+- [x] **Step 16: Restructure `AppShell`** — `src/components/AppShell.tsx`:
 
 1. Delete the whole `<header>` block; the app mark, status line, "Already up to date" and Refresh button now live in `Ribbon`.
 2. Render `<Ribbon …/>` in its place, fed from the hooks `AppShell` already owns:
@@ -3086,7 +3086,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 3. Imports: drop `RefreshCw`, add `Ribbon`, `manaLineSync`, `useSyncProgress`.
 
-- [ ] **Step 17: Reduce `SyncProgress` to the first-run overlay** — `src/components/SyncProgress.tsx`:
+- [x] **Step 17: Reduce `SyncProgress` to the first-run overlay** — `src/components/SyncProgress.tsx`:
 
 1. Delete `PHASE_LABEL` and `useSyncProgress` (they moved in Step 5) and import them from `@/lib/useSyncProgress`.
 2. Delete the slim in-line bar entirely — the branch that returns the `<div className="flex items-center gap-3 border-b …">`. The mana line is now the app's only progress bar, and two of them on one screen is exactly the kind of repetition the direction's boldness budget forbids. `SyncProgress` becomes:
@@ -3110,7 +3110,7 @@ export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressPr
 
 3. `FirstRun` keeps its own `Bar` (it is a full-screen hero, not the chrome) and its `<h2 className="font-heading text-2xl">` now renders in Cinzel automatically — check it still reads well at that size and leave it.
 
-- [ ] **Step 18: Fix the tests the restructure breaks** — three edits, no more:
+- [x] **Step 18: Fix the tests the restructure breaks** — three edits, no more:
 
 1. `src/components/AppShell.test.tsx`, first test: `screen.getByText("Search")` is now ambiguous, because the ribbon renders the active view's title with the same word. Switch all five nav assertions to the role query the last test in the file already uses:
 
@@ -3136,21 +3136,21 @@ export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressPr
     expect(container).toBeEmptyDOMElement();
 ```
 
-- [ ] **Step 19: Verify**
+- [x] **Step 19: Verify**
 
 ```powershell
 npm run verify
 ```
 Expected: green. `App.test.tsx` needs no change — it queries `heading … level: 2`, and the ribbon's title is an `h1`.
 
-- [ ] **Step 20: Manual smoke**
+- [x] **Step 20: Manual smoke**
 
 ```powershell
 npm run tauri dev
 ```
 Expected: a 48px `bg-surface` ribbon with the gold "MTG" mark, the view title in Cinzel, the status line and **Refresh data** on the right, and a 2px WUBRG line beneath it. During a Refresh the line dims and fills left→right behind a gold cap. The sidebar's active item shows a gold hairline. Fonts are served from the app origin — check the devtools network panel for **zero** requests to any external host, and the console for zero CSP violations.
 
-- [ ] **Step 21: Commit**
+- [x] **Step 21: Commit**
 
 ```powershell
 git add -A
@@ -3192,7 +3192,7 @@ pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String>;
 - `setCode` (the existing single-set field) stays: it is the one-set shorthand and is already tested. The UI stops sending it in Task 10 and sends `sets` instead; both AND together if a caller sends both.
 - No new index: `idx_cards_set_cn` already leads on `set_code`, and `cmc` filters run over whatever the other predicates leave.
 
-- [ ] **Step 1: Write the failing tests** — add to `search.rs`'s `mod tests`. The existing `seeded()` has three rows and no `cmc`, so add a second fixture rather than disturbing it:
+- [x] **Step 1: Write the failing tests** — add to `search.rs`'s `mod tests`. The existing `seeded()` has three rows and no `cmc`, so add a second fixture rather than disturbing it:
 
 ```rust
     /// Four printings across three sets with known mana values, including a NULL one —
@@ -3353,14 +3353,14 @@ pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String>;
     }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib search
 ```
 Expected: compile errors — `struct SearchRequest has no field named sets`, `cannot find function run_list_sets`.
 
-- [ ] **Step 3: Extend the request** — in `src-tauri/src/search.rs`, add to `SearchRequest` after `set_code`:
+- [x] **Step 3: Extend the request** — in `src-tauri/src/search.rs`, add to `SearchRequest` after `set_code`:
 
 ```rust
     /// Set codes to include. ORed with each other, ANDed with every other filter — two
@@ -3388,7 +3388,7 @@ const MAX_SET_FILTER: usize = 64;
 const MANA_VALUE_OPEN_ENDED: u8 = 8;
 ```
 
-- [ ] **Step 4: Build the two clauses** — in `run_search`, after the existing `set_code` block:
+- [x] **Step 4: Build the two clauses** — in `run_search`, after the existing `set_code` block:
 
 ```rust
     // OR within, AND without. Blank entries are dropped rather than matched: a picker's
@@ -3445,7 +3445,7 @@ Both clauses go in `wheres` and both push onto `params` **before** the `LIMIT`/`
 pushes at the end, so the count subquery — which shares `where_sql` and runs first, while
 `params` still holds exactly the filters — picks them up with no further change.
 
-- [ ] **Step 5: Update the module doc, again** — Task 7 corrected it from "three" to "four";
+- [x] **Step 5: Update the module doc, again** — Task 7 corrected it from "three" to "four";
 this task adds structure of its own. In `search.rs`'s module comment:
 
 ```rust
@@ -3455,7 +3455,7 @@ this task adds structure of its own. In `search.rs`'s module comment:
 //! is the only thing they carry. No user text reaches the parser; everything else is bound.
 ```
 
-- [ ] **Step 6: Add `list_sets`** — at the end of `search.rs`, before `mod tests`:
+- [x] **Step 6: Add `list_sets`** — at the end of `search.rs`, before `mod tests`:
 
 ```rust
 /// One row of the set picker.
@@ -3482,6 +3482,10 @@ pub struct SetSummary {
 pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
     let mut stmt = conn
         .prepare(
+            // SHIPPED with `count(*) FILTER (WHERE is_paper = 1)` in the subquery: the
+            // plain count includes digital printings, so 61 sets advertised "N cards" and
+            // returned nothing under the search's paper-only default (akr: "339 cards",
+            // 0 results). The picker now hides a set that can only ever answer nothing.
             "SELECT s.code, s.name, s.set_type, s.released_at, coalesce(n.cards, 0)
              FROM sets s
              LEFT JOIN (SELECT set_code, count(*) AS cards FROM cards GROUP BY set_code) n
@@ -3517,14 +3521,14 @@ pub async fn list_sets(
 }
 ```
 
-- [ ] **Step 7: Register it** — in `src-tauri/src/lib.rs`'s `generate_handler!`, after
+- [x] **Step 7: Register it** — in `src-tauri/src/lib.rs`'s `generate_handler!`, after
 `search::search_cards`:
 
 ```rust
             search::list_sets,
 ```
 
-- [ ] **Step 8: Run the tests**
+- [x] **Step 8: Run the tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib search
@@ -3532,7 +3536,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib search
 Expected: all search tests pass, including the seven new ones. The five pre-existing ones
 are untouched — every new field defaults to `None`.
 
-- [ ] **Step 9: Verify and commit**
+- [x] **Step 9: Verify and commit**
 
 ```powershell
 npm run verify
@@ -3584,7 +3588,7 @@ export function SetCombobox({ selected, onToggle }: {
 - **One WUBRG vocabulary.** `useCardSearch` currently declares its own `COLOR_KEYS` / `ColorKey` / `COLOR_LABEL`, which are the same six letters in the same order as `mana.ts`'s `MANA_KEYS` / `ManaKey` / `MANA_LABEL`. Step 5 collapses them onto one definition — two lists that must stay identical will not.
 - **Colour chips keep subset semantics.** `toggleColor`'s existing rule stands: `C` is exclusive both ways, because the backend reads `colors === "C"` as colourless-only and anything else as subset-of-these-letters, under which `"WC"` would silently mean plain `"W"`. Do not "fix" this while restyling it.
 
-- [ ] **Step 1: Mirror the DTOs** — in `src/lib/ipc.ts`, add to `SearchRequest`:
+- [x] **Step 1: Mirror the DTOs** — in `src/lib/ipc.ts`, add to `SearchRequest`:
 
 ```ts
   /** Set codes. ORed with each other, ANDed with every other filter. */
@@ -3615,7 +3619,7 @@ and to the `ipc` object:
   listSets: () => invoke<SetSummary[]>("list_sets"),
 ```
 
-- [ ] **Step 2: Pin the wire shape on both sides** — in `src/lib/ipc.test.ts`, inside the
+- [x] **Step 2: Pin the wire shape on both sides** — in `src/lib/ipc.test.ts`, inside the
 existing argument-name `describe`:
 
 ```ts
@@ -3638,7 +3642,7 @@ existing argument-name `describe`:
   });
 ```
 
-- [ ] **Step 3: Write the failing helper tests** — create `src/lib/keyrune.test.ts` and
+- [x] **Step 3: Write the failing helper tests** — create `src/lib/keyrune.test.ts` and
 `src/features/search/useCardSearch.test.ts`:
 
 ```ts
@@ -3712,14 +3716,14 @@ describe("toggleColor", () => {
 });
 ```
 
-- [ ] **Step 4: Run and watch them fail**
+- [x] **Step 4: Run and watch them fail**
 
 ```powershell
 npm run test:run -- src/lib/keyrune.test.ts src/features/search/useCardSearch.test.ts
 ```
 Expected: unresolved `@/lib/keyrune`, and `toggleIn`/`activeFilterCount` not exported.
 
-- [ ] **Step 5: Implement the helpers** — create `src/lib/keyrune.ts`:
+- [x] **Step 5: Implement the helpers** — create `src/lib/keyrune.ts`:
 
 ```ts
 /**
@@ -3846,14 +3850,14 @@ or "nothing matched", and two more filters can now make it wrong:
     unfiltered: !debouncedText && !format && !colorsParam && !setsParam && !manaParam,
 ```
 
-- [ ] **Step 6: Run the helper tests**
+- [x] **Step 6: Run the helper tests**
 
 ```powershell
 npm run test:run -- src/lib/keyrune.test.ts src/features/search/useCardSearch.test.ts
 ```
 Expected: 7 passed.
 
-- [ ] **Step 7: Write the failing filter-bar tests** — create
+- [x] **Step 7: Write the failing filter-bar tests** — create
 `src/features/search/FilterBar.test.tsx`:
 
 ```tsx
@@ -3949,14 +3953,14 @@ describe("FilterBar", () => {
 });
 ```
 
-- [ ] **Step 8: Run and watch it fail**
+- [x] **Step 8: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/features/search/FilterBar.test.tsx
 ```
 Expected: `Failed to resolve import "./FilterBar"`.
 
-- [ ] **Step 9: Implement the filter bar** — create `src/features/search/FilterBar.tsx`:
+- [x] **Step 9: Implement the filter bar** — create `src/features/search/FilterBar.tsx`:
 
 ```tsx
 import { RotateCcw } from "lucide-react";
@@ -4105,14 +4109,14 @@ function ManaChip({
 }
 ```
 
-- [ ] **Step 10: Run it**
+- [x] **Step 10: Run it**
 
 ```powershell
 npm run test:run -- src/features/search/FilterBar.test.tsx
 ```
 Expected: 6 passed.
 
-- [ ] **Step 11: Write the failing combobox test** — create
+- [x] **Step 11: Write the failing combobox test** — create
 `src/features/search/SetCombobox.test.tsx`:
 
 ```tsx
@@ -4199,14 +4203,14 @@ describe("SetCombobox", () => {
 });
 ```
 
-- [ ] **Step 12: Run and watch it fail**
+- [x] **Step 12: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/features/search/SetCombobox.test.tsx
 ```
 Expected: `Failed to resolve import "./SetCombobox"`.
 
-- [ ] **Step 13: Implement the combobox** — create `src/features/search/SetCombobox.tsx`:
+- [x] **Step 13: Implement the combobox** — create `src/features/search/SetCombobox.tsx`:
 
 ```tsx
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -4370,14 +4374,14 @@ function Option({
 }
 ```
 
-- [ ] **Step 14: Run it**
+- [x] **Step 14: Run it**
 
 ```powershell
 npm run test:run -- src/features/search/SetCombobox.test.tsx
 ```
 Expected: 4 passed.
 
-- [ ] **Step 15: Swap the filter bar into `SearchPage`** — in
+- [x] **Step 15: Swap the filter bar into `SearchPage`** — in
 `src/features/search/SearchPage.tsx`, replace the whole inline filter `<div className="flex
 flex-wrap items-center gap-3">…</div>` (the search input, format select and colour group)
 with `<FilterBar search={search} />`, keeping the view-layout toggle where it is — that is
@@ -4389,14 +4393,14 @@ old shape, point those assertions at the new roles (`getByRole("button", { name:
 `getByLabelText(/format/i)` still works — the label moved to `sr-only` but is still
 associated).
 
-- [ ] **Step 16: Verify**
+- [x] **Step 16: Verify**
 
 ```powershell
 npm run verify
 ```
 Expected: green.
 
-- [ ] **Step 17: Manual smoke**
+- [x] **Step 17: Manual smoke**
 
 ```powershell
 npm run tauri dev
@@ -4407,7 +4411,7 @@ and "lea" by code and shows the Alpha symbol; **Reset all** appearing with a cou
 moment any filter is on and clearing everything in one click. Combining a colour, a set and
 a mana value narrows the results as expected. No external network requests.
 
-- [ ] **Step 18: Commit**
+- [x] **Step 18: Commit**
 
 ```powershell
 git add -A
@@ -4455,7 +4459,7 @@ export function CardGrid(props: {
 
 - Compliance note for the reviewer: these tiles render **full card images** (`grid` variant), which carry the artist's name as printed. The Scryfall artist-credit requirement attaches to `art_crop`/`art` usage, which this view does not use. Do not "optimise" the tile into an art crop without adding the credit line.
 
-- [ ] **Step 1: Write the failing URL tests** — create `src/lib/images.test.ts`:
+- [x] **Step 1: Write the failing URL tests** — create `src/lib/images.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -4498,14 +4502,14 @@ describe("cardImageUrl", () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 ```powershell
 npm run test:run -- src/lib/images.test.ts
 ```
 Expected: `Failed to resolve import "@/lib/images"`.
 
-- [ ] **Step 3: Implement** — create `src/lib/images.ts`:
+- [x] **Step 3: Implement** — create `src/lib/images.ts`:
 
 ```ts
 /**
@@ -4552,14 +4556,14 @@ export function cardImageUrl(cardId: string, face: number, variant: ImageVariant
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 ```powershell
 npm run test:run -- src/lib/images.test.ts
 ```
 Expected: 4 passed.
 
-- [ ] **Step 5: Write the failing grid test** — create `src/features/search/CardGrid.test.tsx`:
+- [x] **Step 5: Write the failing grid test** — create `src/features/search/CardGrid.test.tsx`:
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -4623,14 +4627,14 @@ jsdom has no layout, so `useVirtualizer` sees a zero-height scroll element and r
 whatever its `overscan` allows. Assert on the data that is present, never on how many
 tiles the virtualizer chose to mount.
 
-- [ ] **Step 6: Run and watch it fail**
+- [x] **Step 6: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/features/search/CardGrid.test.tsx
 ```
 Expected: `Failed to resolve import "./CardGrid"`.
 
-- [ ] **Step 7: Implement the grid** — create `src/features/search/CardGrid.tsx`:
+- [x] **Step 7: Implement the grid** — create `src/features/search/CardGrid.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from "react";
@@ -4783,7 +4787,7 @@ function Tile({ card, onSelect }: { card: CardSummary; onSelect: (id: string) =>
 }
 ```
 
-- [ ] **Step 8: Run the grid tests**
+- [x] **Step 8: Run the grid tests**
 
 ```powershell
 npm run test:run -- src/features/search/CardGrid.test.tsx
@@ -4801,7 +4805,7 @@ globalThis.ResizeObserver ??= class {
 } as unknown as typeof ResizeObserver;
 ```
 
-- [ ] **Step 9: Add the view toggle to the store** — in `src/lib/store.ts`:
+- [x] **Step 9: Add the view toggle to the store** — in `src/lib/store.ts`:
 
 ```ts
 /** How the search results are laid out. */
@@ -4821,7 +4825,7 @@ and inside `AppState` / the `create` call:
   setSearchView: (searchView) => set({ searchView }),
 ```
 
-- [ ] **Step 10: Wire the toggle into `SearchPage`** — in `src/features/search/SearchPage.tsx`:
+- [x] **Step 10: Wire the toggle into `SearchPage`** — in `src/features/search/SearchPage.tsx`:
 
 1. Import `useAppStore`, `CardGrid`, and `LayoutGrid`/`Rows3` from `lucide-react`.
 2. Read `const view = useAppStore((s) => s.searchView);` and `setSearchView`.
@@ -4886,7 +4890,7 @@ pass `() => {}` and leave a `// Task 13` marker.
 The table branch keeps its own paging effect; the grid drives paging through
 `onNeedNextPage` because its "last rendered index" is a row of tiles, not a row of data.
 
-- [ ] **Step 11: Verify and commit**
+- [x] **Step 11: Verify and commit**
 
 ```powershell
 npm run verify
@@ -4937,16 +4941,25 @@ pub struct Printing {
 }
 
 pub fn get_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, String>;
-pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<Vec<Printing>, String>;
+// SHIPPED (Task 12 fix round 1): `PrintingsResponse { items: Vec<Printing>, total: i64 }`,
+// not a bare `Vec`. The page is capped at 400 and the list is paper-only, so `total` is
+// the only thing that says a list was truncated — Forest has 862 paper printings.
+pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<PrintingsResponse, String>;
 
 #[tauri::command] pub async fn card_detail(state, id: String) -> Result<Option<CardDetail>, String>;
-#[tauri::command] pub async fn card_printings(state, oracle_id: String) -> Result<Vec<Printing>, String>;
+#[tauri::command] pub async fn card_printings(state, oracle_id: String) -> Result<PrintingsResponse, String>;
 ```
 
 - `artist` has no column: it is read with `coalesce(json_extract(raw,'$.artist'), json_extract(faces,'$[0].artist'))`. It is required by the image policy on the detail pane, and a column for it would be a v3 migration for one string.
 - `list_printings` is capped and ordered; `idx_cards_oracle` serves the lookup.
+- **Contract correction, binding on later plans:** every `Vec<Printing>` / `Printing[]`
+  return type in the Task-12 and Task-13 code blocks below shipped as
+  `PrintingsResponse` / `{ items, total }`. The bare-list shape never existed in a
+  commit; the plan text was written before the paper filter and the uncapped count were
+  added. `total` is counted **after** the `is_paper = 1` filter, so it always agrees with
+  what `items` was drawn from.
 
-- [ ] **Step 1: Write the failing tests** — create `src-tauri/src/card.rs` with only this test module:
+- [x] **Step 1: Write the failing tests** — create `src-tauri/src/card.rs` with only this test module:
 
 ```rust
 #[cfg(test)]
@@ -5061,14 +5074,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib card
 ```
 Expected: `cannot find function 'get_card'` — after adding `pub mod card;` to `lib.rs`.
 
-- [ ] **Step 3: Implement** — write the rest of `src-tauri/src/card.rs`:
+- [x] **Step 3: Implement** — write the rest of `src-tauri/src/card.rs`:
 
 ```rust
 //! One printing in full, and every printing of the same oracle card.
@@ -5241,6 +5254,9 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 /// A blank `oracle_id` returns nothing rather than matching: `oracle_id` is NULLABLE
 /// (reversible cards have none), and a query that let `''` through would be one `IS NULL`
 /// away from returning every such card in the database as a "printing" of each other.
+// SHIPPED: `-> Result<PrintingsResponse, String>`, and the empty-oracle-id early return is
+// `Ok(PrintingsResponse::default())`. The `WHERE` gained `AND is_paper = 1` (a shared
+// `PRINTINGS_WHERE` const the count query uses too), and the count is run uncapped.
 pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<Vec<Printing>, String> {
     if oracle_id.trim().is_empty() {
         return Ok(Vec::new());
@@ -5293,6 +5309,7 @@ pub async fn card_detail(
 }
 
 /// Every printing of one oracle card. Read-only connection, blocking pool.
+/// SHIPPED: `-> Result<PrintingsResponse, String>` (paper only, page capped, count full).
 #[tauri::command]
 pub async fn card_printings(
     state: tauri::State<'_, Arc<AppState>>,
@@ -5305,7 +5322,7 @@ pub async fn card_printings(
 }
 ```
 
-- [ ] **Step 4: Register the commands** — in `src-tauri/src/lib.rs`:
+- [x] **Step 4: Register the commands** — in `src-tauri/src/lib.rs`:
 
 ```rust
         .invoke_handler(tauri::generate_handler![
@@ -5317,14 +5334,14 @@ pub async fn card_printings(
         ])
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib card
 ```
 Expected: five passed.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```powershell
 npm run verify
@@ -5372,7 +5389,7 @@ selectedCardId: string | null;
 setSelectedCardId: (id: string | null) => void;
 ```
 
-- [ ] **Step 1: Add the DTOs** — in `src/lib/ipc.ts`, after `SearchResponse`:
+- [x] **Step 1: Add the DTOs** — in `src/lib/ipc.ts`, after `SearchResponse`:
 
 ```ts
 /** One physical side of a card. Empty for single-faced printings. */
@@ -5439,11 +5456,16 @@ and to the `ipc` object:
 
 ```ts
   cardDetail: (id: string) => invoke<CardDetail | null>("card_detail", { id }),
-  /** Every printing of the oracle card, newest first. */
-  cardPrintings: (oracleId: string) => invoke<Printing[]>("card_printings", { oracleId }),
+  /** Every paper printing of the oracle card, newest first, capped at 400 with a full count. */
+  cardPrintings: (oracleId: string) => invoke<PrintingsResponse>("card_printings", { oracleId }),
 ```
 
-- [ ] **Step 2: Pin the argument names** — in `src/lib/ipc.test.ts`, inside the existing
+**Shipped shape** (corrected in Task 12's fix round; this line read `invoke<Printing[]>`
+until Task 14): the response is `{ items: Printing[]; total: number }`. A mirror typed as
+`Printing[]` would read `items.length` as the whole story with the compiler agreeing, and
+the caption would say "400 printings" for a card that has 862.
+
+- [x] **Step 2: Pin the argument names** — in `src/lib/ipc.test.ts`, inside the existing
 `describe("ipc argument names match the Rust command signatures", …)`:
 
 ```ts
@@ -5460,7 +5482,7 @@ and to the `ipc` object:
   });
 ```
 
-- [ ] **Step 3: Write the failing domain tests** — create `src/features/card/printings.test.ts`:
+- [x] **Step 3: Write the failing domain tests** — create `src/features/card/printings.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -5604,14 +5626,14 @@ describe("faceCount", () => {
 });
 ```
 
-- [ ] **Step 4: Run and watch them fail**
+- [x] **Step 4: Run and watch them fail**
 
 ```powershell
 npm run test:run -- src/features/card/printings.test.ts
 ```
 Expected: `Failed to resolve import "./printings"`.
 
-- [ ] **Step 5: Implement the domain module** — create `src/features/card/printings.ts`:
+- [x] **Step 5: Implement the domain module** — create `src/features/card/printings.ts`:
 
 ```ts
 /**
@@ -5757,14 +5779,14 @@ function safeParse(json: string | null): unknown {
 }
 ```
 
-- [ ] **Step 6: Run the domain tests**
+- [x] **Step 6: Run the domain tests**
 
 ```powershell
 npm run test:run -- src/features/card/printings.test.ts
 ```
 Expected: 12 passed.
 
-- [ ] **Step 7: Write the failing pane test** — create `src/features/card/CardDetailPane.test.tsx`:
+- [x] **Step 7: Write the failing pane test** — create `src/features/card/CardDetailPane.test.tsx`:
 
 ```tsx
 import { render, screen, waitFor } from "@testing-library/react";
@@ -5886,14 +5908,14 @@ describe("CardDetailPane", () => {
 });
 ```
 
-- [ ] **Step 8: Run and watch it fail**
+- [x] **Step 8: Run and watch it fail**
 
 ```powershell
 npm run test:run -- src/features/card/CardDetailPane.test.tsx
 ```
 Expected: `Failed to resolve import "./CardDetailPane"`.
 
-- [ ] **Step 9: Implement the pane** — create `src/features/card/CardDetailPane.tsx`:
+- [x] **Step 9: Implement the pane** — create `src/features/card/CardDetailPane.tsx`:
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -6166,14 +6188,14 @@ function price(value: number | null): string {
 }
 ```
 
-- [ ] **Step 10: Run the pane tests**
+- [x] **Step 10: Run the pane tests**
 
 ```powershell
 npm run test:run -- src/features/card
 ```
 Expected: 16 passed.
 
-- [ ] **Step 11: Mount it** — three edits:
+- [x] **Step 11: Mount it** — three edits:
 
 1. `src/lib/store.ts`, inside `AppState` and the `create` call:
 
@@ -6221,7 +6243,7 @@ export default function App() {
 }
 ```
 
-- [ ] **Step 12: Verify and commit**
+- [x] **Step 12: Verify and commit**
 
 ```powershell
 npm run verify
@@ -6264,7 +6286,7 @@ prefetchImages: (cardIds: string[], variant: ImageVariant) =>
   collection, wishlist or deck tables yet — Plan 3 creates them, and a resumable job with
   nothing to enumerate is a job that cannot be written. Deferred to Plan 3.
 
-- [ ] **Step 1: Write the failing test** — in `images.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing test** — in `images.rs`'s `mod tests`:
 
 ```rust
     /// A page of results is 50 cards, and a prefetch that a fast scroll can queue without
@@ -6296,14 +6318,14 @@ prefetchImages: (cardIds: string[], variant: ImageVariant) =>
     }
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib images
 ```
 Expected: `cannot find function 'prefetch_keys'`.
 
-- [ ] **Step 3: Implement** — in `src-tauri/src/images.rs`:
+- [x] **Step 3: Implement** — in `src-tauri/src/images.rs`:
 
 ```rust
 /// Images one prefetch call will warm. Two pages of results; past that a fast scroll
@@ -6358,7 +6380,7 @@ pub async fn prefetch_images(
 }
 ```
 
-- [ ] **Step 4: Register and expose it**
+- [x] **Step 4: Register and expose it**
 
 `src-tauri/src/lib.rs`:
 
@@ -6379,7 +6401,7 @@ pub async fn prefetch_images(
     invoke<void>("prefetch_images", { cardIds, variant }),
 ```
 
-- [ ] **Step 5: Call it when a page lands** — in `src/features/search/SearchPage.tsx`:
+- [x] **Step 5: Call it when a page lands** — in `src/features/search/SearchPage.tsx`:
 
 ```tsx
   // Warm the images for whatever just arrived. Keyed on the page count rather than on
@@ -6399,14 +6421,22 @@ pub async fn prefetch_images(
   }, [pageCount, view]);
 ```
 
-- [ ] **Step 6: Run the full verify**
+**SHIPPED with a corrected dependency (this snippet has a hole).** `keepPreviousData` holds
+the previous search's pages while a new one is in flight, so a one-page search followed by
+another one-page search never moves `pageCount` — and the page the reader actually asked
+for is the one that never gets warmed. The effect ships keyed on an *identity* of the
+newest page (`searchKey | pageCount | first item id`) plus `query.isPlaceholderData`, which
+also keeps a background refetch from re-walking 50 cached images. Two tests in
+`SearchPage.test.tsx` pin it, and both fail against the snippet above.
+
+- [x] **Step 6: Run the full verify**
 
 ```powershell
 npm run verify
 ```
 Expected: all four stages green. Fix anything that is not before going on.
 
-- [ ] **Step 7: Manual smoke** (requires an interactive run)
+- [x] **Step 7: Manual smoke** (requires an interactive run)
 
 ```powershell
 npm run tauri dev
@@ -6434,13 +6464,35 @@ Check each of these and record the result in the commit message:
 | Second launch | focuses the first window |
 | Quit mid-sync | the window closes promptly; console prints the skipped-checkpoint line rather than hanging |
 
-- [ ] **Step 8: Record the measurements** — append a short table to this plan file under a
+- [x] **Step 8: Record the measurements** — append a short table to this plan file under a
 `**Smoke result (2026-08-04)**` heading, in the shape Plan 1 used: cold-grid scroll time
 for the first screenful, `data/images` size and file count after browsing ~500 cards, and
 the observed `image_cache` row count. These are the baselines Plan 3's pre-warm job will
 be sized against.
 
-- [ ] **Step 9: Check off every box in this plan and commit**
+**Smoke result (2026-08-04)** — live `npm run tauri dev`, WebView2 driven over CDP
+(`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`), Windows 11,
+1280×800 then 1024×700, database as synced (116 568 cards), image cache starting **empty**.
+
+| Measurement | Observed |
+|---|---|
+| Cold grid, first screenful painted | **2 177 ms** from keystroke ("sliver", 379 matches): 368 ms to the new tiles mounting (300 ms debounce + query), then ~1.8 s for 16 cold images through the 6-in-flight / 100 ms pacer |
+| Warm image, second view | **3 ms** (`grid`), **2 ms** (`display`) — and `image_cache.fetched_at` does not move, so it is the disk, not a re-fetch |
+| Cold single image | **127 ms** front face, **29 ms** back face of the same printing |
+| `data/images` after ~700 cards browsed | **35.7 MB** across **591 files** (587 `grid`, 4 `display`) |
+| `SELECT count(*) FROM image_cache` | **591** — exactly the file count, every session, including after two full re-syncs |
+| Mean stored image | **59.6 KB** (`grid`); extrapolates to ~7 GB for all 116 k printings at `grid`, which is why the pre-warm job is scoped to the collection |
+| Page prefetch | one `prefetch_images` per page: 50 files on disk from a 20-tile first screen |
+| Full forced sync | **44.8 s** (download → ingest → sets), determinate 0→99 %, matching Plan 1's ~45 s |
+| Broken tiles across the whole session | **0**; 4 × 404, all of them deliberate probes (a fixture id absent from the real database, and `not-a-uuid`) |
+| Requests to external hosts | **0** — 430 `mtgimg.localhost`, 223 `ipc.localhost`, 51 `localhost:1420`; every font `.woff2` from the app origin |
+| CSP violations / uncaught exceptions / console errors | **0 / 0 / 0** |
+
+Deep-OFFSET paging (the carryover's 595 ms @ 100 k) **did not show**: the grid paged
+through ~14 pages of an unfiltered 116 k browse with no stall the sampler could see, so
+keyset pagination stays deferred.
+
+- [x] **Step 9: Check off every box in this plan and commit**
 
 ```powershell
 git add -A
@@ -6471,6 +6523,7 @@ Every MUST-DO from `docs/superpowers/notes/plan-1-carryover.md`, and where it we
 | Doc drift: duplicated FTS paragraph, "four fields", "three interpolations" | **Task 7** |
 | Deep-OFFSET paging at 595 ms @ 100k → keyset pagination if the grid pages hard | **Deferred, unchanged.** The grid pages the same `search_cards` the table already does, at the same offsets, so Plan 2 changes nothing about the measurement. Task 14's smoke is where it would show; if it does, keyset paging is a `search.rs` change and belongs with the other search work. |
 | Full collection/wishlist/deck image pre-warm (spec §5) | **Deferred to Plan 3.** There are no collection, wishlist or deck tables yet — a resumable job has nothing to enumerate. Task 14 ships the visible-page prefetch, which is the part that has data today. |
+| Set picker ranks name matches over an exact code match (found in Task 14's smoke) | **Deferred to Plan 6.** `SetCombobox.matches` filters on `name.includes(needle) \|\| code.startsWith(needle)` and then keeps `list_sets`' `released_at DESC` order, so typing the code **`lea`** returns 18 sets with Limited Edition Alpha **last** — under seven League Tokens and eight Arena League sets, whose *names* contain "lea". Findable, but not surfaced, and the older the set the worse it gets. The fix is a sort key in `matches` (exact code, then code prefix, then name), not a backend change; it needs a test that pins `lea` → LEA first. Nothing is wrong with the data or the query. |
 | Image cache pruning / "clear cache" control | **Deferred to Plan 6** (settings + distribution). The cache is capped in practice by what the user browses (~1.1 GB worst case for `thumb`), deleting `data/images` is already safe by design, and a button to do it belongs with the rest of the settings screen. |
 
 ### Visual direction coverage (`2026-08-04-visual-design-direction.md`, binding)
@@ -6513,6 +6566,10 @@ Every MUST-DO from `docs/superpowers/notes/plan-1-carryover.md`, and where it we
    settings (which slots into the ribbon beside Refresh, not into a view), overlay focus
    management, portable build + ZIP artifact, e2e smoke, and the second-sync file-growth
    decision (post-swap `VACUUM` — which REQUIRES `create_fts` after — versus shrinking
-   `raw`). The `--chart-*` tokens are still stock greys and near-invisible on the dark
+   `raw`). **Task 14's smoke put a number on that growth: two forced full re-syncs took
+   `mtg.db` from 922 MB to 2.02 GB — roughly +550 MB each, unbounded in the number of
+   refreshes.** The WAL still truncates to 0 on exit, so this is free-page bloat inside the
+   file, not a checkpoint failure; it is the strongest argument for the post-swap `VACUUM`.
+   The `--chart-*` tokens are still stock greys and near-invisible on the dark
    background; the direction doc's **pie deeps** (`--color-pie-*`, shipped in Task 8) are
    what the value-stats charts should be built from.

@@ -620,6 +620,57 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
     )
 }
 
+/// Images one prefetch call will warm. Two pages of results; past that a fast scroll
+/// queues work that competes with the tiles the reader is actually looking at.
+const MAX_PREFETCH: usize = 100;
+
+/// The keys a prefetch request turns into, validated exactly as a protocol request is.
+pub fn prefetch_keys(card_ids: &[String], variant: Variant) -> Vec<ImageKey> {
+    card_ids
+        .iter()
+        .filter(|id| is_card_id(id))
+        // Front faces only: the back of a double-faced card is not on screen until
+        // someone opens the detail pane and flips it.
+        .map(|id| ImageKey {
+            card_id: id.clone(),
+            face: 0,
+            variant,
+        })
+        .take(MAX_PREFETCH)
+        .collect()
+}
+
+/// Warm the cache for a page of results.
+///
+/// Returns as soon as the work is queued rather than when it is done: nothing is waiting
+/// on the answer, and a command that took the length of 100 downloads to resolve would be
+/// a command the UI has to manage. Failures are silent for the same reason — an image
+/// that did not prefetch is an image that fetches when it is rendered.
+#[tauri::command]
+pub async fn prefetch_images(
+    state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
+    card_ids: Vec<String>,
+    variant: String,
+) -> Result<(), String> {
+    let Some(variant) = Variant::parse(&variant) else {
+        return Err(format!("unknown image variant: {variant}"));
+    };
+    let state = state.inner().clone();
+    let keys = prefetch_keys(&card_ids, variant);
+    tauri::async_runtime::spawn(async move {
+        for key in keys {
+            // The cache's own semaphore and interval gate do the pacing; this loop just
+            // hands it work. A failure here is not worth reporting: the tile will ask
+            // again when it renders.
+            let _ = state
+                .images
+                .get(&state.client, &state.db_read, &state.db, &key)
+                .await;
+        }
+    });
+    Ok(())
+}
+
 /// A wait in whole seconds, rounded **up**.
 ///
 /// 29.4 s left of a lockout is not a `Retry-After: 29`: that is a retry inside the window
@@ -839,6 +890,34 @@ mod tests {
         ] {
             assert!(parse_request_path(bad).is_none(), "{bad} must be refused");
         }
+    }
+
+    /// A page of results is 50 cards, and a prefetch that a fast scroll can queue without
+    /// bound is a prefetch that fights the images the reader is actually looking at.
+    #[test]
+    fn a_prefetch_batch_is_capped() {
+        let ids: Vec<String> = (0..500)
+            .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
+            .collect();
+
+        let keys = prefetch_keys(&ids, Variant::Grid);
+
+        assert_eq!(keys.len(), MAX_PREFETCH);
+        assert_eq!(keys[0].face, 0, "only the front is worth prefetching");
+        assert_eq!(keys[0].variant, Variant::Grid);
+    }
+
+    #[test]
+    fn a_prefetch_batch_drops_ids_that_are_not_card_ids() {
+        let keys = prefetch_keys(
+            &[
+                "0000419b-0bba-4488-8f7a-6194544ce91d".to_owned(),
+                "../../etc/passwd".to_owned(),
+            ],
+            Variant::Thumb,
+        );
+
+        assert_eq!(keys.len(), 1);
     }
 
     #[test]

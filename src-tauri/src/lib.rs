@@ -88,7 +88,8 @@ pub fn run() {
             search::search_cards,
             search::list_sets,
             card::card_detail,
-            card::card_printings
+            card::card_printings,
+            images::prefetch_images
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the

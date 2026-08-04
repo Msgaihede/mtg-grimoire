@@ -1,7 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ManaText } from "@/components/ManaText";
-import { ipcError, type CardSummary } from "@/lib/ipc";
+import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
@@ -94,6 +94,39 @@ export function SearchPage() {
   useEffect(() => {
     virtualizer.scrollToOffset(0);
   }, [searchKey, virtualizer]);
+
+  // Warm the images for the page that just landed, so its first paint is not a wall of
+  // empty frames. The grid's own overscan mounts two rows of off-screen `<img>`s, which
+  // covers the *next scroll*; this covers the *next page*. Grid only — the table shows no
+  // art to warm.
+  //
+  // Keyed on an identity of the newest page rather than on `query.data`: an infinite
+  // query hands back a new `data` object on every background refetch, and re-firing there
+  // would re-walk 50 already-cached images for nothing. The page count alone is not
+  // enough either — `keepPreviousData` means a new search with the same number of pages
+  // never moves it, so the search the reader actually typed would be the one page that
+  // never got warmed.
+  const pages = query.data?.pages;
+  const pageCount = pages?.length ?? 0;
+  const latestPage = pages?.[pageCount - 1]?.items;
+  const isPlaceholder = query.isPlaceholderData;
+  const latestKey = `${searchKey}|${pageCount}|${latestPage?.[0]?.id ?? ""}`;
+  useEffect(() => {
+    // Placeholder rows belong to the search *before* this one; they are already warm, and
+    // the real page is one render away.
+    if (view !== "grid" || isPlaceholder) return;
+    if (!latestPage || latestPage.length === 0) return;
+    // Fire-and-forget by design: the command resolves as soon as the work is queued, and
+    // a tile whose prefetch failed simply fetches when it renders.
+    void ipc.prefetchImages(
+      latestPage.map((c) => c.id),
+      "grid",
+    ).catch(() => {});
+    // `latestPage` is deliberately out of the dependency list: it is a fresh array on
+    // every render, and `latestKey` is the part that means "a different page is now the
+    // newest one".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestKey, isPlaceholder, view]);
 
   // Paging is driven by the virtualiser's window rather than a scroll handler: it already
   // knows which row is at the bottom, and it recomputes on resize too, which a scroll

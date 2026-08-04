@@ -16,6 +16,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
     listSets: vi.fn().mockResolvedValue([]),
+    // The grid warms the images of every page that lands, so routing to the search view
+    // calls this on the way up.
+    prefetchImages: vi.fn().mockResolvedValue(undefined),
     cardDetail,
     cardPrintings,
   },

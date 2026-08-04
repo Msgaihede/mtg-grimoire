@@ -22,6 +22,30 @@ Scryfall as the only external dependency.
   `PRAGMA wal_checkpoint(TRUNCATE)`, and `journal_size_limit` caps the file at 64 MB.
 - A second launch inside 24 h makes **no network call at all** — the throttle returns
   before the ETag check and writes nothing, so `last_check_at` does not move.
+- A **forced** Refresh skips only the throttle, not the ETag/`updated_at` check: if the
+  bulk file has not changed it answers "Already up to date" in well under a second and
+  emits nothing but a `checking` phase. To exercise a real ingest, clear `bulk_etag` *and*
+  `bulk_updated_at` from `sync_meta` — clearing the etag alone still short-circuits.
+- Measured 2026-08-04 in a live window: a full forced sync is **44.8 s**, and the header's
+  card count stays readable through every second of it (that is what `db_read` bought).
+
+## Image cache (measured 2026-08-04, live)
+- Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`
+  rows and files stay 1:1, and the row's `source_uri` — Scryfall's `?<epoch>` cache-buster
+  — is the only invalidation signal. Deleting `data/images` is always safe.
+- A `grid` image averages **59.6 KB**. 600 browsed cards cost ~36 MB, so all 116 k
+  printings at `grid` would be ~7 GB — which is why Plan 3's pre-warm is scoped to what
+  the user owns rather than to the database.
+- Warm serve **2–3 ms**, cold single image **~127 ms**, cold first screenful **~1.8 s**
+  after the query lands (6 in flight, 100 ms apart).
+- A page of search results warms itself: `images::prefetch_images` takes front faces only,
+  caps the batch at 100, and is fire-and-forget — it resolves when the work is *queued*.
+- A printing with no art anywhere (162 of them) is a **200 with an SVG placeholder** at the
+  variant's exact dimensions, never a 404 and never a cache row. Only a real failure is an
+  error: 502 for a failed fetch, 503 + `Retry-After` for a rate limit.
+- `mtgimg:` is an `img-src` and nothing else — a `fetch()` at it fails CORS by design (no
+  `Access-Control-Allow-Origin`, because an `<img>` load is no-cors). Read images with
+  `<img>`, never with `fetch`.
 
 ## Frontend design (binding)
 - **All frontend work follows the `frontend-design` skill** (invoke it before UI tasks) and the
@@ -30,6 +54,17 @@ Scryfall as the only external dependency.
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
 - Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
+  inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
+  phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
+  bubble phase and returns early on `e.defaultPrevented`. Capture is load-bearing: two
+  `window` listeners for one event run in *registration* order, and the outer layer was
+  mounted first, so in the bubble phase it would act before the popup and read
+  `defaultPrevented` as false. Every new dismissible layer follows this or it will close
+  something it did not open. Pinned by `App.test.tsx`'s Escape-stack test.
+- A layer that Escape dismissed hands focus back to whatever opened it, *before* React
+  flushes the close (the element is still mounted). An outside-click deliberately does not
+  — the reader is already somewhere else.
 
 ## Architecture (read the spec first)
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`

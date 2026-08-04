@@ -15,6 +15,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { ImageVariant } from "./images";
 
 /**
  * A search as the UI asks for it.
@@ -243,6 +244,13 @@ export const ipc = {
   cardDetail: (id: string) => invoke<CardDetail | null>("card_detail", { id }),
   /** Every paper printing of the oracle card, newest first, capped at 400 with a full count. */
   cardPrintings: (oracleId: string) => invoke<PrintingsResponse>("card_printings", { oracleId }),
+  /**
+   * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
+   * the work is queued, and an image that fails to prefetch simply fetches when it is
+   * rendered. The backend takes the front face only and caps the batch at 100.
+   */
+  prefetchImages: (cardIds: string[], variant: ImageVariant) =>
+    invoke<void>("prefetch_images", { cardIds, variant }),
   /** `force` skips the 24 h throttle. Rejects if a sync is already running. */
   syncRun: (force: boolean) => invoke<SyncOutcome>("sync_run", { force }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),

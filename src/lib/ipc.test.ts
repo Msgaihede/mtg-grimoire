@@ -91,6 +91,20 @@ describe("ipc argument names match the Rust command signatures", () => {
     // compiler would agree with it.
     expect(printings).toEqual({ items: [], total: 0 });
   });
+
+  it("sends a prefetch batch under `cardIds` and `variant`", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.prefetchImages(["p1", "p2"], "grid");
+
+    // `prefetch_images(card_ids, variant)` — Tauri maps the camelCase key onto
+    // `card_ids`, and `variant` is parsed by `Variant::parse`, which rejects anything
+    // outside the four WEBP names with an error rather than silently prefetching nothing.
+    expect(invoke).toHaveBeenCalledWith("prefetch_images", {
+      cardIds: ["p1", "p2"],
+      variant: "grid",
+    });
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {
