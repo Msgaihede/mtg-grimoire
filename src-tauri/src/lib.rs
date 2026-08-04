@@ -1,3 +1,4 @@
+pub mod card_row;
 pub mod db;
 pub mod paths;
 pub mod schema;
