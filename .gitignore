@@ -1,0 +1,8 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/data/
+data/
+*.local
+.DS_Store
+.superpowers/
