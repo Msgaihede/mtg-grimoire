@@ -41,9 +41,28 @@ async fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> Result<sync::Syn
         .map_err(|e| format!("could not read sync status: {e}"))
 }
 
+/// Bring the running instance forward when a second launch is refused.
+///
+/// Without this, double-clicking the exe a second time looks like nothing happened —
+/// the guard is silent by design, so the app has to answer with the window itself.
+fn focus_existing_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, before every other plugin: this one has to decide whether the process
+        // lives at all, and by the time another plugin has initialised, a second instance
+        // has already opened `mtg.db` and the image cache directory that the first one
+        // owns. Two processes sharing a WAL database is survivable; two sharing the temp
+        // `.gz` an ingest streams from is not.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_existing_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             sync_run,
@@ -195,5 +214,47 @@ mod tests {
         let msg = data_dir_error(None, Path::new("C:\\data"), rusqlite::Error::InvalidQuery);
         assert!(msg.contains("could not be determined"), "{msg}");
         assert!(msg.contains("C:\\data"), "{msg}");
+    }
+
+    /// The CSP is configuration, not code, so nothing else can fail when it is loosened.
+    /// This is the guard: it reads the shipped config and pins the sources the app
+    /// genuinely needs — Tauri's IPC transport, which is a `fetch` to
+    /// `http://ipc.localhost` on Windows, and the image protocol — while refusing any
+    /// wildcard. `style-src-attr` is here because the virtualised result list positions
+    /// every row with an inline `style` attribute, and a hash injected into `style-src`
+    /// at build time is what would otherwise silently disable `'unsafe-inline'` for it.
+    #[test]
+    fn the_shipped_csp_allows_ipc_and_images_and_nothing_wild() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let security = &conf["app"]["security"];
+        let csp = security["csp"]
+            .as_str()
+            .expect("app.security.csp must not be null");
+        for required in [
+            "default-src 'self'",
+            "ipc:",
+            "http://ipc.localhost",
+            "mtgimg:",
+            "http://mtgimg.localhost",
+            "style-src-attr 'unsafe-inline'",
+            "object-src 'none'",
+        ] {
+            assert!(csp.contains(required), "CSP is missing `{required}`: {csp}");
+        }
+        assert!(
+            !csp.contains('*'),
+            "no wildcard sources belong in the CSP: {csp}"
+        );
+
+        // Dev has to reach Vite's HMR socket, which production must not carry.
+        let dev = security["devCsp"]
+            .as_str()
+            .expect("app.security.devCsp must be set");
+        assert!(dev.contains("ws://localhost:1420"), "{dev}");
+        assert!(
+            !csp.contains("localhost:1420"),
+            "dev-only sources leaked into csp: {csp}"
+        );
     }
 }

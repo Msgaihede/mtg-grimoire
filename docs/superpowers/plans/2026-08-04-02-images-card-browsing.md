@@ -150,7 +150,7 @@ Later plans build on: `images.rs` (pre-warm job, deck covers), `card.rs` (collec
 - Consumes: `tauri::Manager` (already imported in `lib.rs`), the existing `tauri::Builder` chain in `lib.rs::run()`.
 - Produces: a non-null `app.security.csp` and `app.security.devCsp`; a single-instance plugin registered **first** in the builder; `lib.rs::focus_existing_window(app: &tauri::AppHandle)`.
 
-- [ ] **Step 1: Write the failing CSP test** — append to the `#[cfg(test)] mod tests` block at the bottom of `src-tauri/src/lib.rs`:
+- [x] **Step 1: Write the failing CSP test** — append to the `#[cfg(test)] mod tests` block at the bottom of `src-tauri/src/lib.rs`:
 
 ```rust
     /// The CSP is configuration, not code, so nothing else can fail when it is loosened.
@@ -190,14 +190,14 @@ Later plans build on: `images.rs` (pre-warm job, deck covers), `card.rs` (collec
     }
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml the_shipped_csp
 ```
 Expected: `panicked at 'app.security.csp must not be null'`.
 
-- [ ] **Step 3: Set the CSP** — replace the `security` block in `src-tauri/tauri.conf.json`:
+- [x] **Step 3: Set the CSP** — replace the `security` block in `src-tauri/tauri.conf.json`:
 
 ```json
     "security": {
@@ -206,20 +206,20 @@ Expected: `panicked at 'app.security.csp must not be null'`.
     }
 ```
 
-- [ ] **Step 4: Run the test again**
+- [x] **Step 4: Run the test again**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml the_shipped_csp
 ```
 Expected: `test result: ok. 1 passed`.
 
-- [ ] **Step 5: Add the single-instance plugin** — in `src-tauri/Cargo.toml`, under `[dependencies]`, after `tauri-plugin-opener = "2"`:
+- [x] **Step 5: Add the single-instance plugin** — in `src-tauri/Cargo.toml`, under `[dependencies]`, after `tauri-plugin-opener = "2"`:
 
 ```toml
 tauri-plugin-single-instance = "2"
 ```
 
-- [ ] **Step 6: Register it first** — in `src-tauri/src/lib.rs`, change the builder chain in `run()`. The plugin **must be the first one registered** (its own docs are explicit); a later registration lets the second process get far enough to open the database.
+- [x] **Step 6: Register it first** — in `src-tauri/src/lib.rs`, change the builder chain in `run()`. The plugin **must be the first one registered** (its own docs are explicit); a later registration lets the second process get far enough to open the database.
 
 ```rust
     tauri::Builder::default()
@@ -249,14 +249,14 @@ fn focus_existing_window(app: &tauri::AppHandle) {
 }
 ```
 
-- [ ] **Step 7: Verify**
+- [x] **Step 7: Verify**
 
 ```powershell
 npm run verify
 ```
 Expected: build, lint, Vitest and `cargo test` all green.
 
-- [ ] **Step 8: Manual smoke — the CSP is only real in a running window**
+- [x] **Step 8: Manual smoke — the CSP is only real in a running window**
 
 ```powershell
 npm run tauri dev
@@ -267,7 +267,7 @@ Expected, with the WebView2 devtools console open (right-click → Inspect):
 - **the result rows are positioned, not stacked at the top** (proves `style-src-attr`; a violation here collapses the virtualised list into one pile);
 - launching the exe a second time (`src-tauri/target/debug/mtg-collection-tracker.exe`) focuses the first window instead of opening a second.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add -A
