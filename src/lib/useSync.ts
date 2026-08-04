@@ -95,6 +95,11 @@ export function useSync(): Sync {
         const merged = mergeStatus(latest.current, next);
         latest.current = merged;
         setStatus(merged);
+        // A rejection is this session's account of one click, and it goes stale the
+        // moment nothing is running any more: `sync_run` failures are persisted to
+        // `lastError` too, so keeping the local copy would shadow a fresher backend
+        // message for the rest of the session ("sync already running", pinned forever).
+        if (!merged.syncing) setRunError(null);
       } catch {
         // A status read that failed is not worth a banner: the next one is seconds away,
         // and a sync that failed has already persisted its reason to `lastError`.

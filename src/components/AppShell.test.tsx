@@ -112,12 +112,29 @@ describe("the Refresh button", () => {
 
   it("surfaces a rejected sync_run", async () => {
     syncRun.mockRejectedValue("sync already running");
+    // Which is what "already running" means: the run it collided with is still going.
+    syncStatus.mockResolvedValueOnce(status()).mockResolvedValue(status({ syncing: true }));
     render(<AppShell>{null}</AppShell>);
     const button = await screen.findByRole("button", { name: /refresh/i });
 
     await userEvent.click(button);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("sync already running");
+  });
+
+  /**
+   * A rejection is this session's account of one click. Once a poll reports that nothing
+   * is running, that account is stale — and leaving it up would shadow whatever the
+   * backend has since recorded in `lastError` for the rest of the session.
+   */
+  it("drops a stale rejection once nothing is running any more", async () => {
+    syncRun.mockRejectedValue("sync already running");
+    render(<AppShell>{null}</AppShell>);
+    const button = await screen.findByRole("button", { name: /refresh/i });
+
+    await userEvent.click(button);
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 });
 
@@ -156,6 +173,21 @@ describe("the error banner", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("rate limited by Scryfall");
     expect(screen.getByText("116,568 cards · data from 2026-08-03")).toBeInTheDocument();
   });
+});
+
+/**
+ * The overlay covers the header, so its Retry is the only control the user can reach on
+ * a first run that failed. It has to reach the same forced sync the header's button does.
+ */
+it("retries the first run from inside the overlay", async () => {
+  syncStatus.mockResolvedValue(
+    status({ cardCount: 0, bulkUpdatedAt: null, lastError: "rate limited by Scryfall" }),
+  );
+  render(<AppShell>{null}</AppShell>);
+
+  await userEvent.click(await screen.findByRole("button", { name: /retry/i }));
+
+  expect(syncRun).toHaveBeenCalledWith(true);
 });
 
 it("switches the active view", async () => {

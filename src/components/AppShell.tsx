@@ -81,7 +81,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
         </header>
 
-        <SyncProgress cardCount={status?.cardCount ?? null} />
+        {/* Given the whole screen when the database is empty, so it needs the error and
+            the retry action too: it covers this header, Refresh button included. */}
+        <SyncProgress
+          cardCount={status?.cardCount ?? null}
+          error={error}
+          busy={busy}
+          onRetry={refresh}
+        />
 
         {error && (
           <div
