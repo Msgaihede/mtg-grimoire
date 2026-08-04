@@ -6,14 +6,18 @@
 //! fixed array and an `ORDER BY` picked from three literals — so no user text reaches
 //! the parser; everything else is bound.
 
-use crate::sync::AppState;
+use crate::sync::{lock_db, AppState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// What the UI asks for. `limit: 0` means "unset", which becomes the default page size.
+/// What the UI asks for.
+///
+/// `#[serde(default)]` so every field is optional in the invoke payload — `limit` and
+/// `offset` are bare `u32`, and without it a caller that omits them fails to deserialize
+/// rather than getting the documented "`limit: 0` means unset" behaviour.
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct SearchRequest {
     /// Free text. Prefix-matched against name, type line and oracle/face text.
     pub text: Option<String>,
@@ -81,17 +85,18 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 
     // FTS5 has its own query language: `"`, `*`, `:`, `(`, `AND`/`OR`/`NOT` and `NEAR`
     // are all operators, and a stray one is a syntax *error*, not a zero-result search.
-    // Reducing each word to its alphanumerics and wrapping it in quotes makes every token
-    // a literal phrase; the trailing `*` is the one operator we keep, for prefix matching.
-    // Tokens are ANDed by FTS5's default, so "light bol" needs both.
-    if let Some(text) = filter(&req.text) {
+    // Splitting on everything non-alphanumeric leaves tokens that cannot contain an
+    // operator by construction; quoting each makes it a literal phrase, and the trailing
+    // `*` is the one operator kept, for prefix matching. Tokens are ANDed by FTS5's
+    // default, so "light bol" needs both.
+    //
+    // Splitting, not stripping: the index is built by `unicode61`, which breaks on the
+    // same boundaries. Deleting punctuation inside a word instead would weld its halves
+    // into a token nothing indexes — `Ajani's` → `ajanis`, `God-Pharaoh` → `godpharaoh` —
+    // so the natural spelling of a great many card names would find nothing at all.
+    if let Some(text) = nonblank(&req.text) {
         let toks: Vec<String> = text
-            .split_whitespace()
-            .map(|t| {
-                t.chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .collect::<String>()
-            })
+            .split(|c: char| !c.is_alphanumeric())
             .filter(|t| !t.is_empty())
             .map(|t| format!("\"{t}\"*"))
             .collect();
@@ -105,7 +110,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 
     // `restricted` counts as playable — a Vintage search that hid Black Lotus would be
     // wrong. Formats the card has no entry for yield NULL, which fails the IN.
-    if let Some(f) = filter(&req.format) {
+    if let Some(f) = nonblank(&req.format) {
         wheres.push("json_extract(c.legalities, '$.' || ?) IN ('legal','restricted')".into());
         params.push(Box::new(f.to_owned()));
     }
@@ -115,7 +120,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // exclusions ("contains no letter outside the filter") so the number of clauses stays
     // fixed and each one is a plain `instr`. The interpolated letter comes from `COLORS`;
     // `colors` itself is never spliced into the SQL.
-    if let Some(colors) = filter(&req.colors) {
+    if let Some(colors) = nonblank(&req.colors) {
         let colors = colors.to_ascii_uppercase();
         if colors == "C" {
             wheres.push("(c.color_identity = '' OR c.color_identity IS NULL)".into());
@@ -128,11 +133,11 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         }
     }
 
-    if let Some(s) = filter(&req.set_code) {
+    if let Some(s) = nonblank(&req.set_code) {
         wheres.push("c.set_code = ?".into());
         params.push(Box::new(s.to_owned()));
     }
-    if let Some(r) = filter(&req.rarity) {
+    if let Some(r) = nonblank(&req.rarity) {
         wheres.push("c.rarity = ?".into());
         params.push(Box::new(r.to_owned()));
     }
@@ -198,7 +203,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 /// A UI whose "Any set"/"Any format" option carries an empty value sends `Some("")`.
 /// Taken literally that would mean `set_code = ''` (matches nothing) or the json path
 /// `'$.'` — which is a *SQLite error*, failing the whole search rather than one filter.
-fn filter(v: &Option<String>) -> Option<&str> {
+fn nonblank(v: &Option<String>) -> Option<&str> {
     v.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
@@ -208,21 +213,17 @@ fn filter(v: &Option<String>) -> Option<&str> {
 /// on the IPC thread, and this one waits on the database lock, which a running ingest
 /// holds for tens of seconds. Blocking there would stall every other command with it.
 /// The wait itself is deliberate — unlike a status poll, a search the user explicitly
-/// asked for should answer late rather than answer wrong. Poisoning is recovered from:
-/// a panic elsewhere leaves the `Connection` usable, and refusing to lock ever again
-/// would brick search for the rest of the session.
+/// asked for should answer late rather than answer wrong. `lock_db` is shared with
+/// `sync` so poison recovery has one definition.
 #[tauri::command]
 pub async fn search_cards(
     state: tauri::State<'_, Arc<AppState>>,
     req: SearchRequest,
 ) -> Result<SearchResponse, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        run_search(&conn, &req)
-    })
-    .await
-    .map_err(|e| format!("search could not be run: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || run_search(&lock_db(&state), &req))
+        .await
+        .map_err(|e| format!("search could not be run: {e}"))?
 }
 
 #[cfg(test)]
@@ -263,6 +264,65 @@ mod tests {
         .unwrap();
         assert_eq!(r.total, 1);
         assert_eq!(r.items[0].name, "Lightning Bolt");
+    }
+
+    /// Names carrying the punctuation real card names carry. Added per-test and
+    /// re-indexed, so the shared fixture's pinned counts stay as they are. The rebuild
+    /// is required: `cards_fts` is external-content with no triggers, so a row inserted
+    /// after the fixture's rebuild is invisible to search until the index is redone.
+    #[rustfmt::skip]
+    fn seed_punctuated_names(conn: &Connection) {
+        let rows = [
+            ("10", "Ajani's Pridemate"),
+            ("11", "God-Pharaoh's Gift"),
+        ];
+        for (id, name) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,search_text,raw)
+                 VALUES (?1,?2,'m21','1','en','normal',1,?2,'{}')",
+                rusqlite::params![id, name],
+            ).unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');").unwrap();
+    }
+
+    /// The tokenizer (`unicode61`) splits `Ajani's` into `ajani` + `s`, so a sanitizer
+    /// that *deletes* the apostrophe rather than splitting on it searches for the token
+    /// `ajanis`, which is indexed nowhere — the natural spelling would find nothing.
+    #[test]
+    fn an_apostrophe_splits_a_word_instead_of_welding_it() {
+        let conn = seeded();
+        seed_punctuated_names(&conn);
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("Ajani's".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.total, 1);
+        assert_eq!(r.items[0].name, "Ajani's Pridemate");
+    }
+
+    /// Same failure mode for hyphens, which are everywhere in card names: `God-Pharaoh`
+    /// must search `god` AND `pharaoh`, not the unindexable `godpharaoh`.
+    #[test]
+    fn a_hyphen_splits_a_word_instead_of_welding_it() {
+        let conn = seeded();
+        seed_punctuated_names(&conn);
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("God-Pharaoh".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.total, 1);
+        assert_eq!(r.items[0].name, "God-Pharaoh's Gift");
     }
 
     #[test]
@@ -402,6 +462,79 @@ mod tests {
         .unwrap();
         assert_eq!(p2.total, 2);
         assert_ne!(p2.items[0].id, r.items[0].id);
+    }
+
+    /// The invoke payload the UI actually sends omits every field it has no value for.
+    /// `limit`/`offset` are bare `u32`, so without `#[serde(default)]` this is a
+    /// deserialization *error*, and the "`limit: 0` means unset" contract is unreachable
+    /// from the front end. Also pins the camelCase spelling Task 10 has to mirror.
+    #[test]
+    fn a_partial_camel_case_payload_deserializes_and_takes_the_default_page_size() {
+        let req: SearchRequest =
+            serde_json::from_str(r#"{"text":"bolt","setCode":"lea","paperOnly":true}"#).unwrap();
+        assert_eq!(req.set_code.as_deref(), Some("lea"));
+        assert_eq!(req.paper_only, Some(true));
+        assert_eq!(req.limit, 0, "omitted limit means unset, not a parse error");
+        assert_eq!(req.offset, 0);
+
+        // And "unset" has to behave as the default page size, not as "return nothing".
+        let r = run_search(&seeded(), &req).unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].name, "Lightning Bolt");
+    }
+
+    #[test]
+    fn released_sort_is_newest_first() {
+        let conn = seeded();
+        conn.execute("UPDATE cards SET released_at='1993-08-05' WHERE id='1'", [])
+            .unwrap();
+        conn.execute("UPDATE cards SET released_at='2005-10-07' WHERE id='2'", [])
+            .unwrap();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sort: Some("released".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = r.items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Lightning Helix", "Lightning Bolt"]);
+    }
+
+    #[test]
+    fn paper_only_false_includes_digital_printings() {
+        let conn = seeded();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                paper_only: Some(false),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.total, 3);
+    }
+
+    /// An unrecognised sort falls back to name order rather than erroring — and, since
+    /// the value here would be a syntax error if it ever reached the SQL, this also
+    /// pins that `sort` is *matched* against literals and never interpolated.
+    #[test]
+    fn an_unknown_sort_falls_back_to_name_order() {
+        let conn = seeded();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sort: Some("c.name; DROP TABLE cards".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = r.items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Lightning Bolt", "Lightning Helix"]);
     }
 
     /// `NULLS LAST` needs SQLite ≥ 3.30 — older builds reject it at *prepare* time, so

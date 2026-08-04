@@ -268,7 +268,9 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 /// Poisoning means some other thread panicked while holding the lock; the `Connection`
 /// itself survives that (rusqlite rolls an open transaction back as it unwinds), so
 /// refusing to lock ever again would brick every later sync and search for no gain.
-fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
+///
+/// Shared with [`crate::search`] so that recovery rule lives in exactly one place.
+pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
     state.db.lock().unwrap_or_else(|e| e.into_inner())
 }
 
