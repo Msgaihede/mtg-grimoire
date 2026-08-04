@@ -28,10 +28,10 @@ async fn sync_run(
 
 /// Current sync state.
 ///
-/// `async` and answered on the blocking pool, which is not a style choice: a *sync*
-/// command body runs inline on the IPC thread, and this one takes the database lock —
-/// held for the whole of an ingest. Answering a status poll on that thread would freeze
-/// the window for the length of the very sync the caller is asking about.
+/// `async`, and answered on the blocking pool, because a *sync* command body runs inline
+/// on the IPC thread: this one counts 116 k rows and reads four meta keys, which is small
+/// but not free, and a UI is expected to poll it. `sync::status` itself never waits on the
+/// database — mid-sync it reports what it can and leaves the rest `None`.
 #[tauri::command]
 async fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> Result<sync::SyncStatus, String> {
     let state = state.inner().clone();

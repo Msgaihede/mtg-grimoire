@@ -15,7 +15,17 @@
 //! * **The expensive work is paid for once.** The 77 MB download is the costly step, so
 //!   the metadata that makes the *next* check cheap (`bulk_etag`, `bulk_updated_at`) is
 //!   written as soon as the ingest succeeds — before `/sets` is even called. A later
-//!   failure then costs a retry of the cheap part only.
+//!   failure then costs a retry of the cheap part only, and [`finish_unchanged`] picks
+//!   `/sets` back up on the next run so that retry actually happens.
+//! * **A run that failed leaves no trace that it succeeded.** `last_check_at` is written
+//!   only on the paths that return `Ok`. Stamping it right after the check — before the
+//!   download and ingest that can still fail — would let one dead download throttle
+//!   every *automatic* retry for 24 h, and the app has no other way to start one.
+//!
+//! Failures are also *persisted*, to `last_error`. A sync spawned at startup emits its
+//! `sync:progress` events within milliseconds, before the webview has registered a
+//! listener, and Tauri drops events that nobody is listening for — so the event is the
+//! fast path, and `sync_meta` is the one the UI can still read a minute later.
 //!
 //! `sync_meta.value` is `NOT NULL`, so this module never writes an absent value as
 //! NULL or as `""`: [`set_meta_opt`] deletes the row instead. See [`get_meta`].
@@ -25,7 +35,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
@@ -36,6 +46,9 @@ const K_BULK_UPDATED_AT: &str = "bulk_updated_at";
 const K_LAST_CHECK_AT: &str = "last_check_at";
 const K_LAST_INGEST_AT: &str = "last_ingest_at";
 const K_CARD_COUNT: &str = "card_count";
+/// Why the last run failed, or no row at all if it did not. Survives the process, which
+/// the `sync:progress` event does not.
+const K_LAST_ERROR: &str = "last_error";
 
 /// How long an update check stays fresh. Scryfall rebuilds the bulk files roughly
 /// daily, and the app must not poll the API on every launch.
@@ -69,13 +82,21 @@ pub struct SyncOutcome {
     pub updated_at: Option<String>,
 }
 
+/// What the UI polls.
+///
+/// `syncing` and `data_dir` are always answered. The four database-derived fields are
+/// `None` when the database is busy — which mid-sync it is, for the whole of an ingest
+/// (see [`status`]). `None` there means "not readable right now", never "zero"; a UI
+/// should keep showing its last value rather than render an empty collection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
-    pub card_count: i64,
+    pub card_count: Option<i64>,
     /// Unix seconds, as a string (see [`unix_now`]).
     pub last_check_at: Option<String>,
     pub bulk_updated_at: Option<String>,
+    /// Why the last run failed. Cleared by the next run that gets anywhere.
+    pub last_error: Option<String>,
     pub data_dir: String,
     pub syncing: bool,
 }
@@ -156,6 +177,32 @@ pub fn should_check(last: Option<u64>, now: u64, force: bool) -> bool {
     force || last.is_none_or(|l| l > now || now - l >= CHECK_INTERVAL_SECS)
 }
 
+/// Does this 200 describe the file that is already in the database?
+///
+/// The bulk endpoint answers 200 whenever the stored ETag does not match — including
+/// when there is no stored ETag because a proxy stripped it, or an earlier run never got
+/// one. `updated_at` is then the only evidence of whether the file actually rotated, and
+/// re-downloading 77 MB to re-ingest the same rows is the failure this avoids.
+///
+/// `card_count > 0` is not a detail: metadata can outlive the cards it describes (an
+/// interrupted first run, a swapped-in staging table that never landed), and an empty
+/// database must download no matter what the metadata claims.
+fn already_ingested(remote: Option<&str>, stored: Option<&str>, card_count: i64) -> bool {
+    remote.is_some() && remote == stored && card_count > 0
+}
+
+/// The size the download will be verified against.
+///
+/// A listing with no size gives the download nothing to check itself against; the client
+/// would fetch the whole file and then reject it as a mismatch against zero. Refuse
+/// before spending the bandwidth, and say why.
+fn check_download_size(compressed_size: u64) -> Result<u64, String> {
+    if compressed_size == 0 {
+        return Err("bulk listing had no size; refusing to download".into());
+    }
+    Ok(compressed_size)
+}
+
 /// Seconds since the Unix epoch. A clock before 1970 is not worth a panic: it reads as
 /// 0, which makes every check due.
 fn unix_now() -> u64 {
@@ -189,6 +236,24 @@ fn count_cards(conn: &Connection) -> i64 {
         .unwrap_or(0)
 }
 
+/// Has `sets` never been filled? A failed count reads as "not empty" — if the database
+/// cannot answer, a `/sets` fetch it cannot store either is not the fix.
+fn sets_are_empty(conn: &Connection) -> bool {
+    conn.query_row("SELECT count(*) FROM sets", [], |r| r.get::<_, i64>(0))
+        .map(|n| n == 0)
+        .unwrap_or(false)
+}
+
+/// Bookkeeping shared by every path that returns `Ok` after actually checking: the
+/// check is fresh, and whatever failed last time no longer stands.
+///
+/// Deliberately *not* called on the throttled short-circuit — that run checked nothing,
+/// and clearing `last_error` there would erase a failure the user never got to see.
+fn mark_checked(conn: &Connection, now: u64) -> rusqlite::Result<()> {
+    set_meta(conn, K_LAST_CHECK_AT, &now.to_string())?;
+    set_meta_opt(conn, K_LAST_ERROR, None)
+}
+
 /// The outcome of a run that changed nothing.
 fn unchanged(card_count: i64) -> SyncOutcome {
     SyncOutcome {
@@ -205,6 +270,20 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 /// refusing to lock ever again would brick every later sync and search for no gain.
 fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
     state.db.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Lock the database only if that can be done now.
+///
+/// For readers that must answer *during* a sync: the ingest holds the connection for its
+/// whole run, and a poll that waits for it would hang for exactly as long as the thing
+/// it is trying to report on. Poisoning is recovered as in [`lock_db`]; only genuine
+/// contention returns `None`.
+fn try_lock_db(state: &AppState) -> Option<MutexGuard<'_, Connection>> {
+    match state.db.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 /// Upsert `sets`, returning how many rows were written.
@@ -264,26 +343,65 @@ impl Drop for SyncingGuard<'_> {
 
 /// Run one sync, refusing to start a second while one is in flight.
 ///
-/// Errors are returned *and* emitted as a `sync:progress` event with phase `error`, so
-/// a sync started at launch — with no caller to return to — still reaches the UI.
+/// A failure is reported three ways because no one of them is reliable on its own: it is
+/// returned to the caller (there is none for the sync spawned at startup), emitted as a
+/// `sync:progress` event with phase `error` (Tauri drops events the webview is not yet
+/// listening for, which at startup is all of them), and written to `sync_meta.last_error`
+/// (which is still there whenever the UI gets around to asking).
 pub async fn run_sync(
     state: Arc<AppState>,
     app: tauri::AppHandle,
     force: bool,
 ) -> Result<SyncOutcome, String> {
     if state.syncing.swap(true, Ordering::SeqCst) {
-        // Returned without a progress event on purpose: the sync already in flight is
-        // the one driving `sync:progress`, and an `error` phase here would paint it as
-        // failed in the UI.
+        // Returned without a progress event, and without touching `last_error`, on
+        // purpose: the sync already in flight is the one driving `sync:progress`, and
+        // recording this as *its* failure would be a lie about a run that is still going.
         return Err("sync already running".into());
     }
     let _guard = SyncingGuard(&state.syncing);
 
     let result = do_sync(&state, &app, force).await;
     if let Err(e) = &result {
+        {
+            let conn = lock_db(&state);
+            let _ = set_meta_opt(&conn, K_LAST_ERROR, Some(e.as_str()));
+        }
         let _ = app.emit("sync:progress", Progress::error(e.clone()));
     }
     result
+}
+
+/// Finish a run that found nothing new to ingest.
+///
+/// The `/sets` backfill is what makes "store the card metadata before fetching sets"
+/// safe: `/sets` is otherwise only reached on the download path, so once an ETag is
+/// stored every later run is a 304 that skips it, and a `/sets` call that failed during
+/// the run which ingested the cards would leave the table empty until Scryfall next
+/// rotates the bulk file. A `count(*)` is cheap; a permanently empty `sets` table is not.
+async fn finish_unchanged(
+    state: &Arc<AppState>,
+    app: &tauri::AppHandle,
+    now: u64,
+    card_count: i64,
+) -> Result<SyncOutcome, String> {
+    let needs_sets = {
+        let conn = lock_db(state);
+        sets_are_empty(&conn)
+    };
+    if needs_sets {
+        emit(app, "sets", 0, 0);
+        let sets = state.client.fetch_sets().await.map_err(|e| e.to_string())?;
+        let mut conn = lock_db(state);
+        insert_sets(&mut conn, &sets).map_err(|e| e.to_string())?;
+    }
+
+    {
+        let conn = lock_db(state);
+        mark_checked(&conn, now).map_err(|e| e.to_string())?;
+    }
+    emit_done(app, card_count);
+    Ok(unchanged(card_count))
 }
 
 async fn do_sync(
@@ -301,6 +419,8 @@ async fn do_sync(
     };
 
     if !should_check(stored.last_check, now, force) {
+        // Nothing is written here — not even `last_error` is cleared. This run checked
+        // nothing, so it has earned no claim about the state of the world.
         return Ok(unchanged(stored.card_count));
     }
 
@@ -310,38 +430,29 @@ async fn do_sync(
         .check_bulk_update(stored.etag.as_deref())
         .await
         .map_err(|e| e.to_string())?;
-    {
-        let conn = lock_db(state);
-        set_meta(&conn, K_LAST_CHECK_AT, &now.to_string()).map_err(|e| e.to_string())?;
-    }
 
     let scryfall::BulkCheck::Available(info) = check else {
-        // Not emitting a terminal phase here would leave the UI stuck on "checking"
-        // for the common case — a 304 is what most runs get.
-        emit_done(app, stored.card_count);
-        return Ok(unchanged(stored.card_count));
+        // The common case. `finish_unchanged` stamps `last_check_at` (this run really
+        // did check) and emits a terminal phase, without which the UI would sit on
+        // "checking" forever on the outcome most runs get.
+        return finish_unchanged(state, app, now, stored.card_count).await;
     };
     let updated_at = Some(info.updated_at.clone()).filter(|s| !s.is_empty());
 
-    // A 200 with the same `updated_at` we already ingested is the same file: the ETag
-    // was lost (a proxy stripped it, or a previous run never stored one), not the data
-    // rotated. Re-store the ETag so the next check is a free 304, and skip the 77 MB.
-    // `card_count > 0` guards the case where the metadata survived but the cards did
-    // not — an interrupted first run must still download.
-    if updated_at.is_some() && updated_at == stored.bulk_updated_at && stored.card_count > 0 {
+    if already_ingested(
+        updated_at.as_deref(),
+        stored.bulk_updated_at.as_deref(),
+        stored.card_count,
+    ) {
+        // Re-store the ETag the 200 came with, so the next check is a free 304 again.
         {
             let conn = lock_db(state);
             set_meta_opt(&conn, K_BULK_ETAG, info.etag.as_deref()).map_err(|e| e.to_string())?;
         }
-        emit_done(app, stored.card_count);
-        return Ok(unchanged(stored.card_count));
+        return finish_unchanged(state, app, now, stored.card_count).await;
     }
 
-    // Without a size there is nothing to verify the download against, and an
-    // `expected_size` of 0 would only surface later as a confusing size mismatch.
-    if info.compressed_size == 0 {
-        return Err("bulk listing had no size; refusing to download".into());
-    }
+    let expected_size = check_download_size(info.compressed_size)?;
 
     let gz = state.data_dir.join("tmp").join("default-cards.jsonl.gz");
     if let Some(parent) = gz.parent() {
@@ -349,14 +460,14 @@ async fn do_sync(
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
 
-    emit(app, "downloading", 0, info.compressed_size);
+    emit(app, "downloading", 0, expected_size);
     let mut last_emit = 0u64;
     let downloaded = state
         .client
         .download(
             &info.jsonl_download_uri,
             &gz,
-            info.compressed_size,
+            expected_size,
             &mut |done, total| {
                 if done.saturating_sub(last_emit) >= DOWNLOAD_EMIT_BYTES || done >= total {
                     emit(app, "downloading", done, total);
@@ -377,7 +488,7 @@ async fn do_sync(
 
     // The ingest is a long *blocking* call (minutes of gzip + SQLite), so it runs on a
     // blocking thread with the lock taken inside the closure — never across an await.
-    let ingested = {
+    let joined = {
         let state = state.clone();
         let app = app.clone();
         let gz = gz.clone();
@@ -388,11 +499,17 @@ async fn do_sync(
             })
         })
         .await
-        .map_err(|e| format!("ingest task failed: {e}"))?
     };
-    let stats = match ingested {
-        Ok(s) => s,
+    let stats = match joined {
+        Ok(Ok(s)) => s,
+        // The task itself died (panicked, or the runtime is shutting down). The file is
+        // no more use here than after any other ingest failure, and the module's rule is
+        // that only a resumable partial survives a failed run.
         Err(e) => {
+            let _ = std::fs::remove_file(&gz);
+            return Err(format!("ingest task failed: {e}"));
+        }
+        Ok(Err(e)) => {
             // The file is the right size but its contents are unusable (or the database
             // refused it). Either way this exact file will not ingest next time either,
             // and a resume would only re-verify a file that is already complete.
@@ -421,6 +538,13 @@ async fn do_sync(
         insert_sets(&mut conn, &sets).map_err(|e| e.to_string())?;
     }
 
+    {
+        // Last, because this is the record that the *whole* run succeeded. Stamping it
+        // any earlier would let a failure between here and the check throttle the next
+        // 24 hours of automatic retries.
+        let conn = lock_db(state);
+        mark_checked(&conn, now).map_err(|e| e.to_string())?;
+    }
     emit_done(app, card_count);
     Ok(SyncOutcome {
         updated: true,
@@ -429,17 +553,32 @@ async fn do_sync(
     })
 }
 
-/// Current sync state for the UI. `card_count` is counted live rather than read from
-/// `sync_meta`, so it is right even if a previous run died before writing its meta.
+/// Current sync state for the UI.
+///
+/// Answers without waiting for the database. `syncing` and `data_dir` never needed it;
+/// the rest is read only if the lock is free, because the ingest holds it for its whole
+/// run and a status poll that blocked on it would hang for the length of the sync it was
+/// asking about — parking a thread from the blocking pool on every poll. Mid-sync those
+/// fields come back `None`, which means "not readable right now", not "zero".
+///
+/// `card_count` is counted live rather than read from `sync_meta`, so it is right even if
+/// a previous run died before writing its meta.
 pub fn status(state: &AppState) -> SyncStatus {
-    let conn = lock_db(state);
-    SyncStatus {
-        card_count: count_cards(&conn),
-        last_check_at: get_meta(&conn, K_LAST_CHECK_AT),
-        bulk_updated_at: get_meta(&conn, K_BULK_UPDATED_AT),
+    let mut status = SyncStatus {
+        card_count: None,
+        last_check_at: None,
+        bulk_updated_at: None,
+        last_error: None,
         data_dir: state.data_dir.display().to_string(),
         syncing: state.syncing.load(Ordering::SeqCst),
+    };
+    if let Some(conn) = try_lock_db(state) {
+        status.card_count = Some(count_cards(&conn));
+        status.last_check_at = get_meta(&conn, K_LAST_CHECK_AT);
+        status.bulk_updated_at = get_meta(&conn, K_BULK_UPDATED_AT);
+        status.last_error = get_meta(&conn, K_LAST_ERROR);
     }
+    status
 }
 
 #[cfg(test)]
@@ -452,6 +591,16 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         schema::migrate(&conn).unwrap();
         conn
+    }
+
+    fn test_state(conn: Connection, syncing: bool) -> AppState {
+        AppState {
+            db: Mutex::new(conn),
+            data_dir: PathBuf::from("D:\\app\\data"),
+            syncing: AtomicBool::new(syncing),
+            // Never called: these tests stop short of the network.
+            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+        }
     }
 
     fn set_row(code: &str, name: &str) -> crate::scryfall::SetRow {
@@ -550,6 +699,113 @@ mod tests {
         assert_eq!(read_stored_state(&conn).last_check, None);
     }
 
+    /// The two decisions that stand between a run and a 77 MB download. Both were
+    /// inline conditions; both are the kind that is wrong in one direction silently.
+    #[test]
+    fn already_ingested_needs_a_matching_timestamp_and_cards_to_show_for_it() {
+        let ts = Some("2026-08-03T21:16:27.869+00:00");
+        assert!(already_ingested(ts, ts, 116_000));
+
+        // Metadata outliving its cards is exactly the state an interrupted first run
+        // leaves behind: matching timestamps, nothing in the table.
+        assert!(
+            !already_ingested(ts, ts, 0),
+            "an empty database must download whatever the metadata claims"
+        );
+        assert!(!already_ingested(
+            Some("2026-08-04T09:00:00.000+00:00"),
+            ts,
+            116_000
+        ));
+        assert!(!already_ingested(ts, None, 116_000));
+        // Two absent timestamps are not a match — they are two pieces of no evidence.
+        assert!(!already_ingested(None, None, 116_000));
+    }
+
+    #[test]
+    fn a_bulk_listing_without_a_size_is_refused_before_the_download() {
+        let err = check_download_size(0).unwrap_err();
+        assert!(err.contains("no size"), "{err}");
+        assert_eq!(check_download_size(77_332_681).unwrap(), 77_332_681);
+    }
+
+    /// The bookkeeping every successful path shares. Its counterpart — that a *failed*
+    /// run never reaches this — is control flow in `do_sync`: `mark_checked` is called
+    /// only on the three paths that return `Ok`.
+    #[test]
+    fn mark_checked_stamps_the_check_and_clears_the_previous_failure() {
+        let conn = db();
+        set_meta(&conn, "last_error", "rate limited by Scryfall").unwrap();
+
+        mark_checked(&conn, 1_800_000_000).unwrap();
+
+        assert_eq!(
+            get_meta(&conn, "last_check_at").as_deref(),
+            Some("1800000000")
+        );
+        assert!(get_meta(&conn, "last_error").is_none());
+    }
+
+    /// `sets` is filled only on the download path, and once an ETag is stored every
+    /// later run is a 304 that never gets there — so "is it empty?" is what decides
+    /// whether a failed `/sets` is ever retried.
+    #[test]
+    fn an_empty_sets_table_is_recognised_as_needing_a_backfill() {
+        let mut conn = db();
+        assert!(sets_are_empty(&conn));
+        insert_sets(&mut conn, &[set_row("dom", "Dominaria")]).unwrap();
+        assert!(!sets_are_empty(&conn));
+    }
+
+    /// The status a UI polls *during* a sync. The ingest holds the database for its
+    /// whole run, so a status call that waited for the lock would hang for exactly as
+    /// long as the run it is reporting on — and park a pool thread per poll.
+    #[test]
+    fn status_answers_even_while_the_database_is_held() {
+        let conn = db();
+        set_meta(&conn, "last_check_at", "1800000000").unwrap();
+        set_meta(&conn, "last_error", "rate limited by Scryfall").unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES ('x','Lightning Bolt','lea','161','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        let state = Arc::new(test_state(conn, true));
+
+        // Stands in for the ingest, which holds this same lock for minutes — and the
+        // call is made from another thread, as the real poll is. A regression to a
+        // blocking lock then fails here in five seconds instead of hanging the suite.
+        let held = state.db.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let state = state.clone();
+            std::thread::spawn(move || tx.send(status(&state)));
+        }
+        let busy = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("status must answer while the database is held, not queue behind it");
+        drop(held);
+        let idle = status(&state);
+
+        assert!(busy.syncing, "the flag is an atomic and needs no lock");
+        assert_eq!(busy.data_dir, "D:\\app\\data");
+        assert_eq!(
+            busy.card_count, None,
+            "unreadable must not be reported as zero cards"
+        );
+        assert_eq!(busy.last_check_at, None);
+        assert_eq!(busy.last_error, None);
+
+        assert_eq!(idle.card_count, Some(1));
+        assert_eq!(idle.last_check_at.as_deref(), Some("1800000000"));
+        assert_eq!(
+            idle.last_error.as_deref(),
+            Some("rate limited by Scryfall"),
+            "a failure the startup event could never have delivered is still here"
+        );
+    }
+
     #[test]
     fn sets_are_upserted_and_rows_without_a_code_are_skipped() {
         let mut conn = db();
@@ -602,9 +858,10 @@ mod tests {
         );
 
         let status = serde_json::to_value(SyncStatus {
-            card_count: 1,
+            card_count: Some(1),
             last_check_at: Some("1800000000".into()),
             bulk_updated_at: None,
+            last_error: Some("rate limited by Scryfall".into()),
             data_dir: "D:\\app\\data".into(),
             syncing: true,
         })
@@ -615,6 +872,29 @@ mod tests {
                 "cardCount": 1,
                 "lastCheckAt": "1800000000",
                 "bulkUpdatedAt": null,
+                "lastError": "rate limited by Scryfall",
+                "dataDir": "D:\\app\\data",
+                "syncing": true
+            })
+        );
+        // Mid-sync shape: nothing the database owns is readable, and `cardCount` says
+        // so with `null` rather than lying with a `0` the UI would render as "empty".
+        let busy = serde_json::to_value(SyncStatus {
+            card_count: None,
+            last_check_at: None,
+            bulk_updated_at: None,
+            last_error: None,
+            data_dir: "D:\\app\\data".into(),
+            syncing: true,
+        })
+        .unwrap();
+        assert_eq!(
+            busy,
+            serde_json::json!({
+                "cardCount": null,
+                "lastCheckAt": null,
+                "bulkUpdatedAt": null,
+                "lastError": null,
                 "dataDir": "D:\\app\\data",
                 "syncing": true
             })
