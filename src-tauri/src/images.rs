@@ -15,6 +15,7 @@
 use crate::scryfall::{self, ScryfallError};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -26,11 +27,6 @@ const MAX_CONCURRENT_FETCHES: usize = 6;
 /// Minimum spacing between two fetch *starts* — the ≤10/s ceiling expressed as something
 /// a scheduler can enforce.
 const MIN_FETCH_INTERVAL: Duration = Duration::from_millis(100);
-
-/// How long the bookkeeping write waits for the write connection before giving up. The
-/// ingest holds it for 44 s once a day; a picture must not wait that out, and a missing
-/// `image_cache` row costs one re-fetch from an origin with no rate limit.
-const BOOKKEEPING_LOCK_WAIT: Duration = Duration::from_millis(250);
 
 /// Shortest pause a 429 can buy: what Scryfall documents a rate limit as costing.
 /// A `Retry-After: 0` or `: 1` is not permission to retry inside the window we are
@@ -103,13 +99,32 @@ pub struct ImageKey {
     pub variant: Variant,
 }
 
-/// `images/<variant>/<id[0..2]>/<id>-<face>.webp`, exactly as spec §5 fixes it.
-pub fn cache_path(images_dir: &Path, key: &ImageKey) -> PathBuf {
+/// A Scryfall id: 36 characters of hex and dashes. Deliberately a charset check rather
+/// than a UUID parse — the point is that no `/`, `\`, `.` or `%` can survive it, which is
+/// a stronger and simpler claim than "is well-formed".
+pub fn is_card_id(s: &str) -> bool {
+    s.len() == 36 && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// `images/<variant>/<id[0..2]>/<id>-<face>.webp`, exactly as spec §5 fixes it — or
+/// `None` for an id that cannot be a Scryfall id.
+///
+/// `ImageKey` is built from a URL by the protocol handler, and both of its string-shaped
+/// parts end up as path segments. `Variant` is four literals and cannot be anything else;
+/// the id is checked here, so *there is no way to obtain a path* for `..` or an absolute
+/// path — the refusal is in the return type rather than in a comment asking callers to be
+/// careful.
+pub fn cache_path(images_dir: &Path, key: &ImageKey) -> Option<PathBuf> {
+    if !is_card_id(&key.card_id) {
+        return None;
+    }
     let shard: String = key.card_id.chars().take(2).collect();
-    images_dir
-        .join(key.variant.key())
-        .join(shard)
-        .join(format!("{}-{}.webp", key.card_id, key.face))
+    Some(
+        images_dir
+            .join(key.variant.key())
+            .join(shard)
+            .join(format!("{}-{}.webp", key.card_id, key.face)),
+    )
 }
 
 /// What a placeholder is standing in for.
@@ -267,6 +282,11 @@ pub enum ImageError {
     RateLimited { retry_after_secs: u64 },
     #[error("could not fetch the image: {0}")]
     Fetch(String),
+    /// A cache failure the request cannot be served around. Nothing produces it today —
+    /// a fetch whose bytes could not be stored serves those bytes anyway and counts the
+    /// failure ([`Cache::store_failures`]) — but it is part of the error surface the
+    /// protocol maps, and cache *maintenance* (eviction, a rebuilt index) has nothing to
+    /// hand back when the filesystem refuses.
     #[error("could not use the image cache: {0}")]
     Io(String),
     #[error("could not read the card database: {0}")]
@@ -295,6 +315,10 @@ pub struct Cache {
     /// carries the 429 penalty: Scryfall's rate limit is per application, so a limit one
     /// request earns has to be paid by every request, not just that one.
     gate: tokio::sync::Mutex<tokio::time::Instant>,
+    /// Images fetched but not stored. A read-only data directory or a full disk costs the
+    /// user a slower grid rather than a blank one, which is right — but it is also
+    /// invisible, and a number that only ever climbs is what makes it findable.
+    store_failures: AtomicU64,
 }
 
 impl Cache {
@@ -303,11 +327,17 @@ impl Cache {
             dir: images_dir,
             permits: tokio::sync::Semaphore::new(MAX_CONCURRENT_FETCHES),
             gate: tokio::sync::Mutex::new(tokio::time::Instant::now()),
+            store_failures: AtomicU64::new(0),
         }
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// How many fetched images could not be written to the cache this session.
+    pub fn store_failures(&self) -> u64 {
+        self.store_failures.load(Ordering::Relaxed)
     }
 
     /// Bytes for `key`: from disk when they are current, else fetched, stored and served.
@@ -321,6 +351,12 @@ impl Cache {
         write: &Mutex<Connection>,
         key: &ImageKey,
     ) -> Result<Served, ImageError> {
+        // First, before the database is even asked: an id that cannot be a Scryfall id
+        // becomes a file name further down, and `..` is not something to look up.
+        if !is_card_id(&key.card_id) {
+            return Err(ImageError::UnknownCard);
+        }
+
         let (uri, cached) = {
             // A short synchronous scope, closed before the first `.await` below: a
             // `MutexGuard` held across one would make this future `!Send` (the protocol
@@ -341,7 +377,11 @@ impl Cache {
             }
         };
 
-        let path = cache_path(&self.dir, key);
+        // The guard above is what makes this infallible; the `Option` is the type system
+        // carrying that guarantee instead of a comment claiming it.
+        let Some(path) = cache_path(&self.dir, key) else {
+            return Err(ImageError::UnknownCard);
+        };
         if cached {
             // The row says these bytes are current; the *file* is the thing that can have
             // been deleted under us, and that is allowed — the cache is disposable, so a
@@ -355,20 +395,27 @@ impl Cache {
         }
 
         let bytes = self.fetch(client, &uri).await?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ImageError::Io(e.to_string()))?;
-        }
-        tokio::fs::write(&path, &bytes)
-            .await
-            .map_err(|e| ImageError::Io(e.to_string()))?;
 
-        // Bookkeeping last, and optional. Losing it costs one re-fetch from an origin
-        // with no rate limit; waiting for it would cost the user a picture for the length
-        // of an ingest.
-        if let Some(conn) = crate::db::lock_for(write, BOOKKEEPING_LOCK_WAIT) {
-            let _ = record(&conn, key, &uri, bytes.len());
+        match store(&path, &bytes).await {
+            // Bookkeeping last, and optional. Losing the row costs one re-fetch from an
+            // origin with no rate limit — so this is a single `try_lock`
+            // ([`Duration::ZERO`]) rather than a wait: a *contended* write lock means an
+            // ingest that will hold it for the next 44 s, and polling for it would park a
+            // worker thread on a lock it was never going to win, once per image.
+            Ok(()) => {
+                if let Some(conn) = crate::db::lock_for(write, Duration::ZERO) {
+                    let _ = record(&conn, key, &uri, bytes.len());
+                }
+            }
+            // A cache that cannot be written is still a cache that can serve *this*
+            // request: the bytes are already in hand, and refusing them because the data
+            // directory is read-only or the disk is full would turn a storage problem into
+            // a blank grid. Counted and printed, never returned — and emphatically not
+            // recorded, because a row here would vouch for bytes that are not there.
+            Err(e) => {
+                self.store_failures.fetch_add(1, Ordering::Relaxed);
+                eprintln!("image cache: could not store {}: {e}", path.display());
+            }
         }
         Ok(Served {
             bytes,
@@ -377,6 +424,15 @@ impl Cache {
     }
 
     /// One paced fetch: a permit, then the interval gate, then the request.
+    ///
+    /// The gate is a **deadline, not a queue**. A wait of pacing size (≤
+    /// [`MIN_FETCH_INTERVAL`]) is slept out, because that is the ≤10/s ceiling doing its
+    /// job. A wait longer than that can only be a 429 penalty some other tile earned, and
+    /// standing in line for it would be wrong twice over: the request occupies a worker
+    /// thread and a permit for up to five minutes, and a *second* rate limit could not
+    /// even report itself until the first sleeper woke. So a penalty is answered rather
+    /// than waited on — "not now, in N seconds" is a complete answer, and the protocol
+    /// turns it into a 503 with a `Retry-After` the UI can act on.
     async fn fetch(&self, client: &scryfall::Client, uri: &str) -> Result<Vec<u8>, ImageError> {
         let _permit = self
             .permits
@@ -385,6 +441,12 @@ impl Cache {
             .map_err(|e| ImageError::Fetch(e.to_string()))?;
         {
             let mut next = self.gate.lock().await;
+            let remaining = next.saturating_duration_since(tokio::time::Instant::now());
+            if remaining > MIN_FETCH_INTERVAL {
+                return Err(ImageError::RateLimited {
+                    retry_after_secs: secs_rounded_up(remaining),
+                });
+            }
             tokio::time::sleep_until(*next).await;
             *next = tokio::time::Instant::now() + MIN_FETCH_INTERVAL;
         }
@@ -395,8 +457,7 @@ impl Cache {
                 // The penalty is per application, so it applies to everyone: push the
                 // gate out so no other tile even starts until the window has passed.
                 let penalty = rate_limit_penalty(retry_after_secs);
-                let mut next = self.gate.lock().await;
-                *next = tokio::time::Instant::now() + penalty;
+                self.penalise(penalty).await;
                 Err(ImageError::RateLimited {
                     retry_after_secs: penalty.as_secs(),
                 })
@@ -407,6 +468,53 @@ impl Cache {
             Err(e) => Err(ImageError::Fetch(e.to_string())),
         }
     }
+
+    /// Charge a rate limit to the gate every later fetch has to pass.
+    ///
+    /// `max`, never assignment: two tiles hitting the same 429 window can come back with
+    /// different `Retry-After` values, and the shorter one arriving second must not
+    /// release the app from the longer lockout that is already in force.
+    async fn penalise(&self, penalty: Duration) {
+        let mut next = self.gate.lock().await;
+        *next = (*next).max(tokio::time::Instant::now() + penalty);
+    }
+}
+
+/// A wait in whole seconds, rounded **up**.
+///
+/// 29.4 s left of a lockout is not a `Retry-After: 29`: that is a retry inside the window
+/// we are being punished for, which is what Scryfall escalates to bans over.
+fn secs_rounded_up(d: Duration) -> u64 {
+    d.as_secs() + u64::from(d.subsec_nanos() > 0)
+}
+
+/// Write `bytes` to `path`, creating the shard directory — whole, or not at all.
+///
+/// Written to a temporary name and renamed into place, because the destination of a
+/// *re*-fetch is a file `image_cache` already calls current. A crash between truncating
+/// that file and finishing the write would leave a short one that nothing invalidates —
+/// [`is_current`] compares URIs, and the URI has not changed — so the torn bytes would be
+/// served until Scryfall next re-scans the card, which can be months. `rename` replaces
+/// the destination on Windows too (`MoveFileEx` with `MOVEFILE_REPLACE_EXISTING`), so the
+/// swap is one operation on either platform.
+///
+/// The temporary name carries a counter because two writes to one key can genuinely
+/// overlap — a fast scroll, or a re-fetch racing a first fetch — and a shared temporary
+/// would interleave them into one corrupt file that then gets renamed into place.
+async fn store(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let tmp = path.with_extension(format!("{}.tmp", WRITE_SEQ.fetch_add(1, Ordering::Relaxed)));
+    tokio::fs::write(&tmp, bytes).await?;
+    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+        // Nothing will ever look for this name again, so a failed swap must not leave it.
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -508,19 +616,53 @@ mod tests {
                 dir,
                 &key("0000419b-0bba-4488-8f7a-6194544ce91d", 0, Variant::Grid)
             ),
-            dir.join("grid")
-                .join("00")
-                .join("0000419b-0bba-4488-8f7a-6194544ce91d-0.webp")
+            Some(
+                dir.join("grid")
+                    .join("00")
+                    .join("0000419b-0bba-4488-8f7a-6194544ce91d-0.webp")
+            )
         );
         assert_eq!(
             cache_path(
                 dir,
                 &key("ab000000-0000-0000-0000-000000000001", 1, Variant::Thumb)
             ),
-            dir.join("thumb")
-                .join("ab")
-                .join("ab000000-0000-0000-0000-000000000001-1.webp")
+            Some(
+                dir.join("thumb")
+                    .join("ab")
+                    .join("ab000000-0000-0000-0000-000000000001-1.webp")
+            )
         );
+    }
+
+    /// The id becomes a directory name and a file name, so a path exists only for
+    /// something that could be a Scryfall id. `ImageKey` is built from a URL by the
+    /// protocol handler — these are the shapes that turn one cache directory into
+    /// "anywhere on this disk", and the `Option` is what makes refusing them structural.
+    #[test]
+    fn a_path_is_only_built_for_something_that_could_be_a_scryfall_id() {
+        let dir = Path::new("D:\\app\\data\\images");
+        for bad in [
+            "..",
+            "../../../windows/system32/config/sam",
+            "..\\..\\..\\secrets",
+            "C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "/etc/passwd",
+            "",
+            // The dangerous near-misses: the right length, one character that is not hex.
+            "0000419b-0bba-4488-8f7a-6194544ce91/",
+            "0000419b-0bba-4488-8f7a-6194544ce9%2",
+            "0000419b-0bba-4488-8f7a-6194544ce9..",
+            // ...and the right charset at the wrong length.
+            "0000419b-0bba-4488-8f7a-6194544ce9",
+            "0000419b-0bba-4488-8f7a-6194544ce91dd",
+        ] {
+            assert!(
+                cache_path(dir, &key(bad, 0, Variant::Grid)).is_none(),
+                "`{bad}` must not become a path"
+            );
+            assert!(!is_card_id(bad), "`{bad}` must not read as a card id");
+        }
     }
 
     #[test]
@@ -766,7 +908,7 @@ mod tests {
         assert_eq!(served.content_type, WEBP);
         assert_eq!(mock.calls(), 1);
         assert_eq!(
-            std::fs::read(cache_path(f.cache.dir(), &k)).unwrap(),
+            std::fs::read(cache_path(f.cache.dir(), &k).unwrap()).unwrap(),
             body,
             "the bytes must be on disk at the sharded path"
         );
@@ -797,7 +939,7 @@ mod tests {
         let k = key(BOLT, 0, Variant::Grid);
 
         f.get(&client, &k).await.unwrap();
-        std::fs::remove_file(cache_path(f.cache.dir(), &k)).unwrap();
+        std::fs::remove_file(cache_path(f.cache.dir(), &k).unwrap()).unwrap();
         let served = f.get(&client, &k).await.unwrap();
 
         assert_eq!(served.bytes, vec![7u8; 16]);
@@ -832,7 +974,7 @@ mod tests {
         assert_eq!(served.bytes, vec![2u8; 8], "a bumped version must not hit");
         assert_eq!(fresh.calls(), 1);
         assert_eq!(
-            std::fs::read(cache_path(f.cache.dir(), &k)).unwrap(),
+            std::fs::read(cache_path(f.cache.dir(), &k).unwrap()).unwrap(),
             vec![2u8; 8],
             "the stale bytes must be replaced, not left beside the new ones"
         );
@@ -882,6 +1024,24 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, ImageError::UnknownCard), "{err:?}");
+    }
+
+    /// `ImageKey` is a public struct with public fields, built by the protocol handler out
+    /// of a URL. An id that could not be a Scryfall id is refused before the database is
+    /// asked and long before a path exists — the id is a directory name and a file name.
+    #[tokio::test]
+    async fn a_hostile_card_id_never_reaches_the_database_or_the_filesystem() {
+        let f = Fixture::new("hostile-id");
+        let client = scryfall::Client::new("http://127.0.0.1:1".into());
+
+        for bad in ["../../../windows/system32/config/sam", "..", ""] {
+            let err = f
+                .get(&client, &key(bad, 0, Variant::Grid))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ImageError::UnknownCard), "`{bad}`: {err:?}");
+        }
+        assert!(!f.cache.dir().exists());
     }
 
     /// The 429 penalty is per application, so it is charged to the gate every other tile
@@ -962,6 +1122,152 @@ mod tests {
         assert!(
             ahead <= Duration::from_secs(300),
             "a year of lockout is not something a header gets to ask for: {ahead:?}"
+        );
+    }
+
+    /// A lockout is a deadline to report, not a queue to stand in. The tile that arrives
+    /// during someone else's 429 must be told when to come back — in the time it takes to
+    /// read a clock — rather than occupying a worker thread and a permit until the window
+    /// closes. (Waiting it out would also mean a *second* rate limit could not report
+    /// itself until the first sleeper woke, because the gate mutex was held across the
+    /// sleep.)
+    #[tokio::test]
+    async fn a_request_during_a_penalty_is_refused_at_once_with_the_time_remaining() {
+        let f = Fixture::new("penalty");
+        let server = MockServer::start();
+        let limited = server.mock(|when, then| {
+            when.method(GET).path("/grid/v17.webp");
+            then.status(429).header("retry-after", "60");
+        });
+        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        let client = scryfall::Client::new(server.base_url());
+        let k = key(BOLT, 0, Variant::Grid);
+
+        f.get(&client, &k).await.unwrap_err(); // earns the 60 s lockout
+
+        let started = std::time::Instant::now();
+        let err = tokio::time::timeout(Duration::from_secs(5), f.get(&client, &k))
+            .await
+            .expect("a request must not wait out a penalty it did not earn")
+            .unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "answering took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(err, ImageError::RateLimited { retry_after_secs }
+                     if (55..=60).contains(&retry_after_secs)),
+            "the wait reported must be what is left of the window: {err:?}"
+        );
+        assert_eq!(
+            limited.calls(),
+            1,
+            "and it must not spend a request finding out"
+        );
+    }
+
+    /// Two tiles can hit the same 429 window and come back with different `Retry-After`
+    /// values. The shorter one arriving second must not release the app from the longer
+    /// lockout that is already in force.
+    #[tokio::test]
+    async fn a_later_penalty_never_shortens_a_lockout_already_in_force() {
+        let cache = Cache::new(PathBuf::from("D:\\app\\data\\images"));
+
+        cache.penalise(Duration::from_secs(300)).await;
+        cache.penalise(Duration::from_secs(30)).await;
+
+        let ahead = cache
+            .gate
+            .lock()
+            .await
+            .saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            ahead > Duration::from_secs(290),
+            "a 30 s penalty must not end a 300 s lockout: {ahead:?}"
+        );
+    }
+
+    /// The bytes land whole or not at all. A re-fetch overwrites a file `image_cache`
+    /// already calls current, so a half-written one is not a miss — it is torn bytes with
+    /// a row that vouches for them, and nothing re-checks until Scryfall re-scans the
+    /// card, which can be months away.
+    #[tokio::test]
+    async fn a_store_replaces_the_file_in_one_step_and_leaves_no_temporary_behind() {
+        let dir = std::env::temp_dir().join("mtgtest-images-store");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("grid").join("00").join("bolt-0.webp");
+        let left = |dir: &Path| -> Vec<String> {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.ends_with(".webp"))
+                .collect()
+        };
+
+        store(&path, &[1u8; 64]).await.unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            vec![1u8; 64],
+            "the shard directory is created on the way"
+        );
+
+        // Over an existing, longer file: `rename` replaces on Windows too, and a shorter
+        // new image must not leave the tail of the old one behind it.
+        store(&path, &[2u8; 8]).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), vec![2u8; 8]);
+        assert!(
+            left(path.parent().unwrap()).is_empty(),
+            "a temporary must not survive a store: {:?}",
+            left(path.parent().unwrap())
+        );
+
+        // And the failure branch: a swap that cannot happen (here, a *directory* sitting
+        // where the image goes) must clean up after itself rather than leave a `.tmp`
+        // nothing will ever look for again.
+        let blocked = dir.join("grid").join("00").join("blocked-0.webp");
+        std::fs::create_dir_all(&blocked).unwrap();
+        assert!(store(&blocked, &[3u8; 8]).await.is_err());
+        assert!(
+            left(blocked.parent().unwrap()).is_empty(),
+            "a failed store must leave nothing behind: {:?}",
+            left(blocked.parent().unwrap())
+        );
+    }
+
+    /// A cache that cannot be written is still a cache that can serve the request in
+    /// hand. A read-only data directory (a USB stick with the switch flipped, a locked-
+    /// down Program Files) should cost the user a slower grid, never a blank one — and
+    /// must never leave a row claiming bytes that are not there.
+    #[tokio::test]
+    async fn bytes_are_served_even_when_they_cannot_be_cached() {
+        let f = Fixture::new("unwritable");
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/grid/v17.webp");
+            then.status(200).body(vec![7u8; 16]);
+        });
+        f.card(BOLT, &format!("{}/grid/v17.webp", server.base_url()));
+        let client = scryfall::Client::new(server.base_url());
+        // A *file* where the variant directory has to go: `create_dir_all` cannot win
+        // against that on any platform, and it needs no permission games to arrange.
+        std::fs::create_dir_all(f.cache.dir()).unwrap();
+        std::fs::write(f.cache.dir().join("grid"), b"not a directory").unwrap();
+
+        let served = f.get(&client, &key(BOLT, 0, Variant::Grid)).await.unwrap();
+
+        assert_eq!(served.bytes, vec![7u8; 16]);
+        assert_eq!(served.content_type, WEBP);
+        assert_eq!(
+            f.cache.store_failures(),
+            1,
+            "the failure has to be findable"
+        );
+        assert_eq!(
+            f.cached_row(BOLT),
+            None,
+            "a row must not vouch for bytes that were never stored"
         );
     }
 

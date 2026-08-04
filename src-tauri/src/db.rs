@@ -65,6 +65,13 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// because for both of them "could not" is a real answer: skip the checkpoint (the WAL is
 /// a valid journal either way), skip the row (one re-fetch from an unlimited origin).
 ///
+/// A `timeout` of [`Duration::ZERO`] is exactly one `try_lock` with no sleeping at all,
+/// which is what a caller on an async worker thread wants: contention on the *write*
+/// connection means an ingest that will hold it for the next 44 s, so polling for it would
+/// park a pool thread on a lock it was never going to win. The exit checkpoint, which runs
+/// on its own thread with the process already ending, is the caller that can afford to
+/// wait a little.
+///
 /// Poisoning is recovered exactly as `sync::lock_db` does: the panicking thread's
 /// `Connection` survives, and refusing the lock forever would brick the app for no gain.
 pub fn lock_for(
@@ -169,7 +176,19 @@ mod tests {
         );
 
         drop(taken);
-        assert!(lock_for(&mutex, Duration::from_millis(50)).is_some());
+        let taken = lock_for(&mutex, Duration::from_millis(50));
+        assert!(taken.is_some());
+
+        // Zero is a plain `try_lock`, and not sleeping is the whole point of it: the image
+        // cache asks from an async worker thread, where even one 20 ms poll is a pool
+        // thread parked on a lock that an ingest is going to hold for another 44 seconds.
+        let started = std::time::Instant::now();
+        assert!(lock_for(&mutex, Duration::ZERO).is_none());
+        assert!(
+            started.elapsed() < LOCK_POLL_INTERVAL,
+            "a zero timeout must not sleep, and took {:?}",
+            started.elapsed()
+        );
     }
 
     /// A scratch directory of its own per test — these all touch real files, and the
