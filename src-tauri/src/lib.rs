@@ -3,6 +3,7 @@ pub mod db;
 pub mod ingest;
 pub mod paths;
 pub mod schema;
+pub mod scryfall;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]

@@ -1,0 +1,508 @@
+//! Async HTTP client for the two Scryfall hosts this app talks to.
+//!
+//! Three operations, each with a rule that is easy to get wrong:
+//!
+//! * **Update check** — `GET /bulk-data/default_cards` with the stored weak ETag in
+//!   `If-None-Match`. A 304 is the common case and costs zero bytes, which is the
+//!   whole point: the alternative is re-downloading 77 MB to learn nothing changed.
+//! * **Download** — the bulk file is a real `.gz` *file*, not a `Content-Encoding`.
+//!   reqwest's `gzip` feature is deliberately absent from `Cargo.toml`; enabling it
+//!   would transparently decompress the body and hand the ingest a file that is
+//!   neither valid gzip nor the size the API promised.
+//! * **Sets** — `GET /sets`, following `has_more`/`next_page`.
+//!
+//! Every request to `api.scryfall.com` must carry a real `User-Agent` *and* an
+//! `Accept` header; Cloudflare answers 403 without them, so the UA is pinned on the
+//! client itself and [`Client::api_get`] is the only way this module builds an API
+//! request. The API host is rate limited (a 429 locks the caller out for 30 seconds,
+//! and Scryfall bans repeat offenders), so 429 gets its own error variant for callers
+//! to back off on. The file origins under `*.scryfall.io` are explicitly unlimited.
+
+use std::path::Path;
+
+/// Sent on every request. Scryfall requires an accurate, app-specific UA and says
+/// plainly: "Do not allow HTTP libraries to choose the header for you."
+pub const USER_AGENT: &str =
+    "MTGCollectionTracker/0.1 (https://github.com/markusseerup/mtg-collection)";
+
+/// The `Accept` value Scryfall's own documentation offers as an example.
+const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";
+
+#[derive(Debug, thiserror::Error)]
+pub enum ScryfallError {
+    #[error("http request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("failed to write download: {0}")]
+    Io(#[from] std::io::Error),
+    /// The download finished but is not the size the API promised. A truncated file
+    /// can still be valid gzip, so this check is the only thing standing between a
+    /// short download and a half-ingested card database.
+    #[error("downloaded {actual} bytes, expected {expected}")]
+    SizeMismatch { expected: u64, actual: u64 },
+    /// HTTP 429. Scryfall limits access for 30 seconds and escalates to bans, so the
+    /// caller must back off rather than retry immediately.
+    #[error("rate limited by Scryfall; back off before retrying")]
+    RateLimited,
+    #[error("unexpected response from Scryfall: {0}")]
+    Unexpected(String),
+}
+
+/// Result of an `If-None-Match` check against the bulk-data endpoint.
+#[derive(Debug)]
+pub enum BulkCheck {
+    /// The stored ETag still matches: nothing to download.
+    NotModified,
+    Available(BulkInfo),
+}
+
+/// The bits of a `bulk_data` object this app needs. Note `jsonl_download_uri` and
+/// `compressed_size`: the pre-2026-07-20 `download_uri`/`size` fields are gone and
+/// the legacy `.json` URLs return 404.
+#[derive(Debug, Clone)]
+pub struct BulkInfo {
+    pub jsonl_download_uri: String,
+    pub updated_at: String,
+    pub compressed_size: u64,
+    /// Weak ETag from the response, to be stored and replayed as `If-None-Match`.
+    pub etag: Option<String>,
+}
+
+/// One row of `GET /sets`, shaped to match the `sets` table.
+#[derive(Debug, Clone)]
+pub struct SetRow {
+    pub code: String,
+    pub name: String,
+    pub arena_code: Option<String>,
+    pub mtgo_code: Option<String>,
+    pub set_type: Option<String>,
+    pub released_at: Option<String>,
+    pub icon_svg_uri: Option<String>,
+}
+
+/// Scryfall API client. `base_url` is injectable so the tests can point it at a
+/// local mock server; production passes `"https://api.scryfall.com"`.
+#[derive(Debug, Clone)]
+pub struct Client {
+    http: reqwest::Client,
+    base_url: String,
+}
+
+impl Client {
+    pub fn new(base_url: String) -> Client {
+        let http = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .build()
+            .expect("client");
+        Client {
+            // Trailing slash trimmed so joining a path can never produce `//`.
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            http,
+        }
+    }
+
+    /// The only way this module issues an API request, so no call site can forget the
+    /// mandatory `Accept` header. (`User-Agent` is pinned on the client itself and so
+    /// rides along on downloads too.)
+    fn api_get(&self, url: &str) -> reqwest::RequestBuilder {
+        self.http.get(url).header("Accept", ACCEPT)
+    }
+
+    /// Ask whether the `default_cards` bulk file has changed since `etag`.
+    ///
+    /// Uses the per-type endpoint rather than the `/bulk-data` collection, whose ETag
+    /// flips whenever any of the seven files rotate.
+    pub async fn check_bulk_update(&self, etag: Option<&str>) -> Result<BulkCheck, ScryfallError> {
+        let mut req = self.api_get(&format!("{}/bulk-data/default_cards", self.base_url));
+        if let Some(e) = etag {
+            req = req.header("If-None-Match", e);
+        }
+        let resp = req.send().await?;
+        match resp.status().as_u16() {
+            304 => Ok(BulkCheck::NotModified),
+            429 => Err(ScryfallError::RateLimited),
+            200 => {
+                let etag = resp
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                let v = json_body(resp).await?;
+                Ok(BulkCheck::Available(BulkInfo {
+                    // The one field with no sane default: without a download URI there
+                    // is nothing to sync, so a missing one is an error rather than "".
+                    jsonl_download_uri: v["jsonl_download_uri"]
+                        .as_str()
+                        .ok_or_else(|| ScryfallError::Unexpected("no jsonl_download_uri".into()))?
+                        .to_owned(),
+                    updated_at: v["updated_at"].as_str().unwrap_or_default().to_owned(),
+                    compressed_size: v["compressed_size"].as_u64().unwrap_or(0),
+                    etag,
+                }))
+            }
+            s => Err(ScryfallError::Unexpected(format!("status {s}"))),
+        }
+    }
+
+    /// Download `uri` to `dest`, resuming a partial file via HTTP `Range`, and verify
+    /// the result is exactly `expected_size` bytes.
+    ///
+    /// `progress` is called after every chunk with `(bytes_on_disk, expected_size)` —
+    /// the first value is absolute, counting bytes already present from an earlier
+    /// attempt, not just those fetched by this call.
+    ///
+    /// Resume rules: a `dest` smaller than `expected_size` sends `Range: bytes=N-`,
+    /// and a 206 appends; a 200 (server ignored the range, or nothing to resume)
+    /// restarts the file from zero. Any other status returns *before* `dest` is
+    /// opened, so a 5xx or a 429 can never truncate a partial download.
+    ///
+    /// The size check is the load-bearing part. A truncated bulk file is still valid
+    /// gzip and would ingest as a plausible-looking partial card database, so the byte
+    /// count from the API is the only reliable signal that the file is whole. On
+    /// mismatch this returns [`ScryfallError::SizeMismatch`] and **leaves `dest` in
+    /// place**: a short file is exactly what a later `Range` resume needs, and a long
+    /// one is restarted from scratch by the rule above. Callers must not hand a file
+    /// to the ingest after this returns an error.
+    pub async fn download(
+        &self,
+        uri: &str,
+        dest: &Path,
+        expected_size: u64,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<(), ScryfallError> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let existing = tokio::fs::metadata(dest)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        // A file at or past the expected size is not resumable — it is either finished
+        // or wrong. Either way the fix is to fetch it again from byte zero.
+        let resuming = existing > 0 && existing < expected_size;
+        let mut req = self.http.get(uri);
+        if resuming {
+            req = req.header("Range", format!("bytes={existing}-"));
+        }
+        let resp = req.send().await?;
+
+        let (mut file, mut done) = match resp.status().as_u16() {
+            206 if resuming => (
+                tokio::fs::OpenOptions::new()
+                    .append(true)
+                    .open(dest)
+                    .await?,
+                existing,
+            ),
+            200 => (tokio::fs::File::create(dest).await?, 0),
+            429 => return Err(ScryfallError::RateLimited),
+            s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
+        };
+
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+            done += chunk.len() as u64;
+            progress(done, expected_size);
+        }
+        file.flush().await?;
+        // Durable before it is verified: the whole point of keeping a partial file is
+        // that it survives a crash and can be resumed.
+        file.sync_all().await?;
+        drop(file);
+
+        let actual = tokio::fs::metadata(dest).await?.len();
+        if actual != expected_size {
+            return Err(ScryfallError::SizeMismatch {
+                expected: expected_size,
+                actual,
+            });
+        }
+        Ok(())
+    }
+
+    /// All sets, following `has_more`/`next_page` to the end.
+    pub async fn fetch_sets(&self) -> Result<Vec<SetRow>, ScryfallError> {
+        let mut url = format!("{}/sets", self.base_url);
+        let mut out = Vec::new();
+        loop {
+            let resp = self.api_get(&url).send().await?;
+            match resp.status().as_u16() {
+                200 => {}
+                429 => return Err(ScryfallError::RateLimited),
+                s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
+            }
+            let v = json_body(resp).await?;
+            for s in v["data"].as_array().into_iter().flatten() {
+                out.push(SetRow {
+                    code: s["code"].as_str().unwrap_or_default().to_owned(),
+                    name: s["name"].as_str().unwrap_or_default().to_owned(),
+                    arena_code: s["arena_code"].as_str().map(str::to_owned),
+                    mtgo_code: s["mtgo_code"].as_str().map(str::to_owned),
+                    set_type: s["set_type"].as_str().map(str::to_owned),
+                    released_at: s["released_at"].as_str().map(str::to_owned),
+                    icon_svg_uri: s["icon_svg_uri"].as_str().map(str::to_owned),
+                });
+            }
+            if v["has_more"].as_bool() != Some(true) {
+                break;
+            }
+            let next = v["next_page"].as_str().unwrap_or_default().to_owned();
+            // A missing or self-referential `next_page` would otherwise spin forever
+            // against the same URL.
+            if next.is_empty() || next == url {
+                break;
+            }
+            url = next;
+        }
+        Ok(out)
+    }
+}
+
+/// Parse a response body as JSON.
+///
+/// reqwest is built without its `json` feature (it would only duplicate `serde_json`,
+/// which this crate already depends on), so bodies are decoded here.
+async fn json_body(resp: reqwest::Response) -> Result<serde_json::Value, ScryfallError> {
+    let bytes = resp.bytes().await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| ScryfallError::Unexpected(format!("response was not JSON: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn etag_match_returns_not_modified() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/bulk-data/default_cards")
+                .header("if-none-match", "W/\"abc\"");
+            then.status(304);
+        });
+        let c = Client::new(server.base_url());
+        assert!(matches!(
+            c.check_bulk_update(Some("W/\"abc\"")).await.unwrap(),
+            BulkCheck::NotModified
+        ));
+    }
+
+    #[tokio::test]
+    async fn fresh_check_parses_bulk_info() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/bulk-data/default_cards")
+                .header("user-agent", USER_AGENT)
+                .header_exists("accept");
+            then.status(200)
+                .header("etag", "W/\"xyz\"")
+                .json_body(serde_json::json!({
+                    "object":"bulk_data","type":"default_cards",
+                    "updated_at":"2026-08-03T21:16:27.869+00:00",
+                    "jsonl_download_uri":"https://data.scryfall.io/default-cards/x.jsonl.gz",
+                    "compressed_size":77332681u64 }));
+        });
+        let c = Client::new(server.base_url());
+        let BulkCheck::Available(info) = c.check_bulk_update(None).await.unwrap() else {
+            panic!()
+        };
+        assert_eq!(info.compressed_size, 77332681);
+        assert_eq!(info.etag.as_deref(), Some("W/\"xyz\""));
+    }
+
+    #[tokio::test]
+    async fn download_verifies_size_and_reports_progress() {
+        let server = MockServer::start();
+        let body = vec![7u8; 1000];
+        server.mock(|when, then| {
+            when.method(GET).path("/file.gz");
+            then.status(200).body(body.clone());
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl.gz");
+        let _ = std::fs::remove_file(&dest);
+        let mut seen = 0u64;
+        c.download(
+            &format!("{}/file.gz", server.base_url()),
+            &dest,
+            1000,
+            &mut |done, _| seen = done,
+        )
+        .await
+        .unwrap();
+        assert_eq!(seen, 1000);
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 1000);
+    }
+
+    #[tokio::test]
+    async fn download_size_mismatch_errors() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/f.gz");
+            then.status(200).body("short");
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl2.gz");
+        let _ = std::fs::remove_file(&dest);
+        let err = c
+            .download(
+                &format!("{}/f.gz", server.base_url()),
+                &dest,
+                9999,
+                &mut |_, _| {},
+            )
+            .await;
+        assert!(matches!(err, Err(ScryfallError::SizeMismatch { .. })));
+        // The short file is kept on purpose: it is exactly what a later Range resume
+        // needs. What must not happen is the caller mistaking it for a whole file.
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 5);
+    }
+
+    /// The resume path: a partial file must be continued from its current length and
+    /// appended to, never re-fetched from zero and never appended to twice.
+    #[tokio::test]
+    async fn download_resumes_a_partial_file_with_range() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/resume.gz")
+                .header("range", "bytes=400-");
+            then.status(206).body(vec![9u8; 600]);
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl-resume.gz");
+        std::fs::write(&dest, vec![7u8; 400]).unwrap();
+
+        let mut reports: Vec<(u64, u64)> = Vec::new();
+        c.download(
+            &format!("{}/resume.gz", server.base_url()),
+            &dest,
+            1000,
+            &mut |done, total| reports.push((done, total)),
+        )
+        .await
+        .unwrap();
+
+        let got = std::fs::read(&dest).unwrap();
+        assert_eq!(got.len(), 1000);
+        assert_eq!(&got[..400], &[7u8; 400][..], "existing bytes must be kept");
+        assert_eq!(&got[400..], &[9u8; 600][..], "new bytes must be appended");
+        assert_eq!(reports.last(), Some(&(1000, 1000)));
+        assert!(
+            reports.iter().all(|&(done, _)| done > 400),
+            "progress must be absolute, counting the bytes already on disk: {reports:?}"
+        );
+    }
+
+    /// A file at or beyond the expected size cannot be resumed — appending to it would
+    /// only make it more wrong — so the request goes out without a Range header and
+    /// the file is rewritten from zero.
+    #[tokio::test]
+    async fn download_restarts_when_the_existing_file_is_not_resumable() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/restart.gz").header_missing("range");
+            then.status(200).body(vec![1u8; 1000]);
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl-restart.gz");
+        std::fs::write(&dest, vec![7u8; 2500]).unwrap();
+
+        c.download(
+            &format!("{}/restart.gz", server.base_url()),
+            &dest,
+            1000,
+            &mut |_, _| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), vec![1u8; 1000]);
+    }
+
+    /// A failed request must not cost the caller the partial download it already has:
+    /// the response status is settled before `dest` is opened, so nothing truncates.
+    #[tokio::test]
+    async fn a_failed_response_leaves_the_partial_file_intact() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/boom.gz");
+            then.status(503);
+        });
+        let c = Client::new(server.base_url());
+        let dest = std::env::temp_dir().join("mtgtest-dl-boom.gz");
+        std::fs::write(&dest, vec![7u8; 400]).unwrap();
+
+        let err = c
+            .download(
+                &format!("{}/boom.gz", server.base_url()),
+                &dest,
+                1000,
+                &mut |_, _| {},
+            )
+            .await;
+        assert!(
+            matches!(&err, Err(ScryfallError::Unexpected(m)) if m.contains("503")),
+            "expected an unexpected-status error, got {err:?}"
+        );
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 400);
+    }
+
+    /// 429 is not a generic failure: Scryfall locks the caller out for 30 seconds and
+    /// bans repeat offenders, so it has to reach the caller as something to back off on.
+    #[tokio::test]
+    async fn rate_limiting_is_reported_as_its_own_error() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/default_cards");
+            then.status(429);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/sets");
+            then.status(429);
+        });
+        let c = Client::new(server.base_url());
+        assert!(matches!(
+            c.check_bulk_update(None).await,
+            Err(ScryfallError::RateLimited)
+        ));
+        assert!(matches!(
+            c.fetch_sets().await,
+            Err(ScryfallError::RateLimited)
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_sets_follows_pagination() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/sets")
+                .query_param("page", "2")
+                // The mandatory headers must survive the pagination hop too: without
+                // them this mock stops matching and the assertions below fail.
+                .header("user-agent", USER_AGENT)
+                .header_exists("accept");
+            then.status(200).json_body(serde_json::json!({
+                "has_more": false, "data": [{"code":"dom","name":"Dominaria","arena_code":"dar"}]}));
+        });
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/sets")
+                .header("user-agent", USER_AGENT)
+                .header_exists("accept");
+            then.status(200).json_body(serde_json::json!({
+                "has_more": true,
+                "next_page": format!("{}/sets?page=2", server.base_url()),
+                "data": [{"code":"lea","name":"Limited Edition Alpha"}]}));
+        });
+        let c = Client::new(server.base_url());
+        let sets = c.fetch_sets().await.unwrap();
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[1].arena_code.as_deref(), Some("dar"));
+    }
+}

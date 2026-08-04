@@ -25,4 +25,14 @@ flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# rustls, never native-tls (no OpenSSL/schannel dependency in a portable build), and
+# deliberately NO `gzip` feature: Scryfall bulk data is a real .gz *file*, not a
+# Content-Encoding, so transparent decompression would corrupt the download.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio = { version = "1", features = ["fs", "io-util"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+httpmock = "0.8"
+tokio = { version = "1", features = ["macros", "rt"] }
 
