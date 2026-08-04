@@ -1,5 +1,6 @@
 pub mod db;
 pub mod paths;
+pub mod schema;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
