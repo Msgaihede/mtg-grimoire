@@ -3,6 +3,7 @@ import {
   cardImageUrl,
   imageOrigin,
   imageRetryDelayMs,
+  IMAGE_RETRY_CEILING_MS,
   IMAGE_RETRY_FLOOR_MS,
   IMAGE_RETRY_SPREAD_MS,
 } from "@/lib/images";
@@ -48,21 +49,32 @@ describe("cardImageUrl", () => {
  * error event carries no headers, and the app's CSP allows `mtgimg:` under `img-src`
  * only, so a `fetch` that could read them is blocked before it is sent (and would be
  * cross-origin and header-less anyway). What is left is to never come back sooner than
- * the shortest wait the protocol can ask for — the same 30 s floor `images.rs` clamps
- * every `Retry-After` up to.
+ * the floor `images.rs` clamps its own penalty to, and to double from there — a real
+ * `Retry-After: 60` is a lockout the first retry lands in the middle of.
  */
 describe("imageRetryDelayMs", () => {
   it("never retries inside the protocol's own rate-limit floor", () => {
-    expect(imageRetryDelayMs(0)).toBe(IMAGE_RETRY_FLOOR_MS);
+    expect(imageRetryDelayMs(1, 0)).toBe(IMAGE_RETRY_FLOOR_MS);
     for (let i = 0; i < 200; i++) {
-      expect(imageRetryDelayMs()).toBeGreaterThanOrEqual(IMAGE_RETRY_FLOOR_MS);
+      expect(imageRetryDelayMs(1)).toBeGreaterThanOrEqual(IMAGE_RETRY_FLOOR_MS);
     }
+  });
+
+  it("doubles per attempt, so a lockout longer than the floor still heals", () => {
+    expect(imageRetryDelayMs(2, 0)).toBe(2 * IMAGE_RETRY_FLOOR_MS);
+    expect(imageRetryDelayMs(3, 0)).toBe(4 * IMAGE_RETRY_FLOOR_MS);
+  });
+
+  it("stops doubling at the longest lockout the protocol will report", () => {
+    // Past 300 s the fetcher's own gate has reopened, so a longer wait buys nothing and
+    // an unbounded double would park a tile for hours.
+    expect(imageRetryDelayMs(9, 0)).toBe(IMAGE_RETRY_CEILING_MS);
   });
 
   it("spreads a screenful of retries over a window instead of one tick", () => {
     // A screenful is ~40 tiles and they all fail in the same instant, so an undithered
     // delay would send all 40 back at once — the herd the backoff exists to prevent.
-    const delays = new Set(Array.from({ length: 200 }, () => imageRetryDelayMs()));
+    const delays = new Set(Array.from({ length: 200 }, () => imageRetryDelayMs(1)));
 
     expect(delays.size).toBeGreaterThan(1);
     expect(Math.max(...delays)).toBeLessThan(IMAGE_RETRY_FLOOR_MS + IMAGE_RETRY_SPREAD_MS);

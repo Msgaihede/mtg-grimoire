@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs } from "@/lib/images";
+import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
 import type { CardSummary } from "@/lib/ipc";
 import { rarityColor } from "@/lib/rarity";
 import { cn } from "@/lib/utils";
@@ -133,13 +133,20 @@ export function CardGrid({
       ref={scrollRef}
       role="group"
       aria-label="Search results"
-      tabIndex={0}
+      // No `tabIndex`: every tile is a button, so the scroller is reachable and
+      // scrollable from the keyboard through its own contents. A tab stop on the box
+      // around them would be one more press between the reader and the cards.
       className="min-h-0 flex-1 overflow-auto rounded-md border border-border p-3"
     >
       {/* Holds the scrollbar open to the full height of the wall while the rows inside it
           are positioned absolutely — and, having no padding of its own, is the honest
-          answer to how wide a row of tiles may be. */}
-      <div ref={rowsRef} style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+          answer to how wide a row of tiles may be. The virtualiser's total counts a gap
+          after the last row, which here would be padding under the wall that nothing is
+          separating. */}
+      <div
+        ref={rowsRef}
+        style={{ height: Math.max(0, virtualizer.getTotalSize() - GAP), position: "relative" }}
+      >
         {virtualRows.map((v) => (
           <div
             key={v.key}
@@ -200,18 +207,25 @@ function Tile({
 
   // The self-healing half of the rate limit. A 429 in the image fetcher makes every
   // uncached tile fail fast with a 503 + `Retry-After`, and an `<img>` that errors once
-  // stays broken for the session — so the tile comes back on its own, once, no sooner
-  // than the shortest wait the protocol can ask for and dithered so a screenful of them
-  // does not return in one tick. After that it waits to be asked: scrolling it out of
-  // view and back is a remount, which is a reader saying "now".
+  // stays broken for the session — so the tile comes back on its own, twice, on a
+  // doubling delay that starts no sooner than the floor the protocol clamps its own
+  // penalty to and is dithered so a screenful of them does not return in one tick.
+  //
+  // Twice, because a lockout longer than the floor swallows the first attempt whole: at
+  // `Retry-After: 60` the tile comes back at ~30 s, meets a gate that is still shut, and
+  // a single-shot schedule would leave it on "No image" over a lockout that ended half a
+  // minute later. One timer per tile at a time either way. After the second the tile
+  // waits to be asked: scrolling it out of view and back is a remount, which is a reader
+  // saying "now".
   useEffect(() => {
     if (state !== "waiting") return;
+    const next = attempt + 1;
     const timer = setTimeout(() => {
-      setAttempt(1);
+      setAttempt(next);
       setState("showing");
-    }, imageRetryDelayMs());
+    }, imageRetryDelayMs(next));
     return () => clearTimeout(timer);
-  }, [state]);
+  }, [state, attempt]);
 
   const url = cardImageUrl(card.id, 0, "grid");
 
@@ -239,7 +253,7 @@ function Tile({
             // virtualizer bounds the DOM; this bounds what the DOM asks for.
             loading="lazy"
             decoding="async"
-            onError={() => setState(attempt === 0 ? "waiting" : "failed")}
+            onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
             className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
           />
         ) : (

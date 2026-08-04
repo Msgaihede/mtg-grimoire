@@ -32,7 +32,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** Long enough to cover the dithered wait whatever `Math.random` returned. */
+/** Long enough to cover the first dithered wait whatever `Math.random` returned. */
 const PAST_THE_RETRY = IMAGE_RETRY_FLOOR_MS + IMAGE_RETRY_SPREAD_MS;
 
 describe("CardGrid", () => {
@@ -104,7 +104,13 @@ describe("CardGrid", () => {
     expect(retried).toHaveAttribute("src", expect.stringContaining("/grid/aaa/0"));
   });
 
-  it("stops after that one retry rather than hammering a protocol that is saying no", async () => {
+  /**
+   * The first retry lands 30 s in, which is inside any lockout longer than the floor —
+   * a real `Retry-After: 60` fails it against a gate that is still shut. Spending the
+   * only attempt there is how a self-healing tile stops healing, so it re-arms once more
+   * at double the wait.
+   */
+  it("re-arms once at double the delay when the first retry lands in the lockout", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     render(
       <CardGrid
@@ -119,13 +125,68 @@ describe("CardGrid", () => {
     await act(async () => void vi.advanceTimersByTime(PAST_THE_RETRY));
     fireEvent.error(screen.getByAltText("Lightning Bolt"));
 
-    // Ten minutes later, still no third request: a tile that has failed twice is a tile
-    // whose card has no art the app can reach, and 40 of them polling forever is the herd
-    // the backoff exists to prevent. Scrolling the tile out of view and back is what asks
-    // again, because that is a reader saying "now".
+    // Not on the first schedule again: the second wait is twice the floor, which is past
+    // the 60 s lockout that swallowed the first one.
+    await act(async () => void vi.advanceTimersByTime(2 * IMAGE_RETRY_FLOOR_MS - 1));
+    expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
+
+    await act(async () => void vi.advanceTimersByTime(IMAGE_RETRY_SPREAD_MS + 1));
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/grid/aaa/0"),
+    );
+  });
+
+  it("stops after those two retries rather than hammering a protocol that is saying no", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    fireEvent.error(screen.getByAltText("Lightning Bolt"));
+    await act(async () => void vi.advanceTimersByTime(PAST_THE_RETRY));
+    fireEvent.error(screen.getByAltText("Lightning Bolt"));
+    await act(async () => void vi.advanceTimersByTime(2 * PAST_THE_RETRY));
+    fireEvent.error(screen.getByAltText("Lightning Bolt"));
+
+    // Ten minutes later, still no fourth request: a tile that has failed three times over
+    // five minutes is a tile whose card has no art the app can reach, and 40 of them
+    // polling forever is the herd the backoff exists to prevent. Scrolling it out of view
+    // and back is what asks again, because that is a reader saying "now".
     await act(async () => void vi.advanceTimersByTime(10 * 60_000));
+    expect(vi.getTimerCount()).toBe(0);
     expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+  });
+
+  it("leaves nothing scheduled once a tile has its art", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    fireEvent.error(screen.getByAltText("Lightning Bolt"));
+    // One timer per tile, never a queue of them.
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => void vi.advanceTimersByTime(PAST_THE_RETRY));
+    fireEvent.load(screen.getByAltText("Lightning Bolt"));
+
+    // The retry landed, so the schedule is spent: nothing is left to fire into a tile
+    // that is already showing its card.
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => void vi.advanceTimersByTime(10 * 60_000));
+    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
   });
 
   /**

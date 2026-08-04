@@ -45,30 +45,51 @@ export function cardImageUrl(cardId: string, face: number, variant: ImageVariant
  * The shortest wait a failed image is allowed to come back after.
  *
  * The protocol answers a rate limit with `503` + `Retry-After`, and `images.rs` clamps
- * that header up to Scryfall's documented 30 s before it sends it — so 30 s is the
- * shortest wait it can ever ask for. The renderer cannot read the number itself: an
- * `<img>` error event carries no response, and `mtgimg:` is an `img-src` in the CSP and
- * nothing else, so the `fetch` that would read the header never leaves the page. Waiting
- * the floor is therefore the one schedule that is never *shorter* than what the protocol
- * asked for, which is the half of `Retry-After` that matters: retrying inside the window
- * is what Scryfall escalates to bans over.
+ * its own penalty into 30–300 s before sending it. The renderer cannot read the number:
+ * an `<img>` error event carries no response, and `mtgimg:` is an `img-src` in the CSP
+ * and nothing else, so the `fetch` that would read the header never leaves the page.
+ * What this schedule guarantees instead is that it is never *shorter* than the floor the
+ * protocol clamps its own penalty to — waiting longer than asked is always safe, coming
+ * back early is what Scryfall escalates to bans over.
  */
 export const IMAGE_RETRY_FLOOR_MS = 30_000;
 
 /**
- * How far past the floor retries are scattered. A screenful of tiles fails in the same
+ * How far past each wait retries are scattered. A screenful of tiles fails in the same
  * instant, so a fixed delay would send all of them back in the same instant too.
  */
 export const IMAGE_RETRY_SPREAD_MS = 5_000;
 
 /**
- * When one failed tile should try again — once, and no sooner than {@link
- * IMAGE_RETRY_FLOOR_MS}.
+ * The longest wait, matching the ceiling `images.rs` clamps a lockout *down* to: nothing
+ * is bought by backing off past the point where the fetcher would already have reopened.
+ */
+export const IMAGE_RETRY_CEILING_MS = 300_000;
+
+/**
+ * How many times a failed tile comes back on its own.
+ *
+ * Two, because one is not enough: the shortest lockout the protocol reports is 30 s, but
+ * a real `Retry-After: 60` leaves the gate shut when the first retry lands, and a tile
+ * that spent its only attempt there would sit on "No image" for the rest of the session
+ * over a lockout that ended half a minute later. The second attempt is the one that
+ * covers that. After it the tile waits to be asked — a remount is a reader saying "now".
+ */
+export const IMAGE_RETRY_LIMIT = 2;
+
+/**
+ * When the `attempt`-th retry of one tile should happen: the floor, doubling per attempt,
+ * capped at {@link IMAGE_RETRY_CEILING_MS} and dithered.
+ *
+ * A retry that arrives inside a lockout costs nothing on the wire — the fetcher's gate
+ * fails it locally, without a request — so the doubling is about giving the *next* one a
+ * useful chance rather than about politeness to Scryfall.
  *
  * `random` is a seam for the test rather than a caller's choice: the dither has to be
  * observable to be provable.
  */
-export function imageRetryDelayMs(random: number = Math.random()): number {
+export function imageRetryDelayMs(attempt: number, random: number = Math.random()): number {
+  const doubled = IMAGE_RETRY_FLOOR_MS * 2 ** Math.max(0, attempt - 1);
   const dither = Math.min(Math.max(random, 0), 1) * IMAGE_RETRY_SPREAD_MS;
-  return IMAGE_RETRY_FLOOR_MS + Math.floor(dither);
+  return Math.min(doubled, IMAGE_RETRY_CEILING_MS) + Math.floor(dither);
 }
