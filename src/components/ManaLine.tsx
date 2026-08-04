@@ -56,10 +56,12 @@ export function ManaLine({ sync }: { sync: ManaLineSync | null }) {
             }}
           />
           {/* The gold cap: the accent colour marking the leading edge, so the boundary
-              between done and not-done is legible against five shifting hues. */}
+              between done and not-done is legible against five shifting hues. Clamped at
+              the left edge rather than allowed to sit at -2px, so the first paint of a
+              determinate sync shows the leading edge instead of nothing at all. */}
           <span
             className="absolute inset-y-0 w-0.5 bg-accent transition-[left] duration-150 ease-out motion-reduce:transition-none"
-            style={{ left: `calc(${percent}% - 2px)` }}
+            style={{ left: `max(0px, calc(${percent}% - 2px))` }}
           />
         </>
       )}

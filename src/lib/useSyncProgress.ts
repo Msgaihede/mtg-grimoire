@@ -21,9 +21,10 @@ export const PHASE_LABEL: Record<SyncPhase, string> = {
  * `sync_status` instead — which is why `SyncProgress` takes an `error` prop rather than
  * trusting these events to tell it when something went wrong.
  *
- * Lives here rather than beside one component because two now need it — the ribbon's mana
- * line and the first-run overlay — and a second `listen` registration for the same event
- * would be a second subscription for the life of the app.
+ * **Call this once.** `AppShell` is that one caller; the ribbon's mana line and the
+ * first-run overlay both read the result as a prop. Every extra call is another `listen`
+ * registration on the same event for the life of the app — the hook lives in its own
+ * module so both consumers can share one subscription, not so both can start one.
  */
 export function useSyncProgress(): SyncProgressEvent | null {
   const [progress, setProgress] = useState<SyncProgressEvent | null>(null);

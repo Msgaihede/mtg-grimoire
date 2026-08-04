@@ -41,7 +41,9 @@ it("swaps the main pane when a sidebar entry is picked", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
 
-  expect(screen.getByRole("heading", { name: "Wishlist", level: 2 })).toBeInTheDocument();
+  // The ribbon's `h1` is the only place the view is named — the placeholder used to
+  // repeat it as an `h2`, which was a second heading saying the same word.
+  expect(screen.getByRole("heading", { name: "Wishlist", level: 1 })).toBeInTheDocument();
   expect(screen.getByText(/coming in a later plan/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });

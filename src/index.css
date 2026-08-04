@@ -5,12 +5,9 @@
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource/cinzel/500.css";
 @import "@fontsource/cinzel/600.css";
-/* Mana and set glyphs as bundled icon fonts — no CDN, and the CSP has no remote source.
-   `mana.css` also declares an MPlantin face this app never uses; a @font-face only costs
-   a download when a glyph needs it. Its own `--ms-mana-*` fills are a shade off the
-   direction doc's, so chips are filled from our tokens and the font supplies the glyph. */
-@import "mana-font/css/mana.css";
-@import "keyrune/css/keyrune.css";
+/* `mana-font` and `keyrune` are imported from `main.tsx`, not here: Tailwind inlines every
+   `@import` in this file before Vite sees it, which would hide their `@font-face` rules
+   from the `woff2IconFonts` plugin that strips four dead formats out of them. */
 
 @custom-variant dark (&:is(.dark *));
 

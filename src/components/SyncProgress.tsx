@@ -1,5 +1,5 @@
 import type { SyncProgressEvent } from "@/lib/ipc";
-import { PHASE_LABEL, useSyncProgress } from "@/lib/useSyncProgress";
+import { PHASE_LABEL } from "@/lib/useSyncProgress";
 import { cn } from "@/lib/utils";
 
 /** `null` for a phase with no meaningful denominator (`checking`, `sets`, a failure). */
@@ -55,6 +55,14 @@ function Bar({
 }
 
 export interface SyncProgressProps {
+  /**
+   * The latest `sync:progress` event, or `null` if none has arrived.
+   *
+   * Passed in rather than subscribed to here: `AppShell` already listens for the ribbon's
+   * mana line, and a second `useSyncProgress()` would be a second `listen` registration
+   * on the same event for the life of the app.
+   */
+  progress: SyncProgressEvent | null;
   /** From `sync_status`. `0` means an empty database; `null` means "could not read". */
   cardCount: number | null;
   /** The banner's message — this session's rejection, else the persisted `lastError`. */
@@ -76,9 +84,7 @@ export interface SyncProgressProps {
  * Every other sync is reported by the ribbon's mana line, which is why there is no
  * second, slimmer bar here any more.
  */
-export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressProps) {
-  const progress = useSyncProgress();
-
+export function SyncProgress({ progress, cardCount, error, busy, onRetry }: SyncProgressProps) {
   if (cardCount === 0 && progress?.phase !== "done") {
     return <FirstRun progress={progress} error={error} busy={busy} onRetry={onRetry} />;
   }
@@ -102,12 +108,7 @@ export function SyncProgress({ cardCount, error, busy, onRetry }: SyncProgressPr
  * message is plain text for the same reason — `AppShell`'s banner is the one `role=alert`
  * and it announces the same string.
  */
-function FirstRun({
-  progress,
-  error,
-  busy,
-  onRetry,
-}: { progress: SyncProgressEvent | null } & Omit<SyncProgressProps, "cardCount">) {
+function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "cardCount">) {
   // An `error` event outranks `busy`: the status poll is up to a second behind it, and a
   // failure must not sit hidden behind a progress bar for that second.
   const failed = progress?.phase === "error";
@@ -139,7 +140,9 @@ function FirstRun({
           />
           <div className="flex justify-between text-xs text-muted">
             <span>{progress ? PHASE_LABEL[progress.phase] : "Starting…"}</span>
-            {progress && <span className="tabular-nums">{detail(progress)}</span>}
+            {/* Geist Mono: the direction's third type role is data, and a byte count that
+                reflows its own width every 200 ms is exactly what it is for. */}
+            {progress && <span className="font-mono tabular-nums">{detail(progress)}</span>}
           </div>
         </div>
       ) : (

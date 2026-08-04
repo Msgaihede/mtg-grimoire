@@ -4,35 +4,27 @@ import { SearchPage } from "@/features/search/SearchPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore, type ViewId } from "@/lib/store";
 
-/** What each view says while it is still a placeholder. */
-const BLURB: Record<Exclude<ViewId, "search">, { title: string; body: string }> = {
-  collection: {
-    title: "Collection",
-    body: "Owned cards, quantities and value. Coming in a later plan.",
-  },
-  wishlist: {
-    title: "Wishlist",
-    body: "Cards you are hunting for, with owned badges in search. Coming in a later plan.",
-  },
-  decks: {
-    title: "Decks",
-    body: "Deckbuilder, format validation and deck stats. Coming in a later plan.",
-  },
-  settings: {
-    title: "Settings",
-    body: "Data folder, sync behaviour, import and export. Coming in a later plan.",
-  },
+/**
+ * What each view says while it is still a placeholder.
+ *
+ * The blurb only — no title. The ribbon's `h1` already names the active view, and a
+ * second copy of the same word in the content was both a repetition and, at 20px against
+ * the ribbon's 18px, a subheading louder than the heading above it.
+ */
+const BLURB: Record<Exclude<ViewId, "search">, string> = {
+  collection: "Owned cards, quantities and value. Coming in a later plan.",
+  wishlist: "Cards you are hunting for, with owned badges in search. Coming in a later plan.",
+  decks: "Deckbuilder, format validation and deck stats. Coming in a later plan.",
+  settings: "Data folder, sync behaviour, import and export. Coming in a later plan.",
 };
 
 function ActiveView() {
   const activeView = useAppStore((s) => s.activeView);
   if (activeView === "search") return <SearchPage />;
 
-  const { title, body } = BLURB[activeView];
   return (
     <section className="mx-auto max-w-prose py-16 text-center">
-      <h2 className="font-heading text-xl">{title}</h2>
-      <p className="mt-2 text-sm text-muted">{body}</p>
+      <p className="text-sm text-muted">{BLURB[activeView]}</p>
     </section>
   );
 }

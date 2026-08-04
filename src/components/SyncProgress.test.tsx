@@ -1,35 +1,28 @@
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncProgressEvent } from "@/lib/ipc";
-
-const onSyncProgress = vi.hoisted(() => vi.fn());
-const unlisten = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/ipc", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { onSyncProgress, syncStatus: vi.fn(), syncRun: vi.fn(), searchCards: vi.fn() },
-}));
-
 import { SyncProgress } from "./SyncProgress";
 
-/** Pushes one `sync:progress` event through the listener the component registered. */
-let emit: (e: SyncProgressEvent) => void;
+// No IPC mock and no listener harness: the component takes the latest event as a prop
+// now. `AppShell` owns the one subscription, and `useSyncProgress.test.ts` covers it.
 const onRetry = vi.fn();
 
 beforeEach(() => {
-  unlisten.mockClear();
   onRetry.mockClear();
-  onSyncProgress.mockReset();
-  onSyncProgress.mockImplementation((cb: (e: SyncProgressEvent) => void) => {
-    emit = (e) => act(() => cb(e));
-    return Promise.resolve(unlisten);
-  });
 });
 
 type Props = Parameters<typeof SyncProgress>[0];
 const show = (over: Partial<Props> = {}) =>
   render(
-    <SyncProgress cardCount={116_568} error={null} busy={false} onRetry={onRetry} {...over} />,
+    <SyncProgress
+      progress={null}
+      cardCount={116_568}
+      error={null}
+      busy={false}
+      onRetry={onRetry}
+      {...over}
+    />,
   );
 
 const event = (over: Partial<SyncProgressEvent> = {}): SyncProgressEvent => ({
@@ -40,15 +33,13 @@ const event = (over: Partial<SyncProgressEvent> = {}): SyncProgressEvent => ({
   ...over,
 });
 
-/** The listener is registered asynchronously; nothing can be emitted before it lands. */
-const listening = () => vi.waitFor(() => expect(onSyncProgress).toHaveBeenCalled());
-
 describe("the first-run variant", () => {
-  it("takes over the screen when the database is empty", async () => {
-    show({ cardCount: 0, busy: true });
-    await listening();
-
-    emit(event({ phase: "ingesting", done: 58_500, total: 117_000 }));
+  it("takes over the screen when the database is empty", () => {
+    show({
+      cardCount: 0,
+      busy: true,
+      progress: event({ phase: "ingesting", done: 58_500, total: 117_000 }),
+    });
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText(/setting up your card database/i)).toBeInTheDocument();
@@ -63,15 +54,27 @@ describe("the first-run variant", () => {
     expect(screen.getByText(/starting/i)).toBeInTheDocument();
   });
 
+  /** A finished run means the database is filling; the overlay gets out of the way. */
+  it("steps aside once the run reports it is done", () => {
+    const { container } = show({
+      cardCount: 0,
+      busy: false,
+      progress: event({ phase: "done", done: 116_568, total: 116_568 }),
+    });
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
   /**
    * `null` is "the count could not be read, ask again", not "zero cards" — taking over
    * the screen for it would hide a perfectly good 116 k-card collection.
    */
-  it("does not mistake an unreadable count for an empty database", async () => {
-    const { container } = show({ cardCount: null, busy: true });
-    await listening();
-
-    emit(event({ phase: "ingesting", done: 1, total: 117_000 }));
+  it("does not mistake an unreadable count for an empty database", () => {
+    const { container } = show({
+      cardCount: null,
+      busy: true,
+      progress: event({ phase: "ingesting", done: 1, total: 117_000 }),
+    });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     // An unreadable count is not an empty database, so this renders nothing at all — the
@@ -80,7 +83,7 @@ describe("the first-run variant", () => {
   });
 
   /**
-   * The recovery path the overlay used to swallow: it covers the header, so the Refresh
+   * The recovery path the overlay used to swallow: it covers the ribbon, so the Refresh
    * button underneath is unreachable and the way out has to be *inside*.
    */
   describe("recovery", () => {
@@ -88,7 +91,6 @@ describe("the first-run variant", () => {
       // No event at all: the startup sync failed before the webview registered a
       // listener, which is exactly the case `lastError` is persisted for.
       show({ cardCount: 0, busy: false, error: "rate limited by Scryfall" });
-      await listening();
 
       expect(screen.getByText(/rate limited by Scryfall/i)).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: /retry/i }));
@@ -97,12 +99,13 @@ describe("the first-run variant", () => {
     });
 
     it("offers Retry when the failure arrived as an event", async () => {
-      show({ cardCount: 0, busy: true });
-      await listening();
-
       // Still `busy`: the status poll is up to a second behind the event, and a failure
       // must not sit hidden behind a progress bar for that second.
-      emit(event({ phase: "error", done: 0, total: 0, message: "no internet connection" }));
+      show({
+        cardCount: 0,
+        busy: true,
+        progress: event({ phase: "error", done: 0, total: 0, message: "no internet connection" }),
+      });
 
       expect(screen.getByText(/no internet connection/i)).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: /retry/i }));
@@ -114,21 +117,11 @@ describe("the first-run variant", () => {
      * A run inside the 24 h check window emits nothing and returns nothing to see. With
      * an empty database that would leave a modal over an app that never fills itself.
      */
-    it("offers Retry when nothing is running and nothing has been said", async () => {
+    it("offers Retry when nothing is running and nothing has been said", () => {
       show({ cardCount: 0, busy: false });
-      await listening();
 
       expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
       expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     });
   });
-});
-
-it("stops listening when it unmounts", async () => {
-  const view = show();
-  await listening();
-
-  view.unmount();
-
-  expect(unlisten).toHaveBeenCalled();
 });

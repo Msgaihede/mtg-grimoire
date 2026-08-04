@@ -94,6 +94,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* Given the whole screen when the database is empty, so it needs the error and
             the retry action too: it covers the ribbon, Refresh button included. */}
         <SyncProgress
+          progress={progress}
           cardCount={status?.cardCount ?? null}
           error={error}
           busy={busy}
