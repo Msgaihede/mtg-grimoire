@@ -41,7 +41,11 @@ const SPARSE: CardSummary = {
   layout: "normal",
 };
 
-const page = (items: CardSummary[], total = items.length): SearchResponse => ({ items, total });
+const page = (
+  items: CardSummary[],
+  total = items.length,
+  totalIsCapped = false,
+): SearchResponse => ({ items, total, totalIsCapped });
 
 /** `n` distinct rows starting at `from`, so a page-2 row is tellable from a page-1 one. */
 const cards = (n: number, from = 0): CardSummary[] =>
@@ -189,6 +193,20 @@ describe("SearchPage", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("counts the matches, and says `+` when the backend stopped counting", async () => {
+    searchCards.mockResolvedValue(page([BOLT], 42));
+    const { unmount } = wrap(<SearchPage />);
+    expect(await screen.findByText("42 cards")).toBeInTheDocument();
+    unmount();
+
+    // 5 000 is where the backend gives up counting, so a bare "5,000 cards" would be a
+    // number the reader has no reason to doubt and no way to check.
+    searchCards.mockResolvedValue(page([BOLT], 5000, true));
+    wrap(<SearchPage />);
+
+    expect(await screen.findByText("5,000+ cards")).toBeInTheDocument();
+  });
+
   it("blames the empty database, not the query, when nothing has been synced", async () => {
     searchCards.mockResolvedValue(page([], 0));
     wrap(<SearchPage />);
@@ -315,6 +333,18 @@ describe("nextOffset", () => {
     // `total` and the rows can disagree while a sync swaps the table underneath a pager;
     // trusting `total` alone would refetch the same empty page forever.
     expect(nextOffset([page([], 9999)])).toBeUndefined();
+  });
+
+  /**
+   * A capped `total` is a floor, not an end. Reading it as one would stop a browse of the
+   * 116 k-card database at its five-thousandth row — the reader could scroll no further,
+   * with no indication that there was anything left.
+   */
+  it("keeps paging past a capped total, and stops only on a short page", () => {
+    const full = page(Array(5000).fill(BOLT), 5000, true);
+    expect(nextOffset([full])).toBe(5000);
+    expect(nextOffset([full, page(Array(50).fill(BOLT), 5000, true)])).toBe(5050);
+    expect(nextOffset([full, page([], 5000, true)])).toBeUndefined();
   });
 });
 

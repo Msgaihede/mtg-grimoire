@@ -19,6 +19,7 @@ const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   lastCheckAt: "1800000000",
   bulkUpdatedAt: "2026-08-03T21:16:27.869+00:00",
   lastError: null,
+  lastIngestSkipped: 0,
   dataDir: "D:\\app\\data",
   syncing: false,
   ...over,
@@ -74,6 +75,22 @@ describe("the status line", () => {
 
     expect(await screen.findByText("No card data yet")).toBeInTheDocument();
   });
+
+  /**
+   * The data directory is chosen at startup and can silently be the AppData fallback
+   * rather than the folder beside the exe; spec §3 wants that visible. Nothing else in
+   * the window ever names a path.
+   */
+  it("names the live data directory as a tooltip", async () => {
+    syncStatus.mockResolvedValue(status({ dataDir: "C:\\Users\\x\\AppData\\Roaming\\mtg\\data" }));
+
+    render(<AppShell>{null}</AppShell>);
+
+    expect(await screen.findByText(/116,568 cards/)).toHaveAttribute(
+      "title",
+      "C:\\Users\\x\\AppData\\Roaming\\mtg\\data",
+    );
+  });
 });
 
 describe("the Refresh button", () => {
@@ -99,6 +116,31 @@ describe("the Refresh button", () => {
 
     await waitFor(() => expect(button).toBeEnabled());
     await waitFor(() => expect(syncStatus.mock.calls.length).toBeGreaterThan(pollsBefore));
+  });
+
+  /**
+   * The 304 outcome, which is what most Refreshes get: nothing downloads, nothing
+   * ingests, and without a word from the UI the button simply spins and stops. Spec §4.5
+   * asks for "already up to date" — the one case where saying nothing is indistinguishable
+   * from failing.
+   */
+  it("says so when a Refresh finds nothing new", async () => {
+    syncRun.mockResolvedValue({ updated: false, cardCount: 116_568, updatedAt: null });
+    render(<AppShell>{null}</AppShell>);
+
+    await userEvent.click(await screen.findByRole("button", { name: /refresh/i }));
+
+    expect(await screen.findByText(/already up to date/i)).toBeInTheDocument();
+  });
+
+  it("stays quiet when the Refresh actually ingested something", async () => {
+    syncRun.mockResolvedValue({ updated: true, cardCount: 116_600, updatedAt: null });
+    render(<AppShell>{null}</AppShell>);
+
+    await userEvent.click(await screen.findByRole("button", { name: /refresh/i }));
+
+    await waitFor(() => expect(syncRun).toHaveBeenCalled());
+    expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
   });
 
   it("stays disabled while a sync started elsewhere is running", async () => {
@@ -159,6 +201,7 @@ describe("the error banner", () => {
       lastCheckAt: null,
       bulkUpdatedAt: null,
       lastError: null,
+      lastIngestSkipped: null,
       dataDir: "D:\\app\\data",
       syncing: true,
     });

@@ -67,6 +67,10 @@ export function toggleColor(picked: readonly ColorKey[], key: ColorKey): ColorKe
  * the `cards` table between two requests changes what the offsets address, so a page can
  * arrive short of what was asked for. A computed offset would then point past rows that
  * were never delivered, and the reader would never see them.
+ *
+ * `total` is only an end when the backend counted to it. A capped total means "5 000 or
+ * more", and stopping there would cut a 116 k-card browse off at the five-thousandth row
+ * — so when it is capped, the short page is the only signal that the data ran out.
  */
 export function nextOffset(pages: readonly SearchResponse[]): number | undefined {
   const last = pages[pages.length - 1];
@@ -75,7 +79,8 @@ export function nextOffset(pages: readonly SearchResponse[]): number | undefined
   // A short page is the end of the data whatever `total` says. The two can disagree — a
   // sync swapping the table between two requests is enough — and believing `total` alone
   // would refetch the same empty page forever.
-  if (last.items.length === 0 || seen >= last.total) return undefined;
+  if (last.items.length === 0) return undefined;
+  if (!last.totalIsCapped && seen >= last.total) return undefined;
   return seen;
 }
 
@@ -157,6 +162,8 @@ export function useCardSearch() {
     searchKey: JSON.stringify(queryKey),
     /** Size of the whole match set, not of `rows`. `0` until the first page answers. */
     total: query.data?.pages[0]?.total ?? 0,
+    /** `total` is a floor, not a figure: render it as `5,000+`. */
+    totalIsCapped: query.data?.pages[0]?.totalIsCapped ?? false,
     /**
      * Nothing was asked of the database at all. An empty answer to *this* is an empty
      * database, not a search that missed — the difference between "wait for the sync"

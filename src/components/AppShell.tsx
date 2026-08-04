@@ -32,7 +32,7 @@ const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
 export function AppShell({ children }: { children: ReactNode }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
-  const { status, error, refresh, refreshing } = useSync();
+  const { status, error, refresh, refreshing, upToDate } = useSync();
 
   const line = statusLine(status);
   // Either this window started the sync or something else did (the run spawned at
@@ -68,7 +68,22 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-baseline gap-4 border-b border-border px-5 py-3">
           <h1 className="font-heading text-base font-medium">MTG Collection Tracker</h1>
-          {line && <p className="truncate text-xs text-muted">{line}</p>}
+          {/* The data directory is the app's one piece of hidden state — it silently
+              falls back to AppData when the folder beside the exe is not writable, and
+              spec §3 asks for an indicator of which one is live. A tooltip on the line
+              that already summarises the database is where someone would look. */}
+          {line && (
+            <p className="truncate text-xs text-muted" title={status?.dataDir}>
+              {line}
+            </p>
+          )}
+          {/* A Refresh that found nothing new changes nothing on screen, which reads as a
+              button that did not work. Transient: it is the answer to one click. */}
+          {upToDate && !busy && !error && (
+            <p role="status" className="shrink-0 text-xs text-muted">
+              Already up to date
+            </p>
+          )}
           <button
             type="button"
             onClick={refresh}

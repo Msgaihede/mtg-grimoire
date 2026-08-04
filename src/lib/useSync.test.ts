@@ -7,6 +7,7 @@ const idle: SyncStatus = {
   lastCheckAt: "1800000000",
   bulkUpdatedAt: "2026-08-03T21:16:27.869+00:00",
   lastError: "rate limited by Scryfall",
+  lastIngestSkipped: 12,
   dataDir: "D:\\app\\data",
   syncing: false,
 };
@@ -19,6 +20,7 @@ describe("mergeStatus", () => {
       lastCheckAt: null,
       bulkUpdatedAt: null,
       lastError: null,
+      lastIngestSkipped: null,
       dataDir: "D:\\app\\data",
       syncing: true,
     };

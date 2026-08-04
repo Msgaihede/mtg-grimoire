@@ -57,7 +57,18 @@ export interface CardSummary {
 /** A page of results plus the size of the whole match set, for the pager. */
 export interface SearchResponse {
   items: CardSummary[];
+  /**
+   * Matches, counted no further than 5 000. Only meaningful together with
+   * `totalIsCapped` — an exact count of a 116 k-row browse cost a full table scan on
+   * every keystroke, so the backend stops early and says it did.
+   */
   total: number;
+  /**
+   * The count hit its ceiling: there are `total` matches *or more*. A pager must keep
+   * asking for pages while this is true (and stop on the first short page instead), and
+   * a caption should read `5,000+`.
+   */
+  totalIsCapped: boolean;
 }
 
 /**
@@ -91,6 +102,12 @@ export interface SyncStatus {
   bulkUpdatedAt: string | null;
   /** Why the last run failed, still readable long after its event was dropped. */
   lastError: string | null;
+  /**
+   * Lines the last ingest could not read as cards (spec §8 requires the count be
+   * surfaced, not swallowed). `null` before any ingest has run — which is not the same
+   * as `0`, "the last ingest skipped nothing".
+   */
+  lastIngestSkipped: number | null;
   dataDir: string;
   syncing: boolean;
 }

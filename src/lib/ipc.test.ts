@@ -20,14 +20,14 @@ beforeEach(() => {
  */
 describe("ipc argument names match the Rust command signatures", () => {
   it("sends a search under `req`", async () => {
-    invoke.mockResolvedValue({ items: [], total: 0 });
+    invoke.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
 
     const res = await ipc.searchCards({ text: "bolt", limit: 50, offset: 0 });
 
     expect(invoke).toHaveBeenCalledWith("search_cards", {
       req: { text: "bolt", limit: 50, offset: 0 },
     });
-    expect(res).toEqual({ items: [], total: 0 });
+    expect(res).toEqual({ items: [], total: 0, totalIsCapped: false });
   });
 
   it("sends the throttle override under `force`", async () => {
@@ -44,13 +44,17 @@ describe("ipc argument names match the Rust command signatures", () => {
       lastCheckAt: null,
       bulkUpdatedAt: null,
       lastError: null,
+      lastIngestSkipped: 12,
       dataDir: "d",
       syncing: false,
     });
 
-    await ipc.syncStatus();
+    const res = await ipc.syncStatus();
 
     expect(invoke).toHaveBeenCalledWith("sync_status");
+    // Pinned rather than assumed: spec §8 requires the skipped-line count reach the user,
+    // and a field this side spells differently is `undefined` with no type error anywhere.
+    expect(res.lastIngestSkipped).toBe(12);
   });
 });
 

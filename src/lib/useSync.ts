@@ -5,6 +5,8 @@ import { ipc, ipcError, type SyncStatus } from "@/lib/ipc";
 const POLL_IDLE_MS = 30_000;
 /** …and while a sync is in flight, where the count and the phase are moving. */
 const POLL_SYNCING_MS = 1_000;
+/** How long "Already up to date" stays on screen after a Refresh that found nothing. */
+export const UP_TO_DATE_MS = 5_000;
 
 /**
  * Fold a fresh poll into what the UI already knows.
@@ -60,6 +62,12 @@ export interface Sync {
   refresh: () => void;
   /** True from the click until `sync_run` settles. */
   refreshing: boolean;
+  /**
+   * The last Refresh came back with nothing new (spec §4.5: "already up to date").
+   * Transient — it clears itself after {@link UP_TO_DATE_MS}, because it is an answer to
+   * one click and not a state of the app.
+   */
+  upToDate: boolean;
 }
 
 /**
@@ -78,6 +86,8 @@ export function useSync(): Sync {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [upToDate, setUpToDate] = useState(false);
+  const upToDateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Bumped to restart the poll loop immediately; see `refresh`.
   const [pollNonce, setPollNonce] = useState(0);
   // The merge needs the previous value, and reading it from a ref keeps the state
@@ -117,11 +127,28 @@ export function useSync(): Sync {
     };
   }, [pollNonce]);
 
+  // The timeout below outlives a fast unmount otherwise, and fires `setUpToDate` on a
+  // component that is gone.
+  useEffect(() => () => clearTimeout(upToDateTimer.current), []);
+
   const refresh = useCallback(() => {
     setRefreshing(true);
     setRunError(null);
+    // A second click restarts the message rather than letting the first click's timer
+    // cut the second click's answer short.
+    setUpToDate(false);
+    clearTimeout(upToDateTimer.current);
     ipc
       .syncRun(true)
+      .then((outcome) => {
+        // The 304 case, and the throttle case, and "the file has not rotated" — every
+        // way a run can succeed without ingesting anything. Without this the button
+        // spins for a moment and nothing whatever changes on screen, which reads as a
+        // Refresh that did not work.
+        if (outcome.updated) return;
+        setUpToDate(true);
+        upToDateTimer.current = setTimeout(() => setUpToDate(false), UP_TO_DATE_MS);
+      })
       .catch((e: unknown) => setRunError(ipcError(e)))
       .finally(() => {
         setRefreshing(false);
@@ -129,5 +156,11 @@ export function useSync(): Sync {
       });
   }, []);
 
-  return { status, refreshing, refresh, error: runError ?? status?.lastError ?? null };
+  return {
+    status,
+    refreshing,
+    refresh,
+    upToDate,
+    error: runError ?? status?.lastError ?? null,
+  };
 }

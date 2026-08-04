@@ -68,8 +68,34 @@ pub fn run() {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // `build` + `run(callback)` rather than `run(context)`, for one event: `Exit`.
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                checkpoint_on_exit(app);
+            }
+        });
+}
+
+/// Fold the write-ahead log back into `mtg.db` on the way out.
+///
+/// The app holds its connection open for its whole life, so nothing ever checkpoints the
+/// WAL on its own: after an ingest the `-wal` file is the size of the database it
+/// replaced (measured: 857 MB) and it *stays* there after the process exits, until
+/// something else opens and cleanly closes the file. For an app whose selling point is
+/// running from a USB stick, that is the difference between fitting and not.
+///
+/// Best-effort by design, and silent: this runs after the last window is gone, so there
+/// is no one to tell and nothing to do. A skipped checkpoint costs disk space, never
+/// data — the WAL is a complete, recoverable journal, and the next launch replays it.
+fn checkpoint_on_exit(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<Arc<AppState>>() else {
+        return;
+    };
+    // The *write* connection: a read-only handle may not checkpoint.
+    let conn = sync::lock_db(&state);
+    let _ = db::checkpoint_truncate(&conn);
 }
 
 /// Resolve the data directory, open the database and migrate it.
@@ -111,9 +137,15 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
             db_path.display()
         )
     })?;
+    // Opened after `migrate`, and only after: a read-only connection to a file that has
+    // no tables yet would be a handle that can never be made useful. Same error message
+    // as the write connection — if this fails, the folder is the reason.
+    let conn_read = db::open_read_only(&db_path)
+        .map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
 
     Ok(AppState {
         db: Mutex::new(conn),
+        db_read: Mutex::new(conn_read),
         data_dir,
         syncing: AtomicBool::new(false),
         client: scryfall::Client::new(SCRYFALL_API.to_owned()),

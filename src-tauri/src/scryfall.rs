@@ -28,6 +28,13 @@ pub const USER_AGENT: &str =
 /// The `Accept` value Scryfall's own documentation offers as an example.
 const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";
 
+/// Longest gap this app will wait between two bytes of a response body.
+///
+/// Generous on purpose: it is a liveness check on the connection, not a bandwidth
+/// requirement, and the bulk origin does occasionally pause mid-stream. Sixty seconds of
+/// complete silence, though, is a connection that is not coming back.
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Debug, thiserror::Error)]
 pub enum ScryfallError {
     #[error("http request failed: {0}")]
@@ -95,6 +102,15 @@ impl Client {
             // timeout: a 77 MB bulk download legitimately runs for minutes, and a
             // `timeout()` here would kill it partway every time.
             .connect_timeout(std::time::Duration::from_secs(30))
+            // Bounds each *read* instead — the gap between two chunks, not the length of
+            // the download — so the "no overall timeout" rule above still holds while a
+            // connection that stops delivering can no longer hang forever. That is not a
+            // theoretical case: a half-open TCP connection (laptop suspended, VPN
+            // dropped, NAT entry expired) leaves the streaming loop awaiting a chunk that
+            // will never arrive, `syncing` latched true for the life of the process, and
+            // both the header's Refresh and the first-run Retry disabled behind it — an
+            // unrecoverable UI that only a restart clears.
+            .read_timeout(READ_TIMEOUT)
             .build()
             .expect("client");
         Client {

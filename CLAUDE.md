@@ -18,7 +18,8 @@ Scryfall as the only external dependency.
   ~116.5 k cards / ~1 050 sets. `mtg.db` is ~880 MB, two thirds of it the `raw` JSON
   column.
 - The app never closes its SQLite connection, so a `mtg.db-wal` the size of the ingest
-  (~857 MB) outlives the process until something opens and cleanly closes the file.
+  (~857 MB) used to outlive the process. `RunEvent::Exit` now runs
+  `PRAGMA wal_checkpoint(TRUNCATE)`, and `journal_size_limit` caps the file at 64 MB.
 - A second launch inside 24 h makes **no network call at all** — the throttle returns
   before the ETag check and writes nothing, so `last_check_at` does not move.
 
@@ -28,6 +29,23 @@ Scryfall as the only external dependency.
 - Plans: `docs/superpowers/plans/` — execute in order, check off steps as you go.
 - **Rust owns data plumbing** (SQLite/FTS5, Scryfall sync, image cache). **TS owns domain
   logic** (deck validation, import/export parsing). Keep that boundary.
+
+## Hard rules — database
+- **`cards` is dropped and recreated on every sync** (`schema::swap_staging`, with
+  `foreign_keys=ON`). So: user tables reference `cards.id` **without an enforced foreign
+  key** — a soft reference plus denormalized `set_code`/`collector_number`/`lang`
+  (spec §6). A declared `REFERENCES cards(id)` aborts every sync; `ON DELETE CASCADE`
+  deletes the user's collection on the next refresh. Orphans are *flagged*, never deleted.
+- Every index on `cards` goes in `schema::CARDS_INDEXES` — the swap drops the table with
+  its indexes and replays only that list.
+- `CARDS_COLUMNS` is **frozen**: it is what schema v1 created, not what `cards` is now.
+  Add columns in a new `if v < N` step in `migrate` with `ALTER TABLE`. (`create_staging`
+  derives its layout from `PRAGMA table_info(cards)`, so staging follows automatically.)
+- `cards_fts` is **external-content with no triggers**. Any write to `cards` outside the
+  ingest path needs `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');` — and so does
+  `VACUUM`, which may renumber the rowids the index is keyed on.
+- Two connections: `AppState.db` writes, `AppState.db_read` is `SQLITE_OPEN_READ_ONLY`.
+  Reads go through `db_read` so a search is not stuck behind a 44 s ingest.
 
 ## Hard rules
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.

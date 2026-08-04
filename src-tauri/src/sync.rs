@@ -46,6 +46,11 @@ const K_BULK_UPDATED_AT: &str = "bulk_updated_at";
 const K_LAST_CHECK_AT: &str = "last_check_at";
 const K_LAST_INGEST_AT: &str = "last_ingest_at";
 const K_CARD_COUNT: &str = "card_count";
+/// Lines the last ingest could not read as cards. Scryfall's bulk file has shipped
+/// truncated lines and non-card objects before; the spec requires the count be *surfaced*
+/// rather than swallowed, because a number climbing from 3 to 30 000 is the difference
+/// between a stray token and a schema change that is quietly costing the user cards.
+const K_LAST_INGEST_SKIPPED: &str = "last_ingest_skipped";
 /// Why the last run failed, or no row at all if it did not. Survives the process, which
 /// the `sync:progress` event does not.
 const K_LAST_ERROR: &str = "last_error";
@@ -65,8 +70,14 @@ const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 
 /// Everything a command or a background sync needs. Managed by Tauri as
 /// `Arc<AppState>` so a spawned sync can own a handle of its own.
+///
+/// Two connections to one file, deliberately. `db` is the only one that writes and is
+/// held for the whole of a 44 s ingest; `db_read` is opened read-only so searches answer
+/// from the last committed WAL snapshot instead of queueing behind that. See
+/// [`crate::db::open_read_only`].
 pub struct AppState {
     pub db: Mutex<Connection>,
+    pub db_read: Mutex<Connection>,
     pub data_dir: PathBuf,
     pub syncing: AtomicBool,
     pub client: scryfall::Client,
@@ -97,6 +108,9 @@ pub struct SyncStatus {
     pub bulk_updated_at: Option<String>,
     /// Why the last run failed. Cleared by the next run that gets anywhere.
     pub last_error: Option<String>,
+    /// Lines the last ingest skipped. `None` before any ingest has run (and, like the
+    /// fields above, whenever the database could not be read).
+    pub last_ingest_skipped: Option<i64>,
     pub data_dir: String,
     pub syncing: bool,
 }
@@ -191,6 +205,21 @@ fn already_ingested(remote: Option<&str>, stored: Option<&str>, card_count: i64)
     remote.is_some() && remote == stored && card_count > 0
 }
 
+/// The ETag to replay as `If-None-Match`, or `None` to force a full answer.
+///
+/// The stored ETag describes a *file*, not the state of this database, and the two come
+/// apart: an interrupted first run, or a swap that never landed, leaves the metadata of a
+/// bulk file behind with no cards to show for it. Replaying that ETag then earns a 304 —
+/// "you already have this" — for a database that has nothing, and no amount of Refresh
+/// can get past it, because every run asks the same unanswerable question. Sending no
+/// ETag costs one 200 and a fresh download, which is exactly what an empty database wants.
+///
+/// This is the same reasoning as [`already_ingested`]'s `card_count > 0`, one step
+/// earlier: that one guards the 200 path, this one stops the 304 happening at all.
+fn conditional_etag(etag: Option<&str>, card_count: i64) -> Option<&str> {
+    etag.filter(|_| card_count > 0)
+}
+
 /// The size the download will be verified against.
 ///
 /// A listing with no size gives the download nothing to check itself against; the client
@@ -274,6 +303,14 @@ pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
     state.db.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.
+///
+/// A different mutex from `db`, which is the point: this one is only ever held for the
+/// length of one query, so waiting for it is bounded no matter what the writer is doing.
+pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
+    state.db_read.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Lock the database only if that can be done now.
 ///
 /// For readers that must answer *during* a sync: the ingest holds the connection for its
@@ -328,9 +365,43 @@ fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
 
 /// The terminal event. Every path that leaves `do_sync` successfully sends one, so the
 /// UI is never left showing a phase that has already finished.
-fn emit_done(app: &tauri::AppHandle, card_count: i64) {
+///
+/// `skipped` is `Some` only on the path that actually ingested — a run that found nothing
+/// new has no lines of its own to report, and repeating the previous run's figure would
+/// read as a fresh count.
+fn emit_done(app: &tauri::AppHandle, card_count: i64, skipped: Option<u64>) {
     let n = card_count.max(0) as u64;
-    emit(app, "done", n, n);
+    let mut progress = Progress::new("done", n, n);
+    progress.message = Some(done_message(n, skipped));
+    let _ = app.emit("sync:progress", progress);
+}
+
+/// What the `done` event says. The skipped clause appears only when there is something
+/// to report — "(0 lines skipped)" is noise on the run where everything went right.
+fn done_message(card_count: u64, skipped: Option<u64>) -> String {
+    let cards = format!("{} cards", group_digits(card_count));
+    match skipped {
+        Some(n) if n > 0 => format!(
+            "{cards} ({} {} skipped)",
+            group_digits(n),
+            if n == 1 { "line" } else { "lines" }
+        ),
+        _ => cards,
+    }
+}
+
+/// `116568` → `116,568`. The UI formats its own numbers, but this string is carried by
+/// the event and has nowhere else to be formatted.
+fn group_digits(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Clears `syncing` however the run ends — early return, error, panic, or a dropped
@@ -402,7 +473,7 @@ async fn finish_unchanged(
         let conn = lock_db(state);
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
-    emit_done(app, card_count);
+    emit_done(app, card_count, None);
     Ok(unchanged(card_count))
 }
 
@@ -429,7 +500,7 @@ async fn do_sync(
     emit(app, "checking", 0, 0);
     let check = state
         .client
-        .check_bulk_update(stored.etag.as_deref())
+        .check_bulk_update(conditional_etag(stored.etag.as_deref(), stored.card_count))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -531,6 +602,10 @@ async fn do_sync(
         set_meta_opt(&conn, K_BULK_UPDATED_AT, updated_at.as_deref()).map_err(|e| e.to_string())?;
         set_meta(&conn, K_LAST_INGEST_AT, &unix_now().to_string()).map_err(|e| e.to_string())?;
         set_meta(&conn, K_CARD_COUNT, &card_count.to_string()).map_err(|e| e.to_string())?;
+        // Written even when it is zero: "the last ingest skipped nothing" is a different
+        // statement from "no ingest has run", and the UI distinguishes them.
+        set_meta(&conn, K_LAST_INGEST_SKIPPED, &stats.skipped.to_string())
+            .map_err(|e| e.to_string())?;
     }
 
     emit(app, "sets", 0, 0);
@@ -547,7 +622,7 @@ async fn do_sync(
         let conn = lock_db(state);
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
-    emit_done(app, card_count);
+    emit_done(app, card_count, Some(stats.skipped));
     Ok(SyncOutcome {
         updated: true,
         card_count,
@@ -571,6 +646,7 @@ pub fn status(state: &AppState) -> SyncStatus {
         last_check_at: None,
         bulk_updated_at: None,
         last_error: None,
+        last_ingest_skipped: None,
         data_dir: state.data_dir.display().to_string(),
         syncing: state.syncing.load(Ordering::SeqCst),
     };
@@ -579,6 +655,8 @@ pub fn status(state: &AppState) -> SyncStatus {
         status.last_check_at = get_meta(&conn, K_LAST_CHECK_AT);
         status.bulk_updated_at = get_meta(&conn, K_BULK_UPDATED_AT);
         status.last_error = get_meta(&conn, K_LAST_ERROR);
+        status.last_ingest_skipped =
+            get_meta(&conn, K_LAST_INGEST_SKIPPED).and_then(|s| s.parse().ok());
     }
     status
 }
@@ -598,6 +676,10 @@ mod tests {
     fn test_state(conn: Connection, syncing: bool) -> AppState {
         AppState {
             db: Mutex::new(conn),
+            // A separate in-memory database, not a second handle on the same one: these
+            // tests exercise `db` only, and `search`'s own tests cover the read path
+            // against a real file, where the two connections can actually share.
+            db_read: Mutex::new(Connection::open_in_memory().unwrap()),
             data_dir: PathBuf::from("D:\\app\\data"),
             syncing: AtomicBool::new(syncing),
             // Never called: these tests stop short of the network.
@@ -782,7 +864,9 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         {
             let state = state.clone();
-            std::thread::spawn(move || tx.send(status(&state)));
+            std::thread::spawn(move || {
+                let _ = tx.send(status(&state));
+            });
         }
         let busy = rx
             .recv_timeout(std::time::Duration::from_secs(5))
@@ -864,6 +948,7 @@ mod tests {
             last_check_at: Some("1800000000".into()),
             bulk_updated_at: None,
             last_error: Some("rate limited by Scryfall".into()),
+            last_ingest_skipped: Some(12),
             data_dir: "D:\\app\\data".into(),
             syncing: true,
         })
@@ -875,6 +960,7 @@ mod tests {
                 "lastCheckAt": "1800000000",
                 "bulkUpdatedAt": null,
                 "lastError": "rate limited by Scryfall",
+                "lastIngestSkipped": 12,
                 "dataDir": "D:\\app\\data",
                 "syncing": true
             })
@@ -886,6 +972,7 @@ mod tests {
             last_check_at: None,
             bulk_updated_at: None,
             last_error: None,
+            last_ingest_skipped: None,
             data_dir: "D:\\app\\data".into(),
             syncing: true,
         })
@@ -897,6 +984,7 @@ mod tests {
                 "lastCheckAt": null,
                 "bulkUpdatedAt": null,
                 "lastError": null,
+                "lastIngestSkipped": null,
                 "dataDir": "D:\\app\\data",
                 "syncing": true
             })
@@ -912,5 +1000,67 @@ mod tests {
             failed,
             serde_json::json!({"phase":"error","done":0,"total":0,"message":"boom"})
         );
+    }
+
+    /// Spec §8: parse failures are "logged and skipped with a count surfaced (not silently
+    /// swallowed)". The count reaches the user two ways, because neither is reliable
+    /// alone — in the terminal `done` event, and persisted for the status poll to find
+    /// long after that event was dropped.
+    #[test]
+    fn the_done_message_reports_skipped_lines_only_when_there_were_any() {
+        assert_eq!(
+            done_message(116_568, Some(12)),
+            "116,568 cards (12 lines skipped)"
+        );
+        assert_eq!(
+            done_message(116_568, Some(1)),
+            "116,568 cards (1 line skipped)"
+        );
+        // A clean run says nothing about skipping, and a run that ingested nothing new
+        // has no figure of its own to quote.
+        assert_eq!(done_message(116_568, Some(0)), "116,568 cards");
+        assert_eq!(done_message(116_568, None), "116,568 cards");
+        assert_eq!(done_message(0, None), "0 cards");
+    }
+
+    #[test]
+    fn digits_are_grouped_in_threes_from_the_right() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(1_000), "1,000");
+        assert_eq!(group_digits(116_568), "116,568");
+        assert_eq!(group_digits(1_234_567), "1,234,567");
+    }
+
+    /// A stored ETag with no cards behind it is a 304 waiting to happen — the server
+    /// says "you already have it", and the empty database has no way to disagree. Every
+    /// Refresh would ask the same unanswerable question, forever.
+    #[test]
+    fn an_empty_database_never_sends_an_if_none_match() {
+        assert_eq!(
+            conditional_etag(Some("W/\"abc\""), 116_568),
+            Some("W/\"abc\"")
+        );
+        assert_eq!(
+            conditional_etag(Some("W/\"abc\""), 0),
+            None,
+            "an empty `cards` must be able to get past its own ETag"
+        );
+        assert_eq!(conditional_etag(None, 116_568), None);
+    }
+
+    /// The skipped count survives the process, which the `done` event does not: the
+    /// startup sync emits it before the webview is listening, and Tauri drops it.
+    #[test]
+    fn the_skipped_count_is_readable_from_the_status_long_after_the_event() {
+        let conn = db();
+        set_meta(&conn, K_LAST_INGEST_SKIPPED, "12").unwrap();
+        let state = test_state(conn, false);
+
+        assert_eq!(status(&state).last_ingest_skipped, Some(12));
+
+        // No ingest yet is not the same as an ingest that skipped nothing.
+        let fresh = test_state(db(), false);
+        assert_eq!(status(&fresh).last_ingest_skipped, None);
     }
 }

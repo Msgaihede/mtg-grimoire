@@ -178,9 +178,21 @@ export function SearchPage() {
 
 type Search = ReturnType<typeof useCardSearch>;
 
+/**
+ * How many matches there are, in words.
+ *
+ * The backend stops counting at 5 000 rather than scanning 116 k rows for a number nobody
+ * reads precisely, so past that this says `5,000+ cards` — a floor, which is true —
+ * instead of `5,000 cards`, which would not be.
+ */
+function countOf(total: number, capped: boolean): string {
+  const n = `${total.toLocaleString("en-US")}${capped ? "+" : ""}`;
+  return `${n} ${total === 1 && !capped ? "card" : "cards"}`;
+}
+
 /** The one line that says what the result area is currently showing. */
 function summaryOf(search: Search, failure: string | null): string {
-  const { query, rows, total, unfiltered } = search;
+  const { query, rows, total, totalIsCapped, unfiltered } = search;
 
   if (rows.length === 0) {
     // With no rows there is nothing to caption, so this line carries the whole story.
@@ -194,7 +206,7 @@ function summaryOf(search: Search, failure: string | null): string {
       : "No cards match these filters.";
   }
 
-  const count = `${total.toLocaleString("en-US")} ${total === 1 ? "card" : "cards"}`;
+  const count = countOf(total, totalIsCapped);
   if (query.isFetchingNextPage) return `${count} · loading more…`;
   if (query.isFetching) return `${count} · searching…`;
   return count;
@@ -211,7 +223,7 @@ function Results({
   virtualRows: VirtualItem[];
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
-  const { query, rows, total } = search;
+  const { query, rows, total, totalIsCapped } = search;
 
   // query-core keeps `data` when a fetch fails, so `isError` arrives with every page that
   // did load still in hand. Reading it as "show the error instead" would throw away 400
@@ -266,7 +278,9 @@ function Results({
           aria-label="Search results"
           // The header row plus every match, not just the rows currently in the DOM —
           // otherwise a virtualised list tells assistive tech the database holds 20 cards.
-          aria-rowcount={total + 1}
+          // `-1` is ARIA's "the total is unknown", which is exactly what a capped count
+          // is: 5 000 would be a smaller lie than 20, but still a lie.
+          aria-rowcount={totalIsCapped ? -1 : total + 1}
           tabIndex={0}
           className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
         >
