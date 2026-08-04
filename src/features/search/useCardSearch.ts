@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { ipc, type SearchResponse } from "@/lib/ipc";
+import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 
 /** Rows per request. The backend clamps at 200; 50 is one screenful plus slack. */
 export const PAGE_SIZE = 50;
@@ -19,18 +20,46 @@ export const FORMATS = [
   { value: "commander", label: "Commander" },
 ] as const;
 
-/** WUBRG plus colourless. Order matters: it is the order the filter is written in. */
-export const COLOR_KEYS = ["W", "U", "B", "R", "G", "C"] as const;
-export type ColorKey = (typeof COLOR_KEYS)[number];
+// The filter's colours and the interface's mana symbols are the same six letters in the
+// same order, and `colorParam` depends on that order to make "U then W" and "W then U"
+// the same query key. One definition, re-exported under the name the filter code uses:
+// two lists that must stay identical will not.
+export { MANA_KEYS as COLOR_KEYS, MANA_LABEL as COLOR_LABEL } from "@/lib/mana";
+export type ColorKey = ManaKey;
 
-export const COLOR_LABEL: Record<ColorKey, string> = {
-  W: "White",
-  U: "Blue",
-  B: "Black",
-  R: "Red",
-  G: "Green",
-  C: "Colorless",
-};
+/** The mana-value chips. The last one is open-ended — `8` means "8 or more". */
+export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+/** Add or remove one value. The order values were picked in is not information. */
+export function toggleIn<T>(list: readonly T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+/** Everything {@link activeFilterCount} counts — every filter the search view offers. */
+export interface FilterState {
+  text: string;
+  format: string;
+  colors: readonly string[];
+  sets: readonly string[];
+  manaValues: readonly number[];
+}
+
+/**
+ * How many *kinds* of filter are on.
+ *
+ * Kinds, not values: this number captions a Reset all button, and its job is to tell the
+ * reader how much is about to change. Three colours in one chip row is one thing that is
+ * on, not three.
+ */
+export function activeFilterCount(f: FilterState): number {
+  return [
+    f.text.trim().length > 0,
+    f.format.length > 0,
+    f.colors.length > 0,
+    f.sets.length > 0,
+    f.manaValues.length > 0,
+  ].filter(Boolean).length;
+}
 
 /**
  * The picked colours as the backend spells them — `"WU"`, `"C"`, or nothing.
@@ -41,7 +70,7 @@ export const COLOR_LABEL: Record<ColorKey, string> = {
  */
 export function colorParam(picked: readonly ColorKey[]): string | undefined {
   if (picked.length === 0) return undefined;
-  return COLOR_KEYS.filter((c) => picked.includes(c)).join("");
+  return MANA_KEYS.filter((c) => picked.includes(c)).join("");
 }
 
 /**
@@ -106,6 +135,8 @@ export function useCardSearch() {
   const [text, setText] = useState("");
   const [format, setFormat] = useState("");
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  const [sets, setSets] = useState<readonly string[]>([]);
+  const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -114,10 +145,22 @@ export function useCardSearch() {
   }, [text]);
 
   const colorsParam = colorParam(colors);
+  // Sorted before they reach the key: picking two sets in either order is the same search
+  // and must not cost a second round trip.
+  const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
+  const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
 
   // Every input the request is built from, so a changed filter can never be answered by
   // another filter's cached pages.
-  const queryKey = ["cards", "search", debouncedText, format, colorsParam ?? ""];
+  const queryKey = [
+    "cards",
+    "search",
+    debouncedText,
+    format,
+    colorsParam ?? "",
+    setsParam?.join(",") ?? "",
+    manaParam?.join(",") ?? "",
+  ];
 
   const query = useInfiniteQuery({
     queryKey,
@@ -128,6 +171,8 @@ export function useCardSearch() {
         text: debouncedText || undefined,
         format: format || undefined,
         colors: colorsParam,
+        sets: setsParam,
+        manaValues: manaParam,
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong.
@@ -150,6 +195,20 @@ export function useCardSearch() {
     setFormat,
     colors,
     toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    sets,
+    toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    manaValues,
+    toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    /** How many kinds of filter are on — the number on the Reset all badge. */
+    activeCount: activeFilterCount({ text, format, colors, sets, manaValues }),
+    /** Clear every filter at once, including the search box. */
+    resetAll: () => {
+      setText("");
+      setFormat("");
+      setColors([]);
+      setSets([]);
+      setManaValues([]);
+    },
     query,
     rows,
     /**
@@ -169,6 +228,9 @@ export function useCardSearch() {
      * database, not a search that missed — the difference between "wait for the sync"
      * and "try another word".
      */
-    unfiltered: !debouncedText && !format && !colorsParam,
+    unfiltered: !debouncedText && !format && !colorsParam && !setsParam && !manaParam,
   };
 }
+
+/** The whole of what `FilterBar` consumes — named so the component and its test agree. */
+export type CardSearch = ReturnType<typeof useCardSearch>;

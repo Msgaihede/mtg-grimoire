@@ -9,7 +9,7 @@
  * contract (`invoke` matches them by name, and a typo is a runtime rejection).
  *
  * Sources, verified field by field:
- * `SearchRequest`/`CardSummary`/`SearchResponse` — `src-tauri/src/search.rs`
+ * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -31,6 +31,10 @@ export interface SearchRequest {
   /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
   colors?: string;
   setCode?: string;
+  /** Set codes. ORed with each other, ANDed with every other filter. */
+  sets?: string[];
+  /** Mana-value chips: 0–7 match exactly, 8 means "8 or more". */
+  manaValues?: number[];
   rarity?: string;
   /** Omitted means true: digital-only printings are hidden unless asked for. */
   paperOnly?: boolean;
@@ -69,6 +73,23 @@ export interface SearchResponse {
    * a caption should read `5,000+`.
    */
   totalIsCapped: boolean;
+}
+
+/** One row of the set picker. */
+export interface SetSummary {
+  /** Lowercase, as `cards.set_code` stores it — this is what the filter sends back. */
+  code: string;
+  name: string;
+  setType: string | null;
+  releasedAt: string | null;
+  /**
+   * Paper printings of this set in the local database.
+   *
+   * `0` both for the sets `default_cards` omits entirely and for the Arena/MTGO ones the
+   * search's `paperOnly` default hides — the two are indistinguishable to a picker, and
+   * a row that can only ever return nothing should not be offered either way.
+   */
+  cardCount: number;
 }
 
 /**
@@ -131,6 +152,8 @@ export interface SyncProgressEvent {
 
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
+  /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
+  listSets: () => invoke<SetSummary[]>("list_sets"),
   /** `force` skips the 24 h throttle. Rejects if a sync is already running. */
   syncRun: (force: boolean) => invoke<SyncOutcome>("sync_run", { force }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),

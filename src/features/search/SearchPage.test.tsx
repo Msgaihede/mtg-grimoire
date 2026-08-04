@@ -6,9 +6,12 @@ import type { ReactElement } from "react";
 import type { CardSummary, SearchRequest, SearchResponse } from "@/lib/ipc";
 
 const searchCards = vi.hoisted(() => vi.fn());
+// The set picker mounts with the page and asks for the set list on the way up, so the
+// mock has to answer it — a missing `listSets` is a rejected query, not a compile error.
+const listSets = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { searchCards, syncStatus: vi.fn(), syncRun: vi.fn(), onSyncProgress: vi.fn() },
+  ipc: { searchCards, listSets, syncStatus: vi.fn(), syncRun: vi.fn(), onSyncProgress: vi.fn() },
 }));
 
 import { SearchPage } from "./SearchPage";

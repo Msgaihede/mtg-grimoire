@@ -375,11 +375,16 @@ pub struct SetSummary {
     pub name: String,
     pub set_type: Option<String>,
     pub released_at: Option<String>,
-    /// Printings of this set in the local database.
+    /// **Paper** printings of this set in the local database.
     ///
-    /// Not decoration: `sets` carries every set Scryfall knows, including memorabilia and
-    /// token-only sets that `default_cards` holds nothing for. A picker over 1 050 rows is
-    /// only usable if it can put the ones with cards first, and it needs this to do it.
+    /// Not decoration, and not a plain row count: `sets` carries every set Scryfall knows,
+    /// and two different kinds of them can never answer a search. Memorabilia and
+    /// token-only sets have no rows in `cards` at all, because `default_cards` holds
+    /// nothing for them. The 61 Arena/MTGO sets have hundreds of rows each — and every one
+    /// of them is filtered out again by the `paper_only` default that [`run_search`]
+    /// applies unless a caller says otherwise. So the count is taken over `is_paper = 1`:
+    /// a picker whose numbers do not agree with what clicking the row returns is worse
+    /// than no numbers at all.
     pub card_count: i64,
 }
 
@@ -390,9 +395,14 @@ pub struct SetSummary {
 pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
     let mut stmt = conn
         .prepare(
+            // `FILTER`, not a `WHERE` on the subquery: a set whose every printing is
+            // digital has to come back as a `0` row, and a `WHERE` would drop the group
+            // entirely — which the `LEFT JOIN` would then coalesce to the same 0, but only
+            // by accident. Stated once, in the place that means it.
             "SELECT s.code, s.name, s.set_type, s.released_at, coalesce(n.cards, 0)
              FROM sets s
-             LEFT JOIN (SELECT set_code, count(*) AS cards FROM cards GROUP BY set_code) n
+             LEFT JOIN (SELECT set_code, count(*) FILTER (WHERE is_paper = 1) AS cards
+                          FROM cards GROUP BY set_code) n
                     ON n.set_code = s.code
              ORDER BY s.released_at DESC, s.name ASC",
         )
@@ -1257,5 +1267,33 @@ mod tests {
         // A set the local database has no printings for still appears — it is the count
         // that lets the picker decide, not this function.
         assert_eq!(sets[0].card_count, 0);
+    }
+
+    /// The count is the picker's only signal, and the picker sits above a search that
+    /// hides digital-only printings unless asked. Counting every row would put the 61
+    /// Arena/MTGO sets in the list showing hundreds of cards and answering every query
+    /// with nothing — `card_count` has to agree with what a default search can return,
+    /// not with how many rows `cards` happens to hold.
+    #[test]
+    fn list_sets_counts_only_the_printings_a_default_search_can_return() {
+        let conn = seeded_costs();
+        conn.execute_batch(
+            "INSERT INTO sets (code, name, set_type, released_at) VALUES
+                ('lea','Limited Edition Alpha','core','1993-08-05'),
+                ('ymid','Alchemy: Innistrad','alchemy','2021-12-09');",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
+             VALUES ('d1','Digital Only','ymid','1','en','normal',0,'{}')",
+            [],
+        )
+        .unwrap();
+
+        let sets = run_list_sets(&conn).unwrap();
+        let count_of = |code: &str| sets.iter().find(|s| s.code == code).unwrap().card_count;
+
+        assert_eq!(count_of("lea"), 2, "both Alpha printings are paper");
+        assert_eq!(count_of("ymid"), 0, "its only printing is digital-only");
     }
 }

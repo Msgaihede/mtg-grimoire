@@ -56,6 +56,24 @@ describe("ipc argument names match the Rust command signatures", () => {
     // and a field this side spells differently is `undefined` with no type error anywhere.
     expect(res.lastIngestSkipped).toBe(12);
   });
+
+  it("sends the new filters under the names Rust deserializes", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+
+    await ipc.searchCards({ sets: ["lea"], manaValues: [1, 8], limit: 50, offset: 0 });
+
+    // `search.rs` renames to camelCase, so `manaValues` — not `mana_values` — is the
+    // spelling that lands in `SearchRequest.mana_values`.
+    expect(invoke).toHaveBeenCalledWith("search_cards", {
+      req: { sets: ["lea"], manaValues: [1, 8], limit: 50, offset: 0 },
+    });
+  });
+
+  it("takes no arguments for the set list", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.listSets();
+    expect(invoke).toHaveBeenCalledWith("list_sets");
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {

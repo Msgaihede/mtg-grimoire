@@ -142,6 +142,11 @@
     }
   html {
     @apply font-sans;
+    /* The app is dark-only, and the controls the platform draws for itself — the format
+       filter's dropdown, scrollbars, the search box's clear button — read the scheme
+       rather than the palette. Without this the format picker opens a white list over a
+       dark table. */
+    color-scheme: dark;
     }
 }
 

@@ -2,14 +2,8 @@ import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ipcError, type CardSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import {
-  COLOR_KEYS,
-  COLOR_LABEL,
-  FORMATS,
-  needsNextPage,
-  useCardSearch,
-  type ColorKey,
-} from "./useCardSearch";
+import { FilterBar } from "./FilterBar";
+import { needsNextPage, useCardSearch, type CardSearch } from "./useCardSearch";
 
 /** Row height in px. Rows are uniform, so this is exact rather than an estimate. */
 const ROW_HEIGHT = 44;
@@ -53,14 +47,14 @@ function Row({ card }: { card: CardSummary }) {
 }
 
 /**
- * Card search: a debounced box, three filters, and every match in one scroll.
+ * Card search: a filter bar, and every match in one scroll.
  *
  * The result list is virtualised because an unfiltered search matches the whole database
  * — ~117 k rows — and the page opens on exactly that.
  */
 export function SearchPage() {
   const search = useCardSearch();
-  const { colors, toggleColor, query, rows, searchKey } = search;
+  const { query, rows, searchKey } = search;
   const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -111,60 +105,7 @@ export function SearchPage() {
           and the window is short. It is here to name the view for assistive tech. */}
       <h2 className="sr-only">Card search</h2>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <label htmlFor="card-search-text" className="sr-only">
-          Search cards
-        </label>
-        <input
-          id="card-search-text"
-          type="search"
-          value={search.text}
-          onChange={(e) => search.setText(e.target.value)}
-          placeholder="Search cards…"
-          className="min-w-56 flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm placeholder:text-muted focus:border-accent focus:outline-none"
-        />
-
-        <label htmlFor="card-search-format" className="text-sm text-muted">
-          Format
-        </label>
-        <select
-          id="card-search-format"
-          value={search.format}
-          onChange={(e) => search.setFormat(e.target.value)}
-          className="rounded-md border border-border bg-surface px-2 py-2 text-sm focus:border-accent focus:outline-none"
-        >
-          <option value="">Any format</option>
-          {FORMATS.map((f) => (
-            <option key={f.value} value={f.value}>
-              {f.label}
-            </option>
-          ))}
-        </select>
-
-        <div role="group" aria-label="Color identity" className="flex gap-1">
-          {COLOR_KEYS.map((key: ColorKey) => {
-            const on = colors.includes(key);
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => toggleColor(key)}
-                aria-pressed={on}
-                aria-label={COLOR_LABEL[key]}
-                title={COLOR_LABEL[key]}
-                className={cn(
-                  "size-9 rounded-md border text-sm font-medium transition-colors",
-                  on
-                    ? "border-accent bg-accent text-accent-foreground"
-                    : "border-border text-muted hover:text-text",
-                )}
-              >
-                {key}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <FilterBar search={search} />
 
       <Results
         search={search}
@@ -175,8 +116,6 @@ export function SearchPage() {
     </section>
   );
 }
-
-type Search = ReturnType<typeof useCardSearch>;
 
 /**
  * How many matches there are, in words.
@@ -191,7 +130,7 @@ function countOf(total: number, capped: boolean): string {
 }
 
 /** The one line that says what the result area is currently showing. */
-function summaryOf(search: Search, failure: string | null): string {
+function summaryOf(search: CardSearch, failure: string | null): string {
   const { query, rows, total, totalIsCapped, unfiltered } = search;
 
   if (rows.length === 0) {
@@ -218,7 +157,7 @@ function Results({
   virtualRows,
   scrollRef,
 }: {
-  search: Search;
+  search: CardSearch;
   virtualizer: ReactVirtualizer<HTMLDivElement, Element>;
   virtualRows: VirtualItem[];
   scrollRef: RefObject<HTMLDivElement | null>;

@@ -1,9 +1,11 @@
 /**
  * Trim the icon fonts' `@font-face` rules down to woff2.
  *
- * Build-time code, used by the `woff2IconFonts` plugin in `vite.config.ts` — it lives
- * under `src/` so it is covered by the test suite rather than only by whatever the last
- * build happened to emit. Nothing in the app imports it, so it is not in the bundle.
+ * Build-time code — `vite.config.ts` is its only caller. It lives under `src/` so it is
+ * covered by the test suite rather than only by whatever the last build happened to emit,
+ * and the plugin wrapper lives here with it for the same reason: the `id` filter is half
+ * of what makes this work, and a filter that stops matching is a silent 5 MB regression.
+ * Nothing in the app imports either, so neither is in the bundle.
  *
  * `mana-font` and `keyrune` date from the eot/svg era: their `src` lists name
  * eot + woff + ttf + svg, and `mana.css` never references the `mana.woff2` sitting in the
@@ -37,4 +39,31 @@ export function woff2Only(css: string): string {
       `src: url("../fonts/${family.toLowerCase()}.woff2") format("woff2");`,
     );
   });
+}
+
+/**
+ * `mana-font/css/mana.css` and `keyrune/css/keyrune.css`, however they are imported —
+ * posix or Windows separators, but never with a query suffix. `?raw` is how
+ * `iconFont.test.ts` reads these files as they ship, and transforming that would have the
+ * test grade its own output.
+ */
+const ICON_FONT_CSS = /node_modules[\\/](mana-font|keyrune)[\\/]css[\\/][^\\/?]+\.css$/;
+
+/**
+ * The Vite plugin: ship one format of the icon fonts instead of five.
+ *
+ * `enforce: "pre"` so this runs before Vite's CSS plugin turns the `url()`s into emitted
+ * assets. It only sees these files because `main.tsx` imports them — an `@import` from
+ * `index.css` is inlined by Tailwind before Vite resolves it as a module, and the rules
+ * would never reach a transform hook.
+ */
+export function woff2IconFonts() {
+  return {
+    name: "woff2-icon-fonts",
+    enforce: "pre" as const,
+    transform(code: string, id: string) {
+      if (!ICON_FONT_CSS.test(id)) return null;
+      return { code: woff2Only(code), map: null };
+    },
+  };
 }
