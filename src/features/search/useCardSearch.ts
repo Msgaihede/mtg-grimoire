@@ -20,11 +20,12 @@ export const FORMATS = [
   { value: "commander", label: "Commander" },
 ] as const;
 
-// The filter's colours and the interface's mana symbols are the same six letters in the
-// same order, and `colorParam` depends on that order to make "U then W" and "W then U"
-// the same query key. One definition, re-exported under the name the filter code uses:
-// two lists that must stay identical will not.
-export { MANA_KEYS as COLOR_KEYS, MANA_LABEL as COLOR_LABEL } from "@/lib/mana";
+/**
+ * The filter's colours are the interface's mana symbols — the same six letters in the same
+ * order, and `colorParam` depends on that order to make "U then W" and "W then U" the same
+ * query key. This module used to declare its own copy; an alias is what is left, because
+ * two lists that must stay identical will not.
+ */
 export type ColorKey = ManaKey;
 
 /** The mana-value chips. The last one is open-ended — `8` means "8 or more". */

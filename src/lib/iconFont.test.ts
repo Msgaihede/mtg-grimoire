@@ -96,6 +96,8 @@ describe("the fonts the rewrite points at", () => {
  */
 describe("woff2IconFonts", () => {
   const plugin = woff2IconFonts();
+  /** `Plugin["transform"]` is an object-hook union; this plugin's is the plain function. */
+  const transform = plugin.transform as (code: string, id: string) => { code: string } | null;
   const face = '@font-face{font-family:"Mana";src:url("../fonts/mana.eot");}';
 
   it("is registered in vite.config.ts, before the CSS plugin", () => {
@@ -113,7 +115,7 @@ describe("woff2IconFonts", () => {
     // pnpm's layout, and the minified stylesheet the packages also ship.
     "/proj/node_modules/.pnpm/mana-font@1.18.0/node_modules/mana-font/css/mana.min.css",
   ])("rewrites the icon-font stylesheets, however the id is spelled (%s)", (id) => {
-    expect(plugin.transform(face, id)?.code).toContain('url("../fonts/mana.woff2")');
+    expect(transform(face, id)?.code).toContain('url("../fonts/mana.woff2")');
   });
 
   it.each([
@@ -123,6 +125,6 @@ describe("woff2IconFonts", () => {
     "D:/proj/src/index.css",
     "D:/proj/node_modules/@fontsource/cinzel/500.css",
   ])("leaves every other stylesheet alone (%s)", (id) => {
-    expect(plugin.transform(face, id)).toBeNull();
+    expect(transform(face, id)).toBeNull();
   });
 });

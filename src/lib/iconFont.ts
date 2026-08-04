@@ -19,6 +19,8 @@
  * printed, and a vendored copy would go stale on the next `npm update`. Only `@font-face`
  * blocks are touched; every glyph class passes through untouched.
  */
+// Type-only: `vite` is a devDependency and this import leaves nothing behind at runtime.
+import type { Plugin } from "vite";
 
 /**
  * Magic's card-text face, which `mana.css` declares for four `.ms-…` text classes this
@@ -57,11 +59,11 @@ const ICON_FONT_CSS = /node_modules[\\/](mana-font|keyrune)[\\/]css[\\/][^\\/?]+
  * `index.css` is inlined by Tailwind before Vite resolves it as a module, and the rules
  * would never reach a transform hook.
  */
-export function woff2IconFonts() {
+export function woff2IconFonts(): Plugin {
   return {
     name: "woff2-icon-fonts",
-    enforce: "pre" as const,
-    transform(code: string, id: string) {
+    enforce: "pre",
+    transform(code, id) {
       if (!ICON_FONT_CSS.test(id)) return null;
       return { code: woff2Only(code), map: null };
     },

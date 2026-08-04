@@ -3,12 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { CardSummary, SearchRequest, SearchResponse } from "@/lib/ipc";
+import type { CardSummary, SearchRequest, SearchResponse, SetSummary } from "@/lib/ipc";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the page and asks for the set list on the way up, so the
 // mock has to answer it — a missing `listSets` is a rejected query, not a compile error.
-const listSets = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
+const listSets = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: { searchCards, listSets, syncStatus: vi.fn(), syncRun: vi.fn(), onSyncProgress: vi.fn() },
@@ -89,10 +89,20 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: scrollTo });
 });
 
+/** One set with printings, so the picker has something to pick. */
+const ALPHA: SetSummary = {
+  code: "lea",
+  name: "Limited Edition Alpha",
+  setType: "core",
+  releasedAt: "1993-08-05",
+  cardCount: 295,
+};
+
 beforeEach(() => {
   viewportHeight = 600;
   scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
+  listSets.mockReset().mockResolvedValue([ALPHA]);
 });
 
 afterEach(() => {
@@ -181,6 +191,76 @@ describe("SearchPage", () => {
     await waitFor(() =>
       expect(searchCards).toHaveBeenLastCalledWith(expect.objectContaining({ colors: "C" })),
     );
+  });
+
+  /**
+   * The middle of the wiring, which nothing else covers: `toggleIn` and
+   * `activeFilterCount` are unit-tested, `FilterBar` is tested against a stub search and
+   * `ipc.searchCards` is pinned against `invoke` — but between the chip and the request
+   * sit the hook's state, the query key and the request body, and `sets`/`manaValues`
+   * could be swapped, dropped or spelled wrong there with every one of those green.
+   */
+  it("turns a mana-value chip and a picked set into request fields", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
+
+    await waitFor(() =>
+      expect(searchCards).toHaveBeenLastCalledWith(
+        expect.objectContaining({ manaValues: [3], sets: undefined }),
+      ),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
+
+    // Both at once: a second filter must narrow the first rather than replace it.
+    await waitFor(() =>
+      expect(searchCards).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sets: ["lea"], manaValues: [3] }),
+      ),
+    );
+  });
+
+  it("clears every filter in one request when Reset all is clicked", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
+    await userEvent.click(screen.getByRole("button", { name: "Blue" }));
+    await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
+    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "bolt");
+
+    await waitFor(() =>
+      expect(searchCards).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          text: "bolt",
+          format: "modern",
+          colors: "U",
+          sets: ["lea"],
+          manaValues: [3],
+        }),
+      ),
+    );
+
+    // The badge counts kinds, not values: five filters are on and all five are one click
+    // from gone.
+    const reset = screen.getByRole("button", { name: /reset all/i });
+    expect(reset).toHaveTextContent("5");
+    await userEvent.click(reset);
+
+    await waitFor(() => {
+      const req = lastRequest();
+      expect(req.text).toBeUndefined();
+      expect(req.format).toBeUndefined();
+      expect(req.colors).toBeUndefined();
+      expect(req.sets).toBeUndefined();
+      expect(req.manaValues).toBeUndefined();
+    });
+    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
   });
 
   it("renders every nullable column without inventing a value", async () => {

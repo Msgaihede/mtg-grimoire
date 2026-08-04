@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from "vitest/config";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 // Ships one format of the icon fonts instead of five — worth ~5 MB of the bundle. Both
@@ -12,7 +12,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [woff2IconFonts() as Plugin, react(), tailwindcss()],
+  plugins: [woff2IconFonts(), react(), tailwindcss()],
 
   // `@/*` -> `src/*`, matching tsconfig.json paths and components.json aliases.
   resolve: {

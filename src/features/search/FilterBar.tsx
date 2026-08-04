@@ -4,9 +4,12 @@ import { SetCombobox } from "./SetCombobox";
 import { FORMATS, MANA_VALUES, type CardSearch } from "./useCardSearch";
 
 /**
- * Gold, only ever for keyboard focus. State is said with fill, ring and border instead, so
- * a focused control and an active one are never the same picture — which they would be if
- * "on" and "focused" both drew a gold ring.
+ * Keyboard focus, everywhere in the row.
+ *
+ * Gold says "interactive emphasis" for both focus and on, so the two are told apart by
+ * *shape* rather than by hue: focus is always an `outline`, standing off the control's
+ * edge; on is always the control's own border or a ring hugging it. A chip that is both
+ * shows both, which is the one case where either alone would be a lie.
  */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 

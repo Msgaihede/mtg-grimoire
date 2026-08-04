@@ -49,8 +49,8 @@ describe("SetCombobox", () => {
     listSets.mockResolvedValue(sets);
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
-    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
-    const box = screen.getByRole("textbox", { name: /set/i });
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    const box = screen.getByRole("combobox", { name: /search sets/i });
 
     await userEvent.type(box, "neon");
     expect(
@@ -72,7 +72,7 @@ describe("SetCombobox", () => {
     listSets.mockResolvedValue(sets);
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
-    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
 
     expect(await screen.findByRole("option", { name: /Alpha/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Token Set/ })).not.toBeInTheDocument();
@@ -83,23 +83,52 @@ describe("SetCombobox", () => {
     const onToggle = vi.fn();
     const { rerender } = wrap(<SetCombobox selected={[]} onToggle={onToggle} />);
 
-    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
     await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
     expect(onToggle).toHaveBeenCalledWith("lea");
 
     rerender(<SetCombobox selected={["lea"]} onToggle={onToggle} />);
-    expect(screen.getByRole("combobox", { name: /set/i })).toHaveTextContent("1 set");
+    expect(screen.getByRole("button", { name: "Set" })).toHaveTextContent("1 set");
   });
 
-  it("closes on Escape", async () => {
+  /**
+   * Escape has to hand the caret back. The element it dismisses is the focused one, so
+   * without this the reader is dropped onto `<body>` and the next Tab restarts at the top
+   * of the app — three controls and a sidebar away from the filter they were setting.
+   */
+  it("closes on Escape and gives focus back to the button that opened it", async () => {
     listSets.mockResolvedValue(sets);
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
-    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    const trigger = screen.getByRole("button", { name: "Set" });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
     expect(await screen.findByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /search sets/i })).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
 
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  /** Tabbing past the picker would otherwise leave 288px of listbox hanging over the
+   *  results, with the caret three controls further along the filter row. */
+  it("closes when focus leaves it altogether", async () => {
+    listSets.mockResolvedValue(sets);
+    wrap(
+      <>
+        <SetCombobox selected={[]} onToggle={vi.fn()} />
+        <button type="button">Next control</button>
+      </>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(await screen.findByRole("listbox")).toBeInTheDocument();
+
+    await userEvent.tab();
+
+    expect(screen.getByRole("button", { name: "Next control" })).toHaveFocus();
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
@@ -121,7 +150,7 @@ describe("SetCombobox", () => {
     );
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
-    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
 
     expect(await screen.findByText(/50 of 60/)).toBeInTheDocument();
     expect(screen.getAllByRole("option")).toHaveLength(50);
@@ -143,9 +172,37 @@ describe("SetCombobox", () => {
     ]);
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
-    await userEvent.click(screen.getByRole("combobox", { name: /set/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
 
     const row = await screen.findByRole("option", { name: /未来の拡張/ });
     expect(row).toHaveTextContent("ZZZ");
+  });
+
+  /**
+   * `search.rs` filters on at most `MAX_SET_FILTER` sets and silently truncates past it,
+   * so a 65th pick would leave the button claiming "65 sets" over results computed from
+   * 64. The button is not allowed to say something the search will not do.
+   */
+  it("stops adding sets at the limit the backend enforces, and still lets one go", async () => {
+    listSets.mockResolvedValue(sets);
+    const onToggle = vi.fn();
+    // 64 already picked, one of which is on screen.
+    const atLimit = ["lea", ...Array.from({ length: 63 }, (_, i) => `s${i}`)];
+    wrap(<SetCombobox selected={atLimit} onToggle={onToggle} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+    const unpicked = await screen.findByRole("option", { name: /Kamigawa/ });
+    expect(unpicked).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(unpicked);
+    expect(onToggle).not.toHaveBeenCalled();
+
+    // Removing is the way out, so a picked row stays live.
+    const picked = screen.getByRole("option", { name: /Alpha/ });
+    expect(picked).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(picked);
+    expect(onToggle).toHaveBeenCalledWith("lea");
+
+    expect(screen.getByText(/64 sets is the most/i)).toBeInTheDocument();
   });
 });

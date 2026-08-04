@@ -16,6 +16,17 @@ import { cn } from "@/lib/utils";
  */
 const MAX_OPTIONS = 50;
 
+/**
+ * How many sets one search may name.
+ *
+ * Mirrors `MAX_SET_FILTER` in `src-tauri/src/search.rs`, which truncates past it — so
+ * without a ceiling here the button would say "65 sets" while the backend filtered on 64,
+ * and the results would quietly disagree with the control that produced them. The backend
+ * keeps its truncation as the belt; this is the braces, and it is the only one the reader
+ * can see.
+ */
+const MAX_SETS = 64;
+
 /** Module scope so the scroll effect can depend on it without re-running every render. */
 const optionId = (id: string, index: number) => `${id}-option-${index}`;
 
@@ -43,6 +54,7 @@ export function SetCombobox({
   const [active, setActive] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const id = useId();
   const listboxId = `${id}-listbox`;
   const labelId = `${id}-label`;
@@ -66,7 +78,14 @@ export function SetCombobox({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      // Escape is a keyboard word, and the element it dismissed is about to unmount with
+      // the focus still on it — which drops the caret onto `<body>`, so the next Tab
+      // restarts from the top of the app rather than continuing along the filter row.
+      // Called before React flushes the close, while the input is still mounted.
+      // Outside-click deliberately does not do this: the reader is already somewhere else.
+      buttonRef.current?.focus();
     };
     const onClick = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
@@ -111,6 +130,10 @@ export function SetCombobox({
   const label =
     selected.length === 0 ? "Any set" : `${selected.length} set${selected.length === 1 ? "" : "s"}`;
 
+  /** At the ceiling, adding is off and removing is still on — the way out has to stay open. */
+  const full = selected.length >= MAX_SETS;
+  const canToggle = (code: string) => !full || selected.includes(code);
+
   const onListKeyDown = (e: React.KeyboardEvent) => {
     if (options.length === 0) return;
     if (e.key === "ArrowDown") {
@@ -127,24 +150,36 @@ export function SetCombobox({
       setActive(options.length - 1);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      onToggle(options[activeIndex].code);
+      const code = options[activeIndex].code;
+      if (canToggle(code)) onToggle(code);
     }
   };
 
   return (
-    <div ref={rootRef} className="relative">
+    <div
+      ref={rootRef}
+      className="relative"
+      // Tab out of the panel and the panel should not still be there: 288px of listbox
+      // hanging over the results, with the caret three controls further along. `onBlur`
+      // is React's `focusout`, so it catches the input losing focus to anything at all;
+      // a `relatedTarget` inside the root — the trigger, on Escape — is not leaving.
+      onBlur={(e) => {
+        if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
+      }}
+    >
       {/* The button's *content* is the value ("2 sets"); its name has to come from
           somewhere else, or assistive tech announces the value twice and the field never. */}
       <span id={labelId} className="sr-only">
         Set
       </span>
+      {/* A disclosure button, not the combobox: the combobox is the text field it reveals,
+          which is where the caret goes and what `aria-activedescendant` is read from. */}
       <button
+        ref={buttonRef}
         type="button"
-        role="combobox"
         aria-labelledby={labelId}
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-controls={open ? listboxId : undefined}
         onClick={() => {
           setOpen((v) => !v);
           setActive(0);
@@ -174,7 +209,9 @@ export function SetCombobox({
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
             aria-label="Search sets"
+            aria-expanded="true"
             aria-controls={listboxId}
             aria-activedescendant={options.length > 0 ? optionId(id, activeIndex) : undefined}
             value={query}
@@ -194,7 +231,9 @@ export function SetCombobox({
             className="max-h-64 overflow-auto"
           >
             {options.length === 0 && (
-              <li className="px-2 py-3 text-center text-xs text-muted">
+              // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
+              // options are allowed. `presentation` makes it the sentence it looks like.
+              <li role="presentation" className="px-2 py-3 text-center text-xs text-muted">
                 {sets.isPending
                   ? "Loading sets…"
                   : sets.isError
@@ -209,10 +248,16 @@ export function SetCombobox({
                 set={s}
                 picked={selected.includes(s.code)}
                 active={i === activeIndex}
+                disabled={!canToggle(s.code)}
                 onToggle={onToggle}
               />
             ))}
           </ul>
+          {full && (
+            <p className="pt-2 text-center text-[0.7rem] text-muted">
+              {MAX_SETS} sets is the most one search can name — remove one to add another.
+            </p>
+          )}
           {matches.length > options.length && (
             <p className="pt-2 text-center text-[0.7rem] text-muted">
               Showing {options.length} of {matches.length} — keep typing to narrow it down.
@@ -229,12 +274,14 @@ function Option({
   set,
   picked,
   active,
+  disabled,
   onToggle,
 }: {
   id: string;
   set: SetSummary;
   picked: boolean;
   active: boolean;
+  disabled: boolean;
   onToggle: (code: string) => void;
 }) {
   const glyph = setGlyphClass(set.code);
@@ -243,13 +290,15 @@ function Option({
       id={id}
       role="option"
       aria-selected={picked}
+      aria-disabled={disabled || undefined}
       // Keeps the caret — and therefore the arrow keys — in the search box while the
       // reader picks several sets with the mouse.
       onMouseDown={(e) => e.preventDefault()}
-      onClick={() => onToggle(set.code)}
+      onClick={() => !disabled && onToggle(set.code)}
       className={cn(
-        "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm",
+        "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
         "transition-colors duration-150 motion-reduce:transition-none",
+        disabled ? "cursor-not-allowed opacity-45" : "cursor-pointer",
         picked ? "text-accent" : "text-text",
         active && "bg-bg",
       )}
