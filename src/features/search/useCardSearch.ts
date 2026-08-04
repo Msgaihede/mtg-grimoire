@@ -62,9 +62,11 @@ export function toggleColor(picked: readonly ColorKey[], key: ColorKey): ColorKe
 /**
  * The offset for the page after these, or `undefined` when there is nothing left.
  *
- * Counts the rows actually delivered rather than multiplying page number by `PAGE_SIZE`,
- * because the backend clamps `limit` and may hand back a short page; a computed offset
- * would then skip whatever the shortfall was.
+ * Counts the rows actually delivered rather than multiplying a page number by `PAGE_SIZE`.
+ * The two agree only while every page comes back full, and one need not: a sync swapping
+ * the `cards` table between two requests changes what the offsets address, so a page can
+ * arrive short of what was asked for. A computed offset would then point past rows that
+ * were never delivered, and the reader would never see them.
  */
 export function nextOffset(pages: readonly SearchResponse[]): number | undefined {
   const last = pages[pages.length - 1];
@@ -108,10 +110,12 @@ export function useCardSearch() {
 
   const colorsParam = colorParam(colors);
 
+  // Every input the request is built from, so a changed filter can never be answered by
+  // another filter's cached pages.
+  const queryKey = ["cards", "search", debouncedText, format, colorsParam ?? ""];
+
   const query = useInfiniteQuery({
-    // Every input the request is built from, so a changed filter can never be answered
-    // by another filter's cached pages.
-    queryKey: ["cards", "search", debouncedText, format, colorsParam ?? ""],
+    queryKey,
     queryFn: ({ pageParam }) =>
       ipc.searchCards({
         // Blank strings are dropped rather than sent: the backend treats them as unset
@@ -143,6 +147,14 @@ export function useCardSearch() {
     toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
     query,
     rows,
+    /**
+     * Identity of the current search, for anything that has to react to "this is a
+     * different search now" — resetting the scroll position, above all. Derived from the
+     * query key itself rather than rebuilt from the same fields, so the two cannot drift.
+     * Serialised rather than joined: the text half is whatever the user typed, and a
+     * separator a user can type is a separator that can collide.
+     */
+    searchKey: JSON.stringify(queryKey),
     /** Size of the whole match set, not of `rows`. `0` until the first page answers. */
     total: query.data?.pages[0]?.total ?? 0,
     /**

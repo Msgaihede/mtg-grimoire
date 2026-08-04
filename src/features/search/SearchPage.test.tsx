@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { CardSummary, SearchRequest, SearchResponse } from "@/lib/ipc";
@@ -43,6 +43,10 @@ const SPARSE: CardSummary = {
 
 const page = (items: CardSummary[], total = items.length): SearchResponse => ({ items, total });
 
+/** `n` distinct rows starting at `from`, so a page-2 row is tellable from a page-1 one. */
+const cards = (n: number, from = 0): CardSummary[] =>
+  Array.from({ length: n }, (_, i) => ({ ...BOLT, id: `c${from + i}`, name: `Card ${from + i}` }));
+
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
@@ -55,17 +59,37 @@ const lastRequest = () =>
   searchCards.mock.calls[searchCards.mock.calls.length - 1][0] as SearchRequest;
 
 /**
+ * How tall the scroll container pretends to be. Raise it in a test that needs the
+ * virtualiser to render deep enough into the list to trip the paging effect.
+ */
+let viewportHeight = 600;
+
+/** Every `scrollTo` the virtualiser performs — how the scroll reset is observed. */
+const scrollTo = vi.fn();
+
+/**
  * jsdom lays nothing out: every element measures 0, so the virtualiser computes an empty
  * window and renders no rows at all. `@tanstack/react-virtual` sizes its scroll container
- * with `offsetHeight`, so one number is the whole of what it is missing.
+ * with `offsetHeight`, so one number is the whole of what it is missing. It scrolls
+ * through `Element.scrollTo`, which jsdom does not implement either.
  */
 beforeAll(() => {
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 600 });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get: () => viewportHeight,
+  });
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, value: 900 });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: scrollTo });
 });
 
 beforeEach(() => {
+  viewportHeight = 600;
+  scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("SearchPage", () => {
@@ -84,15 +108,29 @@ describe("SearchPage", () => {
     expect(screen.getByText(/LEA/)).toBeInTheDocument();
   });
 
-  it("coalesces keystrokes into a single request", async () => {
+  it("coalesces keystrokes into one request, 300 ms after the last of them", async () => {
+    // Only the two functions the debounce itself uses, so nothing else in the stack has
+    // to cope with a frozen clock.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     wrap(<SearchPage />);
+    await act(async () => {});
 
-    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "bolt");
+    // `fireEvent`, not `userEvent`: userEvent awaits Testing Library's async wrapper,
+    // which drains the microtask queue through a real `setTimeout(…, 0)` and advances
+    // only *jest* fake timers to get it back. Under vitest's that promise never settles
+    // and the test hangs instead of failing. Four value changes are what typing "bolt"
+    // amounts to as far as the debounce can tell.
+    const input = screen.getByPlaceholderText(/search cards/i);
+    for (const value of ["b", "bo", "bol", "bolt"]) {
+      fireEvent.change(input, { target: { value } });
+    }
 
-    await waitFor(() =>
-      expect(searchCards).toHaveBeenLastCalledWith(expect.objectContaining({ text: "bolt" })),
-    );
-    // The opening browse, then one search. No `b`/`bo`/`bol` in between.
+    // Four keystrokes, and still only the opening browse: no `b`/`bo`/`bol` escaped.
+    expect(requestedTexts()).toEqual([undefined]);
+    await act(async () => void vi.advanceTimersByTime(299));
+    expect(requestedTexts()).toEqual([undefined]);
+
+    await act(async () => void vi.advanceTimersByTime(1));
     expect(requestedTexts()).toEqual([undefined, "bolt"]);
   });
 
@@ -174,6 +212,83 @@ describe("SearchPage", () => {
     wrap(<SearchPage />);
 
     expect(await screen.findByText(/database is locked/i)).toBeInTheDocument();
+  });
+
+  it("keeps the previous rows on screen while a new filter is still loading", async () => {
+    searchCards
+      .mockResolvedValueOnce(page([BOLT]))
+      // The refined search never answers — as a search waiting out an ingest's lock does.
+      .mockImplementationOnce(() => new Promise<SearchResponse>(() => {}));
+    wrap(<SearchPage />);
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
+
+    // `keepPreviousData`: the list does not blank out while the new page is in flight.
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText(/searching…/i)).toBeInTheDocument();
+  });
+
+  it("resets the scroll position when the search changes", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    scrollTo.mockClear();
+
+    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
+
+    // Without this the browser clamps the old offset into the new, shorter list — which
+    // strands the reader at the bottom and trips the paging effect immediately.
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 0 })));
+  });
+
+  it("fetches the next page as the reader nears the bottom, once and not again", async () => {
+    // Tall enough that the virtualiser renders past 80 % of the first page.
+    viewportHeight = 2400;
+    let releasePageTwo: (r: SearchResponse) => void = () => {};
+    searchCards
+      .mockResolvedValueOnce(page(cards(50), 120))
+      .mockImplementationOnce(
+        () => new Promise<SearchResponse>((resolve) => (releasePageTwo = resolve)),
+      );
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
+    expect(searchCards.mock.calls[1][0]).toMatchObject({ offset: 50, limit: 50 });
+
+    // Page 2 is still in flight, and every re-render while it is re-runs the effect.
+    // `isFetchingNextPage` is what stops that becoming a second identical request.
+    await act(async () => {});
+    expect(searchCards).toHaveBeenCalledTimes(2);
+
+    await act(async () => releasePageTwo(page(cards(50, 50), 120)));
+    expect(screen.getByText("Card 0")).toBeInTheDocument();
+    // 100 of 120 rows loaded now puts the 80 % mark below the rendered window again.
+    expect(searchCards).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the loaded rows when a later page fails, and offers a retry", async () => {
+    viewportHeight = 2400;
+    searchCards
+      .mockResolvedValueOnce(page(cards(50), 120))
+      .mockRejectedValueOnce("database is locked")
+      .mockResolvedValueOnce(page(cards(50, 50), 120));
+    wrap(<SearchPage />);
+
+    expect(await screen.findByText(/could not load more cards/i)).toBeInTheDocument();
+    // query-core keeps `data` on error: the 50 rows already read must survive page 2's
+    // rejection, not be replaced by a full-page error.
+    expect(screen.getByText("Card 0")).toBeInTheDocument();
+    expect(screen.getByText("Card 49")).toBeInTheDocument();
+
+    // And the failure stops the auto-pager rather than letting it retry on every render.
+    await act(async () => {});
+    expect(searchCards).toHaveBeenCalledTimes(2);
+
+    await userEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(screen.getByText("Card 50")).toBeInTheDocument());
+    expect(screen.queryByText(/could not load more cards/i)).not.toBeInTheDocument();
   });
 });
 
