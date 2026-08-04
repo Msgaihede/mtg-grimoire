@@ -88,9 +88,10 @@ pub fn ingest_gz(
                 collector_number, rarity, layout, mana_cost, cmc, type_line, oracle_text, colors,
                 color_identity, legalities, games, finishes, prices, price_usd, price_eur, faces,
                 illustration_id, frame_effects, border_color, full_art, promo, promo_types, digital,
-                is_paper, edhrec_rank, game_changer, image_status, image_updated_at, search_text, raw)
+                is_paper, edhrec_rank, game_changer, image_status, image_updated_at, image_uris,
+                face_image_uris, search_text, raw)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
-                ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37)",
+                ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39)",
         )?;
         for line in reader.lines() {
             let line = line?;
@@ -138,6 +139,8 @@ pub fn ingest_gz(
                 c.game_changer,
                 c.image_status,
                 c.image_updated_at,
+                c.image_uris,
+                c.face_image_uris,
                 c.search_text,
                 // The original line, stored verbatim: every field this schema does not
                 // model yet stays recoverable without a re-download.
@@ -232,19 +235,22 @@ mod tests {
         assert_eq!(ticks, 1, "the final progress call always fires");
     }
 
-    /// The 37-column INSERT is positional, and SQLite columns are dynamically typed:
+    /// The 39-parameter INSERT is positional, and SQLite columns are dynamically typed:
     /// two transposed parameters would still insert without complaint and only show
     /// up much later as wrong data. So read a fully-populated row back and check
     /// every column against the value its name promises. Every text value is distinct
     /// — including `oracle_text` vs the `search_text` derived from it — so no swap
-    /// among them can hide.
+    /// among them can hide. The two image columns are checked just below the table
+    /// rather than in it: their key order is serde_json's, not something this crate
+    /// promises, so they are compared by content.
     #[test]
     fn every_column_receives_the_field_it_is_named_for() {
-        // `prices` and `legalities` are stored as verbatim JSON; their keys are written
-        // alphabetically here so the expectation holds whether serde_json sorts keys or
-        // preserves input order. The lone `card_faces` entry is what pushes `search_text`
-        // ("ORACLE FACENAME") apart from `oracle_text` ("ORACLE").
-        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z"}"#;
+        // `prices`, `legalities` and `card_faces` are stored as verbatim JSON; their keys
+        // are written alphabetically here so the expectation holds whether serde_json
+        // sorts keys or preserves input order. The lone `card_faces` entry is what pushes
+        // `search_text` ("ORACLE FACENAME") apart from `oracle_text` ("ORACLE"), and it
+        // carries images of its own so `face_image_uris` is populated too.
+        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"}}"#;
         // Five boolean columns cannot be told apart by one row — with two values to
         // go round, some pair always matches. These two extra rows give each boolean a
         // distinct pattern across the three: full_art 100, promo 011, digital 010,
@@ -284,7 +290,10 @@ mod tests {
             ("prices", Some(r#"{"eur":"2.5","usd":"1.25"}"#)),
             ("price_usd", Some("1.25")),
             ("price_eur", Some("2.5")),
-            ("faces", Some(r#"[{"name":"FACENAME"}]"#)),
+            (
+                "faces",
+                Some(r#"[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}]"#),
+            ),
             ("illustration_id", Some("ILL")),
             ("frame_effects", Some(r#"["showcase"]"#)),
             ("border_color", Some("black")),
@@ -320,6 +329,19 @@ mod tests {
             assert_eq!(got[i].as_deref(), *want, "column `{col}`");
         }
 
+        // The last two parameters, in the same positional check: distinct values top
+        // level vs face, so transposing them cannot hide.
+        let (top, face): (String, String) = conn
+            .query_row(
+                "SELECT json_extract(image_uris, '$.grid'),
+                        json_extract(face_image_uris, '$[0].grid')
+                 FROM cards WHERE id='ID1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((top.as_str(), face.as_str()), ("TOPGRID", "FACEGRID"));
+
         // (full_art, promo, digital, game_changer, is_paper) per row — read down the
         // columns and every boolean has its own signature, so a transposed pair fails.
         for (id, want) in [
@@ -337,6 +359,55 @@ mod tests {
                 .unwrap();
             assert_eq!(got, want, "boolean columns of {id}");
         }
+    }
+
+    /// The ingest and the v2 backfill must produce the same columns, or a card's art
+    /// would change shape depending on whether its row survived a sync. (The extraction
+    /// itself is held to that by `schema::tests::the_backfill_and_the_ingest_agree_on_
+    /// every_image_shape`; this is the wiring — that the two values reach the two
+    /// columns they are named for.)
+    #[test]
+    fn ingested_rows_carry_their_image_columns() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let p = gz_fixture(&[
+            r#"{"object":"card","id":"a","name":"Bolt","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false,"image_uris":{"thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp","normal":"n.jpg"}}"#,
+            r#"{"object":"card","id":"b","name":"Delver","lang":"en","layout":"transform","set":"x","collector_number":"2","games":["paper"],"finishes":["nonfoil"],"digital":false,"card_faces":[{"name":"Front","image_uris":{"grid":"f0.webp"}},{"name":"Back","image_uris":{"grid":"f1.webp"}}]}"#,
+        ]);
+
+        ingest_gz(&mut conn, &p, &mut |_| {}).unwrap();
+
+        let grid: String = conn
+            .query_row(
+                "SELECT json_extract(image_uris, '$.grid') FROM cards WHERE id='a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(grid, "g.webp");
+        let back: String = conn
+            .query_row(
+                "SELECT json_extract(face_image_uris, '$[1].grid') FROM cards WHERE id='b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(back, "f1.webp");
+
+        // The two columns are disjoint populations and the swap that put them here does
+        // not blur them: a `normal` card has no face array, a `transform` no top-level
+        // image object. Transposing the two parameters above would land `a`'s object in
+        // the face column and `b`'s array in the top-level one, so these NULLs are what
+        // says the pair is the right way round.
+        let (face_of_a, top_of_b): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT (SELECT face_image_uris FROM cards WHERE id='a'),
+                        (SELECT image_uris FROM cards WHERE id='b')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((face_of_a, top_of_b), (None, None));
     }
 
     /// A gzipped error page, the wrong bulk variant, a file of nothing but tokens —

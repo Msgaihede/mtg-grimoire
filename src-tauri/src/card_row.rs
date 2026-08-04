@@ -10,8 +10,10 @@
 //!   modal_dfc, reversible), so it falls back too. `color_identity` never does:
 //!   it is a whole-card property and only ever appears at the top level.
 //! - `meld` has top-level images and **no** `card_faces` at all; `transform`,
-//!   `modal_dfc`, `double_faced_token` and `art_series` are the reverse. Neither
-//!   shape is decoded here (images are resolved downstream) but both must parse.
+//!   `modal_dfc`, `double_faced_token` and `art_series` are the reverse — images per
+//!   face and nothing at the top level. Both shapes are resolved here, into two
+//!   columns that live data never fills at once, and a few hundred printings (art
+//!   series, mostly) fill neither.
 //! - `prices` values are decimal **strings** or `null`, never JSON numbers.
 //! - `collector_number` is text (`"1★"`, `"99b"`, `"A-193"`) and `cmc` is decimal
 //!   (`0.5` on un-cards), so neither may be narrowed to an integer.
@@ -58,6 +60,13 @@ pub struct CardRow {
     pub game_changer: bool,
     pub image_status: Option<String>,
     pub image_updated_at: Option<String>,
+    /// The four WEBP variants from the top-level `image_uris`, as compact JSON.
+    /// `None` for the 3.7% of printings that have no top-level image object at all.
+    pub image_uris: Option<String>,
+    /// One entry per `card_faces[i]`: the same object, or JSON `null` for a face with no
+    /// images. `None` when no face has any, which keeps `split`/`adventure`/`flip`
+    /// (two faces, one physical side, images at the top level) out of the column.
+    pub face_image_uris: Option<String>,
     pub search_text: String,
 }
 
@@ -79,6 +88,32 @@ fn joined_letters(v: &Value, k: &str) -> Option<String> {
 /// so a new Scryfall key never needs a migration.
 fn compact(v: &Value, k: &str) -> Option<String> {
     v.get(k).filter(|x| !x.is_null()).map(|x| x.to_string())
+}
+
+/// The four WEBP variants of an object's `image_uris`, as a JSON object — `None` when
+/// the object carries no `image_uris` at all.
+///
+/// Reduced rather than stored verbatim: Scryfall ships eleven keys, seven of them the
+/// legacy JPG/PNG family its own docs mark as *replaced*. `raw` keeps the rest.
+///
+/// All four keys are always written, a variant the source lacks as JSON `null`, because
+/// the v2 backfill builds the same object with `json_object('thumb', json_extract(…), …)`
+/// and SQLite writes those nulls too. A backfilled row and an ingested row have to be the
+/// same object for the same input — see
+/// `schema::tests::the_backfill_and_the_ingest_agree_on_every_image_shape`. (The one
+/// input the two would answer differently is an `image_uris` that is not an object at
+/// all, which the API does not emit and which is better stored as nothing.)
+fn webp_uris(o: &Value) -> Option<Value> {
+    let uris = o.get("image_uris")?.as_object()?;
+    let out = crate::schema::IMAGE_VARIANTS
+        .iter()
+        .map(|k| {
+            let uri = uris.get(*k).and_then(Value::as_str);
+            let uri = uri.map_or(Value::Null, |u| Value::String(u.to_owned()));
+            ((*k).to_owned(), uri)
+        })
+        .collect();
+    Some(Value::Object(out))
 }
 
 /// A price, which Scryfall sends as a decimal string (`"0.32"`) or `null` — never a
@@ -171,6 +206,21 @@ impl CardRow {
                 .unwrap_or(false),
             image_status: s(v, "image_status"),
             image_updated_at: s(v, "image_updated_at"),
+            image_uris: webp_uris(v).map(|u| u.to_string()),
+            // Per face index, never per card: `transform` and friends have two physical
+            // sides and the URL path segment is `front`/`back` accordingly. Iterating
+            // `card_faces` in order is what makes index 0 the front — the order is the
+            // array's, not something reconstructed from the URLs. A face with no images
+            // becomes a JSON `null` in place, so index 1 never silently resolves to
+            // index 0's art, and a faces array with no images at all stays `None`.
+            face_image_uris: faces.and_then(|fs| {
+                let per: Vec<Value> = fs
+                    .iter()
+                    .map(|f| webp_uris(f).unwrap_or(Value::Null))
+                    .collect();
+                let any = per.iter().any(|x| !x.is_null());
+                any.then(|| Value::Array(per).to_string())
+            }),
             search_text,
         })
     }
@@ -227,6 +277,114 @@ mod tests {
         );
         assert!(!c.is_paper);
         assert!(c.digital);
+    }
+
+    #[test]
+    fn top_level_images_are_reduced_to_the_four_webp_variants() {
+        let c = parse(
+            r#"{"object":"card","id":"aaa","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161","games":["paper"],"finishes":["nonfoil"],"digital":false,"image_uris":{"small":"s.jpg","normal":"n.jpg","large":"l.jpg","png":"p.png","art_crop":"ac.jpg","border_crop":"bc.jpg","thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp","crop":"c.webp"}}"#,
+        );
+        let uris: serde_json::Value =
+            serde_json::from_str(c.image_uris.as_deref().unwrap()).unwrap();
+        assert_eq!(uris["thumb"], "t.webp");
+        assert_eq!(uris["grid"], "g.webp");
+        assert_eq!(uris["display"], "d.webp");
+        assert_eq!(uris["art"], "a.webp");
+        assert_eq!(uris.as_object().unwrap().len(), 4, "WEBP only: {uris}");
+        assert_eq!(c.face_image_uris, None);
+    }
+
+    /// The #1 image gotcha: transform / modal_dfc / double_faced_token / art_series /
+    /// reversible_card carry no top-level `image_uris` at all, and a naive read blanks
+    /// every double-faced card in the database.
+    #[test]
+    fn a_transform_carries_its_images_per_face() {
+        let c = parse(
+            r#"{"object":"card","id":"bbb","name":"Delver of Secrets // Insectile Aberration","lang":"en","layout":"transform","set":"isd","collector_number":"51","games":["paper"],"finishes":["nonfoil"],"digital":false,"card_faces":[{"name":"Delver of Secrets","image_uris":{"thumb":"f0t.webp","grid":"f0g.webp","display":"f0d.webp","art":"f0a.webp"}},{"name":"Insectile Aberration","image_uris":{"thumb":"f1t.webp","grid":"f1g.webp","display":"f1d.webp","art":"f1a.webp"}}]}"#,
+        );
+        assert_eq!(c.image_uris, None);
+        let faces: serde_json::Value =
+            serde_json::from_str(c.face_image_uris.as_deref().unwrap()).unwrap();
+        assert_eq!(faces[0]["grid"], "f0g.webp");
+        assert_eq!(faces[1]["grid"], "f1g.webp");
+    }
+
+    /// `split`, `adventure`, `flip` and `prepare` have two faces but one physical side:
+    /// images live at the top level and the faces carry none. The face column must stay
+    /// NULL rather than becoming `[null, null]`, because "no face images" and "faces with
+    /// no images" are the same thing and only one of them is worth a row of storage.
+    #[test]
+    fn a_split_card_keeps_its_images_at_the_top_level() {
+        let c = parse(
+            r#"{"object":"card","id":"ccc","name":"Fire // Ice","lang":"en","layout":"split","set":"apc","collector_number":"128","games":["paper"],"finishes":["nonfoil"],"digital":false,"image_uris":{"thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp"},"card_faces":[{"name":"Fire"},{"name":"Ice"}]}"#,
+        );
+        assert!(c.image_uris.is_some());
+        assert_eq!(c.face_image_uris, None);
+    }
+
+    /// 6 of 105 art_series printings in the sample had images on neither the card nor its
+    /// faces, and 162 printings have none anywhere in the live data. Both columns NULL is
+    /// what the placeholder path keys on, so it has to be reachable.
+    #[test]
+    fn a_printing_with_no_images_anywhere_leaves_both_columns_null() {
+        let c = parse(
+            r#"{"object":"card","id":"ddd","name":"Nameless Art","lang":"en","layout":"art_series","set":"sld","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false,"card_faces":[{"name":"Nameless Art"},{"name":"Nameless Art"}]}"#,
+        );
+        assert_eq!(c.image_uris, None);
+        assert_eq!(c.face_image_uris, None);
+    }
+
+    /// One face imaged, one not — art_series again. The gap has to be a JSON `null` at
+    /// the right index, not a shorter array, or face 1 would resolve to face 0's art.
+    #[test]
+    fn a_face_without_images_is_a_null_at_its_own_index() {
+        let c = parse(
+            r#"{"object":"card","id":"eee","name":"Half Art","lang":"en","layout":"art_series","set":"sld","collector_number":"2","games":["paper"],"finishes":["nonfoil"],"digital":false,"card_faces":[{"name":"Half Art"},{"name":"Half Art","image_uris":{"thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp"}}]}"#,
+        );
+        let faces: serde_json::Value =
+            serde_json::from_str(c.face_image_uris.as_deref().unwrap()).unwrap();
+        assert!(faces[0].is_null(), "{faces}");
+        assert_eq!(faces[1]["grid"], "g.webp");
+    }
+
+    /// Face order is positional, not emergent: `card_faces[0]` is the front, `[1]` the
+    /// back, and the URL path segment (`/front/`, `/back/`) says so. Iterating the array
+    /// in order is what makes that structural — a face read out of order would point the
+    /// front of a transform at the back's art.
+    #[test]
+    fn face_order_follows_card_faces_order() {
+        let c = parse(
+            r#"{"object":"card","id":"fff","name":"Front // Back","lang":"en","layout":"transform","set":"isd","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false,"card_faces":[{"name":"Front","image_uris":{"grid":"https://cards.scryfall.io/grid/front/f/f/fff.webp?1"}},{"name":"Back","image_uris":{"grid":"https://cards.scryfall.io/grid/back/f/f/fff.webp?1"}}]}"#,
+        );
+        let faces: serde_json::Value =
+            serde_json::from_str(c.face_image_uris.as_deref().unwrap()).unwrap();
+        assert!(
+            faces[0]["grid"].as_str().unwrap().contains("/front/"),
+            "{faces}"
+        );
+        assert!(
+            faces[1]["grid"].as_str().unwrap().contains("/back/"),
+            "{faces}"
+        );
+    }
+
+    /// Parity with the v2 backfill, which builds the same object with
+    /// `json_object('thumb', json_extract(…), …)` and so always writes four keys, a
+    /// missing variant among them as JSON `null`. Dropping absent keys here instead would
+    /// make a backfilled row and an ingested row two different objects for one input —
+    /// see `schema::tests::the_backfill_and_the_ingest_agree_on_every_image_shape`.
+    #[test]
+    fn a_variant_missing_from_the_source_is_an_explicit_null_key() {
+        let c = parse(
+            r#"{"object":"card","id":"ggg","name":"Partial","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false,"image_uris":{"grid":"g.webp","normal":"n.jpg"}}"#,
+        );
+        let uris: serde_json::Value =
+            serde_json::from_str(c.image_uris.as_deref().unwrap()).unwrap();
+        assert_eq!(uris["grid"], "g.webp");
+        assert_eq!(uris.as_object().unwrap().len(), 4, "{uris}");
+        for k in ["thumb", "display", "art"] {
+            assert!(uris[k].is_null(), "{k} must be an explicit null: {uris}");
+        }
     }
 
     /// The fixture shared with the ingest test. Its lines are full-shape Scryfall
@@ -337,5 +495,44 @@ mod tests {
         assert_eq!(art.image_status.as_deref(), Some("missing"));
         assert!(art.full_art);
         assert_eq!(art.type_line.as_deref(), Some("Card"));
+    }
+
+    /// The fixture is the only place the three image populations meet real Scryfall
+    /// objects — eleven-key `image_uris` at the top level, per-face objects on the
+    /// double-faced lines, and nothing at all on the art series. If a line ever loses its
+    /// image keys, every ingest test that reads them still passes while covering nothing.
+    #[test]
+    fn the_fixture_covers_all_three_image_populations() {
+        let rows = fixture_rows();
+        let json =
+            |s: &Option<String>| -> Value { serde_json::from_str(s.as_ref().unwrap()).unwrap() };
+
+        // Top level only: `normal`, `meld`, and `split` (two faces, one physical side).
+        for name in ["Lightning Bolt", "Ragnarok", "Fire // Ice"] {
+            let r = row(&rows, name);
+            let uris = json(&r.image_uris);
+            assert_eq!(uris.as_object().unwrap().len(), 4, "{name}: {uris}");
+            for k in crate::schema::IMAGE_VARIANTS {
+                let u = uris[k]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name} has no {k}: {uris}"));
+                assert!(u.contains(&format!("/{k}/")) && u.contains(".webp"), "{u}");
+            }
+            assert!(r.face_image_uris.is_none(), "{name} has no face images");
+        }
+
+        // Per face only: `transform` and `reversible_card`, front then back.
+        for name in ["Delver of Secrets", "Jinnie Fay"] {
+            let r = row(&rows, name);
+            assert!(r.image_uris.is_none(), "{name} has no top-level images");
+            let faces = json(&r.face_image_uris);
+            assert_eq!(faces.as_array().unwrap().len(), 2, "{name}: {faces}");
+            assert!(faces[0]["grid"].as_str().unwrap().contains("/front/"));
+            assert!(faces[1]["grid"].as_str().unwrap().contains("/back/"));
+        }
+
+        // Neither: the art series printing, which is what the placeholder path keys on.
+        let art = row(&rows, "Sheoldred");
+        assert_eq!((&art.image_uris, &art.face_image_uris), (&None, &None));
     }
 }

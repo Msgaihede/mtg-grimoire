@@ -666,6 +666,98 @@ mod tests {
         assert_eq!((u, f), (None, None));
     }
 
+    /// One rule, two implementations: `json_object`/`json_each` here in the v2 step, and
+    /// `card_row::webp_uris` on the ingest path. Every row crosses from the first to the
+    /// second the moment the user syncs, so a disagreement over so much as a null key
+    /// would change a card's image object under a UI that had already read it. Same raw
+    /// JSON through both, compared column by column.
+    #[test]
+    fn the_backfill_and_the_ingest_agree_on_every_image_shape() {
+        // Field order is irrelevant to both readers, so these are trimmed to the keys
+        // `CardRow` insists on plus whatever the case is about.
+        let card = |id: &str, rest: &str| {
+            format!(
+                r#"{{"object":"card","id":"{id}","name":"{id}","lang":"en","layout":"normal","set":"tst","collector_number":"1"{rest}}}"#
+            )
+        };
+        let all11 = r#"{"small":"s.jpg","normal":"n.jpg","large":"l.jpg","png":"p.png","art_crop":"ac.jpg","border_crop":"bc.jpg","thumb":"t.webp","grid":"g.webp","display":"d.webp","art":"a.webp","crop":"c.webp"}"#;
+
+        let cases: Vec<(&str, String)> = vec![
+            // Top level only: eleven keys in, four out.
+            ("top", card("top", &format!(r#","image_uris":{all11}"#))),
+            // Per face only, front then back.
+            (
+                "dfc",
+                card(
+                    "dfc",
+                    r#","card_faces":[{"name":"F0","image_uris":{"thumb":"0t.webp","grid":"0g.webp","display":"0d.webp","art":"0a.webp"}},{"name":"F1","image_uris":{"thumb":"1t.webp","grid":"1g.webp","display":"1d.webp","art":"1a.webp"}}]"#,
+                ),
+            ),
+            // Two faces, one physical side: images at the top, none on the faces.
+            (
+                "split",
+                card(
+                    "split",
+                    &format!(
+                        r#","image_uris":{all11},"card_faces":[{{"name":"F0"}},{{"name":"F1"}}]"#
+                    ),
+                ),
+            ),
+            // One face imaged, one not — the null has to land at its own index.
+            (
+                "half",
+                card(
+                    "half",
+                    r#","card_faces":[{"name":"F0"},{"name":"F1","image_uris":{"grid":"1g.webp"}}]"#,
+                ),
+            ),
+            // Nothing anywhere: both columns NULL, which the placeholder path keys on.
+            ("none", card("none", "")),
+            // A faces array with nothing in it at all.
+            ("empty", card("empty", r#","card_faces":[]"#)),
+            // An image object carrying only the legacy family: four null keys, not NULL.
+            (
+                "legacy",
+                card("legacy", r#","image_uris":{"small":"s.jpg","png":"p.png"}"#),
+            ),
+        ];
+
+        let conn = v1_database();
+        for (id, raw) in &cases {
+            insert_raw(&conn, id, id, raw);
+        }
+        migrate(&conn).unwrap();
+
+        // Compared as parsed JSON, not as bytes: SQLite emits the four keys in
+        // `IMAGE_VARIANTS` order (`{"thumb":…,"grid":…,"display":…,"art":…}`) and
+        // serde_json's map sorts them (`{"art":…,"display":…,"grid":…,"thumb":…}`), so
+        // the two strings differ by key order while the objects — which is all a reader
+        // of `json_extract` or `JSON.parse` ever sees — do not.
+        let parse =
+            |s: Option<String>| s.map(|s| serde_json::from_str::<serde_json::Value>(&s).unwrap());
+        for (id, raw) in &cases {
+            let row = crate::card_row::CardRow::from_json(&serde_json::from_str(raw).unwrap())
+                .unwrap_or_else(|| panic!("{id} did not parse as a card"));
+            let (top, face): (Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT image_uris, face_image_uris FROM cards WHERE id = ?1",
+                    [*id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                parse(top),
+                parse(row.image_uris),
+                "image_uris disagree for `{id}`"
+            );
+            assert_eq!(
+                parse(face),
+                parse(row.face_image_uris),
+                "face_image_uris disagree for `{id}`"
+            );
+        }
+    }
+
     /// `cards_fts` is external-content with no triggers, so CLAUDE.md requires a rebuild
     /// after writes to `cards` outside the ingest. The v2 backfill writes only new,
     /// unindexed columns and renumbers no rowid, so it deliberately does not rebuild —
