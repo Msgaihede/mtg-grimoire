@@ -1,11 +1,12 @@
 # Deckbuilder Follow-ups — Design (user requirements 2026-08-06)
 
-**Status: DRAFT — awaiting user approval.** Three additive requirements, received at Plan 4's close:
+**Status: DRAFT — awaiting user approval.** Four additive requirements, received at Plan 4's close:
 
 1. Drag and drop on cards — from the card list into the different deck areas, and other
    places where card drag and drop might make sense.
 2. Quickly change a card to a different printing by clicking on the printing in the view.
 3. A preview of the different printings on mouse hover, over 0.25 s.
+4. The deck builder should be a lot more visual — show the cards, not just descriptive text.
 
 ## What already exists (Plan 4, Task 14)
 
@@ -76,9 +77,38 @@ collection drop would).
   search tiles already show art in the pane on click; a hover preview there is Plan 6's
   "hover previews" item if wanted.
 
+## 4. The visual deck builder
+
+The zone columns become **card-image columns**: each entry renders as the card itself,
+not a text row.
+
+- **The stacked look.** Within a group (Type or Mana value — the existing group-by
+  stays), cards render as full-card images vertically overlapped so that each card
+  beneath the top one shows its **title band** (the classic deckbuilder stack). The top
+  card of each stack is fully visible; hovering or focusing any card lifts it to full
+  visibility (an in-page z-order change, no motion, no scale). Quantity ≥2 renders one
+  image with a mono `×N` badge — not N copies (density, and the cache serves one key).
+- **Image variant: `grid`** — the pre-warm UNION already warms deck cards at `grid`
+  (Plan 4 Task 4), so a built deck's editor opens warm from disk (~3 ms/image). A 100-card
+  deck at ~60 KB avg is ~6 MB once, cached forever. Placeholder/retry story is `CardGrid`'s,
+  which the gallery already ports.
+- **Per-card controls survive**: the stepper, the row menu (move/cover/printing), and the
+  click-to-open-pane all live on the card image — the action row appears on hover/focus
+  exactly as the search grid's tiles do (`REVEAL_ON_HOVER`), with the Task-14 `data-no-drag`
+  marks so controls never start a drag. Keyboard: cards are focusable in list order; the
+  hover-lift follows focus; every existing shortcut keeps working.
+- **The compact text list stays as a toggle** (per-deck-session, default **visual**): at
+  1024 px with the pane and panel up, a 200 px column shows stacked cards fine (the title
+  band is what matters), but power users comparing prices/collector numbers want the
+  dense rows. The toggle is the editor's own — it does not touch the Search view's
+  grid/table preference.
+- Group headers, orphan rows (no image — the flagged sentence needs its text), the maybe
+  scratchpad, drag targets/indicator, and the stats block all carry over unchanged.
+
 ## Sequencing
 
-Plan 4 is closing (final review + fix wave in flight). These three land as a short
-follow-up plan — backend command first, then the two pane features, then the drag
-extension — each with the established review loop, CDP verification, and the binding
-frontend-design direction.
+Plan 4 is closing (final review + fix wave in flight). These four land as the next plan —
+suggested order: the visual deck builder first (it is the surface the other three touch),
+then the backend swap command + pane features (printing swap, hover preview), then the
+drag extension — each task with the established review loop, CDP verification, and the
+binding frontend-design direction.
