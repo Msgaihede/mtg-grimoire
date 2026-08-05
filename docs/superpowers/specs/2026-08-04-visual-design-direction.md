@@ -22,7 +22,8 @@ Magic's color pie IS the interface's color system. The app chrome is a quiet, da
 - `--mana-w` #FFFBD5  `--mana-u` #AAE0FA  `--mana-b` #CBC2BF  `--mana-r` #F9AA8F  `--mana-g` #9BD3AE
 - Glyphs render in near-black on those fills, exactly like printed symbols.
 - These fills are for **chips, pips and the mana line**. A printed **cost** is drawn with `mana-font`'s own `.ms-cost` pills instead — glyph and fill both the font's — because a cost is many small symbols in a row and they read as the printed article or not at all.
-- Frame/pie deep variants (for identity pips, charts later): W #F8E7B9, U #0E68AB, B #3B3A3E, R #D3202A, G #00733E, gold #D9B95C (multicolor), colorless #C8C4BF.
+- Frame/pie deep variants (for identity pips and the deck-stats charts): W #F8E7B9, U #0E68AB, B #3B3A3E, R #D3202A, G #00733E, gold #D9B95C (multicolor), colorless #C8C4BF.
+  The sanctioned chart uses (2026-08-05): deck colour distribution and land distribution pies (hand-rolled inline SVG), the mana-curve bars (accent fill, not five-colour), and type-distribution horizontal bars. Every chart shows its numbers as visible text; none animates. This is inside the boldness budget because deck colour IS Magic meaning — it does not license charts elsewhere.
 
 ### Rarity
 common `#9AA0A6` (silver-grey) · uncommon `#B3C7CE` · rare `#BFA35A` · mythic `#E86A33`. Small gem dot or tinted text in tables/tiles.
