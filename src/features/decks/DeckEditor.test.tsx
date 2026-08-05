@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { CardSummary, DeckCard, DeckDetail, DeckRow, FormatSpec } from "@/lib/ipc";
+import { dragOnto, startDrag } from "@/test-drag";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -803,5 +804,128 @@ describe("DeckEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Move to Sideboard" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
+  });
+});
+
+/**
+ * The three drags, end to end: a tile out of the panel into a zone, a row from one zone into
+ * another, and a row onto the tray that takes it out of the deck.
+ *
+ * Real drag events at the real registrations — `src/test-drag.ts` explains why jsdom can carry
+ * them and lists what it cannot (the platform's drag preview, pointer hit-testing, auto-scroll
+ * and Escape, which the browser handles without telling the page). Every one of these has a
+ * click path from Tasks 12–13 tested above it: what these prove is that the drag reaches the
+ * *same* write, not a second one.
+ */
+describe("DeckEditor drag and drop", () => {
+  const zone = (title: string) => screen.getByRole("region", { name: new RegExp(`^${title}`) });
+  /** The scroller is the drop target, and the attribute is how `ZoneColumn` marks it. */
+  const scroller = (title: string) => zone(title).querySelector("[data-zone-scroller]")!;
+  /** A row, from the name it shows. The `<li>` is the drag handle — the whole row is. */
+  const row = (name: string) => screen.getByRole("button", { name }).closest("li")!;
+
+  /** One result in the panel, for the drags that start there. */
+  function panelHolds(name: string) {
+    searchCards.mockResolvedValue({ items: [found(name)], total: 1, totalIsCapped: false });
+    return async () => {
+      const art = await screen.findByRole("button", { name });
+      return art.closest('[draggable="true"]')!;
+    };
+  }
+
+  /**
+   * The zone that took the card decides, not the panel's target-zone select — which is still
+   * saying Main deck while the card lands in the sideboard. That is the whole difference
+   * between the drag and the button beside it, and the reason a drop carries its own zone.
+   */
+  it("adds a card dragged out of the panel to the zone it was dropped on", async () => {
+    const tile = panelHolds("Goblin Guide");
+    await open();
+
+    await dragOnto(await tile(), scroller("Sideboard"));
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", "side", 1);
+    expect(screen.getByLabelText("Add to")).toHaveValue("main");
+  });
+
+  /**
+   * A row dropped on another column is the row menu's "Move to" by another route — the same
+   * command, and the same hand-off afterwards: the row the reader was holding has left, so the
+   * caret goes to the zone that now has the card and announces it.
+   */
+  it("moves a row into the zone it was dropped on, and hands the caret to it", async () => {
+    await open();
+
+    await dragOnto(row("Lightning Bolt"), scroller("Sideboard"));
+
+    await waitFor(() =>
+      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", "main", "side"),
+    );
+    await waitFor(() => expect(zone("Sideboard")).toHaveFocus());
+  });
+
+  /**
+   * The tray is the drag's own way out of the deck: it is not there until a row is in the air,
+   * it names the card once it has it, and it writes the zero that the stepper's last press
+   * writes.
+   */
+  it("offers a way out of the deck while a row is in the air", async () => {
+    await open();
+    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+
+    const held = await startDrag(row("Lightning Bolt"));
+    const tray = screen.getByText("Remove from deck");
+    await held.over(tray);
+    expect(screen.getByText("Remove Lightning Bolt from deck")).toBeInTheDocument();
+    await held.drop();
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", "main", 0);
+    await waitFor(() => expect(screen.queryByText(/remove/i)).not.toBeInTheDocument());
+  });
+
+  /**
+   * And it is not there for a card being dragged *in*: there is no row to take out, so a tray
+   * that appeared would be offering to undo something that never happened.
+   */
+  it("does not offer the tray for a card dragged in from the panel", async () => {
+    const tile = panelHolds("Goblin Guide");
+    await open();
+
+    const held = await startDrag(await tile());
+    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+
+    await held.cancel();
+  });
+
+  /**
+   * **A cancelled drag is not a press of Escape as far as this app is concerned.**
+   *
+   * The platform cancels a drag itself — in Chromium the keypress goes to the drag operation
+   * and the page is told by a `dragend`, which is what takes the tray down here. jsdom has no
+   * drag to cancel, so what this pins is the app's half of that contract: while a card is in
+   * the air the editor is listening for no keys at all, so an Escape that reaches the window
+   * arrives with nothing consumed and the card detail pane behind this view still closes on
+   * its own press (`App.test.tsx`'s Escape stack). An editor that treated a drag as a
+   * dismissible layer would eat that press and leave a card pinned open.
+   */
+  it("takes the tray away on the drag's own end, without spending the app's Escape", async () => {
+    await open();
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    const held = await startDrag(row("Lightning Bolt"));
+    expect(screen.getByText("Remove from deck")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(heard).toEqual([false]);
+
+    await held.cancel();
+
+    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", listen);
   });
 });

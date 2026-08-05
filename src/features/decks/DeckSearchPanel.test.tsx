@@ -2,7 +2,10 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { CardSummary, DeckZone, SearchResponse } from "@/lib/ipc";
+import { startDrag } from "@/test-drag";
+import { readDragData } from "./dnd";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the filter bar and asks for the set list on the way up.
@@ -187,6 +190,35 @@ describe("DeckSearchPanel", () => {
 
     panel({ zones: ["main", "commander", "maybe"] });
     expect(zoneOptions()).toContain("Commander");
+  });
+
+  /**
+   * The tile is the drag's handle, and what it carries is the card it is showing.
+   *
+   * The registration is the half that can go wrong silently — a wall builds its own tiles, so
+   * the panel reaches them through one callback ref, and a callback that closed over the wrong
+   * card would drag a card the reader is not touching. So this asks the drag itself rather
+   * than the `draggable="true"` attribute: pick the tile up, and read what the library was
+   * handed. Where the card *lands* is the zone's business (`ZoneColumn.test.tsx`) and the
+   * whole gesture is the editor's (`DeckEditor.test.tsx`).
+   */
+  it("hands each drawn tile to the drag adapter, carrying the card it draws", async () => {
+    const { container } = panel();
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]).toContainElement(art);
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(tiles[0]);
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "search-card", cardId: BOLT.id, name: BOLT.name },
+    ]);
   });
 
   /** One copy, into the zone the header names. `deck_add_card` folds it into whatever is

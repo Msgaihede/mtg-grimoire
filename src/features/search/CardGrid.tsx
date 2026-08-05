@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RarityGem } from "@/components/RarityGem";
 import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
@@ -94,6 +94,7 @@ export function CardGrid<T extends GridCard>({
   label = "Search results",
   badge,
   action,
+  tileRef,
   minTileWidth = TILE_MIN_WIDTH,
 }: {
   rows: T[];
@@ -118,6 +119,15 @@ export function CardGrid<T extends GridCard>({
   badge?: (card: T) => ReactNode;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
+  /**
+   * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
+   * draggable, since a drag library is handed elements and this wall builds its own.
+   *
+   * A callback ref, so it may return a cleanup (React 19) and the caller's registration is
+   * torn down with the tile. Nothing here uses the element: absent, this wall behaves exactly
+   * as it did, and the deck editor's search panel is the only caller.
+   */
+  tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   /**
    * Narrowest a tile may get here, overriding {@link TILE_MIN_WIDTH}.
    *
@@ -229,6 +239,7 @@ export function CardGrid<T extends GridCard>({
                 selected={card.id === selectedId}
                 badge={badge}
                 action={action}
+                tileRef={tileRef}
               />
             ))}
           </div>
@@ -262,6 +273,7 @@ function Tile<T extends GridCard>({
   selected,
   badge,
   action,
+  tileRef,
 }: {
   card: T;
   width: number;
@@ -269,6 +281,7 @@ function Tile<T extends GridCard>({
   selected: boolean;
   badge?: (card: T) => ReactNode;
   action?: (card: T) => ReactNode;
+  tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
 }) {
   const [state, setState] = useState<TileState>("showing");
   const [attempt, setAttempt] = useState(0);
@@ -309,11 +322,19 @@ function Tile<T extends GridCard>({
 
   const url = cardImageUrl(card.id, 0, "grid");
 
+  // Held still, because React detaches and re-runs a callback ref whose identity changed —
+  // so an inline arrow here would tear the caller's registration down and build it again on
+  // every render of a tile, and this wall re-renders on every scrolled row.
+  const attach = useCallback(
+    (element: HTMLElement | null) => tileRef?.(card, element),
+    [tileRef, card],
+  );
+
   return (
     // A wrapper rather than one big button: the caption now carries a control of its own,
     // and a button inside a button is invalid HTML that React warns about and browsers
     // render as they please. The art is the button; the quick-add is its neighbour.
-    <div style={{ width }} className="group flex shrink-0 flex-col gap-1">
+    <div ref={attach} style={{ width }} className="group flex shrink-0 flex-col gap-1">
       {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
           join the button's accessible name, and a wall of forty cards would be forty
           buttons called "Lightning Bolt 3 in your collection". */}
@@ -349,6 +370,13 @@ function Tile<T extends GridCard>({
                 // virtualizer bounds the DOM; this bounds what the DOM asks for.
                 loading="lazy"
                 decoding="async"
+                // An `<img>` is draggable by default, and the browser picks the *nearest*
+                // draggable ancestor as a drag's source — so the art would start a drag of
+                // itself and the tile's own drag (the deck editor's, through `tileRef`) would
+                // never begin. Off here rather than at the caller, because the caller is
+                // handed the tile and cannot reach this. Nothing is lost: an `mtgimg:` URL
+                // means nothing outside this window.
+                draggable={false}
                 onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
                 className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
               />

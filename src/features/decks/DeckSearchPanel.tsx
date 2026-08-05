@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Plus, Search } from "lucide-react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -6,9 +7,10 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import { useCardSearch } from "@/features/search/useCardSearch";
-import { ipcError, type DeckZone } from "@/lib/ipc";
+import { ipcError, type CardSummary, type DeckZone } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { dragData } from "./dnd";
 import type { Deck } from "./useDeck";
 import { ZONE_LABEL } from "./ZoneColumn";
 
@@ -201,6 +203,29 @@ export function DeckSearchPanel({
     </button>
   );
 
+  /**
+   * Every drawn tile, as a card that can be dragged into a zone.
+   *
+   * The wall builds its own tiles, so this is the only way to hand a library an element: one
+   * `draggable()` per tile, torn down by the cleanup React 19 takes from a ref callback. The
+   * *drop* is the zone's business — this end only says what is being carried.
+   *
+   * A stable identity, so the registration is not torn down and rebuilt on every render of a
+   * panel that re-renders on every keystroke. The tile's element is passed fresh each time,
+   * and the card with it, so nothing here goes stale.
+   *
+   * The Add button beside the art does the same thing for the keyboard and for anyone who
+   * would rather press than drag (spec §7's click-to-add fallback, which is the *primary*
+   * path — this is a shortcut over it).
+   */
+  const tileRef = useCallback((card: CardSummary, element: HTMLElement | null) => {
+    if (!element) return;
+    return draggable({
+      element,
+      getInitialData: () => dragData({ kind: "search-card", cardId: card.id, name: card.name }),
+    });
+  }, []);
+
   const addFailure = add.isError ? ipcError(add.error) : null;
   // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
   // in hand — reading it as "show the error instead" would throw away results the reader is
@@ -323,6 +348,7 @@ export function DeckSearchPanel({
           minTileWidth={TILE_FLOOR}
           selectedId={selectedCardId}
           onSelect={selectCard}
+          tileRef={tileRef}
           badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
           action={(card) => (
             <button

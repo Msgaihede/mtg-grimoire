@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import {
+  dropTargetForElements,
+  monitorForElements,
+} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
@@ -12,6 +17,7 @@ import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
 import { useDeck } from "./useDeck";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { ZONE_LABEL, ZoneColumn, type GroupBy } from "./ZoneColumn";
@@ -124,7 +130,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     setNameDraft(null);
   }, []);
 
+  /**
+   * The card a **row** drag is carrying, or `null` when nothing is being dragged out of the
+   * deck.
+   *
+   * Only ever a `deck-card` — `canMonitor` says so — and that is the whole reason this state
+   * exists: the remove tray is drawn from it, and a card being dragged *in* from the search
+   * panel has nothing to remove. It also keeps a panel drag from re-rendering this editor at
+   * all, which is what keeps the tiles' `draggable` registrations still under the reader's
+   * pointer while they drag one.
+   */
+  const [dragging, setDragging] = useState<DragPayload | null>(null);
+  /** Whether the card being dragged is over the tray, so the tray can say what letting go
+   *  would do. */
+  const [overTray, setOverTray] = useState(false);
+
   const editorRef = useRef<HTMLElement>(null);
+  const trayRef = useRef<HTMLDivElement>(null);
+  /** The wrapping row of zone columns — the one scroller a drag may have to move to reach
+   *  its target, since four columns wrap onto a second line well before 1024px. */
+  const zonesRef = useRef<HTMLDivElement>(null);
   /** The row the deck and the panel share, and the only width either of them can be judged
    *  against — the window's own is three layouts away from it. */
   const deskRef = useRef<HTMLDivElement>(null);
@@ -283,39 +308,143 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     );
   }, []);
 
-  const setQuantity = useCallback(
-    (card: DeckCard, quantity: number) => {
+  // The three zone writes, each addressed by the slot rather than by a `DeckCard` — because
+  // that is all a *drop* carries, and a drag and a menu press must not be two ways of writing
+  // the same thing. The row controls below hand their own card to the same three.
+  //
+  // Each takes the mutation's `mutate` rather than the mutation: TanStack hands back a fresh
+  // result object on every render, so a callback that depends on the whole thing has a new
+  // identity every render — and these three are what the drop targets are registered with, so
+  // that would be every zone column unregistering and re-registering itself in the middle of a
+  // drag. `mutate` is stable for the life of the component, which makes the stability
+  // `ZoneColumn.onDropCard` asks for true rather than merely intended.
+  const writeQuantity = deck.setQuantity.mutate;
+  const writeMove = deck.moveCard.mutate;
+  const writeAdd = deck.addCard.mutate;
+
+  const setQuantityAt = useCallback(
+    (cardId: string, zone: DeckZone, quantity: number) => {
       // Zero takes the row out from under the caret — optimistically, so it happens on the
       // press — and the control the caret was on goes with it. The zone it left is where the
       // reader is looking and it announces its new count, which is the same hand-off a move
       // makes. Before the write, because the row is gone by the time an answer arrives.
-      if (quantity === 0) (zoneRefs.current[card.zone] ?? editorRef.current)?.focus();
-      deck.setQuantity.mutate({ cardId: card.cardId, zone: card.zone, quantity });
+      if (quantity === 0) (zoneRefs.current[zone] ?? editorRef.current)?.focus();
+      writeQuantity({ cardId, zone, quantity });
     },
-    [deck.setQuantity],
+    [writeQuantity],
   );
 
-  const move = useCallback(
-    (card: DeckCard, to: DeckZone) => {
+  const moveTo = useCallback(
+    (cardId: string, from: DeckZone, to: DeckZone) => {
       // Somewhere to look: the scratchpad is shut by default, and a card moved into a closed
       // drawer is a card that has vanished.
       if (to === "maybe") setShowMaybe(true);
-      deck.moveCard.mutate(
-        { cardId: card.cardId, from: card.zone, to },
+      writeMove(
+        { cardId, from, to },
         {
           onSuccess: () => {
             // The row this menu belongs to is about to leave the column, so the caret goes to
             // where the card landed — which announces the zone and its new count. The editor
             // itself is the fallback for a zone that is not on screen (the scratchpad, on the
-            // render before it opens).
+            // render before it opens). A dropped card is handed on the same way: it is the
+            // row that unmounts either way, and focus follows the card.
             (zoneRefs.current[to] ?? editorRef.current)?.focus();
             setMenu(null);
           },
         },
       );
     },
-    [deck.moveCard],
+    [writeMove],
   );
+
+  /** One copy into a zone — the panel's Add button's write, and a search tile's drop. */
+  const addTo = useCallback(
+    (cardId: string, zone: DeckZone) => {
+      if (zone === "maybe") setShowMaybe(true);
+      writeAdd({ cardId, zone, quantity: 1 });
+    },
+    [writeAdd],
+  );
+
+  const setQuantity = useCallback(
+    (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.zone, quantity),
+    [setQuantityAt],
+  );
+
+  const move = useCallback(
+    (card: DeckCard, to: DeckZone) => moveTo(card.cardId, card.zone, to),
+    [moveTo],
+  );
+
+  /**
+   * What a drop writes — the one place the three drags become the three commands.
+   *
+   * `dnd.ts` decided *what* the drop means and refused the ones that mean nothing; this
+   * decides nothing at all, which is why the rule can be tested without a browser and this
+   * can be read in one breath. Every branch is a write the editor already had: a drag adds
+   * nothing to what a reader can do, only to how fast they can do it.
+   */
+  const applyDrop = useCallback(
+    (write: DeckWrite) => {
+      if (write.write === "add") addTo(write.cardId, write.zone);
+      else if (write.write === "move") moveTo(write.cardId, write.from, write.to);
+      else setQuantityAt(write.cardId, write.zone, 0);
+    },
+    [addTo, moveTo, setQuantityAt],
+  );
+
+  // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
+  // rows: a tile dragged in from the panel is not something the tray can take, and a monitor
+  // that answered for it would re-render the panel — and with it the tile the reader has hold
+  // of — in the middle of the drag.
+  useEffect(
+    () =>
+      monitorForElements({
+        canMonitor: ({ source }) => readDragData(source.data)?.kind === "deck-card",
+        onDragStart: ({ source }) => setDragging(readDragData(source.data)),
+        // Dropped, or cancelled with Escape: the platform's own way out of a drag ends in the
+        // same event, so the tray goes away either way without this view hearing a keypress.
+        onDrop: () => {
+          setDragging(null);
+          setOverTray(false);
+        },
+      }),
+    [],
+  );
+
+  // The tray, while it exists. Registered from an effect that re-runs when it mounts, because
+  // it only exists during a drag — a drop target added mid-drag is picked up on the next
+  // `dragover`, which is how a tray that appears on `dragstart` can be dropped on at all.
+  const trayShown = dragging !== null;
+  useEffect(() => {
+    const element = trayRef.current;
+    if (!element) return;
+    const writeFor = (data: Record<string, unknown>) => {
+      const payload = readDragData(data);
+      return payload && dropWrite(payload, { kind: "remove" });
+    };
+    return dropTargetForElements({
+      element,
+      canDrop: ({ source }) => writeFor(source.data) !== null,
+      onDragEnter: () => setOverTray(true),
+      onDragLeave: () => setOverTray(false),
+      onDrop: ({ source }) => {
+        setOverTray(false);
+        const write = writeFor(source.data);
+        if (write) applyDrop(write);
+      },
+    });
+  }, [trayShown, applyDrop]);
+
+  // Four columns wrap onto a second line long before the 1024px floor, so a zone can be off
+  // the bottom of its own scroller while a card is in the air over it. This scrolls it into
+  // reach when the drag nears the edge — the one motion in this task, and the platform's own
+  // idea of a drag rather than the app's.
+  useEffect(() => {
+    const element = zonesRef.current;
+    if (!element) return;
+    return autoScrollForElements({ element });
+  }, [hasRow]);
 
   /** Somewhere to look, exactly as a move into the scratchpad arranges: the pile is shut by
    *  default, and a card added into a closed drawer is a card that has vanished. */
@@ -366,7 +495,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ref={editorRef}
       tabIndex={-1}
       aria-label={row ? `Deck editor: ${row.name}` : "Deck editor"}
-      className={cn("flex h-full min-h-0 flex-col gap-3", FOCUS)}
+      // `relative` is the remove tray's anchor: it sits along this view's bottom edge, over
+      // the price line rather than above it, so a drag does not begin by moving every drop
+      // target on screen 40px upwards.
+      className={cn("relative flex h-full min-h-0 flex-col gap-3", FOCUS)}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <button
@@ -525,7 +657,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // taken theirs.
         <div ref={deskRef} className="flex min-h-0 flex-1 gap-3">
           <div className="flex min-w-0 flex-1 flex-col gap-3">
-            <div className="flex min-h-0 flex-1 flex-wrap gap-3 overflow-y-auto">
+            <div ref={zonesRef} className="flex min-h-0 flex-1 flex-wrap gap-3 overflow-y-auto">
               {columns.map((zone) => (
                 <ZoneColumn
                   key={zone}
@@ -547,6 +679,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   onMove={move}
                   onSetCover={setCover}
                   onSelect={setSelectedCardId}
+                  onDropCard={applyDrop}
                   // `max-h-full` is what makes a column scroll rather than the editor: in a
                   // *wrapping* flex row, `align-items: stretch` stretches an item to its line's
                   // cross size — which is the tallest item's content — and never to the
@@ -599,6 +732,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   onMove={move}
                   onSetCover={setCover}
                   onSelect={setSelectedCardId}
+                  onDropCard={applyDrop}
                   className={cn("mt-2 max-h-64", ZONE_WIDTH.maybe)}
                 />
               )}
@@ -618,6 +752,34 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       {/* Spec §5: a price is never shown without saying how old it is. Once, under the deck,
           rather than as a tooltip on every one of sixty rows. */}
       <p className="shrink-0 text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+
+      {dragging && (
+        // The way out of a deck, for a hand that is already holding the card. It exists only
+        // while a row is in the air, and it takes the place of the price line rather than a
+        // place of its own: appearing in the flow would push every column up by its own
+        // height at the exact moment the reader is aiming at one.
+        //
+        // No transition on either state — it appears instantly and it answers instantly. An
+        // affordance that fades in during a drag is an affordance that is still arriving when
+        // the reader has let go, and the motion budget spends its 150ms on chip and nav state.
+        //
+        // Destructive rather than gold: gold is where a card is *going*, and this is the one
+        // drop that takes something away. It names the card once it has it, because by then
+        // the platform's drag preview is the only other thing saying which card this is.
+        <div
+          ref={trayRef}
+          className={cn(
+            "absolute inset-x-0 bottom-0 z-30 flex h-10 items-center justify-center gap-1.5",
+            "rounded-md border border-dashed text-xs",
+            overTray
+              ? "border-destructive/60 bg-destructive/10 text-destructive"
+              : "border-border bg-surface text-dim",
+          )}
+        >
+          <Trash2 className="size-3.5" aria-hidden="true" />
+          {overTray ? `Remove ${dragging.name} from deck` : "Remove from deck"}
+        </div>
+      )}
     </section>
   );
 }

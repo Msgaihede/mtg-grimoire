@@ -1,4 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type Ref, type RefObject } from "react";
+import {
+  draggable,
+  dropTargetForElements,
+} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { MoreHorizontal } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
@@ -7,6 +11,8 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
+import { dragData, dropWrite, readDragData, type DeckWrite } from "./dnd";
+import { DropIndicator } from "./DropIndicator";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
@@ -202,6 +208,16 @@ export interface ZoneColumnProps {
   onMove: (card: DeckCard, to: DeckZone) => void;
   onSetCover: (card: DeckCard) => void;
   onSelect: (cardId: string) => void;
+  /**
+   * A card was dropped on this column, and this is the write it means — computed here rather
+   * than reported raw, because the column is what knows its own zone and `dropWrite` is the
+   * same rule the drop target already asked in `canDrop`.
+   *
+   * Stable, please (`useCallback`): it is a dependency of the effect that registers the drop
+   * target, and a new identity every render is a target that unregisters and re-registers
+   * mid-drag.
+   */
+  onDropCard: (write: DeckWrite) => void;
   className?: string;
   /** The editor hands the caret to a zone after a card lands in it — the row the menu was on
    *  has left, and an element that unmounts with focus on it drops it to `<body>`. */
@@ -230,6 +246,7 @@ export function ZoneColumn({
   onMove,
   onSetCover,
   onSelect,
+  onDropCard,
   className,
   ref,
 }: ZoneColumnProps) {
@@ -237,6 +254,38 @@ export function ZoneColumn({
   const groups: CardGroup[] = groupBy
     ? groupCards(cards, groupBy)
     : [{ key: "all", label: "", count: copies, cards: [...cards] }];
+
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  /** Whether a card the column can take is over it. Only ever true for a drop this column
+   *  would act on — `canDrop` below means a refused payload never enters at all. */
+  const [over, setOver] = useState(false);
+
+  // The column takes drops on its scroller: everything under the heading, which is the part
+  // of the column that reads as the list. `canDrop` and the drop itself ask the same
+  // question, a second apart, because only the second one writes — and a payload that is not
+  // this app's own never reaches either.
+  useEffect(() => {
+    const element = scrollerRef.current;
+    if (!element) return;
+    const writeFor = (data: Record<string, unknown>) => {
+      const payload = readDragData(data);
+      return payload && dropWrite(payload, { kind: "zone", zone });
+    };
+    return dropTargetForElements({
+      element,
+      getData: () => ({ zone }),
+      canDrop: ({ source }) => writeFor(source.data) !== null,
+      onDragEnter: () => setOver(true),
+      // Left, or the drag ended somewhere else — a cancelled drag clears its drop targets
+      // before it finishes, so Escape takes the line down as surely as a drop does.
+      onDragLeave: () => setOver(false),
+      onDrop: ({ source }) => {
+        setOver(false);
+        const write = writeFor(source.data);
+        if (write) onDropCard(write);
+      },
+    });
+  }, [zone, onDropCard]);
 
   return (
     <section
@@ -246,12 +295,16 @@ export function ZoneColumn({
       // — from the caret being handed here after a move, or from a screen reader's region
       // list — is asking "which zone, and how big".
       aria-label={`${title}, ${copies} ${copies === 1 ? "card" : "cards"}`}
+      // `relative` is what the drop line hangs from: it is drawn on the column's own top
+      // edge, not inside the scroller, so a column scrolled halfway down still says it is the
+      // one taking the card.
       className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-lg border border-border",
+        "relative flex min-h-0 flex-col overflow-hidden rounded-lg border border-border",
         FOCUS,
         className,
       )}
     >
+      {over && <DropIndicator />}
       <h3 className="flex shrink-0 items-baseline justify-between gap-2 border-b border-border bg-surface px-3 py-2 text-sm">
         <span className="min-w-0 truncate">{title}</span>
         <span className="font-mono text-xs tabular-nums text-dim">{copies}</span>
@@ -260,7 +313,11 @@ export function ZoneColumn({
       {/* The zone's own scroller. Every column scrolls on its own so a 60-card main deck does
           not push the sideboard off the bottom of the window — and it is what a row menu
           measures itself against, since it is what would clip one. */}
-      <div {...{ [SCROLLER_ATTR]: "" }} className="min-h-0 flex-1 overflow-y-auto p-1">
+      <div
+        ref={scrollerRef}
+        {...{ [SCROLLER_ATTR]: "" }}
+        className="min-h-0 flex-1 overflow-y-auto p-1"
+      >
         {cards.length === 0 ? (
           <p className="px-2 py-3 text-xs text-dim">Nothing here yet.</p>
         ) : (
@@ -339,12 +396,31 @@ function CardRow({
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLLIElement>(null);
   // The allocator never claims a copy for the scratchpad, so every `maybe` row reads 0 owned
   // by construction. A mark there would report a shortage the reader does not have.
   const short = zone !== "maybe" && card.ownedQuantity < card.quantity;
 
+  // The row is the drag handle for the whole card, and `draggable()` is what marks it one:
+  // it sets `draggable="true"` on this element, which is also how the suite can prove the
+  // registration landed on the right row without a `DataTransfer` jsdom does not have.
+  //
+  // Re-registered only when the payload would change — the id, the name and the zone are the
+  // whole of it — rather than on every render, because the editor re-renders on every drag
+  // and a target that unregisters mid-drag is a drop that never arrives.
+  const { cardId, name } = card;
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!element) return;
+    return draggable({
+      element,
+      getInitialData: () => dragData({ kind: "deck-card", cardId, name, fromZone: zone }),
+    });
+  }, [cardId, name, zone]);
+
   return (
     <li
+      ref={rowRef}
       className={cn(
         "group relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2",
         "rounded-md px-1.5 py-1 transition-colors duration-150 hover:bg-surface",

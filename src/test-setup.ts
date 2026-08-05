@@ -15,3 +15,11 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 } as unknown as typeof ResizeObserver;
+
+// jsdom has no layout, so it answers no questions about what is at a point either — and the
+// drag auto-scroller asks one on every frame of a drag (`pragmatic-drag-and-drop-auto-scroll`
+// looks through what is under the pointer to find the scroller it should move). An
+// unimplemented method there throws outside every test's stack: an unhandled error that fails
+// the run without failing an assertion. Nothing is under a pointer in a window with no layout,
+// and that is what this answers — the auto-scroll itself is the live CDP pass's to prove.
+document.elementsFromPoint ??= () => [];

@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { DeckCard } from "@/lib/ipc";
+import { startDrag } from "@/test-drag";
+import { DROP_LINE_ATTR } from "./DropIndicator";
 import { card, resetRowIds } from "./validation/fixtures";
 import { groupCards, shouldFlipUp, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
 
@@ -14,6 +17,7 @@ function handlers() {
     onMove: vi.fn(),
     onSetCover: vi.fn(),
     onSelect: vi.fn(),
+    onDropCard: vi.fn(),
   };
 }
 
@@ -391,5 +395,151 @@ describe("ZoneColumn", () => {
     draw([]);
 
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The column as one end of a drag: what it accepts, what it refuses, and what it says while
+ * a card is in the air over it.
+ *
+ * These drive the drag library's own code path — real `dragstart`, `dragenter`, `dragover`
+ * and `drop` events at the real registrations (`src/test-drag.ts` explains why that works in
+ * jsdom and what it still cannot reach). The *editor's* end of the same wiring — which write
+ * each drop becomes, and the remove tray — is `DeckEditor.test.tsx`.
+ */
+describe("ZoneColumn drops", () => {
+  /** The attribute a column marks its own scroller with. Duplicated from `ZoneColumn` rather
+   *  than exported for a test: it is the drop target, and a test that dropped somewhere else
+   *  would pass without ever reaching one. */
+  const SCROLLER = "[data-zone-scroller]";
+
+  /**
+   * Two columns, because a move needs both ends: a row is dragged out of one zone and into
+   * another, and the column that takes it is not the column that had it.
+   */
+  function drawPair(cards: DeckCard[]) {
+    const main = handlers();
+    const side = handlers();
+    const common = {
+      groupBy: null,
+      moveTargets: ["main", "side"] as const,
+      openMenuCardId: null,
+      busy: false,
+    };
+    render(
+      <>
+        <ZoneColumn zone="main" title={ZONE_LABEL.main} cards={cards} {...common} {...main} />
+        <ZoneColumn zone="side" title={ZONE_LABEL.side} cards={[]} {...common} {...side} />
+      </>,
+    );
+    const column = (title: string) => screen.getByRole("region", { name: new RegExp(`^${title}`) });
+    return {
+      main,
+      side,
+      column,
+      scroller: (title: string) => column(title).querySelector(SCROLLER)!,
+      line: (title: string) => column(title).querySelector(`[${DROP_LINE_ATTR}]`),
+    };
+  }
+
+  /** Anything else in the window that can be dragged — the app's next feature, standing in
+   *  for itself. Cleaned up by hand: it is not part of a render. */
+  function elsewhere(data: Record<string, unknown>) {
+    const element = document.createElement("div");
+    document.body.append(element);
+    const unregister = draggable({ element, getInitialData: () => data });
+    return {
+      element,
+      cleanup: () => {
+        unregister();
+        element.remove();
+      },
+    };
+  }
+
+  /** A row dropped on another zone is a move, and the column names the write itself: it is
+   *  what knows which zone it is. */
+  it("takes a row dragged out of another zone", async () => {
+    const { main, side, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
+
+    const held = await startDrag(screen.getByRole("listitem"));
+    await held.over(scroller("Sideboard"));
+    await held.drop();
+
+    expect(side.onDropCard).toHaveBeenCalledWith({
+      write: "move",
+      cardId: "c-Lightning Bolt",
+      from: "main",
+      to: "side",
+    });
+    // The zone the card left hears nothing: a drop happens in one place.
+    expect(main.onDropCard).not.toHaveBeenCalled();
+  });
+
+  /** The line is the whole of the promise: it says *this* column, on the column that would
+   *  take the card, and it is gone the moment the card is somewhere else. */
+  it("draws the drop line on the column that would take the card, and nowhere else", async () => {
+    const { line, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
+
+    const held = await startDrag(screen.getByRole("listitem"));
+    await held.over(scroller("Sideboard"));
+
+    expect(line("Sideboard")).toBeInTheDocument();
+    expect(line("Main deck")).toBeNull();
+
+    await held.leave();
+    expect(line("Sideboard")).toBeNull();
+
+    await held.cancel();
+  });
+
+  /**
+   * A row dropped back where it came from is not a write, and the column says so before the
+   * reader lets go: no line, and nothing to undo.
+   *
+   * `deck_move_card` from a zone to itself would touch the deck, reallocate and bump
+   * `updated_at` to leave the list exactly as it was.
+   */
+  it("does not offer itself to a row it already holds", async () => {
+    const { main, line, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
+
+    // Out to the sideboard and back again, which is a reader changing their mind — and the
+    // only way to ask this column the question, since a card that never left it was never
+    // over anything else either.
+    const held = await startDrag(screen.getByRole("listitem"));
+    await held.over(scroller("Sideboard"));
+    await held.over(scroller("Main deck"));
+
+    expect(line("Main deck")).toBeNull();
+    expect(line("Sideboard")).toBeNull();
+
+    await held.drop();
+    expect(main.onDropCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A drag from somewhere else in the app is inert here — no line, no write — even when what
+   * it carries is shaped exactly like a card.
+   *
+   * This is the mark in `dnd.ts` doing the only job it has. The payload below is a deck
+   * drag's in every field; the one thing it is missing is the one thing that is checked.
+   */
+  it("ignores a drag that is not a deck drag's", async () => {
+    const { side, line, scroller } = drawPair([]);
+    const other = elsewhere({
+      kind: "deck-card",
+      cardId: "c-Lightning Bolt",
+      name: "Lightning Bolt",
+      fromZone: "main",
+    });
+
+    const held = await startDrag(other.element);
+    await held.over(scroller("Sideboard"));
+
+    expect(line("Sideboard")).toBeNull();
+
+    await held.drop();
+    expect(side.onDropCard).not.toHaveBeenCalled();
+    other.cleanup();
   });
 });

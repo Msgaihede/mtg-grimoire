@@ -108,6 +108,31 @@ describe("CardGrid", () => {
     expect(bolt).toHaveAttribute("loading", "lazy");
   });
 
+  /**
+   * The tile's own root is what a caller may make draggable, and the art must not compete for
+   * it: an `<img>` is draggable by default and the browser picks the *nearest* draggable
+   * ancestor as a drag's source, so without this the deck editor's tile drag would never
+   * start — the art would drag itself instead, carrying an `mtgimg:` URL that means nothing
+   * anywhere.
+   */
+  it("hands a caller the tile's root element and keeps the art from stealing the drag", () => {
+    const seen: [string, string][] = [];
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        tileRef={(c, el) => {
+          if (el) seen.push([c.id, el.tagName]);
+        }}
+      />,
+    );
+
+    expect(seen).toEqual([["aaa", "DIV"]]);
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("draggable", "false");
+  });
+
   it("opens the card that was clicked", async () => {
     const onSelect = vi.fn();
     render(
