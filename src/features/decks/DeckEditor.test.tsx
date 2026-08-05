@@ -12,6 +12,7 @@ const deckUpdate = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
+const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 // The docked search panel is the editor's own filter bar, set picker and result wall.
 const searchCards = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSetCardQuantity,
     deckMoveCard,
     deckAddCard,
+    deckMissingToWishlist,
     formatSpecs,
     searchCards,
     listSets,
@@ -159,6 +161,7 @@ beforeEach(() => {
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
+  deckMissingToWishlist.mockReset().mockResolvedValue(3);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   // Nothing found by default: a result named after a card already in the deck would be a
   // second button by that name, and every test here addresses rows by the card's name.
@@ -734,6 +737,65 @@ describe("DeckEditor", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^Maybe/ }));
 
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+  });
+
+  /**
+   * The readout layer, over the same rows the columns are drawn from: one query, so the curve
+   * and the format check can never disagree about what is in the deck.
+   */
+  it("adds up the deck under the header", async () => {
+    await open();
+
+    // Four Bolts and two Bears, both nonlands, both mana value 1.
+    expect(screen.getByText("Cards").nextElementSibling).toHaveTextContent("6");
+    const curve = screen.getByRole("list", { name: "Mana curve" });
+    expect(within(curve).getByText("6 cards at mana value 1")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Card types" })).toBeInTheDocument();
+  });
+
+  /** Six cards is not a Modern deck, and the chip says so before it is opened. */
+  it("counts the format's findings on a chip in the header", async () => {
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+
+    expect(
+      screen.getByText("Modern decks need at least 60 cards; you have 6."),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
+   * would consume one press — so the editor holds *one* piece of state for the pair, and
+   * opening either takes the other down.
+   */
+  it("never has a row menu and the format check open at once", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
+    expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Modern check" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
+
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
+  });
+
+  /** The one write in this task, end to end: what the deck is short of becomes wishes, and the
+   *  strip says how many in words. */
+  it("sends what the deck is missing to the wishlist", async () => {
+    await open();
+
+    expect(screen.getByText("3 of 6 missing")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+
+    await waitFor(() => expect(deckMissingToWishlist).toHaveBeenCalledWith(4));
+    expect(await screen.findByText("Added 3 wishes.")).toBeInTheDocument();
   });
 
   /** Spec §5: a price is never shown without saying how old it is. */

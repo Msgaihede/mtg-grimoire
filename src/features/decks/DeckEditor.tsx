@@ -17,9 +17,11 @@ import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
 import { useDeck } from "./useDeck";
 import { useFormatSpecs } from "./useFormatSpecs";
+import { ValidationPanel } from "./ValidationPanel";
 import { ZONE_LABEL, ZoneColumn, type GroupBy } from "./ZoneColumn";
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
@@ -81,9 +83,18 @@ const GROUPINGS: { id: GroupBy; label: string }[] = [
   { id: "manaValue", label: "Mana value" },
 ];
 
-/** Which row's actions menu is open. One per editor: `useDismissOnEscape` orders exactly two
- *  rungs, so two open menus would both close on one press. */
-type Menu = { zone: DeckZone; cardId: string } | null;
+/**
+ * The one dismissible layer this editor can have open, and there is deliberately only ever
+ * one.
+ *
+ * `useDismissOnEscape` orders exactly two rungs — one capture-phase `"inner"` layer and one
+ * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
+ * would both close on a single press. A row's actions menu and the format check are both
+ * `"inner"`, so they are modelled as *one* piece of state: "never two" is then structural
+ * rather than remembered, and at most one of the two Escape registrations is ever enabled.
+ * `DecksPage`'s `Panel` is the same arrangement, for the same reason.
+ */
+type Layer = { kind: "menu"; zone: DeckZone; cardId: string } | { kind: "check" } | null;
 
 /**
  * One deck, open for editing.
@@ -105,7 +116,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
-  const [menu, setMenu] = useState<Menu>(null);
+  const [layer, setLayer] = useState<Layer>(null);
   const [showMaybe, setShowMaybe] = useState(false);
   /** Where the docked panel's adds land. Here rather than in the panel because it is a fact
    *  about the deck being edited, and the zones it may take are this editor's own. */
@@ -154,8 +165,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *  against — the window's own is three layouts away from it. */
   const deskRef = useRef<HTMLDivElement>(null);
   const [deskWidth, setDeskWidth] = useState(0);
-  /** Whatever opened the menu that is up, so Escape can hand the caret back to it. */
+  /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
+  /** The format check's chip, which is what opens the one layer that is not a row's. */
+  const chipRef = useRef<HTMLButtonElement>(null);
   /** One per drawn column, so a card that moves takes the caret to where it landed. */
   const zoneRefs = useRef<Partial<Record<DeckZone, HTMLElement | null>>>({});
   const tookFocus = useRef(false);
@@ -191,6 +204,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * duration would make one edit block another for no reason. Read off the mutations' own
    * `variables`, which are the slot each write named.
    */
+  const menu = layer?.kind === "menu" ? layer : null;
   const menuBusy =
     menu !== null &&
     ((deck.moveCard.isPending && deck.moveCard.variables?.cardId === menu.cardId) ||
@@ -284,28 +298,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [failedAt, refetch]);
 
   // Focus first, then close: the trigger is still mounted at this point. This is the
-  // **keyboard** way out; the click-away way out is `closeMenu` and hands nothing back,
+  // **keyboard** way out; the click-away way out is `close` and hands nothing back,
   // because the reader who clicked elsewhere is already somewhere else.
-  const dismissMenu = useCallback(() => {
+  const dismiss = useCallback(() => {
     openerRef.current?.focus();
-    setMenu(null);
+    setLayer(null);
   }, []);
-  const closeMenu = useCallback(() => setMenu(null), []);
-  useDismissOnEscape({ layer: "inner", onDismiss: dismissMenu, enabled: menu !== null });
+  const close = useCallback(() => setLayer(null), []);
+  // Only while a row menu is up: the format check owns its own rung and enables it while *it*
+  // is open, and the union above is what guarantees the two are never enabled at once.
+  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: menu !== null });
 
-  // A deck deleted under an open menu takes the menu's row with it — but not the state that
+  // A deck deleted under an open layer takes the menu's row with it — but not the state that
   // says one is open, and an `"inner"` layer nothing draws is a layer that eats the first
   // Escape of whatever the reader does next. Reset during render, which is React's own answer
   // to state that has to follow a prop (`CardDetailPane`'s face, `Cover`'s art).
-  if (gone && menu !== null) setMenu(null);
+  if (gone && layer !== null) setLayer(null);
 
   const openMenu = useCallback((card: DeckCard, trigger: HTMLButtonElement) => {
     openerRef.current = trigger;
-    setMenu((open) =>
-      open?.cardId === card.cardId && open.zone === card.zone
+    setLayer((open) =>
+      open?.kind === "menu" && open.cardId === card.cardId && open.zone === card.zone
         ? null
-        : { zone: card.zone, cardId: card.cardId },
+        : { kind: "menu", zone: card.zone, cardId: card.cardId },
     );
+  }, []);
+
+  const openCheck = useCallback(() => {
+    openerRef.current = chipRef.current;
+    setLayer({ kind: "check" });
   }, []);
 
   // The three zone writes, each addressed by the slot rather than by a `DeckCard` — because
@@ -349,7 +370,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             // render before it opens). A dropped card is handed on the same way: it is the
             // row that unmounts either way, and focus follows the card.
             (zoneRefs.current[to] ?? editorRef.current)?.focus();
-            setMenu(null);
+            setLayer(null);
           },
         },
       );
@@ -460,7 +481,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         {
           onSuccess: () => {
             openerRef.current?.focus();
-            setMenu(null);
+            setLayer(null);
           },
         },
       );
@@ -589,6 +610,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             onClick={() => deck.update.mutate({ isBuilt: !row.isBuilt })}
           />
 
+          {/* What the rules make of the deck, in the ribbon of chips that governs it — and
+              nothing at all while the seeded rules are not in hand. A format the seed no
+              longer carries has no rules to judge against, and a chip that said "No issues"
+              because nothing was checked would be the one sentence this panel must never
+              write. */}
+          {spec && (
+            <ValidationPanel
+              cards={deck.cards}
+              spec={spec}
+              open={layer?.kind === "check"}
+              buttonRef={chipRef}
+              onOpen={openCheck}
+              onDismiss={dismiss}
+              onClose={close}
+              onSelectCard={setSelectedCardId}
+            />
+          )}
+
           <div role="group" aria-label="Group cards by" className="ml-auto flex gap-1">
             {GROUPINGS.map(({ id, label }) => (
               <button
@@ -610,10 +649,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* Task 15's seam: the live stats strip (curve, pips, price, owned-vs-missing) and the
-          validation chip mount here, over the same `deck.cards` and `spec` this editor already
-          holds — one query, so a curve and a legality panel can never disagree. Nothing in this
-          task computes either. */}
+      {/* What the deck adds up to, over the same rows the columns are drawn from — one query,
+          so a curve and a legality panel can never disagree. A *block* rather than a strip:
+          four charts and a figure row do not fit on one line at the widths this editor is read
+          at, and the direction's floor is a chart whose numbers are legible, not a chart that
+          fits. It is `shrink-0`, so the columns below give way to it rather than the other way
+          around — the block is a fixed ~150px and a column that lost 150px is still a column. */}
+      {row && <DeckStats cards={deck.cards} send={deck.missingToWishlist} />}
 
       {writeFailure && (
         <p
@@ -671,7 +713,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   openMenuCardId={menu?.zone === zone ? menu.cardId : null}
                   busy={menuBusy}
                   onOpenMenu={openMenu}
-                  onCloseMenu={closeMenu}
+                  onCloseMenu={close}
                   onSetQuantity={setQuantity}
                   onMove={move}
                   onSetCover={setCover}
@@ -724,7 +766,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   openMenuCardId={menu?.zone === "maybe" ? menu.cardId : null}
                   busy={menuBusy}
                   onOpenMenu={openMenu}
-                  onCloseMenu={closeMenu}
+                  onCloseMenu={close}
                   onSetQuantity={setQuantity}
                   onMove={move}
                   onSetCover={setCover}
