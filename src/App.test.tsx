@@ -52,7 +52,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import App from "./App";
-import type { CardDetail, CardSummary, DeckRow } from "@/lib/ipc";
+import type { CardDetail, CardSummary, CollectionRow, DeckRow } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 
@@ -88,6 +88,41 @@ const BOLT: CardSummary = {
   finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
+};
+
+/** The same card as a collection row, for the Escape-from-a-stepper test below. */
+const BOLT_ENTRY: CollectionRow = {
+  id: 7,
+  cardId: "c1",
+  name: "Lightning Bolt",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "161",
+  lang: "en",
+  rarity: "common",
+  manaCost: "{R}",
+  typeLine: "Instant",
+  layout: "normal",
+  finish: "nonfoil",
+  condition: "NM",
+  quantity: 2,
+  tradelistQuantity: 0,
+  unitPriceUsd: 400.5,
+  unitPriceEur: 350,
+  purchasePrice: null,
+  purchaseCurrency: null,
+  acquiredAt: null,
+  acquisitionSource: null,
+  serialNumber: null,
+  altered: false,
+  signed: false,
+  proxy: false,
+  misprint: false,
+  grading: null,
+  tags: "[]",
+  notes: null,
+  needsReview: null,
+  updatedAt: 1_800_000_000,
 };
 
 const BOLT_DETAIL: CardDetail = {
@@ -291,6 +326,48 @@ it("closes the card when the reader leaves the view", async () => {
   await screen.findByRole("complementary", { name: /card details/i });
 
   await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
+/**
+ * The other half of the Escape protocol: a control *inside* a row must not swallow the key
+ * on the way to `window`.
+ *
+ * A row in the collection table opens the card on Enter or Space, so the cells holding its
+ * stepper stop those presses from reaching the row. They used to stop the whole `keydown`,
+ * and React attaches one listener at the root — so a press that never reached the root
+ * never reached `window`, where the pane's Escape listens. The pane then stayed open for as
+ * long as the caret sat in a stepper, which is exactly where it sits while a count is being
+ * corrected. Found in the running app (2026-08-06), invisible to every suite here: a test
+ * that fires Escape at the row never travels the path that was broken.
+ */
+it("closes the card on Escape from inside a collection row's stepper", async () => {
+  collectionList.mockResolvedValue({ items: [BOLT_ENTRY], total: 1 });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Collection" }));
+
+  await userEvent.click(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+  expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+
+  const stepper = screen.getByRole("spinbutton", { name: /Quantity of Lightning Bolt/ });
+  stepper.focus();
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
+/** The same key, the same cell shape, in the search table's quick-add — the second of the
+ *  two sites the live pass found, and the one a reader meets first. */
+it("closes the card on Escape from inside the search table's add button", async () => {
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Table view" }));
+
+  await userEvent.click(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+  expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+
+  screen.getByRole("button", { name: /Add Lightning Bolt \(LEA 161\) to collection/ }).focus();
+  await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 });

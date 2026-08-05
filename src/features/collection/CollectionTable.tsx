@@ -11,6 +11,7 @@ import { finishLabel } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
 /** Row height in px. Rows are uniform — except for the flagged ones, below. */
@@ -301,11 +302,12 @@ export function CollectionTable({
                   The row opens the card on any click and on Enter or Space, and every one of
                   those lands here too: without stopping them, correcting a count would also
                   open the card, and typing `12` into the box would scroll the list a
-                  screenful. */}
+                  screenful. Those two keys and no others — a blanket `stopPropagation` also
+                  took Escape away from the card pane, which listens on `window`. */}
               <span
                 role="cell"
                 onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => e.stopPropagation()}
+                onKeyDown={stopRowActivationKeys}
               >
                 <QuantityStepper
                   size="sm"
@@ -334,7 +336,7 @@ export function CollectionTable({
               <span
                 role="cell"
                 onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => e.stopPropagation()}
+                onKeyDown={stopRowActivationKeys}
               >
                 {/* Offered on an empty row and nowhere else. Zero copies is a state the
                     stepper can reach and nothing else can leave: the backend keeps the row —

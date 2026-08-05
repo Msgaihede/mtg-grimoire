@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,7 +97,7 @@ function wrap(cardId: string, onClose = vi.fn()) {
  * already mounted would capture `<body>` as the opener and prove nothing about either
  * hand-back.
  */
-async function openFromAButton(): Promise<HTMLElement> {
+async function openFromAButton({ strict = false } = {}): Promise<HTMLElement> {
   function Harness() {
     const [open, setOpen] = useState(false);
     return (
@@ -110,11 +110,12 @@ async function openFromAButton(): Promise<HTMLElement> {
     );
   }
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  const tree = (
     <QueryClientProvider client={qc}>
       <Harness />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 
   const opener = screen.getByRole("button", { name: "Open the card" });
   await userEvent.click(opener);
@@ -289,6 +290,27 @@ describe("CardDetailPane", () => {
 
     // Focus moves in, so the pane's own controls are the next thing Tab reaches.
     expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  /**
+   * The same hand-back under StrictMode, which is how the app actually runs in development
+   * — and where it was broken for two plans without a single test noticing.
+   *
+   * StrictMode runs a mount effect twice: mount, unmount, mount. The first run had already
+   * pulled the caret into the pane, so the second recorded the **pane** as its own opener;
+   * `close()` then focused an element that was unmounting and the caret landed on `<body>`.
+   * Seen in the running app on 2026-08-06 — every Escape out of the pane, from every view.
+   */
+  it("hands focus back under StrictMode, where the mount effect runs twice", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(printings));
+
+    const opener = await openFromAButton({ strict: true });
 
     await userEvent.keyboard("{Escape}");
 

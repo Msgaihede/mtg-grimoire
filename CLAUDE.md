@@ -19,14 +19,35 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
-`eval` · `click <css>` · `text <visible text>` · `key Escape` · `type` · `size 1024 768` ·
-`media prefers-reduced-motion reduce` · `shot out.png` · `console out.jsonl` (stays
-attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that watches
-only one reports a clean console it never looked at).
+`eval` · `click <css>` · `text <visible text>` · `key Escape` · `type` ·
+`size 1024 768 "<expr>"` · `media prefers-reduced-motion reduce "<expr>"` ·
+`shot out.png [w h]` · `console out.jsonl` (stays attached; records `Log.entryAdded` **and**
+`Runtime.consoleAPICalled` — a run that watches only one reports a clean console it never
+looked at).
+
+- **`media` and `size` take a trailing expression and it is evaluated *in that session*.** A
+  separate `eval` after them measures nothing: `setEmulatedMedia` is reverted the instant its
+  socket closes, and every invocation of the script is its own socket. Worse, WebView2 ignores
+  a features-only override entirely, so `media` has to send `"screen"` *with* the feature —
+  which is why "reduced motion verified over CDP" was a claim nobody had measured until this
+  contract landed (Plan 4, Task 11). `setDeviceMetricsOverride` is the opposite and **survives
+  detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
+  window back, so read `innerWidth`/`innerHeight` before the first override and end the run
+  with an explicit `size 1280 800`.
+- **Drags** (`Input.setInterceptDrags` + `Input.dragIntercepted` + `Input.dispatchDragEvent`)
+  leave two things behind when a run dies mid-flight, and both make *every later drag* fail
+  silently: the browser's own drag controller (clear it with a `dragCancel` + `mouseReleased`,
+  then `setInterceptDrags:false`) and pdnd's `[data-pdnd-honey-pot]` element, left covering the
+  pointer so the next `mousePressed` lands on it. Remove it. A scroller left scrolled hides
+  rows from `cdp.mjs click` the same way — and a row whose centre is off-screen cannot be
+  pressed at all, so press a visible child.
+- **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
+  fault.** Reload with the recorder attached and read the entries that arrive after.
 
 Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug/data/mtg.db`
 **while the app holds it** (WAL allows it). Delete every seeded row afterwards — `data/` is
-the user's, and it is never committed.
+the user's, and it is never committed. Seed **user tables only**: `cards` and `sync_meta`
+belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
 ## Data & sync (measured against the live Scryfall API, 2026-08-04/05)
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtgcollection.tracker/data`.
@@ -36,6 +57,10 @@ the user's, and it is never committed.
 - A sync yields ~116.6 k cards / ~1 050 sets from a 77 MB download. **Timings, measured
   2026-08-05 over three live forced syncs (debug build):** `checking` <1 s · `downloading`
   ~2.5 s · `ingesting` **~81 s** · `reclaiming` ~6 s · `sets` ~5 s — **92–99 s end to end**.
+  Re-measured 2026-08-06 on the day's rotated bulk file: **93 s**, corpus **116,590**
+  unchanged. Scryfall rotates once a day (~21:10 UTC), so a forced Refresh gets a real ingest
+  at most once a day — after that the ETag answers 304 until tomorrow, and there is no
+  in-bounds way to ask for another.
   The old **44.8 s** figure predates schema v3: the ingest now gzips `raw` on the way in,
   and that is where the extra minute went. A run that finds nothing new is **1.8 s**.
 - `mtg.db` was **2.02 GB** and is **547 MB** after the two things Plan 3 added: the one-time
@@ -52,6 +77,12 @@ the user's, and it is never committed.
   bulk file has not changed it answers "Already up to date" in well under a second and
   emits nothing but a `checking` phase. To exercise a real ingest, clear `bulk_etag` *and*
   `bulk_updated_at` from `sync_meta` — clearing the etag alone still short-circuits.
+- **The two halves of the reconciler run on different schedules, and that decides how a
+  fixture is staged.** `reconcile::apply` — the `/migrations` poll — runs on *every* finished
+  run, the "already up to date" path included (`finish_unchanged` calls it deliberately: 304
+  is the answer most runs get). `reconcile::sweep_orphans` runs **only after a real ingest**.
+  So a merge can be exercised any time by deleting its `card_migrations` bookkeeping row and
+  forcing a Refresh; an orphan flag needs the day's ingest.
 - Searches keep answering through every second of a sync — 20 timed searches across one,
   every one correct, none stalled (that is what `db_read` bought).
 - The ingest **commits every 2 000 rows and releases the write connection between batches**,
@@ -65,6 +96,15 @@ the user's, and it is never committed.
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
+- **Schema is v5.** v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
+  and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
+  (2026) makes a commander out of a Vehicle or Spacecraft *with a P/T box*, and that is
+  unanswerable without them. Its backfill reads `raw` through `schema::json_raw` exactly as
+  v3's `artist` did, so it could only recover the **1 510 of 116 590** rows that keep a
+  `card_faces` array; everything else fills on the next sync's swap. Until then **both
+  columns NULL means unknown, never "no P/T box"**, and `deck::get_deck` repairs the rows
+  that ask (`fill_unknown_power_toughness`, gunzipped in Rust, gated on a type line that
+  could have one).
 
 ## Image cache (measured 2026-08-04, live)
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`
@@ -164,10 +204,11 @@ the user's, and it is never committed.
   `init_state` turns any error into "move `mtg.db` aside", which that disk cannot do.
 
 ## Hard rules — user data
-- `collection_entries`/`wishlist_entries`/`card_migrations` reference `cards.id` **softly**
-  and denormalize `set_code`/`collector_number`/`lang` (and `name`, on the wishlist). A row
-  whose card vanishes is **flagged** (`needs_review`, a sentence) and never deleted —
-  `reconcile::sweep_orphans` runs after every ingest and clears the flag if the card returns.
+- `collection_entries`/`wishlist_entries`/`card_migrations`/`deck_cards` reference `cards.id`
+  **softly** and denormalize `set_code`/`collector_number`/`lang` (and `name`, on the wishlist
+  and on deck cards) — as does `decks.cover_card_id`. A row whose card vanishes is **flagged**
+  (`needs_review`, a sentence) and never deleted — `reconcile::sweep_orphans` runs after every
+  ingest over all three user card tables and clears the flag if the card returns.
 - Grain: `(card_id, finish, condition, lang, altered, signed, proxy, misprint, serial, grading)`,
   as `schema::COLLECTION_GRAIN` — one constant, because the UNIQUE index and every
   `ON CONFLICT` target must match verbatim. The `coalesce(…, '')`s are load-bearing: NULLs in
@@ -195,6 +236,52 @@ the user's, and it is never committed.
 - `cards.oracle_id` is NULLABLE and **no live row is null** — 0 of 116,590, all 81
   reversible printings included, because `card_row` falls back to `card_faces[0]`. Every
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
+
+## Hard rules — decks
+- **There are exactly three enforced foreign keys in the whole schema, and all three are
+  user↔user**: `deck_cards.deck_id → decks(id)`, `deck_allocations.deck_id → decks(id)` and
+  `deck_allocations.collection_entry_id → collection_entries(id)`, every one
+  `ON DELETE CASCADE`. Three, because CASCADE is only ever right at a *user-initiated*
+  delete: deleting a deck takes its list and its reservations, and `collection::remove_entry`
+  frees the reservations on copies that no longer exist. The app's one **non-user** delete is
+  the reconciler's fold, and `reconcile::fold_into_existing` **repoints (and where the
+  survivor is already allocated, folds) every allocation onto the surviving entry before the
+  DELETE runs**, so that CASCADE fires over nothing. Nothing else declares `REFERENCES`, and
+  **nothing ever declares it against `cards`** — a declared FK there aborts every sync.
+- Zones are an enum — `main | side | commander | companion | maybe` — CHECK-constrained in
+  SQL and narrowed in TS. **Deck cards side with the wishlist: `CHECK (quantity > 0)`, so
+  zero removes the row.** A zone slot at zero holds no condition, no price and no story;
+  only the collection's zero is worth keeping. The grain is
+  `(deck_id, card_id, zone)` (`schema::DECK_CARD_GRAIN`) — the same printing in two zones is
+  two rows, added twice in one zone is one row with the sum. `maybe` is a scratchpad: the
+  allocator skips it, the stats skip it, the validator never sees it.
+- **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
+  seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
+  (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
+  `sideboard_max`, `allows_companion`, `max_mana_value` and `enabled_in_picker` as columns. A
+  rules change is a **new migration step re-running the seed constant**, never an engine
+  branch, and a new format is a row. Never derive one format from another.
+- **Validation is TypeScript** (spec §3), in `src/features/decks/validation/`: `engine.ts`
+  (size, copy limits, restricted semantics, legality), `singleton.ts` (exact-phrase
+  exceptions, re-derived from oracle text and never a card list), `commanders.ts`
+  (eligibility, partners, colour identity), `companions.ts`, `bracket.ts` (advisory only —
+  the engine does not import it). Rust supplies **facts** (`DeckCardRow`: per-printing
+  `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws every
+  conclusion. `oldschool` is the one printing-sensitive key, and it comes out right with no
+  special case because each row carries its own printing's answer.
+- **A deck card's unit price is the nonfoil `usd` key of that printing's `prices` blob** — a
+  deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
+  `cards.price_usd` is a fallback chain and is never summed, here least of all.
+- **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
+  deck's rows inside the caller's transaction on every zone write (and on the Built toggle),
+  greedily and deterministically: exact printing, then real copies, then oldest entry. A
+  **built** deck's claims are subtracted from what other decks can see. The read clamps with
+  `min(allocation, entry.quantity)`, so stepping a collection row down is honest immediately —
+  but **growing the collection does not re-run the allocator**, so a deck reads the new copies
+  only after its next zone write. Known, named, and Plan 6's to close.
+- Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
+  and wishlist arms) and the reconciler's **three-table sweep**
+  (`collection_entries`, `wishlist_entries`, `deck_cards`).
 
 ## Hard rules
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.

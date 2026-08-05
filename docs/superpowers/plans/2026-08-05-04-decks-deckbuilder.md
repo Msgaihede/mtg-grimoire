@@ -130,7 +130,7 @@ Plan 3's addendum names three residuals as **PLAN 4 EARLY FOLDS**, and they go f
 - Consumes: `SyncProgressEvent`/`SyncPhase` (from `@/lib/ipc` — phases `"checking" | "downloading" | "ingesting" | "reclaiming" | "sets" | "compacting" | "done" | "error"`), `SYNC_INVALIDATED`, `queryClient` (from `@/lib/query`).
 - Produces: no new exports. `useSyncInvalidation(progress: SyncProgressEvent | null): void` keeps its signature and gains one behaviour: **invalidate on `error` when this run reached `ingesting`**.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/lib/useSyncInvalidation.test.ts` (read the file first and reuse its existing render/mock idioms):
 
@@ -175,9 +175,9 @@ it("invalidates on an error that follows an ingest, and not on one that does not
 
 with a local helper `const phase = (p: SyncPhase): SyncProgressEvent => ({ phase: p, done: 0, total: 0, message: null });`.
 
-- [ ] **Step 2: Run and watch them fail** — `npm run test:run -- useSyncInvalidation`. The literal test passes immediately (it pins today's truth — it exists to catch tomorrow's deletion); the error-phase test fails: nothing invalidates on `error`.
+- [x] **Step 2: Run and watch them fail** — `npm run test:run -- useSyncInvalidation`. The literal test passes immediately (it pins today's truth — it exists to catch tomorrow's deletion); the error-phase test fails: nothing invalidates on `error`.
 
-- [ ] **Step 3: Implement** — in `useSyncInvalidation.ts`, track the ingest with a ref (render-stable, and nothing renders from it):
+- [x] **Step 3: Implement** — in `useSyncInvalidation.ts`, track the ingest with a ref (render-stable, and nothing renders from it):
 
 ```ts
 export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
@@ -201,11 +201,11 @@ export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
 }
 ```
 
-- [ ] **Step 4: The doc sweep** — the corpus has been 116,590 since the 2026-08-05 sync and the final wave's cross-referencing docs already say so; four survivors contradict them. In each, replace the figure with a date-stamped one (`0 of 116,590 live rows (2026-08-05)` / `116 590 rows`): `schema.rs:9`, `card.rs:218`, `CardDetailPane.tsx:106`, `AddToCollection.tsx:329`. Doc text only — the `Ribbon.test.tsx`/`useSync.test.ts`/`AppShell.test.tsx` fixtures that feed `116,568` through a mocked `SyncStatus` are fixture data, not claims about the live corpus: leave them.
+- [x] **Step 4: The doc sweep** — the corpus has been 116,590 since the 2026-08-05 sync and the final wave's cross-referencing docs already say so; four survivors contradict them. In each, replace the figure with a date-stamped one (`0 of 116,590 live rows (2026-08-05)` / `116 590 rows`): `schema.rs:9`, `card.rs:218`, `CardDetailPane.tsx:106`, `AddToCollection.tsx:329`. Doc text only — the `Ribbon.test.tsx`/`useSync.test.ts`/`AppShell.test.tsx` fixtures that feed `116,568` through a mocked `SyncStatus` are fixture data, not claims about the live corpus: leave them.
 
-- [ ] **Step 5: `MAX_MIGRATION_PAGES` 10 → 20** in `src-tauri/src/scryfall.rs`, updating the constant's doc with today's arithmetic: the live log is 2 569 entries (8 pages of 10); at ~1 000 entries/year the old cap had roughly two spare pages; unused pages cost nothing because the loop breaks on `has_more` long before the cap; and the overflow warning is an `eprintln!` that release builds never show, so headroom is the only real defence. `fetch_migrations_stops_at_the_page_cap` asserts against the constant and follows automatically — confirm it still passes.
+- [x] **Step 5: `MAX_MIGRATION_PAGES` 10 → 20** in `src-tauri/src/scryfall.rs`, updating the constant's doc with today's arithmetic: the live log is 2 569 entries (8 pages of 10); at ~1 000 entries/year the old cap had roughly two spare pages; unused pages cost nothing because the loop breaks on `has_more` long before the cap; and the overflow warning is an `eprintln!` that release builds never show, so headroom is the only real defence. `fetch_migrations_stops_at_the_page_cap` asserts against the constant and follows automatically — confirm it still passes.
 
-- [ ] **Step 6: Verify and commit** — `npm run verify` green, then:
+- [x] **Step 6: Verify and commit** — `npm run verify` green, then:
 
 ```
 chore: fold plan-3 review residuals (invalidation guard, error-after-ingest, doc figures, migration page cap)
@@ -235,7 +235,7 @@ pub const DECK_CARD_GRAIN: &str = "deck_id, card_id, zone";
 pub const ALLOCATION_GRAIN: &str = "deck_id, collection_entry_id";
 ```
 
-- [ ] **Step 1: Write the failing tests** — append to `schema.rs`'s `mod tests`. Write small seed helpers once (`seed_card`/`deck`/`entry`/`deck_card`/`allocate` — plain INSERTs returning ids) and reuse them in Task 3.
+- [x] **Step 1: Write the failing tests** — append to `schema.rs`'s `mod tests`. Write small seed helpers once (`seed_card`/`deck`/`entry`/`deck_card`/`allocate` — plain INSERTs returning ids) and reuse them in Task 3.
 
 ```rust
 /// The three enforced FKs, exercised at their delete sites. `foreign_keys=ON`, as
@@ -330,9 +330,9 @@ fn the_v5_backfill_fills_power_and_toughness_from_raw_and_faces() {
 
 Also update `migrate_is_idempotent_and_creates_tables`: the `sqlite_master` IN-list grows `'decks','deck_cards','deck_allocations','format_specs'` and the count becomes 11.
 
-- [ ] **Step 2: Run and watch them fail** — `cargo test --manifest-path src-tauri/Cargo.toml schema::` — the v5 tables do not exist and `SCHEMA_VERSION` is 4.
+- [x] **Step 2: Run and watch them fail** — `cargo test --manifest-path src-tauri/Cargo.toml schema::` — the v5 tables do not exist and `SCHEMA_VERSION` is 4.
 
-- [ ] **Step 3: The `if v < 5` step.** After the `if v < 4` block, one transaction ending in the **literal** `PRAGMA user_version = 5`:
+- [x] **Step 3: The `if v < 5` step.** After the `if v < 4` block, one transaction ending in the **literal** `PRAGMA user_version = 5`:
 
 ```rust
 if v < 5 {
@@ -461,7 +461,7 @@ if v < 5 {
 
 No `CARDS_INDEXES` entry (nothing new is indexed on `cards`), no `CARDS_COLUMNS` edit (frozen), no FTS rebuild (two unindexed columns, no rowid renumbering — v2/v3's reasoning; add the twin test `the_v5_backfill_leaves_the_search_index_answering` in the v2/v3 style).
 
-- [ ] **Step 4: The seed — the research doc's table, cell for cell.** A module-level constant so the numbers are reviewable in one screen. `INSERT OR REPLACE`, so a future correction is a new migration step re-running the same constant:
+- [x] **Step 4: The seed — the research doc's table, cell for cell.** A module-level constant so the numbers are reviewable in one screen. `INSERT OR REPLACE`, so a future correction is a new migration step re-running the same constant:
 
 ```rust
 /// The format rules as DATA (spec §6). Source of every cell:
@@ -502,11 +502,11 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
 
 Deck-size semantics the engine relies on (document them **on the constant**): `deck_min`/`deck_max` count the `main` + `commander` zones together — "exactly 100 **incl cmdr**", "exactly 60 **incl OB+sig spell**" (Oathbreaker's planeswalker and signature spell both live in the `commander` zone; Task 9 validates the pair). The companion never counts toward deck size (EDH's is "effectively a 101st card"; in 60-card formats it occupies a sideboard slot, which Task 8 counts against `sideboard_max`). `predh` carries `'edh'` as its commander rule on purpose: the 2026 Vehicle/Spacecraft clause is harmless there because the `predh` legality key already excludes everything post-2011 — the pool check does the narrowing. That is not "deriving one format from another" (the seed never copies a *legality*); it is two formats genuinely sharing one eligibility rule.
 
-- [ ] **Step 5: `card_row.rs` + `ingest.rs`** — `CardRow` gains `pub power: Option<String>` and `pub toughness: Option<String>`, read with the same top-level-then-`card_faces[0]` fallback the artist uses (a transform's P/T live on its faces). `ingest.rs` adds the two columns to the staging INSERT's column list and bindings, and its fixture gains a card with `"power"`/`"toughness"` so the ingest path is proven, not just the backfill. `create_staging` needs nothing: it derives from `PRAGMA table_info(cards)`.
+- [x] **Step 5: `card_row.rs` + `ingest.rs`** — `CardRow` gains `pub power: Option<String>` and `pub toughness: Option<String>`, read with the same top-level-then-`card_faces[0]` fallback the artist uses (a transform's P/T live on its faces). `ingest.rs` adds the two columns to the staging INSERT's column list and bindings, and its fixture gains a card with `"power"`/`"toughness"` so the ingest path is proven, not just the backfill. `create_staging` needs nothing: it derives from `PRAGMA table_info(cards)`.
 
-- [ ] **Step 6: Run the suite** — the new tests pass, and the standing ones keep passing: `staging_takes_its_columns_from_the_live_table_not_from_the_v1_constant` now proves staging carries `power`/`toughness` for free, and `the_indexes_on_cards_are_identical_before_and_after_a_swap` proves the swap still replays only `CARDS_INDEXES`.
+- [x] **Step 6: Run the suite** — the new tests pass, and the standing ones keep passing: `staging_takes_its_columns_from_the_live_table_not_from_the_v1_constant` now proves staging carries `power`/`toughness` for free, and `the_indexes_on_cards_are_identical_before_and_after_a_swap` proves the swap still replays only `CARDS_INDEXES`.
 
-- [ ] **Step 7: Verify and commit** — `npm run verify`, then:
+- [x] **Step 7: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: schema v5 — decks, deck_cards, deck_allocations, format_specs seed, cards P/T
@@ -525,7 +525,7 @@ feat: schema v5 — decks, deck_cards, deck_allocations, format_specs seed, card
 - Consumes: `Migration` (scryfall.rs), the deck-card grain's columns (spelled per-row, as `collision_target` spells the collection grain). The `deck`/`allocate` seed helpers below live in `reconcile`'s own `mod tests` (Task 2's schema helpers are a different module — mirror their shape, don't reach for them).
 - Produces: no signature changes. `apply`/`merge`/`flag_deleted`/`sweep_orphans`/`user_data_is_empty` all grow `deck_cards`; `fold_into_existing` grows the allocation repoint; `merge` receives destinations resolved through the pass's own old→new map.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 /// THE gate (plan-3 final review, I6): the fold is the app's only non-user delete, and
@@ -602,9 +602,9 @@ fn a_same_day_chain_lands_on_the_final_id() {
 }
 ```
 
-- [ ] **Step 2: Run and watch them fail** — the allocation tests fail with the allocation gone (CASCADE fired), the deck-card tests with untouched rows, the chain test with `card_id = "b-id"`.
+- [x] **Step 2: Run and watch them fail** — the allocation tests fail with the allocation gone (CASCADE fired), the deck-card tests with untouched rows, the chain test with `card_id = "b-id"`.
 
-- [ ] **Step 3: The fold gate.** In `fold_into_existing`, between the survivor UPDATE and the source DELETE:
+- [x] **Step 3: The fold gate.** In `fold_into_existing`, between the survivor UPDATE and the source DELETE:
 
 ```rust
 // The FK treaty (schema v5): `deck_allocations.collection_entry_id` cascades on
@@ -636,9 +636,9 @@ tx.execute(
 )?;
 ```
 
-- [ ] **Step 4: Deck rows join `merge`.** After the wishlist loop, a deck loop in the collection loop's shape: `UPDATE OR IGNORE deck_cards` repointing `card_id` and refreshing `set_code`/`collector_number`/`lang` (NOT `name` — the name is the oracle name and the merge does not change what the card is called; if it did, the sweep's flag is the honest channel) with the unconditional `needs_review = ?note`; when `OR IGNORE` swallows the grain collision, fold quantities into the row at `(deck_id, new_id, zone)` and delete the source; `flag_unfoldable(tx, "deck_cards", …)` as the defensive arm — it is table-generic already. `flag_deleted` and `sweep_orphans` change their table arrays to `["collection_entries", "wishlist_entries", "deck_cards"]` (the sweep's `card_id IS NOT NULL` guard is vacuous for deck rows and harmless). `user_data_is_empty` gains the third `count(*)`.
+- [x] **Step 4: Deck rows join `merge`.** After the wishlist loop, a deck loop in the collection loop's shape: `UPDATE OR IGNORE deck_cards` repointing `card_id` and refreshing `set_code`/`collector_number`/`lang` (NOT `name` — the name is the oracle name and the merge does not change what the card is called; if it did, the sweep's flag is the honest channel) with the unconditional `needs_review = ?note`; when `OR IGNORE` swallows the grain collision, fold quantities into the row at `(deck_id, new_id, zone)` and delete the source; `flag_unfoldable(tx, "deck_cards", …)` as the defensive arm — it is table-generic already. `flag_deleted` and `sweep_orphans` change their table arrays to `["collection_entries", "wishlist_entries", "deck_cards"]` (the sweep's `card_id IS NOT NULL` guard is vacuous for deck rows and harmless). `user_data_is_empty` gains the third `count(*)`.
 
-- [ ] **Step 5: Transitive merge resolution.** In `apply`, before the loop:
+- [x] **Step 5: Transitive merge resolution.** In `apply`, before the loop:
 
 ```rust
 // Merge destinations resolve through the pass's own map, so a chain lands every row
@@ -663,7 +663,7 @@ let final_id = |mut id: &str| -> &str {
 
 and `merge` is called with `final_id(new_id)` in place of `new_id`. The recorded `card_migrations` row keeps Scryfall's own `new_card_id` — the bookkeeping mirrors the log; the *rows* land on the truth. `a_chain_of_merges_delivered_newest_first_still_lands_on_the_last_id` (the dated-chain test) must still pass untouched.
 
-- [ ] **Step 6: Verify and commit** — the full `reconcile::` suite (20+ standing tests — fold-carries-the-receipt, first-message-wins, delete-flag-outlives are untouched invariants) plus the new ones, `npm run verify`, then:
+- [x] **Step 6: Verify and commit** — the full `reconcile::` suite (20+ standing tests — fold-carries-the-receipt, first-message-wins, delete-flag-outlives are untouched invariants) plus the new ones, `npm run verify`, then:
 
 ```
 feat: reconciler covers deck rows; fold repoints allocations; transitive merge chains
@@ -746,7 +746,7 @@ pub fn move_card(conn: &Connection, deck_id: i64, card_id: &str, from: &str, to:
 
 Commands: `deck_create`, `deck_update`, `deck_delete`, `deck_duplicate`, `deck_list`, `deck_add_card`, `deck_set_card_quantity`, `deck_move_card` (plus Task 5's `deck_get`, `deck_missing_to_wishlist`, `format_specs_list`). Every write ends by touching `decks.updated_at` — the gallery sorts by it.
 
-- [ ] **Step 1: Write the failing tests** (in `deck.rs`'s own `mod tests`, on the Task 2 helpers):
+- [x] **Step 1: Write the failing tests** (in `deck.rs`'s own `mod tests`, on the Task 2 helpers):
 
 ```rust
 /// The zone write is the collection quick-add's contract on the deck grain: the same
@@ -788,9 +788,9 @@ fn a_card_id_that_does_not_resolve_is_refused() { /* add_card with an unknown id
 
 And in `images.rs`: extend `the_prewarm_selects_owned_cards_that_are_not_cached_yet` — a third seeded row in `deck_cards` makes the count 3, and a cached one drops out. (`prewarm_keys` gains one arm: `UNION SELECT card_id FROM deck_cards` — carryover MUST-DO 3; still `grid`-only, per the constant's own doc.)
 
-- [ ] **Step 2: Run and watch them fail** — module doesn't exist; write `deck.rs` skeleton with `todo!()`s if needed to get names compiling, or write straight through.
+- [x] **Step 2: Run and watch them fail** — module doesn't exist; write `deck.rs` skeleton with `todo!()`s if needed to get names compiling, or write straight through.
 
-- [ ] **Step 3: Implement.** The upsert is `COLLECTION_GRAIN`'s pattern on `DECK_CARD_GRAIN`:
+- [x] **Step 3: Implement.** The upsert is `COLLECTION_GRAIN`'s pattern on `DECK_CARD_GRAIN`:
 
 ```rust
 fn valid_zone(zone: &str) -> Result<&str, String> {
@@ -842,9 +842,9 @@ SELECT d.id, d.name, d.format_key, fs.display_name, d.description, d.cover_card_
 
 (LEFT JOINs both: a vanished cover card or an unknown key must never hide a deck.)
 
-- [ ] **Step 4: Register the commands** in `lib.rs`'s `generate_handler!` and add `pub mod deck;`.
+- [x] **Step 4: Register the commands** in `lib.rs`'s `generate_handler!` and add `pub mod deck;`.
 
-- [ ] **Step 5: Verify and commit** — `npm run verify`, then:
+- [x] **Step 5: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: deck CRUD and zone writes; deck cards join the image pre-warm
@@ -935,7 +935,7 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
 
 Commands: `deck_get` (db_read), `format_specs_list` (db_read), `deck_missing_to_wishlist` (write).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 /// The allocator's whole contract in one scene: 4 Bolts wanted, 3 owned across two
@@ -983,9 +983,9 @@ fn an_orphaned_deck_card_is_listed_from_its_denormalized_columns() {}
 fn missing_to_wishlist_writes_any_printing_wishes_through_the_wishlist_grain() {}
 ```
 
-- [ ] **Step 2: Run and watch them fail.**
+- [x] **Step 2: Run and watch them fail.**
 
-- [ ] **Step 3: The allocator.** Delete-and-rebuild inside the caller's transaction, so it is deterministic and idempotent:
+- [x] **Step 3: The allocator.** Delete-and-rebuild inside the caller's transaction, so it is deterministic and idempotent:
 
 ```rust
 pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
@@ -1010,9 +1010,9 @@ EXISTS(SELECT 1 FROM cards u
 
 and the owned attribution computed in Rust after the rows land: sum this deck's allocations per oracle card (each clamped to `min(a.quantity, e.quantity)` via a join), then walk the deck's rows for that oracle in commander→main→side→companion→maybe order handing out `min(remaining, row.quantity)`. Unit-testable as a pure function — write it as one (`fn attribute_owned(rows: &mut [DeckCardRow], owned_by_oracle: &HashMap<String, i64>)`).
 
-- [ ] **Step 4: Wire `allocate_deck`** into `add_card`/`set_card_quantity`/`move_card` (same transaction, after the write) and into `update_deck` when `is_built` changes. `missing_to_wishlist` loops the deck's still-missing cards calling `wishlist::add_wish` with `WishInput { oracle_id, name (the entry's, for the orphan case), quantity: missing, ..Default::default() }` under one write lock.
+- [x] **Step 4: Wire `allocate_deck`** into `add_card`/`set_card_quantity`/`move_card` (same transaction, after the write) and into `update_deck` when `is_built` changes. `missing_to_wishlist` loops the deck's still-missing cards calling `wishlist::add_wish` with `WishInput { oracle_id, name (the entry's, for the orphan case), quantity: missing, ..Default::default() }` under one write lock.
 
-- [ ] **Step 5: Verify and commit** — `npm run verify`, then:
+- [x] **Step 5: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: deck read with validation facts, the greedy allocator, missing-to-wishlist
@@ -1031,7 +1031,7 @@ Two items the carryover names as natural Plan-4 companions, both halves of thing
 - Consumes: `collection::FINISH_PRICE_EUR`'s etched-is-NULL shape (re-expressed over the wish's preferred finish), `eurPrice` from `@/lib/prices`, `FilterChips`' toggle-chip vocabulary.
 - Produces: `WishlistQuery.needs_review: Option<bool>` (Rust) / `needsReview?: boolean` (`ipc.ts`); `WishRow.unit_price_eur: Option<f64>` / `unitPriceEur: number | null`; `WishlistFilterState` gains `needsReview: boolean | undefined`.
 
-- [ ] **Step 1: Rust tests first** — in `wishlist.rs`'s `mod tests`:
+- [x] **Step 1: Rust tests first** — in `wishlist.rs`'s `mod tests`:
 
 ```rust
 /// The backend half plan-3 deferred: `Some(true)` narrows to flagged wishes,
@@ -1054,11 +1054,11 @@ CASE coalesce(w.preferred_finish, 'nonfoil') WHEN 'etched' THEN NULL ELSE
             WHEN 'foil' THEN '$.eur_foil' ELSE '$.eur' END) AS REAL) END AS unit_price_eur
 ```
 
-- [ ] **Step 2: The TS mirror** — `ipc.ts` (`WishlistQuery.needsReview`, `WishRow.unitPriceEur`, doc comments in the file's voice), `useWishlist.ts` (state + `toggleNeedsReview` tri-state via the existing `cycleTriState`, `activeFilterCount` counts three, `resetAll` clears three, the query key gains the term).
+- [x] **Step 2: The TS mirror** — `ipc.ts` (`WishlistQuery.needsReview`, `WishRow.unitPriceEur`, doc comments in the file's voice), `useWishlist.ts` (state + `toggleNeedsReview` tri-state via the existing `cycleTriState`, `activeFilterCount` counts three, `resetAll` clears three, the query key gains the term).
 
-- [ ] **Step 3: The view** — WishlistPage's header cost `useMemo` grows the EUR sum + its own unpriced counter (the collection header's presentation: a second `Figure`, `eurPrice`, `PRICES_AS_OF` title, `n unpriced` note); the filter bar gains a "Needs review" chip (rendered only when the list has flagged rows or the filter is on — a permanent chip for a state most users never see is chrome). Extend `WishlistPage.test.tsx`: the EUR figure renders and the etched-wish unpriced counter counts; the chip narrows.
+- [x] **Step 3: The view** — WishlistPage's header cost `useMemo` grows the EUR sum + its own unpriced counter (the collection header's presentation: a second `Figure`, `eurPrice`, `PRICES_AS_OF` title, `n unpriced` note); the filter bar gains a "Needs review" chip (rendered only when the list has flagged rows or the filter is on — a permanent chip for a state most users never see is chrome). Extend `WishlistPage.test.tsx`: the EUR figure renders and the etched-wish unpriced counter counts; the chip narrows.
 
-- [ ] **Step 4: Verify and commit** — `npm run verify`, then:
+- [x] **Step 4: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: wishlist needs-review filter and EUR pricing
@@ -1114,17 +1114,17 @@ deckMissingToWishlist: (deckId: number) => invoke<number>("deck_missing_to_wishl
 formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),
 ```
 
-- [ ] **Step 1: Failing tests** — `ipc.test.ts` pins the new commands' argument names (its existing style: a mocked `invoke` asserting name + payload keys); `useSyncInvalidation.test.ts`'s Task-1 literal grows `["decks"]` (six keys — this is the "one decision" that test exists to make visible).
+- [x] **Step 1: Failing tests** — `ipc.test.ts` pins the new commands' argument names (its existing style: a mocked `invoke` asserting name + payload keys); `useSyncInvalidation.test.ts`'s Task-1 literal grows `["decks"]` (six keys — this is the "one decision" that test exists to make visible).
 
-- [ ] **Step 2: Implement `ipc.ts`** with the file's documentation voice (every nullable explained, the two `ownedQuantity` disambiguations extended with the deck's third meaning: *allocation-clamped copies secured for this deck* — three names, three questions).
+- [x] **Step 2: Implement `ipc.ts`** with the file's documentation voice (every nullable explained, the two `ownedQuantity` disambiguations extended with the deck's third meaning: *allocation-clamped copies secured for this deck* — three names, three questions).
 
-- [ ] **Step 3: Hooks.**
+- [x] **Step 3: Hooks.**
   - `useFormatSpecs()` — `useQuery({ queryKey: ["formatSpecs"], staleTime: Infinity })` + `formatSpecFor(key)` helper; the seeded table changes once per migration, like `sets`. **Not** in `SYNC_INVALIDATED`: a sync cannot change it.
   - `useDecks()` — `["decks", "list"]`; mutations (`create`/`update`/`delete`/`duplicate`) invalidate `["decks"]`.
   - `useDeck(id)` — `["decks", "detail", id]`; card mutations invalidate `["decks"]` **and** `["wishlist"]` (missing→wishlist) — and collection mutations already invalidate `["collection"]`, so add `["decks"]` to the collection mutation invalidations in `useCollection.ts` (allocations shift when quantities do; find the existing `invalidateQueries` sites and extend them).
   - `store.ts`: `openDeckId: number | null` + `setOpenDeckId`, with `setActiveView` clearing it exactly as it clears `selectedCardId` (leaving Decks closes the editor; the doc comment explains it in the store's voice).
 
-- [ ] **Step 4: Verify and commit** — `npm run verify`, then:
+- [x] **Step 4: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: deck IPC mirrors, query hooks, format-spec cache, decks in sync invalidation
@@ -1179,7 +1179,7 @@ export function copyException(oracleText: string | null): number | null;
 export function isBasicLand(typeLine: string | null): boolean;
 ```
 
-- [ ] **Step 1: Write the failing tests.** A tiny fixture factory (`card(overrides): CardFacts`) and a `spec(key)` helper hard-coding the seed's rows for the formats under test (the engine tests must not invoke — the seed's *authority* is Task 2's Rust test; these fixtures mirror it and say so). The matrix, one `describe` per rule:
+- [x] **Step 1: Write the failing tests.** A tiny fixture factory (`card(overrides): CardFacts`) and a `spec(key)` helper hard-coding the seed's rows for the formats under test (the engine tests must not invoke — the seed's *authority* is Task 2's Rust test; these fixtures mirror it and say so). The matrix, one `describe` per rule:
 
 ```ts
 describe("deck size", () => {
@@ -1231,9 +1231,9 @@ describe("sideboard and mana value", () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch them fail** — `npm run test:run -- validation`.
+- [x] **Step 2: Run and watch them fail** — `npm run test:run -- validation`.
 
-- [ ] **Step 3: Implement.** The engine is a pipeline of small pure functions over one pre-computed view (`byOracle: Map<oracleId|name, {cards, mainAndSideQuantity}>` — copy limits count main + side combined, CR 100.4a; `zoneTotals`). `copyException`:
+- [x] **Step 3: Implement.** The engine is a pipeline of small pure functions over one pre-computed view (`byOracle: Map<oracleId|name, {cards, mainAndSideQuantity}>` — copy limits count main + side combined, CR 100.4a; `zoneTotals`). `copyException`:
 
 ```ts
 const WORD_NUMBERS: Record<string, number> = {
@@ -1259,7 +1259,7 @@ export function isBasicLand(typeLine: string | null): boolean {
 
 Per-face MV for `maxManaValue`: parse `faces` JSON, take each face's `cmc` if present, else compute from the face's `mana_cost` symbols (a helper `manaValueOf(cost)` — `{2}{U}` → 3, `{X}` → 0, hybrid `{W/U}` → 1 — export it; Task 15's curve uses the same arithmetic and there must be one). Messages are template helpers so wording is uniform; every message uses the card's `name` and real numbers, sentence case, no exclamation marks.
 
-- [ ] **Step 4: Verify and commit** — `npm run verify`, then:
+- [x] **Step 4: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: deck validation engine — size, copies, legality, singleton exceptions
@@ -1298,7 +1298,7 @@ export function colorIdentityIssues(
 export function identityOf(card: CardFacts): ReadonlySet<string>;
 ```
 
-- [ ] **Step 1: The test matrix**, real cards as fixtures (name them in the tests — reviewers can check them against Scryfall):
+- [x] **Step 1: The test matrix**, real cards as fixtures (name them in the tests — reviewers can check them against Scryfall):
 
 ```ts
 describe("eligibility by rule", () => {
@@ -1348,13 +1348,13 @@ describe("colour identity (903.5c/d via Scryfall's field)", () => {
 });
 ```
 
-- [ ] **Step 2: Run, fail, implement.** Notes that are load-bearing:
+- [x] **Step 2: Run, fail, implement.** Notes that are load-bearing:
   - Front face first: `factsFace0(card)` merges `faces[0]`'s `type_line`/`oracle_text`/`power`/`toughness` over the card's own when `faces` is present — eligibility and partner keywords read the front face (`card_row` already hoists cost/type for most layouts; the merge makes the engine independent of which).
   - Keyword detection is line-anchored on oracle text: `Partner with ([^\n(]+?)(?:\s*\(|\n|$)` (reminder text in parentheses is stripped first — 903.4c's lesson applies to parsing too); bare `Partner` must match a line that is exactly `Partner` or `Partner (`-prefixed, so "Partner with" never half-matches; `Partner—(.+)` captures the flavour text tag; `Doctor's companion` and `Choose a Background` are literal phrases; `can be your commander` is a phrase test on the unstripped text (it lives in rules text, not reminder text, on the 32 cards that carry it).
   - `identityOf` parses `color_identity` JSON to a Set once; the deck identity is the union across the commander zone's non-signature-spell cards.
   - `banned_as_commander` reads `card.legalities[spec.key] === "restricted"` **only for commander-zone cards** — main-deck restricted under this semantic is silence (Task 8 already routed by `restrictedSemantic`).
 
-- [ ] **Step 3: Verify and commit** — `npm run verify`, then:
+- [x] **Step 3: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: commander eligibility, partner pairing, colour identity validation
@@ -1393,13 +1393,13 @@ export interface BracketEstimate {
 export function estimateBracket(cards: CardFacts[]): BracketEstimate;
 ```
 
-- [ ] **Step 1: The test matrix.**
+- [x] **Step 1: The test matrix.**
   - Zone rules first: more than one companion → error; `spec.allowsCompanion` false (gladiator — the seed's data, not a key test) → "Gladiator has no sideboard, so it has no companions."; a companion that is not a companion (no "Companion —" text) → error; in EDH the companion must also satisfy singleton + the deck's colour identity ("effectively a 101st card") — reuse Task 8/9's functions over `[...deck, companion]`.
   - The ten conditions, one honest fixture each (research doc's own phrasings): **Gyruda** even MV only · **Jegantha** no cost with a repeated symbol — `{1}{W}{W}` fails, `{W}{U}{B}{R}{G}` passes, faces' costs count, generic `{2}` is one symbol · **Kaheera** every creature is Cat/Elemental/Nightmare/Dinosaur/Beast (changelings noted as a known false negative in a comment — "changeling" text is not a creature type list; documented, not solved) · **Keruga** every nonland MV ≥ 3 · **Lurrus** every permanent MV ≤ 2 · **Lutri** nonland names distinct (and the comment records: unbanned in Commander 2026-02-09, still banned in Brawl/CompBrawl — the *legality* half of that is Task 8's ordinary banned check, no code here) · **Obosh** odd MV + lands · **Umori** all nonlands share a card type · **Yorion** deck size ≥ deckMin + 20 (the one condition that reads the spec) · **Zirda** every permanent has an activated ability (heuristic: oracle text contains a `:` outside reminder parentheses; the comment owns its precision).
   - Bracket: 4 game changers → `gameChangers: 4`, bracket ≥ 4; zero flags + no extra-turn/MLD text → bracket 1–2; "Take an extra turn" and "Destroy all lands" fixtures land in their lists. Assert the shape, not a rules-lawyer table — the number is advisory and the test says so.
-- [ ] **Step 2: Run, fail, implement.** `companions.ts` is a `Record<string, CompanionRule>` with `{ applies: (deck, spec) => Issue[] }` per name; unknown companion names produce the not-a-companion error rather than silence. `estimateBracket` counts `gameChanger === true`, greps for `"extra turn"` and MLD phrases (`"destroy all lands"`, `"lands"` + `"sacrifice"` in one sentence) case-insensitively, and maps: any MLD or >6 changers → 5; 4–6 changers → 4; 1–3 → 3; extra-turns only → 3; else 2 with an empty-handed 1 when the deck also has no tutors marker (keep the mapping in one commented table — it is a heuristic and the comment says which beta document it paraphrases).
-- [ ] **Step 3: The Rust fixture** — `ingest.rs`'s fixture JSONL gains a card with `"game_changer": true`; the ingest test asserts the column reads 1. (MUST-DO 2 discharged: the flag is now proven end to end — bulk line → column → `DeckCardRow.game_changer` (Task 5's read serializes it) → `estimateBracket`.)
-- [ ] **Step 4: Verify and commit** — `npm run verify`, then:
+- [x] **Step 2: Run, fail, implement.** `companions.ts` is a `Record<string, CompanionRule>` with `{ applies: (deck, spec) => Issue[] }` per name; unknown companion names produce the not-a-companion error rather than silence. `estimateBracket` counts `gameChanger === true`, greps for `"extra turn"` and MLD phrases (`"destroy all lands"`, `"lands"` + `"sacrifice"` in one sentence) case-insensitively, and maps: any MLD or >6 changers → 5; 4–6 changers → 4; 1–3 → 3; extra-turns only → 3; else 2 with an empty-handed 1 when the deck also has no tutors marker (keep the mapping in one commented table — it is a heuristic and the comment says which beta document it paraphrases).
+- [x] **Step 3: The Rust fixture** — `ingest.rs`'s fixture JSONL gains a card with `"game_changer": true`; the ingest test asserts the column reads 1. (MUST-DO 2 discharged: the flag is now proven end to end — bulk line → column → `DeckCardRow.game_changer` (Task 5's read serializes it) → `estimateBracket`.)
+- [x] **Step 4: Verify and commit** — `npm run verify`, then:
 
 ```
 feat: companion validation and the advisory bracket estimate
@@ -1421,9 +1421,9 @@ The gallery spec §7 promises: a wall of cover-art cards. A deck tile is the `ar
 - Consumes: `useDecks()`, `useFormatSpecs()`, `ipc.deckCreate/deckUpdate/deckDelete/deckDuplicate`, `cardImageUrl(id, 0, "art")` from `@/lib/images` (its real argument order: card, face, variant), `useAppStore` (`openDeckId`, `setOpenDeckId`), `useDismissOnEscape` (`"inner"` for the create form popover), `Figure`/`FigureRow` if a summary strip is wanted — it is not: the gallery's story is the covers.
 - Produces: `DecksPage` (no props — the store owns which view is open, `App.tsx`'s pattern).
 
-- [ ] **Step 1: Failing tests** — `DecksPage.test.tsx` with mocked `ipc`: an empty state that says what a deck is and carries the one primary action ("New deck"); tiles render name, format display name, `cardCount` in the mono data face, an `Archived` section separated and collapsed by default; the cover `<img>` src is the `art` URL and the credit line renders the artist; create flow: open form (focus lands in the name field), pick a format (seeded list order asserted, `future` absent), submit calls `deckCreate` and the new deck opens (`setOpenDeckId`); duplicate and archive actions call their commands; delete asks first (a deck is minutes of work — one confirm, in words naming the deck) and Escape closes the form popover without leaving the view.
-- [ ] **Step 2: Run, fail, implement.** Layout notes the direction binds: tiles are art-first (5:7-adjacent crop frame, name + format caption below in Geist, count in Geist Mono), the gallery is a CSS grid over `minmax(200px, 1fr)`, hover reveals the actions row (`REVEAL_ON_HOVER`'s pattern), focus-visible gold outline on every control, `motion-reduce:transition-none` on the one 150 ms hover transition. No colour anywhere except the art itself. The create form is a popover, an `"inner"` Escape layer that hands focus back to the New deck button.
-- [ ] **Step 3: Verify in the app** (CDP: create, rename, duplicate, archive, delete; covers paint; console clean), then `npm run verify` and commit:
+- [x] **Step 1: Failing tests** — `DecksPage.test.tsx` with mocked `ipc`: an empty state that says what a deck is and carries the one primary action ("New deck"); tiles render name, format display name, `cardCount` in the mono data face, an `Archived` section separated and collapsed by default; the cover `<img>` src is the `art` URL and the credit line renders the artist; create flow: open form (focus lands in the name field), pick a format (seeded list order asserted, `future` absent), submit calls `deckCreate` and the new deck opens (`setOpenDeckId`); duplicate and archive actions call their commands; delete asks first (a deck is minutes of work — one confirm, in words naming the deck) and Escape closes the form popover without leaving the view.
+- [x] **Step 2: Run, fail, implement.** Layout notes the direction binds: tiles are art-first (5:7-adjacent crop frame, name + format caption below in Geist, count in Geist Mono), the gallery is a CSS grid over `minmax(200px, 1fr)`, hover reveals the actions row (`REVEAL_ON_HOVER`'s pattern), focus-visible gold outline on every control, `motion-reduce:transition-none` on the one 150 ms hover transition. No colour anywhere except the art itself. The create form is a popover, an `"inner"` Escape layer that hands focus back to the New deck button.
+- [x] **Step 3: Verify in the app** (CDP: create, rename, duplicate, archive, delete; covers paint; console clean), then `npm run verify` and commit:
 
 ```
 feat: decks gallery with card-art covers and create/duplicate/archive
@@ -1445,9 +1445,9 @@ The editor spec §7 describes: zones center-stage, grouped by card type or mana 
 - Consumes: `useDeck(id)`, `useFormatSpecs()`, `ipc.deckAddCard/deckSetCardQuantity/deckMoveCard/deckUpdate`, `QuantityStepper` (`{ value, onChange, min, max, label }` — its real props), `ManaText`, `RarityGem`, `useAppStore().setSelectedCardId` (a row click opens the existing `CardDetailPane` — it is docked at `App` level and already an `"outer"` Escape layer, so the editor gets a detail pane for free), `usdPrice`/`PRICES_AS_OF`.
 - Produces: `DeckEditor({ deckId })`, `ZoneColumn({ zone, title, cards, groupBy, onAdd, onSetQuantity, onMove })`.
 
-- [ ] **Step 1: Failing tests.** The editor renders: header (deck name as an inline-editable field committing on blur/Enter through `deckUpdate`; the format select; the **Built** toggle with its meaning in a tooltip — "reserves your copies for this deck"; a back control returning to the gallery via `setOpenDeckId(null)`); the five zones with `main` widest and `commander`/`companion` compact (hidden entirely when the format's spec neither requires a commander nor allows a companion — the seeded data drives the chrome); group-by control (Type default / Mana value) that regroups main's rows under Cinzel-free 12px `text-dim` headers with counts; each row: quantity stepper (zero removes — assert the row leaves and `deckSetCardQuantity(…, 0)` was the call), name, `ManaText` cost, set·number in mono, unit price, an owned mark (`3/4` in mono when `ownedQuantity < quantity`, nothing when fully owned — absence is the healthy state); a row click opens the card (`setSelectedCardId`), stepper clicks do not (stopPropagation, the search table's pattern); "Set as cover" in the row's hover actions calls `deckUpdate({ coverCardId })` — the cheap cover picker the plan scope allows; an orphaned row renders from its denormalized name with its `needs_review` sentence and no dead image.
-- [ ] **Step 2: Run, fail, implement.** Grouping is a pure `groupCards(cards, groupBy)` helper (exported, tested): by type — the eight buckets in printed order (Creature, Planeswalker, Instant, Sorcery, Artifact, Enchantment, Battle, Land; front face's type line decides; anything else lands in Other) — or by MV (0–7, 8+, the filter chips' own bucketing). Zones scroll independently inside the editor's own `overflow` containers (no page-level horizontal scroll at 1024px — the direction's floor). The `maybe` zone sits collapsed under the columns; it is a scratchpad, and the stats/validation of Task 15 never read it.
-- [ ] **Step 3: Verify in the app** (CDP at 1024 and 1280: add via the pane's printings + steppers, move via zone menu fallback — a small per-row "move to…" menu is the click path `deckMoveCard` needs before drag exists; Escape stack: pane closes before editor state is touched), then `npm run verify` and commit:
+- [x] **Step 1: Failing tests.** The editor renders: header (deck name as an inline-editable field committing on blur/Enter through `deckUpdate`; the format select; the **Built** toggle with its meaning in a tooltip — "reserves your copies for this deck"; a back control returning to the gallery via `setOpenDeckId(null)`); the five zones with `main` widest and `commander`/`companion` compact (hidden entirely when the format's spec neither requires a commander nor allows a companion — the seeded data drives the chrome); group-by control (Type default / Mana value) that regroups main's rows under Cinzel-free 12px `text-dim` headers with counts; each row: quantity stepper (zero removes — assert the row leaves and `deckSetCardQuantity(…, 0)` was the call), name, `ManaText` cost, set·number in mono, unit price, an owned mark (`3/4` in mono when `ownedQuantity < quantity`, nothing when fully owned — absence is the healthy state); a row click opens the card (`setSelectedCardId`), stepper clicks do not (stopPropagation, the search table's pattern); "Set as cover" in the row's hover actions calls `deckUpdate({ coverCardId })` — the cheap cover picker the plan scope allows; an orphaned row renders from its denormalized name with its `needs_review` sentence and no dead image.
+- [x] **Step 2: Run, fail, implement.** Grouping is a pure `groupCards(cards, groupBy)` helper (exported, tested): by type — the eight buckets in printed order (Creature, Planeswalker, Instant, Sorcery, Artifact, Enchantment, Battle, Land; front face's type line decides; anything else lands in Other) — or by MV (0–7, 8+, the filter chips' own bucketing). Zones scroll independently inside the editor's own `overflow` containers (no page-level horizontal scroll at 1024px — the direction's floor). The `maybe` zone sits collapsed under the columns; it is a scratchpad, and the stats/validation of Task 15 never read it.
+- [x] **Step 3: Verify in the app** (CDP at 1024 and 1280: add via the pane's printings + steppers, move via zone menu fallback — a small per-row "move to…" menu is the click path `deckMoveCard` needs before drag exists; Escape stack: pane closes before editor state is touched), then `npm run verify` and commit:
 
 ```
 feat: deck editor — zone columns, grouping, steppers, inline rename, cover pick
@@ -1469,9 +1469,9 @@ Spec §7: "search panel docked right." Not a second search implementation — th
 - Consumes: `useCardSearch()` (`{ query, rows, searchKey, total, … }` — the whole `CardSearch`), `FilterBar({ search })`, `CardGrid` (`rows/listKey/selectedId/onSelect/badge/action/onNeedNextPage`), `OwnedBadge`, `ipc.deckAddCard`, `parseFinishes` is **not** needed — a deck card has no finish.
 - Produces: `DeckSearchPanel({ deckId, targetZone, onTargetZoneChange })`.
 
-- [ ] **Step 1: Failing tests.** The panel renders the filter bar and grid over a mocked search; its header carries a compact **target zone** select (Main default; Sideboard only when the spec has one; Commander/Companion when the spec does — seeded data drives it again) — this select is the click path's zone choice and therefore the keyboard's, which is what makes drag optional; each tile's action button calls `deckAddCard(deckId, cardId, targetZone, 1)` and the row's `OwnedBadge` still tells the collection story; tile click still opens the detail pane (`onSelect` → `setSelectedCardId`); the panel is collapsible (the editor is usable at 1024px with it closed; the toggle names itself "Search cards").
-- [ ] **Step 2: Run, fail, implement.** One narrow-column adaptation is allowed: `FilterBar` in the panel may wrap its chip rows (it already flex-wraps — verify, don't fork it). The grid's `listKey` is the panel's own `searchKey` so a new search scrolls to top; images warm through the existing `prefetchImages` effect pattern only if the panel reuses `SearchPage`'s effect — it does not: the grid's overscan warming is enough for a 320px column of ~2 tiles per row, and the comment says so.
-- [ ] **Step 3: Verify in the app**, `npm run verify`, commit:
+- [x] **Step 1: Failing tests.** The panel renders the filter bar and grid over a mocked search; its header carries a compact **target zone** select (Main default; Sideboard only when the spec has one; Commander/Companion when the spec does — seeded data drives it again) — this select is the click path's zone choice and therefore the keyboard's, which is what makes drag optional; each tile's action button calls `deckAddCard(deckId, cardId, targetZone, 1)` and the row's `OwnedBadge` still tells the collection story; tile click still opens the detail pane (`onSelect` → `setSelectedCardId`); the panel is collapsible (the editor is usable at 1024px with it closed; the toggle names itself "Search cards").
+- [x] **Step 2: Run, fail, implement.** One narrow-column adaptation is allowed: `FilterBar` in the panel may wrap its chip rows (it already flex-wraps — verify, don't fork it). The grid's `listKey` is the panel's own `searchKey` so a new search scrolls to top; images warm through the existing `prefetchImages` effect pattern only if the panel reuses `SearchPage`'s effect — it does not: the grid's overscan warming is enough for a 320px column of ~2 tiles per row, and the comment says so.
+- [x] **Step 3: Verify in the app**, `npm run verify`, commit:
 
 ```
 feat: docked search panel in the deck editor, click-to-add with target zone
@@ -1502,15 +1502,15 @@ export function dragData(p: DragPayload): Record<string, unknown>;
 export function readDragData(data: Record<string, unknown>): DragPayload | null;
 ```
 
-- [ ] **Step 1: Failing tests** — `dnd.test.ts` round-trips the payload (`readDragData(dragData(p))` is `p`; garbage is `null` — drops from outside the app must be inert); `ZoneColumn.test.tsx` gains a drop test using the adapter's own events if practical, otherwise the drop handler is extracted (`onDropPayload(payload, targetZone, deckId)` → the right `deckAddCard`/`deckMoveCard` call) and unit-tested directly, with the wiring left to the live smoke — record which in the test file's header.
-- [ ] **Step 2: Implement.**
+- [x] **Step 1: Failing tests** — `dnd.test.ts` round-trips the payload (`readDragData(dragData(p))` is `p`; garbage is `null` — drops from outside the app must be inert); `ZoneColumn.test.tsx` gains a drop test using the adapter's own events if practical, otherwise the drop handler is extracted (`onDropPayload(payload, targetZone, deckId)` → the right `deckAddCard`/`deckMoveCard` call) and unit-tested directly, with the wiring left to the live smoke — record which in the test file's header.
+- [x] **Step 2: Implement.**
   - `npm install` the three exact versions.
   - Search tiles: `draggable({ element, getInitialData: () => dragData({ kind: "search-card", … }) })` in a `useEffect` per tile ref — attach via `CardGrid`'s `action` cell's parent? No: `CardGrid` stays untouched; the panel wraps each tile through `CardGrid`'s existing render slots only if a slot can carry a ref — it cannot, so the *panel* attaches one `draggable` per rendered tile via event delegation is not something the library offers either. The honest wiring: `CardGrid` gains one optional prop, `tileRef?: (card: T, el: HTMLElement | null) => void`, a callback ref forwarded to each tile's root — three lines in `CardGrid`, no behaviour change when absent, tested by the panel. (This is the one shared-component edit in the plan; keep it exactly this small.)
   - Zone columns: `dropTargetForElements` on the column's scroller (`getData: () => ({ zone })`, `canDrop` by payload kind), `autoScrollForElements` on the same element. Drop → `onDropPayload`.
   - Rows: `draggable` with `kind: "deck-card"`; while any drag is active (a `monitorForElements` in `DeckEditor` sets local state) a **remove tray** appears along the editor's bottom edge — a labelled drop target ("Remove from deck") that calls `deckSetCardQuantity(…, 0)`; it appears only for `deck-card` payloads, and it appears instantly (no transition — motion budget).
   - `DropIndicator`: a 2px `bg-accent` line at the closest edge of the hovered row/column (hitbox's `extractClosestEdge`), absolutely positioned, `aria-hidden` — ~20 lines, app tokens, the reason the Atlaskit indicator package stays out.
   - The drag preview is the platform's (the element snapshot `setDragImage` gives) — no custom preview, no portal, nothing for the CSP to see.
-- [ ] **Step 3: Verify in the app over CDP** — and this is the task whose verification is the point: drag from panel to main (row appears, count moves), between zones (fold honoured), to the tray (row leaves); **console shows zero CSP violations** (the `console out.jsonl` recorder watching both event families — a violation is exactly the class of error a suite cannot see); `prefers-reduced-motion: reduce` leaves no animation running; keyboard-only pass still builds a deck through Task 12–13's click paths. Then `npm run verify`, commit:
+- [x] **Step 3: Verify in the app over CDP** — and this is the task whose verification is the point: drag from panel to main (row appears, count moves), between zones (fold honoured), to the tray (row leaves); **console shows zero CSP violations** (the `console out.jsonl` recorder watching both event families — a violation is exactly the class of error a suite cannot see); `prefers-reduced-motion: reduce` leaves no animation running; keyboard-only pass still builds a deck through Task 12–13's click paths. Then `npm run verify`, commit:
 
 ```
 feat: drag-and-drop across zones, search panel and remove tray
@@ -1538,9 +1538,9 @@ Spec §7's two remaining Deckbuilder clauses. Live stats: mana curve, colour pip
   - `typeDist`: counts per primary type (Creature/Instant/Sorcery/Artifact/Enchantment/Planeswalker/Battle/Land/Other) from the Task 12 grouping helper,
   - average MV over nonlands, price sum + unpriced count, owned/missing totals.
 
-- [ ] **Step 1: Failing tests.** `deckStats` over a hand-built deck: curve buckets right (an 8+ card lands in the last), pips count pips not cards (a WU card feeds both W and U — from `colors`, not identity: the curve strip describes casting costs), average MV ignores lands, price sums `unitPriceUsd` × quantity with an `n unpriced` counter (never `price_usd` — the row's field is already the blob's `usd`), owned/missing totals agree with the rows. `DeckStats` renders the pips row **and four charts, every chart carrying its numbers as visible text** (user requirement 2026-08-05, additive to the original strip — a chart with no numbers fails the task, and dropping a previously specced figure fails it too): the pips row stays as specced (one dot per colour in the **pie deep** fills with mono counts — the overlapping castability measure); the mana curve as 9 proportional bars with a mono count above/beside each bar (bars in `bg-surface` with a `bg-accent` fill — the curve stays data-quiet); **colour distribution as a pie** (hand-rolled inline SVG arcs — no chart library, no portal, no animation) in the **pie deep** fills (gold `#D9B95C` for Multicolor, `#C8C4BF` for Colorless) with a legend of mono counts per segment; **land distribution as a second pie**, same construction, basic-type segments in their pie deeps, Multi-type in gold, Other lands in colorless grey, legend with counts; **type distribution as horizontal bars** (the best chart for eight nameable categories — pies fail past six) with the count at each bar's end in mono. A zero bucket draws no segment and no legend row; an empty deck renders the strip's figures and no charts. Each chart's `<svg>` is `aria-hidden` — the legend/caption text IS the accessible story, no duplicate narration; price carries `PRICES_AS_OF` as its title; "3 of 60 missing" renders beside a **Send missing to wishlist** button that calls `deckMissingToWishlist` and reports what it did in words ("Added 3 wishes.") — and is absent when nothing is missing. `ValidationPanel`: the chip reads "No issues · Modern" or "3 issues" (`text-destructive` number, no red backgrounds); opening lists issues grouped by `code` with each `message` verbatim from the engine; clicking an issue's card name selects the card (`setSelectedCardId`); the chip is `aria-expanded` and the panel is an `"inner"` Escape layer handing focus back to the chip; for commander-rule formats the bracket section renders "Bracket ~3 · 2 game changers" with a disclosure naming them, and the copy says "estimate" — it is advisory and reads as one.
-- [ ] **Step 2: Run, fail, implement.** Validation runs in a `useMemo` over `(cards, spec)` — the engine is pure and a deck is ≤ a few hundred rows, so it runs on every edit without debouncing; if profiling in the smoke says otherwise, note it in the carryover rather than optimizing blind. The stats strip is one `FigureRow` plus the visual clusters (pips row, curve, the two pies, type bars); at 1024px the clusters wrap to further lines rather than truncating — the strip may become a stats *block* below the header at the editor's narrower widths, and that is fine; what is not fine is a chart whose numbers clip.
-- [ ] **Step 3: Verify in the app** (CDP: build an illegal Vintage deck and read the exact restricted sentence; a WU card under a mono-W commander names itself; the missing→wishlist round trip lands in the Wishlist view with the any-printing badge; **read the four charts' numbers off the live DOM against a seeded deck whose distribution you know** — a 24-land Boros deck's two pies and curve are checkable by hand), `npm run verify`, commit:
+- [x] **Step 1: Failing tests.** `deckStats` over a hand-built deck: curve buckets right (an 8+ card lands in the last), pips count pips not cards (a WU card feeds both W and U — from `colors`, not identity: the curve strip describes casting costs), average MV ignores lands, price sums `unitPriceUsd` × quantity with an `n unpriced` counter (never `price_usd` — the row's field is already the blob's `usd`), owned/missing totals agree with the rows. `DeckStats` renders the pips row **and four charts, every chart carrying its numbers as visible text** (user requirement 2026-08-05, additive to the original strip — a chart with no numbers fails the task, and dropping a previously specced figure fails it too): the pips row stays as specced (one dot per colour in the **pie deep** fills with mono counts — the overlapping castability measure); the mana curve as 9 proportional bars with a mono count above/beside each bar (bars in `bg-surface` with a `bg-accent` fill — the curve stays data-quiet); **colour distribution as a pie** (hand-rolled inline SVG arcs — no chart library, no portal, no animation) in the **pie deep** fills (gold `#D9B95C` for Multicolor, `#C8C4BF` for Colorless) with a legend of mono counts per segment; **land distribution as a second pie**, same construction, basic-type segments in their pie deeps, Multi-type in gold, Other lands in colorless grey, legend with counts; **type distribution as horizontal bars** (the best chart for eight nameable categories — pies fail past six) with the count at each bar's end in mono. A zero bucket draws no segment and no legend row; an empty deck renders the strip's figures and no charts. Each chart's `<svg>` is `aria-hidden` — the legend/caption text IS the accessible story, no duplicate narration; price carries `PRICES_AS_OF` as its title; "3 of 60 missing" renders beside a **Send missing to wishlist** button that calls `deckMissingToWishlist` and reports what it did in words ("Added 3 wishes.") — and is absent when nothing is missing. `ValidationPanel`: the chip reads "No issues · Modern" or "3 issues" (`text-destructive` number, no red backgrounds); opening lists issues grouped by `code` with each `message` verbatim from the engine; clicking an issue's card name selects the card (`setSelectedCardId`); the chip is `aria-expanded` and the panel is an `"inner"` Escape layer handing focus back to the chip; for commander-rule formats the bracket section renders "Bracket ~3 · 2 game changers" with a disclosure naming them, and the copy says "estimate" — it is advisory and reads as one.
+- [x] **Step 2: Run, fail, implement.** Validation runs in a `useMemo` over `(cards, spec)` — the engine is pure and a deck is ≤ a few hundred rows, so it runs on every edit without debouncing; if profiling in the smoke says otherwise, note it in the carryover rather than optimizing blind. The stats strip is one `FigureRow` plus the visual clusters (pips row, curve, the two pies, type bars); at 1024px the clusters wrap to further lines rather than truncating — the strip may become a stats *block* below the header at the editor's narrower widths, and that is fine; what is not fine is a chart whose numbers clip.
+- [x] **Step 3: Verify in the app** (CDP: build an illegal Vintage deck and read the exact restricted sentence; a WU card under a mono-W commander names itself; the missing→wishlist round trip lands in the Wishlist view with the any-printing badge; **read the four charts' numbers off the live DOM against a seeded deck whose distribution you know** — a 24-land Boros deck's two pies and curve are checkable by hand), `npm run verify`, commit:
 
 ```
 feat: live deck stats and the validation panel with bracket advisory
@@ -1556,7 +1556,7 @@ The plan's Task 14-of-Plan-3 equivalent: drive the real app over CDP (`scripts/c
 - Modify: `CLAUDE.md`, whatever the smoke indicts
 - Create: `docs/superpowers/notes/plan-4-carryover.md`
 
-- [ ] **Step 1: The scripted smoke**, recorded in the carryover with numbers:
+- [x] **Step 1: The scripted smoke**, recorded in the carryover with numbers:
   - Deck lifecycle: create (Commander), rename, cover from a card, archive/unarchive, duplicate, delete — gallery truthful throughout.
   - Build a real Commander deck ~15 cards via all three add paths (panel click-to-add, drag, detail-pane printings). The grain: the same printing added twice folds; zones separate.
   - Validation truth-spotting against the live database: a 99-card commander deck reads the exactly-100 message; 2 Sol Ring reads the singleton message; Relentless Rats ×10 is silent; a `restricted`-in-Vintage card ×3 in a Vintage deck reads the spec §7 sentence verbatim; a WU card under a mono-W commander names itself; Serra Angel `8ed` in an Old School deck errors while `lea` does not (TRAP B, live).
@@ -1565,10 +1565,10 @@ The plan's Task 14-of-Plan-3 equivalent: drive the real app over CDP (`scripts/c
   - The reconciler in anger: seed a deck card on a fake id, force a sync, watch the flag arrive and the banner language; repoint and watch it clear. Confirm a fold scenario preserves an allocation (seed the collision, run the migration path).
   - Environment sweeps: 1024/1280 px no horizontal scroll; `prefers-reduced-motion: reduce` neutral; keyboard-only deck build (tab stops named, focus gold); Escape stack — validation popover → detail pane → nothing, one layer per press, focus handed back; console: **0 errors, 0 warnings, 0 CSP violations** across the whole session with both event families recorded.
   - Timings worth writing down: `deck_get` on a 100-card deck; `validateDeck` wall time in the panel; allocator cost inside a zone write (it runs per edit — this is the number that decides whether Plan 6 needs to care).
-- [ ] **Step 2: Fix what it finds** (small fixes inline in this task; anything structural becomes a ledgered carryover item instead).
-- [ ] **Step 3: CLAUDE.md** — a "Hard rules — decks" addition in the file's voice: the three enforced FKs and *why exactly three* (fold repoints before delete; nothing ever references `cards`); zones enum + zero-removes; `format_specs` is data (a rules change is a reseed step, never engine code); validation is TS and where it lives; deck price = the blob's nonfoil `usd`, never `price_usd`; deck cards ride the pre-warm UNION and the reconciler's three-table sweep. Amend the schema-version references (v5, P/T columns, the corpus figure if the smoke re-syncs).
-- [ ] **Step 4: `docs/superpowers/notes/plan-4-carryover.md`** — measured results, findings ledger, deferred-with-reasons (start from this plan's Later-plans section), and the MUST-DO list for Plan 5 (at minimum: deck import needs `deck_add_card`'s zone vocabulary and the Arena `arena_code ?? code` mapping already in `sets`; the export writers read the same `DeckDetail` the editor does; the Owned-chip semantics ruling plan-3 parked is still open).
-- [ ] **Step 5: `npm run verify`**, close the checkboxes, commit:
+- [x] **Step 2: Fix what it finds** (small fixes inline in this task; anything structural becomes a ledgered carryover item instead).
+- [x] **Step 3: CLAUDE.md** — a "Hard rules — decks" addition in the file's voice: the three enforced FKs and *why exactly three* (fold repoints before delete; nothing ever references `cards`); zones enum + zero-removes; `format_specs` is data (a rules change is a reseed step, never engine code); validation is TS and where it lives; deck price = the blob's nonfoil `usd`, never `price_usd`; deck cards ride the pre-warm UNION and the reconciler's three-table sweep. Amend the schema-version references (v5, P/T columns, the corpus figure if the smoke re-syncs).
+- [x] **Step 4: `docs/superpowers/notes/plan-4-carryover.md`** — measured results, findings ledger, deferred-with-reasons (start from this plan's Later-plans section), and the MUST-DO list for Plan 5 (at minimum: deck import needs `deck_add_card`'s zone vocabulary and the Arena `arena_code ?? code` mapping already in `sets`; the export writers read the same `DeckDetail` the editor does; the Owned-chip semantics ruling plan-3 parked is still open).
+- [x] **Step 5: `npm run verify`**, close the checkboxes, commit:
 
 ```
 chore: complete plan 4 (decks & deckbuilder) — smoke, CLAUDE.md, carryover

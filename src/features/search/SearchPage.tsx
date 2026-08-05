@@ -8,6 +8,7 @@ import { parseFinishes } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
@@ -75,8 +76,10 @@ function Row({ card }: { card: CardSummary }) {
       </span>
       {/* The row opens the card on any click and on Enter or Space, and every one of those
           lands here too: without stopping them, recording a copy would also open the card,
-          and typing `12` into the quantity box would scroll the list a screenful. */}
-      <span role="cell" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          and typing `12` into the quantity box would scroll the list a screenful. Those two
+          keys and no others — a blanket `stopPropagation` also took Escape away from the
+          card pane, which listens on `window`. */}
+      <span role="cell" onClick={(e) => e.stopPropagation()} onKeyDown={stopRowActivationKeys}>
         <AddToCollectionButton
           className={REVEAL_ON_HOVER}
           target={{

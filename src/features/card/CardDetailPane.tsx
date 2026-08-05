@@ -70,8 +70,17 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   }, [cardId]);
 
   // Once, on the way up: whatever had the caret is where Escape has to put it back.
+  //
+  // Never the pane itself, and that guard is the whole reason this is not one line.
+  // StrictMode runs a mount effect twice in development — mount, unmount, mount — and the
+  // first run has already moved the caret *into* the pane, so the second would record the
+  // pane as its own opener. `close()` then focuses an element that is unmounting, the caret
+  // lands on `<body>`, and the next Tab restarts from the top of the app. Measured live on
+  // 2026-08-06: every Escape out of the pane dropped focus to `<body>` under `tauri dev`.
+  // Nothing is skipped in production, where the effect runs once and the caret is outside.
   useEffect(() => {
-    openerRef.current = document.activeElement as HTMLElement | null;
+    const active = document.activeElement as HTMLElement | null;
+    if (!paneRef.current?.contains(active)) openerRef.current = active;
     paneRef.current?.focus();
   }, []);
 
