@@ -215,9 +215,9 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 /// and it is wrong. Scryfall omits the *top-level* `oracle_id` on `reversible_card`, and
 /// [`crate::card_row`] falls back to `card_faces[0].oracle_id` exactly as it does for `cmc`,
 /// `type_line` and `mana_cost`, so the column is filled. Measured on the live database:
-/// **0 of 116 568 rows** have a NULL `oracle_id`, all 81 reversible printings included. The
-/// nullability is a contract with a JSON shape, not a population; this guard is a fence
-/// around a case that does not currently occur.
+/// **0 of 116 590 rows (2026-08-05)** have a NULL `oracle_id`, all 81 reversible printings
+/// included. The nullability is a contract with a JSON shape, not a population; this guard
+/// is a fence around a case that does not currently occur.
 ///
 /// Two statements over one `WHERE`: the page, and an uncapped count so a truncated list
 /// can say what it is a truncation *of*. The count is cheap in a way

@@ -6,8 +6,8 @@
 //! TEXT (values like `"161★"` exist), and `legalities` is stored as a JSON blob because the
 //! format list grows over time. *Omitted at the top level* is not the same as absent:
 //! [`crate::card_row`] falls back to `card_faces[0]` for all three, so live data fills
-//! `oracle_id` on every one of its 116 568 rows. The columns stay NULLABLE because the JSON
-//! permits it, not because a population needs them to.
+//! `oracle_id` on every one of its 116 590 rows (2026-08-05). The columns stay NULLABLE
+//! because the JSON permits it, not because a population needs them to.
 //!
 //! The line that runs through the whole file: the first four tables are *sync data* and
 //! `cards` is dropped and recreated wholesale on every sync (see [`swap_staging`]); the

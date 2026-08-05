@@ -326,9 +326,10 @@ function AddPopup({
               // That is a fence around the nullable type, not around a kind of card. The
               // belief that reversible cards have no `oracle_id` is false: Scryfall omits
               // only the *top-level* one, and `card_row` falls back to `card_faces[0]`, so
-              // 0 of 116,568 live rows are null and all 81 reversible printings can be
-              // wished for by oracle. Disabled rather than hidden all the same: a choice
-              // that silently disappears is one the reader has no reason to believe exists.
+              // 0 of 116,590 live rows (2026-08-05) are null and all 81 reversible
+              // printings can be wished for by oracle. Disabled rather than hidden all the
+              // same: a choice that silently disappears is one the reader has no reason to
+              // believe exists.
               disabled={any && target.oracleId === null}
               onClick={() => setAnyPrinting(any)}
               className={cn(

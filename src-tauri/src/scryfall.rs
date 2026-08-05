@@ -77,14 +77,22 @@ pub const MAX_SET_PAGES: usize = 20;
 /// **350 is the page size, not the log.** The figure this comment used to carry ("~350
 /// migrations exist in total") was one page mistaken for the whole endpoint. Measured
 /// 2026-08-05: `GET /migrations` answers 350 entries with `has_more: true`, and the live
-/// `card_migrations` table holds **2 569** — eight pages of the ten this cap allows.
+/// `card_migrations` table holds **2 569** — eight pages.
 ///
-/// The log only grows (415 entries in 2022, 1 270 in 2023, 761 in 2024, and 123 across
-/// 2025–26 to date), so the ceiling here is ~3 500 entries and roughly two spare pages.
-/// Reaching it truncates the *oldest* migrations, because Scryfall serves the log newest
-/// first — which is silent by construction, hence the `eprintln!` in `fetch_migrations`
-/// when the loop ends on this rather than on `has_more`.
-pub const MAX_MIGRATION_PAGES: usize = 10;
+/// **Why 20 and not the 10 this was.** The log only grows (415 entries in 2022, 1 270 in
+/// 2023, 761 in 2024, and 123 across 2025–26 to date), and at the fastest year on record —
+/// call it ~1 000 a year — a cap of 10 ceilinged at 3 500 entries, which is 931 spare: two
+/// or three pages, about one year. Reaching it truncates the *oldest* migrations, because
+/// Scryfall serves the log newest first, and those are exactly the rows a long-standing
+/// collection is likeliest to still be parked on.
+///
+/// The truncation is silent by construction. Its only notice is the `eprintln!` in
+/// [`Client::fetch_migrations`], and a release build has no console to print to, so nobody
+/// would learn of it from the app — headroom is the whole defence. Unused pages cost
+/// nothing: the loop breaks on `has_more` long before the cap, so the eleventh page is only
+/// ever requested in the world where it exists. 20 is therefore ~7 000 entries and ~4 spare
+/// years at that fastest rate (many more at the recent one), bought for nothing.
+pub const MAX_MIGRATION_PAGES: usize = 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScryfallError {

@@ -107,6 +107,49 @@ it("stops listening when it unmounts", async () => {
 });
 
 /**
+ * The guard the constant could not be: asserting `SYNC_INVALIDATED` against itself let any
+ * key be deleted with the suite still green — every other test in this file spreads the
+ * constant into its own expectation. One literal list makes the contract real; updating it
+ * is a *decision*, not a rename that rides along.
+ */
+it("invalidates exactly the five known roots", () => {
+  expect(SYNC_INVALIDATED).toEqual([["cards"], ["collection"], ["wishlist"], ["card"], ["sets"]]);
+});
+
+/**
+ * The gap plan 3 ledgered: a swap that succeeded followed by a `/sets` that failed surfaces
+ * as the `error` phase and no `done`, leaving the cache describing a corpus that is no
+ * longer on disk until some later run finishes. The frontend can see the whole story in the
+ * phases it already receives: an `error` after an `ingesting` is a run that may have
+ * committed. (An error after `ingesting` but *before* the swap also matches; invalidating
+ * then refetches unchanged data, which is cheap and correct.)
+ */
+it("invalidates on an error that follows an ingest, and not on one that does not", async () => {
+  const { rerender } = renderHook(
+    ({ p }: { p: SyncProgressEvent | null }) => useSyncInvalidation(p),
+    {
+      initialProps: { p: null as SyncProgressEvent | null },
+    },
+  );
+  await listening();
+
+  rerender({ p: event("checking") });
+  rerender({ p: event("error") });
+  expect(invalidate).not.toHaveBeenCalled(); // a failed *check* changed nothing on disk
+
+  rerender({ p: event("checking") });
+  rerender({ p: event("ingesting") });
+  rerender({ p: event("error") });
+  expect(invalidatedKeys()).toEqual([...SYNC_INVALIDATED]);
+
+  // …and the flag does not leak into the next run: a later error with no ingest is quiet.
+  invalidate.mockClear();
+  rerender({ p: event("checking") });
+  rerender({ p: event("error") });
+  expect(invalidate).not.toHaveBeenCalled();
+});
+
+/**
  * Outside a Tauri window (a plain `vite dev`) the registration rejects, exactly as
  * `useSyncProgress`'s does. Losing one of the two triggers is not worth taking the app
  * down for — the `done` phase still arrives through the props.

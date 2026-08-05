@@ -103,9 +103,10 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     //
     // It is *not* the reversible-card state, whatever the comment here used to say:
     // Scryfall omits only the top-level `oracle_id` on those, and `card_row` falls back to
-    // `card_faces[0]`, so the column is filled. 0 of 116,568 live rows are null, all 81
-    // reversible printings included. This gate is a fence around the type, not around a
-    // card — which is why the section below renders nothing instead of explaining itself.
+    // `card_faces[0]`, so the column is filled. 0 of 116,590 live rows (2026-08-05) are
+    // null, all 81 reversible printings included. This gate is a fence around the type, not
+    // around a card — which is why the section below renders nothing instead of explaining
+    // itself.
     enabled: oracleId !== null,
   });
 

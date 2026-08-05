@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ipc, type SyncProgressEvent } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
@@ -30,12 +30,14 @@ function invalidateAll(): void {
  * pre-sync data until its view was remounted or the window refocused — and `["sets"]`
  * never at all, because the set picker holds its answer with `staleTime: Infinity`.
  *
- * Two triggers, because there are two ways a sync changes what is on screen:
+ * Three triggers, because there are three ways a sync changes what is on screen:
  *
  * * the **`done` phase**, which every successful path emits (`sync::emit_done`) — the card
  *   corpus is new;
  * * **`collection:reconciled`**, which `sync::reconcile_ids` emits only when a migration
- *   actually moved one of the user's rows — a repoint, a fold, or a flag.
+ *   actually moved one of the user's rows — a repoint, a fold, or a flag;
+ * * an **`error` phase that follows an `ingesting`** — the one failure that can leave a
+ *   swapped corpus behind (see `sawIngest` below).
  *
  * The second currently always precedes the first, so it is the belt to the other's braces:
  * it is what keeps this right if a reconcile ever runs somewhere a `done` does not follow,
@@ -52,8 +54,27 @@ export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
   // ingest, and this effect must run on the transition into `done` rather than on each of
   // the hundred ticks that led to it.
   const phase = progress?.phase ?? null;
+  // Whether the run in flight reached `ingesting` — the phase that means "the corpus on
+  // disk may no longer be the one the cache described". `error` alone is ambiguous: most
+  // errors are a failed 24 h check that changed nothing. But an error *after* an ingest is
+  // the reachable path (a network blip between the swap and `/sets`) where the corpus was
+  // replaced and no `done` follows: `do_sync` swaps `cards`, stores the ETag, and only then
+  // calls `/sets` (`sync.rs`, "Written before `/sets` is called"), so a failure there ends
+  // the run at `error` with 116 k new rows already committed. Nothing invalidates, and the
+  // next `done` is a whole later run away — a relaunch or a manual Refresh — with every
+  // mounted query answering from the old corpus until then, `["sets"]` for good.
+  //
+  // A ref, not state: nothing renders from it, and it must not add a render to an ingest
+  // that ticks a hundred times.
+  const sawIngest = useRef(false);
   useEffect(() => {
-    if (phase === "done") invalidateAll();
+    // The two phases that open a run, and so end the previous one's claim on the flag.
+    if (phase === "checking" || phase === "downloading") sawIngest.current = false;
+    if (phase === "ingesting") sawIngest.current = true;
+    if (phase === "done" || (phase === "error" && sawIngest.current)) {
+      sawIngest.current = false;
+      invalidateAll();
+    }
   }, [phase]);
 
   useEffect(() => {
