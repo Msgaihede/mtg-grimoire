@@ -28,6 +28,35 @@ describe("Ribbon", () => {
     expect(screen.getByRole("button", { name: /refresh/i })).toBeEnabled();
   });
 
+  /**
+   * The one consumer of `images::Cache::store_failures`, which counted for a whole plan
+   * with nothing reading it. Non-zero means the images on screen are never being cached —
+   * invisible otherwise, because they display perfectly and simply re-download forever.
+   */
+  it("says so in the tooltip when images could not be cached, and stays quiet when they could", () => {
+    const { rerender } = render(<Ribbon {...props({ imageStoreFailures: 12 })} />);
+
+    const line = screen.getByText("116,568 cards · data from 2026-08-03");
+    expect(line).toHaveAttribute(
+      "title",
+      "D:\\app\\data\n12 card images could not be saved to the cache — the data folder may be read-only or full.",
+    );
+
+    // Singular, because "1 card images" is the sort of thing that makes a reader distrust
+    // the number beside it.
+    rerender(<Ribbon {...props({ imageStoreFailures: 1 })} />);
+    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toHaveAttribute(
+      "title",
+      "D:\\app\\data\n1 card image could not be saved to the cache — the data folder may be read-only or full.",
+    );
+
+    rerender(<Ribbon {...props({ imageStoreFailures: 0 })} />);
+    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toHaveAttribute(
+      "title",
+      "D:\\app\\data",
+    );
+  });
+
   it("runs and then refuses a second sync while one is in flight", async () => {
     const onRefresh = vi.fn();
     const { rerender } = render(<Ribbon {...props({ onRefresh })} />);

@@ -187,7 +187,7 @@ pub fn ingest_gz(
 
 - `sync::lock_conn` keeps its name and its callers, and becomes a one-line delegate to `db::lock_blocking` so poison recovery has exactly one definition (carryover fold: "collapse the two bounded-lock helpers").
 
-- [ ] **Step 1: Write the failing test — a writer gets the lock while an ingest is running**
+- [x] **Step 1: Write the failing test — a writer gets the lock while an ingest is running**
 
 Append to `src-tauri/src/ingest.rs`'s `mod tests`:
 
@@ -238,14 +238,14 @@ Append to `src-tauri/src/ingest.rs`'s `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml a_writer_gets_the_connection
 ```
 Expected: a compile error — `ingest_gz` takes `&mut Connection`, not `&Mutex<Connection>`. That is the failure; the signature is the feature.
 
-- [ ] **Step 3: Move poison recovery into `db.rs`** — add to `src-tauri/src/db.rs`, above `lock_for`:
+- [x] **Step 3: Move poison recovery into `db.rs`** — add to `src-tauri/src/db.rs`, above `lock_for`:
 
 ```rust
 /// How long a user-facing write waits for the write connection before answering "busy".
@@ -278,7 +278,7 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 }
 ```
 
-- [ ] **Step 4: Chunk the staging load** — in `src-tauri/src/ingest.rs`, replace the whole of `ingest_gz` (and add the two helpers below it):
+- [x] **Step 4: Chunk the staging load** — in `src-tauri/src/ingest.rs`, replace the whole of `ingest_gz` (and add the two helpers below it):
 
 ```rust
 pub fn ingest_gz(
@@ -451,7 +451,7 @@ with `raw: line.to_owned()` in the struct literal, plus a thin compatibility wra
 
 and the ingest loop calls `CardRow::from_json_line(&v, &line)`.
 
-- [ ] **Step 5: Update the two ingest tests the chunking genuinely changes**
+- [x] **Step 5: Update the two ingest tests the chunking genuinely changes**
 
 In `io_failure_mid_stream_leaves_cards_intact_and_connection_usable`, the staging assertion moves from "rolled back" to "committed and irrelevant":
 
@@ -469,7 +469,7 @@ In `io_failure_mid_stream_leaves_cards_intact_and_connection_usable`, the stagin
 
 and both this test and `a_missing_file_fails_before_touching_staging` now build a `Mutex<Connection>` and read through it (`let conn = crate::db::lock_blocking(&db);`) rather than holding a `Connection` directly. Every other test in the module changes only its call: `ingest_gz(&db, &p, …)` where `let db = std::sync::Mutex::new(conn);`.
 
-- [ ] **Step 6: Point `sync.rs` at the new signature** — in `do_sync`, the spawn_blocking closure becomes:
+- [x] **Step 6: Point `sync.rs` at the new signature** — in `do_sync`, the spawn_blocking closure becomes:
 
 ```rust
         tauri::async_runtime::spawn_blocking(move || {
@@ -481,7 +481,7 @@ and both this test and `a_missing_file_fails_before_touching_staging` now build 
         })
 ```
 
-- [ ] **Step 7: Run the ingest and sync suites**
+- [x] **Step 7: Run the ingest and sync suites**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml ingest
@@ -489,7 +489,7 @@ cargo test --manifest-path src-tauri/Cargo.toml sync
 ```
 Expected: all green, including the new lock test and `progress_fires_every_batch_and_once_at_the_end` (unchanged: full batches report, the tail flush is silent, and the post-swap call is the last one).
 
-- [ ] **Step 8: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 ```powershell
 npm run verify
@@ -527,7 +527,7 @@ pub fn raw_json(stored: &[u8]) -> Option<String>;
 
 - `CardRow.raw` changes from `String` to `Vec<u8>` (the gzip member), and `card.rs`'s `ARTIST_SQL` is deleted in favour of the plain `artist` column.
 
-- [ ] **Step 1: Write the failing migration tests** — append to `src-tauri/src/schema.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing migration tests** — append to `src-tauri/src/schema.rs`'s `mod tests`:
 
 ```rust
     /// Carryover 2a: the artist gets a column of its own, backfilled out of the JSON that
@@ -647,14 +647,14 @@ pub fn raw_json(stored: &[u8]) -> Option<String>;
     }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml v3
 ```
 Expected: `no such column: artist`, and `SCHEMA_VERSION` is not defined.
 
-- [ ] **Step 3: Add the version constant and the v3 step** — in `src-tauri/src/schema.rs`, above `migrate`:
+- [x] **Step 3: Add the version constant and the v3 step** — in `src-tauri/src/schema.rs`, above `migrate`:
 
 ```rust
 /// The head schema version — what [`migrate`] walks a database up to, and what
@@ -699,7 +699,7 @@ and inside `migrate`, after the `if v < 2` block:
 
 Change the assertion in `migrate_is_idempotent_and_creates_tables` from `assert_eq!(version, 2)` to `assert_eq!(version, SCHEMA_VERSION)`, and the same in `migrate_reaches_version_2_and_adds_the_image_columns` (rename it to `migrate_reaches_the_head_version_and_adds_the_image_columns`).
 
-- [ ] **Step 4: Add `artist` to the row and the compression helpers** — in `src-tauri/src/card_row.rs`, add the field after `face_image_uris`:
+- [x] **Step 4: Add `artist` to the row and the compression helpers** — in `src-tauri/src/card_row.rs`, add the field after `face_image_uris`:
 
 ```rust
     /// Who drew it. A column of its own since v3: it is one short string per row, and
@@ -765,16 +765,16 @@ pub fn raw_json(stored: &[u8]) -> Option<String> {
 }
 ```
 
-- [ ] **Step 5: Add `artist` to the ingest** — in `src-tauri/src/ingest.rs`, add `artist` to `STAGING_INSERT`'s column list (after `face_image_uris`), bump the placeholder list to `?40`, and bind `c.artist` in the same position in `write_batch`.
+- [x] **Step 5: Add `artist` to the ingest** — in `src-tauri/src/ingest.rs`, add `artist` to `STAGING_INSERT`'s column list (after `face_image_uris`), bump the placeholder list to `?40`, and bind `c.artist` in the same position in `write_batch`.
 
-- [ ] **Step 6: Retire `ARTIST_SQL`** — in `src-tauri/src/card.rs`, delete the constant and its doc comment, and replace both `{ARTIST_SQL}` interpolations with the bare column `artist`. Update the module doc's claim about `raw`:
+- [x] **Step 6: Retire `ARTIST_SQL`** — in `src-tauri/src/card.rs`, delete the constant and its doc comment, and replace both `{ARTIST_SQL}` interpolations with the bare column `artist`. Update the module doc's claim about `raw`:
 
 ```rust
 //! Nothing here reads `raw`: `artist` has had a column of its own since schema v3, which
 //! was the last thing this module took out of that blob.
 ```
 
-- [ ] **Step 7: Write the storage-class test** — append to `src-tauri/src/card_row.rs`'s `mod tests`:
+- [x] **Step 7: Write the storage-class test** — append to `src-tauri/src/card_row.rs`'s `mod tests`:
 
 ```rust
     /// The column is declared `TEXT NOT NULL` by a frozen v1 constant and now holds gzip.
@@ -821,7 +821,7 @@ pub fn raw_json(stored: &[u8]) -> Option<String> {
     }
 ```
 
-- [ ] **Step 8: Fix the fixture and the column test** — `src-tauri/tests/fixtures/cards_sample.jsonl` lines gain an `"artist"` field (any real name), and in `ingest.rs`'s `every_column_receives_the_field_it_is_named_for`: add `"artist":"ARTIST"` to the `line` fixture, then **swap** two rows of the `expected` table — `("artist", Some("ARTIST"))` goes in, `("raw", Some(line))` comes out, so the array and its `[(&str, Option<&str>); 37]` annotation are unchanged. `raw` cannot stay in a table of text columns now that it is a gzip BLOB, so it gets its own check below:
+- [x] **Step 8: Fix the fixture and the column test** — `src-tauri/tests/fixtures/cards_sample.jsonl` lines gain an `"artist"` field (any real name), and in `ingest.rs`'s `every_column_receives_the_field_it_is_named_for`: add `"artist":"ARTIST"` to the `line` fixture, then **swap** two rows of the `expected` table — `("artist", Some("ARTIST"))` goes in, `("raw", Some(line))` comes out, so the array and its `[(&str, Option<&str>); 37]` annotation are unchanged. `raw` cannot stay in a table of text columns now that it is a gzip BLOB, so it gets its own check below:
 
 ```rust
         // `raw` is a gzip BLOB from v3, so it cannot be compared as a text column with the
@@ -834,7 +834,7 @@ pub fn raw_json(stored: &[u8]) -> Option<String> {
         assert_eq!(crate::card_row::raw_json(&stored).as_deref(), Some(line));
 ```
 
-- [ ] **Step 9: Verify and commit**
+- [x] **Step 9: Verify and commit**
 
 ```powershell
 npm run verify
@@ -876,7 +876,7 @@ pub fn incremental_vacuum(conn: &Connection) -> rusqlite::Result<()>;
 - `schema::create_fts` becomes `pub` (mandatory after a VACUUM).
 - `SyncPhase` gains `"compacting"` on both sides of the IPC boundary.
 
-- [ ] **Step 1: Write the failing tests** — create `src-tauri/src/maintenance.rs` with the test module first:
+- [x] **Step 1: Write the failing tests** — create `src-tauri/src/maintenance.rs` with the test module first:
 
 ```rust
 #[cfg(test)]
@@ -1003,14 +1003,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml maintenance
 ```
 Expected: the module has no `needs_conversion`/`convert_to_incremental`/`incremental_vacuum`, and `db.rs` still sets WAL first.
 
-- [ ] **Step 3: Write the module** — the rest of `src-tauri/src/maintenance.rs`:
+- [x] **Step 3: Write the module** — the rest of `src-tauri/src/maintenance.rs`:
 
 ```rust
 //! Database maintenance: the one-time `auto_vacuum` conversion, and the cheap page return
@@ -1076,7 +1076,7 @@ pub fn incremental_vacuum(conn: &Connection) -> rusqlite::Result<()> {
 
 Register the module in `src-tauri/src/lib.rs` (`pub mod maintenance;`, alphabetically after `images`).
 
-- [ ] **Step 4: Fix the pragma order in `db::open`** — in `src-tauri/src/db.rs`:
+- [x] **Step 4: Fix the pragma order in `db::open`** — in `src-tauri/src/db.rs`:
 
 ```rust
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -1106,7 +1106,7 @@ and extend `open_sets_wal` with:
         assert_eq!(auto_vacuum, 2, "auto_vacuum must be INCREMENTAL (2)");
 ```
 
-- [ ] **Step 5: Make `create_fts` public** — in `src-tauri/src/schema.rs`, change `fn create_fts` to `pub fn create_fts` and extend its doc:
+- [x] **Step 5: Make `create_fts` public** — in `src-tauri/src/schema.rs`, change `fn create_fts` to `pub fn create_fts` and extend its doc:
 
 ```rust
 /// (Re)create the external-content FTS5 index over `cards` and populate it.
@@ -1119,7 +1119,7 @@ and extend `open_sets_wal` with:
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
 ```
 
-- [ ] **Step 6: Wire it into the sync** — in `src-tauri/src/sync.rs`, add the phase to the `Progress` doc list (`checking | downloading | ingesting | sets | compacting | done | error`), then, inside `do_sync`, immediately after the ingest's `spawn_blocking` result is unwrapped and the temp file removed:
+- [x] **Step 6: Wire it into the sync** — in `src-tauri/src/sync.rs`, add the phase to the `Progress` doc list (`checking | downloading | ingesting | sets | compacting | done | error`), then, inside `do_sync`, immediately after the ingest's `spawn_blocking` result is unwrapped and the temp file removed:
 
 ```rust
     {
@@ -1189,7 +1189,7 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
 }
 ```
 
-- [ ] **Step 7: Teach the frontend the new phase** — in `src/lib/ipc.ts`:
+- [x] **Step 7: Teach the frontend the new phase** — in `src/lib/ipc.ts`:
 
 ```ts
 export type SyncPhase =
@@ -1211,7 +1211,7 @@ and in `src/lib/useSyncProgress.ts`, add to `PHASE_LABEL`:
   compacting: "Compacting database…",
 ```
 
-- [ ] **Step 8: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 ```powershell
 npm run verify
@@ -1244,7 +1244,7 @@ pub const WISHLIST_GRAIN: &str =
 
 - `SCHEMA_VERSION` becomes `4`.
 
-- [ ] **Step 1: Write the failing tests** — append to `src-tauri/src/schema.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing tests** — append to `src-tauri/src/schema.rs`'s `mod tests`:
 
 ```rust
     /// The invariant this whole plan is shaped by, now with the real tables: a sync drops
@@ -1400,14 +1400,14 @@ pub const WISHLIST_GRAIN: &str =
     }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib schema
 ```
 Expected: `no such table: collection_entries`.
 
-- [ ] **Step 3: Add the grain constants and the v4 step** — in `src-tauri/src/schema.rs`, bump `SCHEMA_VERSION` to `4`, add above `migrate`:
+- [x] **Step 3: Add the grain constants and the v4 step** — in `src-tauri/src/schema.rs`, bump `SCHEMA_VERSION` to `4`, add above `migrate`:
 
 ```rust
 /// What makes two collection rows the *same* row, as one SQL fragment.
@@ -1554,16 +1554,16 @@ and the step itself, after the `if v < 3` block:
 
 Note the `{{company, grade, cert}}` escaping — the SQL is inside `format!`, so a literal brace is doubled. The two `{grain}`/`{wish}` interpolations are the named arguments below the string.
 
-- [ ] **Step 4: Extend the table-count assertion** — in `migrate_is_idempotent_and_creates_tables`, widen the `IN (…)` list to `('cards','sets','sync_meta','cards_fts','collection_entries','wishlist_entries','card_migrations')` and assert `7`.
+- [x] **Step 4: Extend the table-count assertion** — in `migrate_is_idempotent_and_creates_tables`, widen the `IN (…)` list to `('cards','sets','sync_meta','cards_fts','collection_entries','wishlist_entries','card_migrations')` and assert `7`.
 
-- [ ] **Step 5: Run the schema suite**
+- [x] **Step 5: Run the schema suite**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib schema
 ```
 Expected: all green, including the four new tests.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```powershell
 npm run verify
@@ -1609,7 +1609,7 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String>;
 #[tauri::command] pub async fn collection_remove(…) -> Result<EntryChange, String>;
 ```
 
-- [ ] **Step 1: Write the failing tests** — create `src-tauri/src/collection.rs` with its test module:
+- [x] **Step 1: Write the failing tests** — create `src-tauri/src/collection.rs` with its test module:
 
 ```rust
 #[cfg(test)]
@@ -1833,14 +1833,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml collection
 ```
 Expected: the module does not exist yet.
 
-- [ ] **Step 3: Write the module** — the rest of `src-tauri/src/collection.rs`:
+- [x] **Step 3: Write the module** — the rest of `src-tauri/src/collection.rs`:
 
 ```rust
 //! The owned-cards table: what the user has, at what grain, and what it is worth.
@@ -2222,7 +2222,7 @@ pub async fn collection_remove(
 }
 ```
 
-- [ ] **Step 4: Register the module and the commands** — in `src-tauri/src/lib.rs`, add `pub mod collection;` (alphabetically, before `db`) and extend `generate_handler!`:
+- [x] **Step 4: Register the module and the commands** — in `src-tauri/src/lib.rs`, add `pub mod collection;` (alphabetically, before `db`) and extend `generate_handler!`:
 
 ```rust
             collection::collection_add,
@@ -2231,14 +2231,14 @@ pub async fn collection_remove(
             collection::collection_remove,
 ```
 
-- [ ] **Step 5: Run the suite and verify**
+- [x] **Step 5: Run the suite and verify**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml collection
 npm run verify
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -A
@@ -2293,7 +2293,7 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
 #[tauri::command] pub async fn collection_summary(…) -> Result<CollectionSummary, String>;
 ```
 
-- [ ] **Step 1: Write the failing tests** — append to `src-tauri/src/collection.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing tests** — append to `src-tauri/src/collection.rs`'s `mod tests`:
 
 ```rust
     /// Money, per finish, out of the blob. The fixture is built so that using `price_usd`
@@ -2569,13 +2569,13 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
     }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml collection
 ```
 
-- [ ] **Step 3: Extract the shared filters** — create `src-tauri/src/filters.rs`:
+- [x] **Step 3: Extract the shared filters** — create `src-tauri/src/filters.rs`:
 
 ```rust
 //! The card predicates, in one place, so every list that filters cards filters them the
@@ -2779,7 +2779,7 @@ pub fn nonblank(v: &Option<String>) -> Option<&str> {
 
 Register it in `lib.rs` (`pub mod filters;`).
 
-- [ ] **Step 4: Point `search.rs` at it** — replace the filter-building block of `run_search` (everything from `let mut wheres` down to the `paper_only` clause) with:
+- [x] **Step 4: Point `search.rs` at it** — replace the filter-building block of `run_search` (everything from `let mut wheres` down to the `paper_only` clause) with:
 
 ```rust
     let mut p = filters::Predicates::default();
@@ -2826,7 +2826,7 @@ and add an `impl SearchRequest` block beside the struct:
 
 Delete `search.rs`'s now-duplicate `COLORS`, `MAX_SET_FILTER`, `MANA_VALUE_OPEN_ENDED` and `nonblank`, and re-point the two references in `SearchRequest`'s doc comments at `filters::MANA_VALUE_OPEN_ENDED`. **`search.rs`'s test module is not edited at all** — it passing untouched is the proof that the extraction changed nothing.
 
-- [ ] **Step 5: Write the list and summary** — append to `src-tauri/src/collection.rs`:
+- [x] **Step 5: Write the list and summary** — append to `src-tauri/src/collection.rs`:
 
 ```rust
 /// What one owned card is worth in USD, read from the `prices` blob **by finish**.
@@ -3173,14 +3173,14 @@ pub async fn collection_summary(
 
 Register both commands in `lib.rs`.
 
-- [ ] **Step 6: Run everything Rust and verify the extraction changed nothing**
+- [x] **Step 6: Run everything Rust and verify the extraction changed nothing**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 Expected: green, with `search.rs`'s suite untouched and passing — that is the extraction's proof.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 npm run verify
@@ -3221,7 +3221,7 @@ pub struct CardSummary { …, pub owned_quantity: i64, pub wishlisted: bool }
 pub struct SearchRequest { …, pub owned: Option<bool> }
 ```
 
-- [ ] **Step 1: Write the failing tests** — create `src-tauri/src/wishlist.rs` with its test module:
+- [x] **Step 1: Write the failing tests** — create `src-tauri/src/wishlist.rs` with its test module:
 
 ```rust
 #[cfg(test)]
@@ -3467,14 +3467,14 @@ and append to `src-tauri/src/search.rs`'s `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml wishlist
 cargo test --manifest-path src-tauri/Cargo.toml results_carry
 ```
 
-- [ ] **Step 3: Write `wishlist.rs`** — the module, mirroring `collection.rs`'s shape:
+- [x] **Step 3: Write `wishlist.rs`** — the module, mirroring `collection.rs`'s shape:
 
 ```rust
 //! The wishlist: what the user is hunting for, at the grain spec §6 gives it — an oracle
@@ -3832,7 +3832,7 @@ pub async fn wishlist_list(
 }
 ```
 
-- [ ] **Step 4: Add the two columns and the filter to `search.rs`** — extend `CardSummary`:
+- [x] **Step 4: Add the two columns and the filter to `search.rs`** — extend `CardSummary`:
 
 ```rust
     /// Copies the collection holds of **this printing**, across every finish and
@@ -3887,14 +3887,14 @@ and the two columns on the page query only (never on the count, which does not n
 
 with `owned_quantity: row.get(10)?` and `wishlisted: row.get(11)?` in the row mapper, and the two new keys added to `search_response_json_uses_the_camel_case_names_the_frontend_expects` (`"ownedQuantity": 0, "wishlisted": false`).
 
-- [ ] **Step 5: Register and run**
+- [x] **Step 5: Register and run**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run verify
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -A
@@ -3933,7 +3933,7 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)>;
 pub fn user_data_is_empty(conn: &Connection) -> bool;
 ```
 
-- [ ] **Step 1: Write the failing tests** — create `src-tauri/src/reconcile.rs` with its test module:
+- [x] **Step 1: Write the failing tests** — create `src-tauri/src/reconcile.rs` with its test module:
 
 ```rust
 #[cfg(test)]
@@ -4154,13 +4154,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml reconcile
 ```
 
-- [ ] **Step 3: Add `/migrations` to the client** — in `src-tauri/src/scryfall.rs`:
+- [x] **Step 3: Add `/migrations` to the client** — in `src-tauri/src/scryfall.rs`:
 
 ```rust
 /// Pages `fetch_migrations` will follow. ~350 migrations exist in total and the endpoint
@@ -4236,7 +4236,7 @@ impl Client {
 
 with a mocked test beside `fetch_sets`'s, covering both strategies and the page cap.
 
-- [ ] **Step 4: Write the reconciler** — the rest of `src-tauri/src/reconcile.rs`:
+- [x] **Step 4: Write the reconciler** — the rest of `src-tauri/src/reconcile.rs`:
 
 ```rust
 //! Scryfall's id migrations, applied to the user's own rows.
@@ -4503,7 +4503,7 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
 }
 ```
 
-- [ ] **Step 5: Run it on every sync** — in `src-tauri/src/sync.rs`, add to `do_sync` right after the `incremental_vacuum` block (so it follows the swap, on the path that changed `cards`):
+- [x] **Step 5: Run it on every sync** — in `src-tauri/src/sync.rs`, add to `do_sync` right after the `incremental_vacuum` block (so it follows the swap, on the path that changed `cards`):
 
 ```rust
     {
@@ -4578,14 +4578,14 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
 }
 ```
 
-- [ ] **Step 6: Run everything and verify**
+- [x] **Step 6: Run everything and verify**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run verify
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add -A
@@ -4643,7 +4643,7 @@ export function ToggleChip(props: { label: string; pressed: boolean; onClick: ()
 export function ResetAll(props: { count: number; onReset: () => void }): JSX.Element;
 ```
 
-- [ ] **Step 1: Write the failing vocabulary tests** — create `src/features/collection/conditions.test.ts`:
+- [x] **Step 1: Write the failing vocabulary tests** — create `src/features/collection/conditions.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -4741,13 +4741,13 @@ describe("parseFinishes", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 npm run test:run -- conditions finish
 ```
 
-- [ ] **Step 3: Write the vocabularies** — `src/features/collection/conditions.ts`:
+- [x] **Step 3: Write the vocabularies** — `src/features/collection/conditions.ts`:
 
 ```ts
 /**
@@ -4902,7 +4902,7 @@ function safeParse(json: string | null): unknown {
 
 `src/features/card/printings.ts` loses `Finish`, `FINISHES`, `PRICE_KEY`, `parseFinishes` and `finishPrice` (it keeps its own `safeParse` for legalities, and keeps `groupByIllustration`, `legalityChips`, `faceCount` and `FORMAT_ORDER`). `CardDetailPane.tsx` then imports `type Finish`, `FINISH_LABEL`, `FINISH_MARK`, `parseFinishes` and `finishPrice` from `@/lib/finish` — including the `Finish` type, which it currently takes from `./printings` — and deletes its two local `FINISH_*` records. `printings.test.ts` loses the `finishPrice`/`parseFinishes` blocks to `finish.test.ts`; nothing else in it moves.
 
-- [ ] **Step 4: One home for price text** — create `src/lib/prices.ts`:
+- [x] **Step 4: One home for price text** — create `src/lib/prices.ts`:
 
 ```ts
 /**
@@ -4930,7 +4930,7 @@ export function eurPrice(value: number | null): string {
 
 and replace the local `usd`/`price`/`PRICES_AS_OF` declarations in `SearchPage.tsx` and `CardDetailPane.tsx` with imports.
 
-- [ ] **Step 5: Rename the dim-text token** — carryover item 4. The app's `--color-muted` means *dim text*, while shadcn's `muted` means *a subtle surface*, and Tailwind builds `bg-muted` and `text-muted` from the same literal — so the two meanings cannot both be served by one token. Rename ours and give shadcn its own back:
+- [x] **Step 5: Rename the dim-text token** — carryover item 4. The app's `--color-muted` means *dim text*, while shadcn's `muted` means *a subtle surface*, and Tailwind builds `bg-muted` and `text-muted` from the same literal — so the two meanings cannot both be served by one token. Rename ours and give shadcn its own back:
 
 In `src/index.css`'s `@theme` block:
 
@@ -4959,7 +4959,7 @@ rg -n "text-dim" src | Measure-Object -Line       # expect: ~42 lines
 
 `text-muted-foreground` must **not** be touched — the word boundary in the pattern is what protects it, and the second `rg` is the check.
 
-- [ ] **Step 6: Pin the rename** — create `src/lib/tokens.test.ts`:
+- [x] **Step 6: Pin the rename** — create `src/lib/tokens.test.ts`:
 
 ```ts
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -5004,7 +5004,7 @@ describe("colour tokens", () => {
 });
 ```
 
-- [ ] **Step 7: The two pieces of shared chrome** — `src/components/RarityGem.tsx`, which four surfaces had a copy of:
+- [x] **Step 7: The two pieces of shared chrome** — `src/components/RarityGem.tsx`, which four surfaces had a copy of:
 
 ```tsx
 import { rarityColor } from "@/lib/rarity";
@@ -5054,7 +5054,7 @@ export function RarityGem({
 
 and `src/components/FilterChips.tsx`, holding what `FilterBar` had inline so the collection's filter row is the same row rather than a lookalike: `FILTER_FOCUS`, `FILTER_CONTROL`, `ManaChip` (moved verbatim from `FilterBar.tsx`, including its comments about the 60% dim and the offset ring), `ManaValueChips` (the 0–8+ row, `MANA_VALUES` moved here from `useCardSearch.ts` and re-exported there for its existing importers), `ToggleChip` (a labelled on/off chip — new, used by "Owned" and by the collection's finish/condition filters), and `ResetAll` (the button with the count badge). `FilterBar.tsx` then imports all five and keeps its own layout; **its existing tests must pass unedited**, which is the check that the extraction changed nothing.
 
-- [ ] **Step 8: Mirror the new commands** — in `src/lib/ipc.ts`, add the DTOs (field-for-field against `collection.rs`, `wishlist.rs` and `search.rs`, which is what the Rust-side shape tests pin), the two new `CardSummary` fields, `owned` on `SearchRequest`, and the commands:
+- [x] **Step 8: Mirror the new commands** — in `src/lib/ipc.ts`, add the DTOs (field-for-field against `collection.rs`, `wishlist.rs` and `search.rs`, which is what the Rust-side shape tests pin), the two new `CardSummary` fields, `owned` on `SearchRequest`, and the commands:
 
 ```ts
   /** Add copies. The same printing, finish and condition twice is one row with a bigger
@@ -5079,7 +5079,7 @@ and `src/components/FilterChips.tsx`, holding what `FilterBar` had inline so the
 
 and extend `src/lib/ipc.test.ts`'s argument-name table with all eight, because `invoke` matches by name and a typo there is a runtime rejection nothing else would catch.
 
-- [ ] **Step 9: The store** — in `src/lib/store.ts`, add the collection's own layout toggle (the search's is not shared: a reader can want art in one view and a table in the other):
+- [x] **Step 9: The store** — in `src/lib/store.ts`, add the collection's own layout toggle (the search's is not shared: a reader can want art in one view and a table in the other):
 
 ```ts
   /** How the collection is laid out. Separate from `searchView` on purpose — the search is
@@ -5089,7 +5089,7 @@ and extend `src/lib/ipc.test.ts`'s argument-name table with all eight, because `
 ```
 with `collectionView: "table"` as the default, and `setActiveView` continuing to clear `selectedCardId`.
 
-- [ ] **Step 10: Verify and commit**
+- [x] **Step 10: Verify and commit**
 
 ```powershell
 npm run verify
@@ -5129,7 +5129,7 @@ export interface AddTarget {
 export function AddToCollectionButton(props: { target: AddTarget; className?: string }): JSX.Element;
 ```
 
-- [ ] **Step 1: Write the failing component tests** — create `src/features/collection/AddToCollection.test.tsx` covering, with `@testing-library/user-event` and a mocked `@/lib/ipc` (the pattern `CardDetailPane.test.tsx` already uses):
+- [x] **Step 1: Write the failing component tests** — create `src/features/collection/AddToCollection.test.tsx` covering, with `@testing-library/user-event` and a mocked `@/lib/ipc` (the pattern `CardDetailPane.test.tsx` already uses):
 
 1. **the default add is one nonfoil near-mint copy** — open the popup, press "Add to collection", and assert `ipc.collectionAdd` was called with exactly `{ cardId, finish: "nonfoil", condition: "NM", quantity: 1 }`;
 2. **only the finishes the printing exists in are offered** — a target with `finishes: ["nonfoil","foil"]` shows two finish chips and no etched one;
@@ -5139,13 +5139,13 @@ export function AddToCollectionButton(props: { target: AddTarget; className?: st
 6. **a failed add says so and keeps the popup open** — the mutation rejects with the backend's busy sentence and it is rendered in a `role="alert"`, with the form still filled in;
 7. **a successful add reports in a `role="status"`** ("Added 2 × Lightning Bolt") and leaves the popup open for a second add, because adding three conditions of the same card is one interaction, not three.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 npm run test:run -- AddToCollection
 ```
 
-- [ ] **Step 3: Write the stepper** — `src/components/QuantityStepper.tsx`:
+- [x] **Step 3: Write the stepper** — `src/components/QuantityStepper.tsx`:
 
 ```tsx
 import { Minus, Plus } from "lucide-react";
@@ -5230,7 +5230,7 @@ export function QuantityStepper({
 }
 ```
 
-- [ ] **Step 4: Write the popup** — `src/features/collection/AddToCollection.tsx`:
+- [x] **Step 4: Write the popup** — `src/features/collection/AddToCollection.tsx`:
 
 ```tsx
 import { useCallback, useId, useRef, useState } from "react";
@@ -5505,7 +5505,7 @@ function AddPopup({
 }
 ```
 
-- [ ] **Step 5: Wire the three entry points**
+- [x] **Step 5: Wire the three entry points**
 
 **Printings rows** (`CardDetailPane.tsx`): `PrintingRow` gains a trailing `<AddToCollectionButton>` built from the printing's own fields, and the row becomes `flex items-center` so the button lines up with the prices. This is the carryover fold — the rows are now the fastest way to record "I have the Alpha one".
 
@@ -5515,14 +5515,14 @@ function AddPopup({
 
 Each of the three passes `finishes` from what it has: the printings row and the pane have the printing's `finishes` blob (`parseFinishes`), the grid and table have none on `CardSummary` — so they pass `[]`, and the popup offers nonfoil. That is the honest default: `finishes` is not on the search DTO, and adding it there to save one chip would put a JSON blob on every row of a 116 k-row browse.
 
-- [ ] **Step 6: Run the affected suites**
+- [x] **Step 6: Run the affected suites**
 
 ```powershell
 npm run test:run -- AddToCollection QuantityStepper CardDetailPane CardGrid SearchPage App
 ```
 Expected: green, including `App.test.tsx`'s Escape-stack test — which now has a third layer in play and is the reason the popup is `"inner"`.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 ```powershell
 npm run verify
@@ -5563,7 +5563,7 @@ export function useCollection(): {
 
 - `CardGrid` is generalised: its `rows` prop becomes `GridCard[]` (`{ id, name, setCode, collectorNumber, rarity }`), which `CardSummary` satisfies structurally, plus an optional `badge?: (card: GridCard) => ReactNode` rendered over the art's bottom-left corner. Nothing about the search's use changes.
 
-- [ ] **Step 1: Write the failing tests** — `src/features/collection/useCollection.test.ts` for the pure parts (`activeFilterCount` over the collection's larger filter set; `resetAll` clearing all seven; the query key changing when a finish filter toggles and *not* when the same two finishes are picked in the other order), and `CollectionPage.test.tsx` for:
+- [x] **Step 1: Write the failing tests** — `src/features/collection/useCollection.test.ts` for the pure parts (`activeFilterCount` over the collection's larger filter set; `resetAll` clearing all seven; the query key changing when a finish filter toggles and *not* when the same two finishes are picked in the other order), and `CollectionPage.test.tsx` for:
 
 1. **an empty collection explains itself** — "Nothing here yet. Add cards from search, or import a collection file." rather than "no cards match", which would blame the reader for an empty table;
 2. **the summary header renders the four figures** and labels the value with `PRICES_AS_OF`;
@@ -5573,13 +5573,13 @@ export function useCollection(): {
 6. **the needs-review banner appears when `summary.needsReview > 0`**, names the count, and its button switches the list to those rows;
 7. **the flagged row renders its reason** and still shows `SET · NUMBER` from the denormalized columns even with `name: null`.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 npm run test:run -- Collection useCollection
 ```
 
-- [ ] **Step 3: Write `useCollection`** — the same shape as `useCardSearch` (debounced text, one query key built from every input, `keepPreviousData`), plus:
+- [x] **Step 3: Write `useCollection`** — the same shape as `useCardSearch` (debounced text, one query key built from every input, `keepPreviousData`), plus:
 
 ```ts
   // The summary is its own query over the *same* filters, not a field of the page: a
@@ -5593,7 +5593,7 @@ npm run test:run -- Collection useCollection
 
 with `queryKey: ["collection", "list", filterKey]` for the paged list, so the popup's `invalidateQueries({ queryKey: ["collection"] })` refreshes both.
 
-- [ ] **Step 4: Write the summary header** — `src/features/collection/CollectionSummary.tsx`:
+- [x] **Step 4: Write the summary header** — `src/features/collection/CollectionSummary.tsx`:
 
 ```tsx
 import type { CollectionSummary as Summary } from "@/lib/ipc";
@@ -5659,7 +5659,7 @@ function Figure({
 }
 ```
 
-- [ ] **Step 5: Write the table and the page** — `CollectionTable.tsx` is `SearchPage`'s virtualized table with the collection's columns (name + mana cost · set · finish/condition · quantity stepper · unit price · value) and the same sticky-header-inside-the-scroller trick, `role="table"`/`aria-rowcount`, `ROW_FOCUS` outline and `RarityGem`. Two things are new:
+- [x] **Step 5: Write the table and the page** — `CollectionTable.tsx` is `SearchPage`'s virtualized table with the collection's columns (name + mana cost · set · finish/condition · quantity stepper · unit price · value) and the same sticky-header-inside-the-scroller trick, `role="table"`/`aria-rowcount`, `ROW_FOCUS` outline and `RarityGem`. Two things are new:
 
 ```tsx
         {/* The stepper writes straight through: a collection table is where quantities are
@@ -5706,16 +5706,16 @@ function Figure({
         />
 ```
 
-- [ ] **Step 6: Mount it** — in `src/App.tsx`, `ActiveView` returns `<CollectionPage />` for `"collection"`, and `BLURB` loses its `collection` entry (the remaining three keep theirs, so the `Record<Exclude<ViewId, "search" | "collection">, string>` type changes with it).
+- [x] **Step 6: Mount it** — in `src/App.tsx`, `ActiveView` returns `<CollectionPage />` for `"collection"`, and `BLURB` loses its `collection` entry (the remaining three keep theirs, so the `Record<Exclude<ViewId, "search" | "collection">, string>` type changes with it).
 
-- [ ] **Step 7: Run and verify**
+- [x] **Step 7: Run and verify**
 
 ```powershell
 npm run test:run -- Collection CardGrid App
 npm run verify
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add -A
@@ -5736,7 +5736,7 @@ Spec §7: *"Wishlist view mirrors this; 'owned' badges appear in search once a w
 - Create: `src/features/wishlist/useWishlist.ts`, `src/features/wishlist/WishlistPage.tsx` + `.test.tsx`
 - Modify: `src/App.tsx`, `src/features/search/SearchPage.tsx`, `src/features/search/CardGrid.tsx`, `src/features/search/FilterBar.tsx`, `src/features/search/useCardSearch.ts`
 
-- [ ] **Step 1: Write the failing tests** — `WishlistPage.test.tsx`:
+- [x] **Step 1: Write the failing tests** — `WishlistPage.test.tsx`:
 
 1. **a wish shows what is still needed** — `quantity: 4`, `ownedQuantity: 1` renders "1 of 4 owned" and a progress-free mono readout (no bar: the motion and colour budget is spent);
 2. **a fulfilled wish is marked, not hidden** — `ownedQuantity >= quantity` renders "Fulfilled" and stays in the list, because a wishlist that deletes its own entries loses the record of why they were there;
@@ -5747,13 +5747,13 @@ Spec §7: *"Wishlist view mirrors this; 'owned' badges appear in search once a w
 
 and in `SearchPage.test.tsx` / `CardGrid.test.tsx`: **a result the user owns carries a mono `×3` badge with an accessible name ("3 in your collection"), and a wished card carries a heart with "On your wishlist"** — and neither appears on a card with `ownedQuantity: 0, wishlisted: false`.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 npm run test:run -- Wishlist SearchPage CardGrid
 ```
 
-- [ ] **Step 3: Write the wishlist view** — `useWishlist.ts` mirrors `useCollection` over `ipc.wishlistList` with the `fulfilled` filter, and `WishlistPage.tsx` is a single virtualized list (no grid toggle: a shopping list is read by name, not by art) whose row is:
+- [x] **Step 3: Write the wishlist view** — `useWishlist.ts` mirrors `useCollection` over `ipc.wishlistList` with the `fulfilled` filter, and `WishlistPage.tsx` is a single virtualized list (no grid toggle: a shopping list is read by name, not by art) whose row is:
 
 ```tsx
       <span role="cell" className="flex min-w-0 items-baseline gap-2">
@@ -5773,7 +5773,7 @@ npm run test:run -- Wishlist SearchPage CardGrid
       </span>
 ```
 
-- [ ] **Step 4: Badge the search results** — `CardGrid`'s tile renders `badge` (added in Task 11) over the art's bottom-left corner, and `SearchPage` passes one built from the new `CardSummary` fields:
+- [x] **Step 4: Badge the search results** — `CardGrid`'s tile renders `badge` (added in Task 11) over the art's bottom-left corner, and `SearchPage` passes one built from the new `CardSummary` fields:
 
 ```tsx
 /**
@@ -5807,11 +5807,11 @@ function OwnedBadge({ owned, wishlisted }: { owned: number; wishlisted: boolean 
 
 The table row shows the same two facts inside its name cell, so the two views state one truth the same way.
 
-- [ ] **Step 5: The Owned filter chip** — `useCardSearch` gains `owned: boolean | undefined` with a three-state toggle (any → owned → missing → any), counted by `activeFilterCount` and cleared by `resetAll`; `FilterBar` renders it with the shared `ToggleChip`. The request sends `owned` only when it is set, so an untouched filter row still produces the same payload it always did.
+- [x] **Step 5: The Owned filter chip** — `useCardSearch` gains `owned: boolean | undefined` with a three-state toggle (any → owned → missing → any), counted by `activeFilterCount` and cleared by `resetAll`; `FilterBar` renders it with the shared `ToggleChip`. The request sends `owned` only when it is set, so an untouched filter row still produces the same payload it always did.
 
-- [ ] **Step 6: Mount it** — `App.tsx` returns `<WishlistPage />` for `"wishlist"`, and `BLURB` drops that entry too (leaving `decks` and `settings`).
+- [x] **Step 6: Mount it** — `App.tsx` returns `<WishlistPage />` for `"wishlist"`, and `BLURB` drops that entry too (leaving `decks` and `settings`).
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 ```powershell
 npm run verify
@@ -5845,7 +5845,7 @@ pub fn prewarm_keys(conn: &Connection, variant: Variant, limit: usize) -> rusqli
 #[tauri::command] pub async fn prewarm_collection(state: …) -> Result<usize, String>;
 ```
 
-- [ ] **Step 1: Write the failing tests** — append to `src-tauri/src/images.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing tests** — append to `src-tauri/src/images.rs`'s `mod tests`:
 
 ```rust
     /// Carryover item 3, ledgered twice: nothing deduplicated two requests for the same
@@ -5945,13 +5945,13 @@ pub fn prewarm_keys(conn: &Connection, variant: Variant, limit: usize) -> rusqli
 
 `Fixture` (`Fixture::new(name)`, `.cache`, `.read`, `.write`, `.card(id, uri)`) is the existing helper the fetch tests already use — a real file database with both connections and a real cache directory. `seeded()` is the in-memory `Connection` the resolution tests use.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml images
 ```
 
-- [ ] **Step 3: Add the single-flight map** — in `src-tauri/src/images.rs`, `Cache` gains:
+- [x] **Step 3: Add the single-flight map** — in `src-tauri/src/images.rs`, `Cache` gains:
 
 ```rust
     /// One lock per key, so two callers who want the same image do not both fetch it.
@@ -6022,7 +6022,7 @@ pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 ```
 
-- [ ] **Step 4: Cap the body and log the off-host refusal** — in `scryfall.rs`:
+- [x] **Step 4: Cap the body and log the off-host refusal** — in `scryfall.rs`:
 
 ```rust
 /// The largest image body this app will read into memory.
@@ -6084,7 +6084,7 @@ and in `images.rs`'s `resolve`, on the refusal branch (carryover item 6):
         });
 ```
 
-- [ ] **Step 5: Write the pre-warm** — in `images.rs`:
+- [x] **Step 5: Write the pre-warm** — in `images.rs`:
 
 ```rust
 /// Images one pre-warm pass will fetch.
@@ -6168,7 +6168,7 @@ Register the command, add `prewarmCollection: () => invoke<number>("prewarm_coll
   }, [rows.length]);
 ```
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```powershell
 npm run verify
@@ -6186,10 +6186,15 @@ The remaining carryover folds, the documentation that makes the new invariants f
 
 **Files:**
 - Modify: `CLAUDE.md`, `src-tauri/src/sync.rs`, `src/lib/ipc.ts`, `src/components/Ribbon.tsx`, `src/lib/useDismissOnEscape.ts`, `docs/superpowers/notes/plan-3-carryover.md` (new)
+- **Also modified, for the folds the ledger deferred here** (see the carryover file's §3):
+  `src-tauri/src/{schema,maintenance,filters,collection,wishlist,card,images,search}.rs`,
+  `src/features/card/CardDetailPane.tsx`, `src/features/collection/AddToCollection.tsx`,
+  `src/components/AppShell.tsx`, `eslint.config.js`, and `scripts/cdp.mjs` (new — the CDP
+  verification flow, checked in rather than described, after four sessions rebuilt it)
 
-- [ ] **Step 1: The `store_failures` consumer** — the counter has incremented since Plan 2 with nothing reading it. `sync::SyncStatus` gains `image_store_failures: u64` (read from `state.images.store_failures()`, which needs no database and so is always answered), `ipc.ts` mirrors it, and `Ribbon` appends one clause to the status line's tooltip when it is non-zero: *"N card images could not be saved to the cache — the data folder may be read-only or full."* Pin the new field in `dto_json_uses_the_camel_case_names_the_frontend_expects`.
+- [x] **Step 1: The `store_failures` consumer** — the counter has incremented since Plan 2 with nothing reading it. `sync::SyncStatus` gains `image_store_failures: u64` (read from `state.images.store_failures()`, which needs no database and so is always answered), `ipc.ts` mirrors it, and `Ribbon` appends one clause to the status line's tooltip when it is non-zero: *"N card images could not be saved to the cache — the data folder may be read-only or full."* Pin the new field in `dto_json_uses_the_camel_case_names_the_frontend_expects`.
 
-- [ ] **Step 2: The `useDismissOnEscape` doc** — add the paragraph the carryover asked for:
+- [x] **Step 2: The `useDismissOnEscape` doc** — add the paragraph the carryover asked for:
 
 ```ts
  * **This does not generalise to two `"inner"` peers.** The protocol orders exactly two
@@ -6200,7 +6205,7 @@ The remaining carryover folds, the documentation that makes the new invariants f
  * rather than adding a second `"inner"` and hoping registration order holds.
 ```
 
-- [ ] **Step 3: CLAUDE.md** — three edits, all of them things a future session needs before it reads any code:
+- [x] **Step 3: CLAUDE.md** — three edits, all of them things a future session needs before it reads any code:
 
 Add to **Image cache**:
 
@@ -6251,14 +6256,14 @@ and amend **Data & sync** with the three facts that changed underneath it:
   phase); a `VACUUM` **always** needs `schema::create_fts` after it.
 ```
 
-- [ ] **Step 4: Full verify**
+- [x] **Step 4: Full verify**
 
 ```powershell
 npm run verify
 ```
 Expected: build, lint (`--max-warnings 0`), Vitest and `cargo test` all green.
 
-- [ ] **Step 5: Live smoke — `npm run tauri dev`**
+- [x] **Step 5: Live smoke — `npm run tauri dev`**
 
 Run against the real database and record the numbers in this file. Every line is something this plan asserted and has not yet observed:
 
@@ -6282,11 +6287,56 @@ Run against the real database and record the numbers in this file. Every line is
 | 16 | 1024px width, `prefers-reduced-motion`, keyboard-only pass over both new views | no clipping, no motion, every control reachable with a visible gold outline |
 | 17 | Console | 0 CSP violations, 0 errors, 0 React warnings (the tile restructure is the one to watch) |
 
-- [ ] **Step 6: The eight `soon.jpg` printings** — carryover item 8 asked for a verification, not a feature. The improve-path is already automatic (a sync rewrites `image_uris`, and a URI that gains a cache-buster becomes fetchable), so search for one of the eight (`plst UMA-149`, `mic 55`–`58`) and record what it shows and what its `image_status` is now. Note the finding in the carryover file either way.
+**Smoke result (2026-08-05)** — live `npm run tauri dev`, WebView2 driven over CDP with the
+now-checked-in `scripts/cdp.mjs`, Windows 11, 1280×800 then 1024×800. The database was a
+genuine Plan-2 artefact: schema v4, `auto_vacuum = NONE`, `raw` still TEXT, **2.02 GB**,
+0 collection rows, 0 wishlist rows. Every row seeded or added was deleted afterwards.
+Full detail in `docs/superpowers/notes/plan-3-carryover.md`.
 
-- [ ] **Step 7: Write the carryover notes** — create `docs/superpowers/notes/plan-3-carryover.md` with: the measured numbers from Step 5, anything deferred out of this plan with its reason, the smoke findings, and the MUST-DO list for Plan 4 (deck tables reference `collection_entries.id` for allocations — the *only* enforced foreign key in the schema, because both sides are user data; `game_changer: true` still has no fixture).
+| # | Observed |
+|---|---|
+| 1 | **Pass.** Tile → `m10 146` nonfoil NM (1 107 ms); table row → `sld 901` **foil** NM (the popup offered only that printing's finishes); printings row → `sld IFIYW-2` nonfoil **MP**. |
+| 2 | **Pass.** 2 + 2 = **4**, one row. |
+| 3 | **Adapted** (no serial field until the entry editor): same card as foil → new row, foil + LP → third row. Five rows over three `card_id`s, the grain doing its job. |
+| 4 | **Pass, term by term.** Header read **$73.92 / €56.59**; the hand-sum over five rows is $73.92 / €56.59 exactly. `price_usd` for `m10 146` is `1.73` — summing *that* over 8 copies gives $13.84, so the per-finish lookup is proven. |
+| 5 | **Pass.** Etched `sta 19` priced **$4.13** (`usd_etched`); the EUR total gained **`1 unpriced`** rather than a number. |
+| 6 | **Pass.** unfiltered 10/3/$75.68 → Foil 5/2/$64.63 (badge 1) → +Red 5/2/$64.63 (badge 2) → **Reset all** 10/3/$75.68, badge gone. |
+| 7 | **Pass.** `9ED 1 · 1★ · 2 · 2★ · 10 · 100` — lexical would give `1, 10, 100, 1★, 2, 2★`. |
+| 8 | **Pass.** Pinned `sta 42` reads **0 of 4 owned** ($15.44 = 4 × $3.86); the any-printing wish reads **Fulfilled**. Search shows `×1 / 1 in your collection` on `sld 901`, `×8` on `m10 146`, and `On your wishlist` on every Bolt printing (the any-printing wish is keyed on the oracle card). Fulfilled chip: any (2) → Still missing (1) → Fulfilled (1) → any (2). |
+| 9 | **Pass, by three orders of magnitude.** 10 `collection_add` calls mid-ingest: **4–7 ms each** (median 6), **0 `BUSY` refusals**, no toast. 20 timed searches across the same sync, every count correct, none stalled. |
+| 10 | **Pass.** `compacting` appeared **once**. `mtg.db` **2 018 877 440 → 547 807 232 B** (−72.9 %), `auto_vacuum` 0 → 2, freelist 243 187 → 500 pages, and `lightning` still returns **411** FTS hits. |
+| 11 | **Pass.** Second forced sync: **1.8 s**, `checking` only, "Already up to date", file byte-identical. A later *full re-ingest* left it at 547 655 680 B (−0.03 %) with **freelist 0** — the post-swap `incremental_vacuum` doing exactly its job. |
+| 12 | **Pass, with a corrected figure.** `typeof(raw) = blob`; **622 460 391 → 235 058 435 B = 37.8 %** of the pre-v3 total. "Roughly a quarter" was optimistic; CLAUDE.md's "~236 MB" was right. |
+| 13 | **Pass.** Flagged with the sentence *"This printing is not in the card database…"*, a **Needs review** banner, still listed (`XXX · 999`), still counted (Cards 29), value `—` and counted as unpriced. Repointing at a card that exists cleared it; the app's log recorded `1 rows flagged, 0 cleared` then `0 rows flagged, 1 cleared`. (Restoring the *card row* is not live-observable: a swap rebuilds `cards` from Scryfall wholesale, so a hand-inserted row cannot survive it. `reconcile`'s tests cover that shape.) |
+| 14 | **Pass.** `image_cache` grid **2 298 → 2 299** within two seconds of the Collection view's first paint — the one owned printing never rendered as art. Owned cards only. |
+| 15 | **Pass with one blemish.** One layer per press, popup then pane. Focus returned to the printings-row Add button after the first press; after the second it landed on `BODY` rather than the virtualized row that opened the pane. |
+| 16 | **Pass with one blemish.** No horizontal scroll and nothing clipped at 1024 or 1280 on either view; every transition in both new views neutralised under `prefers-reduced-motion`; 22 tab stops, all named, ring `solid 2px oklch(0.75 0.12 85)`. The blemish is Plan-2 chrome: the five sidebar buttons and **Refresh data** carry a bare `transition-colors duration-150` with no `motion-reduce:` guard. |
+| 17 | **Pass.** **0 errors, 0 warnings, 0 CSP violations, 0 React warnings** for the whole session. Five console entries total: WebView2's lazy-image intervention, Vite's two HMR lines, React DevTools' banner, the recorder's attach line. |
 
-- [ ] **Step 8: Check off every box in this plan and commit**
+**Sync phases and timings**, three live forced syncs (debug build):
+
+| Sync | Phases | Total |
+|---|---|---|
+| 1 (Plan-2 database) | checking 0.5 s · downloading 1.5 s · ingesting 4.0→85.8 s · sets · **compacting** 90.8 s | **99.2 s** |
+| 2 (nothing new) | checking only | **1.8 s** |
+| 3 (forced re-ingest) | downloading 0.4 s · ingesting 2.9→83.5 s · **reclaiming** 83.5→89.6 s · sets | **91.6 s** |
+
+The plan's inherited **44.8 s** figure is now stale: the ingest gzips `raw` on the way in,
+and that is where the extra minute went. CLAUDE.md carries the new numbers.
+
+- [x] **Step 6: The eight `soon.jpg` printings** — carryover item 8 asked for a verification, not a feature. The improve-path is already automatic (a sync rewrites `image_uris`, and a URI that gains a cache-buster becomes fetchable), so search for one of the eight (`plst UMA-149`, `mic 55`–`58`) and record what it shows and what its `image_status` is now. Note the finding in the carryover file either way.
+
+**Result (2026-08-05): they are now four, and the healing was watched happening.**
+`plst UMA-149` (Sparkspitter) recovered between 2026-08-04 and 2026-08-05 — `image_status`
+`missing → highres_scan`, and its `image_uris` now carry real `cards.scryfall.io` URIs with
+a `?1785827111` cache-buster, so it is fetchable today with no code change. The remaining
+four are `mic 55`–`58`, all still `missing` and still `errors.scryfall.com/soon.jpg` in
+every slot; `SELECT count(*) FROM cards WHERE image_uris NOT LIKE '%?%'` returns exactly 4.
+**The improve-path is automatic and needs no feature.** Recorded in the carryover file.
+
+- [x] **Step 7: Write the carryover notes** — create `docs/superpowers/notes/plan-3-carryover.md` with: the measured numbers from Step 5, anything deferred out of this plan with its reason, the smoke findings, and the MUST-DO list for Plan 4 (deck tables reference `collection_entries.id` for allocations — the *only* enforced foreign key in the schema, because both sides are user data; `game_changer: true` still has no fixture).
+
+- [x] **Step 8: Check off every box in this plan and commit**
 
 ```powershell
 git add -A
@@ -6352,6 +6402,27 @@ Every MUST-DO from `docs/superpowers/notes/plan-2-carryover.md`, and where it we
 | Migrations reconciler: merge repoints, delete flags (spec §4.7) | **Task 8** |
 | Pre-warm for the user's own cards (spec §5) | **Task 13** |
 | Prices always labelled with an as-of date (spec §5) | **Task 9** (`PRICES_AS_OF`), used in **11**, **12** |
+
+---
+
+## Plan-doc drift — where the steps above are no longer true
+
+Recorded at the end of Task 14 rather than edited into the steps, because the steps are the
+record of what was *planned*. **Where this table and a step above disagree, this table is
+right.** Every entry was ruled during execution and is carried by the shipped code's own
+doc comments and tests.
+
+| Where | The plan says | What shipped, and why |
+|---|---|---|
+| Step 2044, 5063, 5572 (Tasks 5, 9, 11) | *"Zero removes the row"* for a **collection** entry | **Zero keeps the row** — with its condition, purchase price, tags and acquisition story. The stepper dims it, disables `−`, and offers a **Remove** button that appears only at zero. Deleting is `collection_remove` and only ever that. Ruled in Task 5's review as a plan-level contradiction; `wishlist_entries` is the opposite (`CHECK (quantity > 0)`, so zero *is* a removal there) and the two are deliberately asymmetric. |
+| Task 9 steps and the file tree at line 151 | `conditions.ts` lives in `src/features/collection/` | It lives in **`src/lib/`**. Ruled in Task 9's review: `lib/ipc.ts` needs the `Condition` type, and a `lib → features` import is the layering edge the move deletes. |
+| Task 9's pinned condition test | Cardmarket **`PO`** maps to `PL`/played | **`PO` → `DMG`**, and `PL` was absent from the table entirely (so "Played" was importing as *near mint*). The research doc governs over the brief's pinned test. |
+| Task 7 step 3 | `escape_like`/`LIKE_ESCAPE` live in `wishlist.rs` | They live in **`filters.rs`**, `pub`, so the next `LIKE` this app grows does not invent a second escaping rule. Moved in Task 14. |
+| Task 6 step 4 | `run_search` keeps its own filter block | The filters are shared with the collection through `filters::push_card_filters`, and the extracted SQL is byte-identical to what `search.rs` built before. |
+| Task 3 | the `compacting` phase does the reclaim in one hold | The reclaim is **chunked** (`PRAGMA incremental_vacuum(2000)` with a `RECLAIM_YIELD` between chunks) and has its own **`reclaiming`** phase. `PHASES` is 8 long, not 7. |
+| Task 1 / everywhere | a full forced sync is **44.8 s** | **92–99 s** measured 2026-08-05 (debug build): the ingest now gzips `raw` on the way in. A run that finds nothing new is **1.8 s**. See the smoke result under Task 14 step 5. |
+| Task 13 step 3 | the single-flight map holds `Weak<Shared<…>>` | A per-key `Arc<tokio::sync::Mutex<()>>` plus a re-read of the disk. A shared future must be `'static`, which would force `Arc<Cache>` and owned clones of the client and both connections through the protocol handler. |
+| Task 10 / 12 comments | *"reversible cards have no `oracle_id`"* | **False.** Scryfall omits only the *top-level* id; `card_row` falls back to `card_faces[0]`. 0 of 116 590 live rows are null, all 81 reversible printings included. Every `oracleId === null` branch is a fence around the nullable type, not a card anyone can find. Corrected across six files in Task 14. |
 
 ---
 

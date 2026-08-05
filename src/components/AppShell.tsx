@@ -84,6 +84,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           title={title}
           statusLine={statusLine(status)}
           dataDir={status?.dataDir}
+          imageStoreFailures={status?.imageStoreFailures}
           busy={busy}
           upToDate={upToDate}
           hasError={error !== null}

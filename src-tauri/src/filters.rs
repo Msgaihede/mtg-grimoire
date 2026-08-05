@@ -86,6 +86,34 @@ pub fn fts_query(text: &str) -> Option<String> {
     (!toks.is_empty()).then(|| toks.join(" "))
 }
 
+/// The `ESCAPE` character for a `LIKE` pattern built from a user's text.
+///
+/// A backslash, and interpolated into SQL as a literal — which is safe because it is this
+/// constant and never anything a caller sends. Every character it protects is escaped by
+/// [`escape_like`], itself included.
+pub const LIKE_ESCAPE: char = '\\';
+
+/// A user's text as a `LIKE` pattern that means exactly what it says.
+///
+/// `LIKE`'s wildcards are ordinary characters in a search box: somebody who types `%` means
+/// the per-cent sign, and `_` is one keystroke from the `-` in half the card names in Magic
+/// (`God-Pharaoh`). Unescaped, either turns a filter into a filter that does not filter —
+/// the failure nobody reports, because a list showing too much still looks like a list.
+///
+/// Lives here rather than beside its one caller because it is the escaping half of a
+/// contract whose other half is SQL, and the next `LIKE` this app grows must not invent a
+/// second one. Pair it with `ESCAPE '{LIKE_ESCAPE}'` in the pattern's clause; the pattern
+/// itself is always bound, never interpolated.
+///
+/// The escape character goes first: doing it last would escape the backslashes the other
+/// two arms had just introduced, and `%` would come back out as a literal `\` followed by a
+/// wildcard.
+pub fn escape_like(text: &str) -> String {
+    text.replace(LIKE_ESCAPE, &format!("{LIKE_ESCAPE}{LIKE_ESCAPE}"))
+        .replace('%', &format!("{LIKE_ESCAPE}%"))
+        .replace('_', &format!("{LIKE_ESCAPE}_"))
+}
+
 /// Push every non-text card predicate onto `p`, qualified with `alias`.
 ///
 /// `rows` names the table that carries the *denormalised* printing beside its soft card

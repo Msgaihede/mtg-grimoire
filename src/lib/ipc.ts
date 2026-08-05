@@ -76,7 +76,9 @@ export interface CardSummary {
   priceUsd: number | null;
   layout: string;
   /**
-   * The oracle card this printing is of, or `null` on a reversible card, which has none.
+   * The oracle card this printing is of. `null` mirrors `cards.oracle_id`'s nullability and
+   * nothing more — no live row is null, reversible cards included (Scryfall omits only the
+   * *top-level* id and `card_row` falls back to `card_faces[0]`).
    *
    * Here so a result row can be wished for as *any* printing without opening the card first
    * — a wishlist usually means the card rather than the cardboard.
@@ -518,12 +520,12 @@ export interface SyncOutcome {
 /**
  * What the UI polls.
  *
- * `dataDir` and `syncing` are always answered. The five database-derived fields are
- * `null` only when the read-only connection could not be used at all; an ingest no
- * longer blanks them. `null` there means "not readable right now", never "zero" and
- * never "cleared": a UI that renders it literally reports an empty collection and
- * throws away an error banner the user has not read yet. See `mergeStatus` in
- * `useSync.ts`, which is the one place that resolves this.
+ * `dataDir`, `syncing` and `imageStoreFailures` are always answered — none of them needs
+ * the database. The five database-derived fields are `null` only when the read-only
+ * connection could not be used at all; an ingest no longer blanks them. `null` there means
+ * "not readable right now", never "zero" and never "cleared": a UI that renders it
+ * literally reports an empty collection and throws away an error banner the user has not
+ * read yet. See `mergeStatus` in `useSync.ts`, which is the one place that resolves this.
  */
 export interface SyncStatus {
   cardCount: number | null;
@@ -541,6 +543,17 @@ export interface SyncStatus {
   lastIngestSkipped: number | null;
   dataDir: string;
   syncing: boolean;
+  /**
+   * Card images this process fetched and then could not write to the cache — a read-only
+   * data folder, a full disk. A number, never `null`: it is a counter in memory rather
+   * than a database read, and the disk that would make the rest unreadable is the very
+   * thing it reports on. Resets with the app.
+   *
+   * Non-zero is worth telling the reader about because nothing else shows it: the images
+   * still display (the bytes were in hand), they are simply never cached, so the only
+   * visible symptom is a grid that re-downloads itself forever.
+   */
+  imageStoreFailures: number;
 }
 
 /** The phases `sync.rs` emits, and the only values `SyncProgressEvent.phase` takes. */

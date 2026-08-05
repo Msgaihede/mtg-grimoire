@@ -65,12 +65,27 @@ pub fn fts_rebuild_is_pending(conn: &Connection) -> bool {
 /// [`K_AUTO_VACUUM_ERROR`]: a conversion that failed *at* `create_fts` records both, and the
 /// index being wrong is a worse state than the file being large. A rebuild is also the one
 /// half that is cheap to retry — no `VACUUM`, no temporary file, no free space needed.
+///
+/// **In one transaction, because a repair must not be able to make things worse.**
+/// [`crate::schema::create_fts`] is a `DROP`, a `CREATE` and a `rebuild` that walks every
+/// card; run in autocommit, a failure in that last statement — the long one, and the one a
+/// full disk stops — leaves the index *emptier* than the desynced one it replaced, and the
+/// caller that gets this `Err` is a launch that carries on regardless. Rolled back, a failed
+/// repair costs exactly nothing: the marker stays set and the next launch tries again.
+/// Clearing the marker joins the same transaction, so "the index is rebuilt" and "nothing is
+/// owed" cannot disagree.
+///
+/// [`convert_to_incremental`]'s own `create_fts` deliberately does *not* get this treatment:
+/// its `VACUUM` has already renumbered the rowids the old index points at, so there is no
+/// good earlier state to roll back to and nothing to preserve.
 pub fn rebuild_fts_if_pending(conn: &Connection) -> rusqlite::Result<bool> {
     if !fts_rebuild_is_pending(conn) {
         return Ok(false);
     }
-    crate::schema::create_fts(conn)?;
-    crate::sync::set_meta_opt(conn, K_FTS_REBUILD_PENDING, None)?;
+    let tx = conn.unchecked_transaction()?;
+    crate::schema::create_fts(&tx)?;
+    crate::sync::set_meta_opt(&tx, K_FTS_REBUILD_PENDING, None)?;
+    tx.commit()?;
     Ok(true)
 }
 
@@ -246,10 +261,11 @@ pub fn reclaim_freed_pages(
             // Releasing the mutex is not the same as handing it over. A `std::sync::Mutex`
             // is unfair: this thread comes straight back round and re-acquires, and the
             // window a waiter has to win in is the length of one `emit` — tens of
-            // microseconds. Probed at that gap, 9 of 10 waiters timed out; at 5 ms, none
-            // did. So the loop stands aside deliberately, which is what makes the
-            // between-chunks promise true rather than merely available in principle.
-            // Costs ~0.65 s across the 130-chunk run this was measured on.
+            // microseconds. Measured against the shipped code before this line existed,
+            // **10 waiters out of 10 timed out**; with the yield, 10 out of 10 get in. The
+            // between-chunks promise was therefore false as written, not merely fragile, and
+            // this is what makes it true rather than available in principle. Costs ~0.65 s
+            // across the 130-chunk run this was measured on.
             std::thread::sleep(RECLAIM_YIELD);
         }
     }

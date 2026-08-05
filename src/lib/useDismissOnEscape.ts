@@ -31,6 +31,13 @@ export type DismissLayer = "inner" | "outer";
  * this encodes is "never act on a press something else has already consumed", and it is
  * true of a second popup as much as of a pane.
  *
+ * **This does not generalise to two `"inner"` peers.** The protocol orders exactly two
+ * rungs — one capture-phase layer and one bubble-phase layer — so two popups open at once
+ * are not ordered by it at all: both would consume the same press and both would close. If
+ * a third layer is ever needed, nest it deliberately (the inner one owns the press, the
+ * middle one checks `defaultPrevented` before acting) or extend this hook with a depth,
+ * rather than adding a second `"inner"` and hoping registration order holds.
+ *
  * A layer that Escape dismissed hands focus back to whatever opened it — do that from
  * `onDismiss`, *before* React flushes the close, while the element is still mounted. An
  * outside-click deliberately does not, so that belongs to the caller and not here: the

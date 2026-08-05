@@ -1,10 +1,13 @@
 //! Database schema: `cards`, `sets`, `sync_meta`, the `cards_fts` search index, and the
 //! user's own tables — `collection_entries`, `wishlist_entries`, `card_migrations`.
 //!
-//! Nullability here is load-bearing. Scryfall omits `oracle_id`, `cmc` and `type_line`
-//! on some printings (reversible cards, art series), `collector_number` is TEXT (values
-//! like `"161★"` exist), and `legalities` is stored as a JSON blob because the format
-//! list grows over time.
+//! Nullability here is load-bearing. Scryfall omits `oracle_id`, `cmc` and `type_line` at
+//! the top level on some printings (reversible cards, art series), `collector_number` is
+//! TEXT (values like `"161★"` exist), and `legalities` is stored as a JSON blob because the
+//! format list grows over time. *Omitted at the top level* is not the same as absent:
+//! [`crate::card_row`] falls back to `card_faces[0]` for all three, so live data fills
+//! `oracle_id` on every one of its 116 568 rows. The columns stay NULLABLE because the JSON
+//! permits it, not because a population needs them to.
 //!
 //! The line that runs through the whole file: the first four tables are *sync data* and
 //! `cards` is dropped and recreated wholesale on every sync (see [`swap_staging`]); the
@@ -355,8 +358,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
              CREATE TABLE IF NOT EXISTS wishlist_entries (
                 id INTEGER PRIMARY KEY,
-                -- The oracle card. NULLABLE, because reversible cards genuinely have no
-                -- oracle_id and a wish for one can only be a wish for its printing.
+                -- The oracle card. NULLABLE because `cards.oracle_id` is: a wish for a
+                -- printing whose oracle card is unknown can only be a wish for that
+                -- printing. (No live row is null — the reversible-card story that used to
+                -- be told here is wrong, see `card_row` — so this is a fence, not a case.)
                 oracle_id TEXT,
                 -- NULL = any printing (spec §6). Set = that printing and no other.
                 card_id TEXT,
@@ -441,20 +446,29 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// 304. See [`crate::maintenance::K_FTS_REBUILD_PENDING`]. It costs one `sync_meta` lookup
 /// on every launch that does not need it.
 ///
-/// **It is also the one step here that is not allowed to stop a launch.** Every other
-/// failure in this function means the database cannot be used at all; a rebuild that fails
-/// means search is wrong, which is bad and is not the same thing. Making it fatal would turn
-/// a full disk into an app that refuses to start and tells the user to move a perfectly
-/// good `mtg.db` aside. So it is logged, the debt is left recorded, and the next launch —
-/// or the next sync, through `compact_once` — tries again.
+/// **[`migrate`] is the only step here allowed to stop a launch.** A schema that cannot be
+/// brought to head means the database cannot be used at all. The other two mean something is
+/// *worse* rather than unusable — a rebuild that fails means search is wrong, a drop that
+/// fails means a few hundred megabytes stay parked — and both failures have the same likely
+/// cause: a disk that is full, read-only, or held open by something else. Making either
+/// fatal would turn that into an app which refuses to start and tells the user to move a
+/// perfectly good `mtg.db` aside, which is the one remedy a full disk is deaf to. So both
+/// are logged, their debt is left exactly where it was, and the next launch — or the next
+/// sync, through `compact_once` and `create_staging` — tries again.
 ///
 /// The drop is not tidiness. The ingest commits its staging load a batch at a time, so a
 /// sync that is killed partway — a closed lid, a pulled stick, a crash — leaves a
-/// *committed* staging table holding most of a card database: measured against the ~880 MB
-/// `mtg.db`, that is several hundred megabytes. Nothing reclaims it on its own, because the
-/// only other `DROP` is inside [`create_staging`], and the next launch's sync short-circuits
-/// on its stored ETag until Scryfall rotates the bulk file — so the residue can sit there
-/// for days while every launch adds nothing but reads around it.
+/// *committed* staging table holding most of a card database: measured against the ~2 GB
+/// `mtg.db`, that is several hundred megabytes.
+///
+/// **What bounds that residue's life is the throttle, not Scryfall's rotation.** The only
+/// other `DROP` is inside [`create_staging`], and the metadata that lets a check
+/// short-circuit (`bulk_etag`, `bulk_updated_at`) is written *after* a successful ingest —
+/// so a killed run stores nothing, and the next run that is actually due sees the same
+/// changed bulk file it died downloading and re-enters `create_staging`. The residue
+/// therefore survives the rest of the 24 h check window, and survives indefinitely only
+/// while the app stays offline or unlaunched. That is still a day of a USB stick carrying
+/// hundreds of megabytes of nothing, and a launch is the moment it is free to hand back.
 ///
 /// This returns those pages to SQLite's freelist, so the next ingest reuses them instead of
 /// growing the file past them — and on an incremental-auto-vacuum database, which is every
@@ -476,7 +490,14 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
              could not be done now: {e}\nSearch results may be wrong until the next sync."
         );
     }
-    conn.execute_batch("DROP TABLE IF EXISTS cards_staging")
+    if let Err(e) = conn.execute_batch("DROP TABLE IF EXISTS cards_staging") {
+        eprintln!(
+            "an interrupted sync left a `cards_staging` table behind and it could not be \
+             dropped now: {e}\nThe data folder is using more space than it needs to until \
+             the next sync reuses it."
+        );
+    }
+    Ok(())
 }
 
 /// Create a fresh, empty `cards_staging` table with the exact `cards` layout.
@@ -671,9 +692,11 @@ mod tests {
 
     /// A killed sync leaves a *committed* staging table now that the ingest chunks its
     /// load — several hundred megabytes of it, on the database of an app that ships on a
-    /// USB stick. Nothing else would drop it for days: `create_staging` is the only other
-    /// `DROP`, and it does not run until the sync stops short-circuiting on its stored
-    /// ETag, which waits on Scryfall rotating the bulk file.
+    /// USB stick. Nothing else would drop it before the next run that is actually due:
+    /// `create_staging` holds the only other `DROP`, and `bulk_etag`/`bulk_updated_at` are
+    /// written only after a *successful* ingest — so the killed run stored nothing, and the
+    /// rest of the 24 h check window (longer, offline) stands between the residue and the
+    /// `create_staging` that would clear it.
     ///
     /// A real file rather than `:memory:`, because the residue this is about is disk.
     #[test]
@@ -717,6 +740,37 @@ mod tests {
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The twin of `maintenance::a_launch_survives_a_repair_it_cannot_carry_out`, for the
+    /// other non-fatal step. `init_state` turns a `prepare_database` error into "this file
+    /// may be from a newer version of the app, or damaged — move it aside", which is a
+    /// misleading thing to say about a database whose only problem is that the *disk* is
+    /// full or read-only, and a useless thing to suggest to somebody who has no room to
+    /// move it to. Space this drop would have reclaimed is not worth a launch.
+    ///
+    /// The failure is arranged with a view, because "the disk is full" is not something a
+    /// test can stage hermetically: `DROP TABLE` refuses to delete a view by name, so the
+    /// statement fails for a reason of its own while everything around it stays healthy.
+    #[test]
+    fn a_launch_survives_a_staging_drop_it_cannot_carry_out() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch("CREATE VIEW cards_staging AS SELECT 1 AS x;")
+            .unwrap();
+
+        prepare_database(&conn).expect("a launch must not die on a drop it cannot do");
+
+        // The residue is still there, and still recorded where the next attempt looks —
+        // `create_staging` at the next sync, `prepare_database` at the next launch.
+        let still: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 1, "the debt stays where a later run will find it");
     }
 
     #[test]
@@ -843,12 +897,18 @@ mod tests {
     /// so without them a second unserialised copy would insert instead of conflicting, and
     /// the upsert every quick-add depends on would silently create duplicates.
     ///
-    /// Every term of [`COLLECTION_GRAIN`] is exercised, one at a time, because this is the
-    /// constant all of Plan 3 upserts against and a term silently dropped from it is a term
-    /// that stops distinguishing anything. Deleting any of `finish`, `condition`,
-    /// `serial_number`, the four flags or `grading` from the constant fails a line below —
-    /// and turning `coalesce(serial_number, '')` back into a bare `serial_number` fails the
-    /// very first assertion, because two NULLs would stop conflicting.
+    /// **Every** term of [`COLLECTION_GRAIN`] is exercised, one at a time, because this is
+    /// the constant all of Plan 3 upserts against and a term silently dropped from it is a
+    /// term that stops distinguishing anything. Deleting any of `card_id`, `finish`,
+    /// `condition`, `lang`, `serial_number`, the four flags or `grading` from the constant
+    /// fails a line below — and turning `coalesce(serial_number, '')` back into a bare
+    /// `serial_number` fails the very first assertion, because two NULLs would stop
+    /// conflicting.
+    ///
+    /// `card_id` and `lang` are the two that took a deliberate row each. Every other term
+    /// varies naturally across the cases above them; those two were held constant by the
+    /// fixture, so until this test grew a German copy and a second card, "every term" was a
+    /// sentence about the constant rather than about anything being checked.
     #[test]
     fn the_collection_grain_is_unique_including_the_nullable_parts() {
         let conn = Connection::open_in_memory().unwrap();
@@ -868,6 +928,28 @@ mod tests {
         add("foil", "LP", None).unwrap();
         add("foil", "NM", Some("042/500")).unwrap();
         add("foil", "NM", Some("043/500")).unwrap();
+
+        // `lang` and `card_id`, each differing in exactly one term from the very first row
+        // — a German Alpha Bolt is a different object from an English one (spec §1 keeps
+        // `lang` per entry for precisely this), and two cards are two cards. Neither varies
+        // anywhere else in this test, so without these two rows both terms could be deleted
+        // from the constant with every assertion still passing.
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('bolt','lea','161','de','foil','NM',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .expect("`lang` must be part of the grain: a German copy is not the English one");
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('shock','m21','159','en','foil','NM',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .expect("`card_id` must be part of the grain");
 
         // The four flags. Each is in the grain because an altered — or signed, or proxy,
         // or misprinted — copy is a *different object* from a clean one, not a note about
@@ -915,7 +997,7 @@ mod tests {
         let n: i64 = conn
             .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n, 11);
+        assert_eq!(n, 13);
     }
 
     /// The enums, enforced where they cannot be argued with. `finishes` is a strict enum

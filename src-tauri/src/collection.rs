@@ -199,12 +199,18 @@ fn canonical_grading(grading: Option<&str>) -> Result<Option<String>, String> {
 
 /// A quantity the database will accept, refused in words rather than as a CHECK failure.
 ///
-/// **Zero is allowed, and keeps the row.** A stepper taken to zero leaves the entry with
-/// its condition, its purchase price, its tags and its acquisition story intact — the user
-/// still owns that story on the day they own none of the card. Deleting is [`remove_entry`]
-/// and only ever [`remove_entry`]; a negative number is not a quantity and must never be a
-/// back door to one.
-fn valid_quantity(n: i64, what: &str) -> Result<i64, String> {
+/// **Zero is allowed here, and keeps the row.** A stepper taken to zero leaves the entry
+/// with its condition, its purchase price, its tags and its acquisition story intact — the
+/// user still owns that story on the day they own none of the card. Deleting is
+/// [`remove_entry`] and only ever [`remove_entry`]; a negative number is not a quantity and
+/// must never be a back door to one.
+///
+/// `what` names the field, so the one message serves every caller. The wishlist shares it
+/// (`crate::wishlist::set_wish_quantity`) for the *negative* half only — its zero is a
+/// removal, because `wishlist_entries` carries `CHECK (quantity > 0)` and a wish holds
+/// nothing worth keeping once emptied. Both refuse below zero for the same reason, and
+/// there is no second wording of it.
+pub(crate) fn valid_quantity(n: i64, what: &str) -> Result<i64, String> {
     (n >= 0)
         .then_some(n)
         .ok_or_else(|| format!("{n} is not a quantity. A {what} cannot be less than zero."))

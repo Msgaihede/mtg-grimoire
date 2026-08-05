@@ -903,11 +903,14 @@ mod tests {
     }
 
     /// The reason there are two connections. A search must answer while an ingest holds
-    /// the write connection for its whole 44 s run — under WAL the reader sees the last
-    /// committed snapshot and never waits, and the only thing that used to serialise them
-    /// was sharing one `Mutex<Connection>`. Run from another thread, as the real command
-    /// is, so a regression to the shared lock fails here in five seconds rather than
-    /// hanging the suite.
+    /// the write connection — under WAL the reader sees the last committed snapshot and
+    /// never waits, and the only thing that used to serialise them was sharing one
+    /// `Mutex<Connection>`. This test holds that lock outright, which is the guarantee
+    /// being pinned: the chunked ingest releases it between batches, so a search that only
+    /// answered in those gaps would still pass a gentler test and still stall a reader for
+    /// the length of a batch. Run from another thread, as the real command is, so a
+    /// regression to the shared lock fails here in five seconds rather than hanging the
+    /// suite.
     #[test]
     fn a_search_answers_while_an_ingest_holds_the_write_connection() {
         use crate::sync::lock_db_read;

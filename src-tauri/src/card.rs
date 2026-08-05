@@ -207,9 +207,17 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 
 /// Every **paper** printing of one oracle card, newest first, plus how many there are.
 ///
-/// A blank `oracle_id` returns nothing rather than matching: `oracle_id` is NULLABLE
-/// (reversible cards have none), and a query that let `''` through would be one `IS NULL`
-/// away from returning every such card in the database as a "printing" of each other.
+/// A blank `oracle_id` returns nothing rather than matching. The column is NULLABLE, and a
+/// query that let `''` through would be one `IS NULL` away from returning every card that
+/// lacked one as a "printing" of each other.
+///
+/// **Not because reversible cards have none** — that belief travelled through this codebase
+/// and it is wrong. Scryfall omits the *top-level* `oracle_id` on `reversible_card`, and
+/// [`crate::card_row`] falls back to `card_faces[0].oracle_id` exactly as it does for `cmc`,
+/// `type_line` and `mana_cost`, so the column is filled. Measured on the live database:
+/// **0 of 116 568 rows** have a NULL `oracle_id`, all 81 reversible printings included. The
+/// nullability is a contract with a JSON shape, not a population; this guard is a fence
+/// around a case that does not currently occur.
 ///
 /// Two statements over one `WHERE`: the page, and an uncapped count so a truncated list
 /// can say what it is a truncation *of*. The count is cheap in a way
@@ -414,8 +422,10 @@ mod tests {
         assert!(all[0].finishes.as_deref().unwrap().contains("foil"));
     }
 
-    /// `oracle_id` is NULLABLE — reversible cards have none at all. An empty list, not a
-    /// query that matches every row whose oracle_id is also null.
+    /// `oracle_id` is NULLABLE, so an id nothing answers to must give an empty list rather
+    /// than a query that matches every row whose `oracle_id` is also null. (No live row has
+    /// one — see [`list_printings`] — which is why the blank case needs a test rather than
+    /// a search of the database to find it.)
     #[test]
     fn an_unknown_oracle_id_returns_nothing() {
         let conn = seeded();

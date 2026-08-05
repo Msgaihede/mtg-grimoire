@@ -581,8 +581,11 @@ impl Cache {
     /// * The **write connection was contended** — an ingest holds it, and `record`'s
     ///   `try_lock` with [`Duration::ZERO`] declines to wait (deliberately: see the arm
     ///   below). The bytes are on disk, but no row vouches for them, so the waiter's
-    ///   [`is_current`] misses and it fetches again. This is the common one: it is true for
-    ///   the ~44 s of every ingest.
+    ///   [`is_current`] misses and it fetches again. This is the common one: an ingest is
+    ///   the app's longest write, and it is holding the connection for all but the gaps
+    ///   between its 2 000-row batches. (Not for its whole ~44 s run — `ingest_gz` commits
+    ///   and releases per batch since Plan 3 — so this degradation is likely during an
+    ///   ingest rather than certain.)
     /// * The **store failed** — a read-only data directory, a full disk. Nothing is on disk
     ///   to re-read, and nothing may be recorded, so the waiter necessarily fetches.
     ///
@@ -626,8 +629,10 @@ impl Cache {
             // Bookkeeping last, and optional. Losing the row costs one re-fetch from an
             // origin with no rate limit — so this is a single `try_lock`
             // ([`Duration::ZERO`]) rather than a wait: a *contended* write lock means an
-            // ingest that will hold it for the next 44 s, and polling for it would park a
-            // worker thread on a lock it was never going to win, once per image.
+            // ingest, which holds it for one 2 000-row batch at a time and takes it
+            // straight back afterwards. Waiting would park a worker thread per image
+            // through a run that mostly is not going to hand it over, to save a re-fetch
+            // from an origin Scryfall documents as having no rate limit.
             Ok(()) => {
                 if let Some(conn) = crate::db::lock_for(write, Duration::ZERO) {
                     let _ = record(&conn, key, uri, bytes.len());

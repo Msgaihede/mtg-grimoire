@@ -205,8 +205,10 @@ describe("AddToCollectionButton", () => {
     expect(wish.cardId).toBeUndefined();
   });
 
-  /** A reversible card has no oracle id, so there is nothing an "any printing" wish could
-   *  be keyed on — and a choice that cannot be kept is not offered. */
+  /** With no oracle id there is nothing an "any printing" wish could be keyed on, and a
+   *  choice that cannot be kept is not offered. No live row is in this state (the
+   *  reversible-card explanation this test used to carry is false), so this fence exists
+   *  only here — which is exactly why it needs a test. */
   it("cannot wish for any printing of a card that has no oracle id", async () => {
     await open({ ...BOLT, oracleId: null });
 

@@ -11,7 +11,8 @@
 //! state to preserve. A wish for none of something is not a wish, and [`set_wish_quantity`]
 //! takes a zero as the removal it can only be.
 
-use crate::collection::{EntryChange, BUSY, FINISHES};
+use crate::collection::{valid_quantity, EntryChange, BUSY, FINISHES};
+use crate::filters::{escape_like, LIKE_ESCAPE};
 use crate::schema::WISHLIST_GRAIN;
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -253,12 +254,10 @@ fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, Str
 /// come from a bug or a hand-made payload, and in a module where zero legitimately deletes,
 /// treating `-1` as "close enough to zero" would make arithmetic that went wrong somewhere
 /// upstream silently destroy a row. Zero is a thing a stepper can mean; minus one is not.
+/// The refusal is [`crate::collection::valid_quantity`]'s, verbatim, because "the same
+/// refusal" is the claim — a second copy of the sentence is a second thing to drift.
 pub fn set_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
-    if quantity < 0 {
-        return Err(format!(
-            "{quantity} is not a quantity. A wishlist quantity cannot be less than zero."
-        ));
-    }
+    valid_quantity(quantity, "wishlist quantity")?;
     if quantity == 0 {
         return remove_wish(conn, id);
     }
@@ -288,24 +287,6 @@ pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
         quantity: 0,
         removed: true,
     })
-}
-
-/// The `ESCAPE` character for the name filter's `LIKE`.
-///
-/// A backslash, and interpolated into the SQL as a literal — which is safe because it is
-/// this constant and never anything a caller sends. Every character it protects is escaped
-/// by [`escape_like`], itself included.
-const LIKE_ESCAPE: char = '\\';
-
-/// A user's text as a `LIKE` pattern that means exactly what it says.
-///
-/// The escape character goes first: doing it last would escape the backslashes the other
-/// two arms had just introduced, and `%` would come back out as a literal `\` followed by a
-/// wildcard.
-fn escape_like(text: &str) -> String {
-    text.replace(LIKE_ESCAPE, &format!("{LIKE_ESCAPE}{LIKE_ESCAPE}"))
-        .replace('%', &format!("{LIKE_ESCAPE}%"))
-        .replace('_', &format!("{LIKE_ESCAPE}_"))
 }
 
 pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
@@ -1178,9 +1159,15 @@ mod tests {
         );
         assert_eq!(found("God_Pharaoh"), Vec::<String>::new(), "`_` is not `-`");
         assert_eq!(found("God-Pharaoh"), ["God-Pharaoh's Gift"]);
-        // The escape character itself, which the escaping has to escape first of all — and
-        // which must reach SQLite as a pattern rather than as a dangling escape (that is a
-        // *prepare* error, so an unescaped backslash would fail the whole list).
+        // The escape character itself, which the escaping has to escape first of all.
+        //
+        // **Neither of these two lines is a fence** — the fences are `%` and `God_Pharaoh`
+        // above, which fail the moment the escaping stops. A backslash reaches SQLite as a
+        // *bound parameter*, so it can never be a prepare error whatever it contains, and
+        // SQLite's `LIKE` treats a trailing escape as matching nothing rather than raising:
+        // both of these answer with an empty list escaped or not. They are here as recorded
+        // behaviour — no name in Magic contains a backslash, so "nothing found" is the
+        // right answer and worth pinning — not as protection.
         assert_eq!(found("\\"), Vec::<String>::new());
         assert_eq!(found("\\%"), Vec::<String>::new());
         assert_eq!(

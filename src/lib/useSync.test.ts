@@ -10,6 +10,7 @@ const idle: SyncStatus = {
   lastIngestSkipped: 12,
   dataDir: "D:\\app\\data",
   syncing: false,
+  imageStoreFailures: 0,
 };
 
 /** The whole point of `SyncStatus` having five nullable fields (see `sync::status`). */
@@ -23,10 +24,14 @@ describe("mergeStatus", () => {
       lastIngestSkipped: null,
       dataDir: "D:\\app\\data",
       syncing: true,
+      // Not carried, and it must not be: it is a process counter rather than a database
+      // read, so the fresh poll's value is always the true one.
+      imageStoreFailures: 4,
     };
 
     const merged = mergeStatus(idle, busy);
 
+    expect(merged.imageStoreFailures).toBe(4);
     expect(merged.cardCount).toBe(116_568);
     expect(merged.bulkUpdatedAt).toBe("2026-08-03T21:16:27.869+00:00");
     expect(merged.lastCheckAt).toBe("1800000000");

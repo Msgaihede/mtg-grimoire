@@ -9,15 +9,40 @@ Scryfall as the only external dependency.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 
-## Data & sync (measured against the live Scryfall API, 2026-08-04)
+## Verifying UI in the real app (do this, not just tests)
+Every UI task in Plans 2–3 found something the suite could not: a clipped reason line, a
+tile that said nothing until you searched again, a header behind the scroller. Drive the
+real window over CDP.
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+npm run tauri dev
+```
+Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
+`eval` · `click <css>` · `text <visible text>` · `key Escape` · `type` · `size 1024 768` ·
+`media prefers-reduced-motion reduce` · `shot out.png` · `console out.jsonl` (stays
+attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that watches
+only one reports a clean console it never looked at).
+
+Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug/data/mtg.db`
+**while the app holds it** (WAL allows it). Delete every seeded row afterwards — `data/` is
+the user's, and it is never committed.
+
+## Data & sync (measured against the live Scryfall API, 2026-08-04/05)
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtgcollection.tracker/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
   `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
   folder to force a clean first-run sync. All three locations are gitignored.
-- A cold sync takes ~45 s (77 MB download + streaming ingest + FTS rebuild) and yields
-  ~116.5 k cards / ~1 050 sets. `mtg.db` measures ~2 GB before compaction (Task 3 shrinks
-  it); `raw` is much the largest column at 622 MB, which schema v3's gzip takes to ~236 MB
-  on the first sync after the migration.
+- A sync yields ~116.6 k cards / ~1 050 sets from a 77 MB download. **Timings, measured
+  2026-08-05 over three live forced syncs (debug build):** `checking` <1 s · `downloading`
+  ~2.5 s · `ingesting` **~81 s** · `reclaiming` ~6 s · `sets` ~5 s — **92–99 s end to end**.
+  The old **44.8 s** figure predates schema v3: the ingest now gzips `raw` on the way in,
+  and that is where the extra minute went. A run that finds nothing new is **1.8 s**.
+- `mtg.db` was **2.02 GB** and is **547 MB** after the two things Plan 3 added: the one-time
+  `compacting` conversion (which reclaimed a 996 MB freelist) and gzip `raw`
+  (**622 MB → 235 MB**, 38 % of the original — not the quarter that was estimated). A
+  full re-ingest afterwards leaves the file within 0.03 % of that and the freelist at **0**,
+  which is the post-swap `incremental_vacuum` doing its job.
 - The app never closes its SQLite connection, so a `mtg.db-wal` the size of the ingest
   (~857 MB) used to outlive the process. `RunEvent::Exit` now runs
   `PRAGMA wal_checkpoint(TRUNCATE)`, and `journal_size_limit` caps the file at 64 MB.
@@ -27,8 +52,19 @@ Scryfall as the only external dependency.
   bulk file has not changed it answers "Already up to date" in well under a second and
   emits nothing but a `checking` phase. To exercise a real ingest, clear `bulk_etag` *and*
   `bulk_updated_at` from `sync_meta` — clearing the etag alone still short-circuits.
-- Measured 2026-08-04 in a live window: a full forced sync is **44.8 s**, and the header's
-  card count stays readable through every second of it (that is what `db_read` bought).
+- Searches keep answering through every second of a sync — 20 timed searches across one,
+  every one correct, none stalled (that is what `db_read` bought).
+- The ingest **commits every 2 000 rows and releases the write connection between batches**,
+  so a collection edit during a sync waits one batch, not one sync. `ingest_gz` takes
+  `&Mutex<Connection>` for exactly that reason. **Measured mid-ingest: 10 `collection_add`
+  calls, 4–7 ms each, 0 `BUSY` refusals.** A killed ingest therefore leaves a *committed*
+  `cards_staging`; `prepare_database` drops it at the next launch, because the ETag that
+  would short-circuit the next check is written only after a *successful* ingest.
+- `cards.raw` is a **gzip BLOB** from schema v3 (the column is still *declared* `TEXT` — v1
+  is frozen — and SQLite's TEXT affinity leaves a BLOB alone). `json_extract` over it is a
+  hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
+  Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
+  **not** rewrite existing rows — the corpus converts on the next sync's swap.
 
 ## Image cache (measured 2026-08-04, live)
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`
@@ -47,6 +83,19 @@ Scryfall as the only external dependency.
 - `mtgimg:` is an `img-src` and nothing else — a `fetch()` at it fails CORS by design (no
   `Access-Control-Allow-Origin`, because an `<img>` load is no-cors). Read images with
   `<img>`, never with `fetch`.
+- A card image URI with no `?<epoch>` cache-buster is **refused at resolution** — it is
+  uncacheable by construction, so it resolves to the no-image placeholder and never to
+  bytes. This heals itself: the printings that publish `errors.scryfall.com/soon.jpg` in all
+  four slots were **eight** on 2026-08-04 and are **four** (`mic 55`–`58`) on 2026-08-05,
+  because a sync rewrites `image_uris` and a URI that gains a cache-buster becomes
+  fetchable. No code is involved; do not build a re-fetch path for it.
+  `cards.scryfall.io` is the **only** host images are fetched from; an off-host URI is
+  refused and warned about once per process. A placeholder is served `no-store` (it is the
+  one 200 whose content is meant to change), real bytes `max-age=86400`.
+- Images are fetched **once per key** even when a screenful asks at the same moment
+  (`Cache`'s per-key mutex + a re-read of the disk). The waiter re-reads rather than being
+  handed the bytes, so it degrades to a second fetch when the write connection was busy or
+  the store failed — both acceptable, both documented at `images::fetch_and_store`.
 
 ## Frontend design (binding)
 - **All frontend work follows the `frontend-design` skill** (invoke it before UI tasks) and the
@@ -104,7 +153,48 @@ Scryfall as the only external dependency.
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
 - Two connections: `AppState.db` writes, `AppState.db_read` is `SQLITE_OPEN_READ_ONLY`.
-  Reads go through `db_read` so a search is not stuck behind a 44 s ingest.
+  Reads go through `db_read` so a search is not stuck behind an ~80 s ingest.
+- `db::open` sets `PRAGMA auto_vacuum=INCREMENTAL` **before** `journal_mode=WAL` — after WAL
+  has materialised the file the pragma is a silent no-op that only a `VACUUM` can apply.
+  Databases from Plans 1–2 are converted once, after a sync, by `maintenance` (`compacting`
+  phase); a `VACUUM` **always** needs `schema::create_fts` after it.
+- Only `schema::migrate` may stop a launch. `prepare_database`'s other two steps (an FTS
+  rebuild an interrupted compaction owed; the staging table an interrupted ingest left)
+  are logged and left owing — their likeliest cause is a full or read-only disk, and
+  `init_state` turns any error into "move `mtg.db` aside", which that disk cannot do.
+
+## Hard rules — user data
+- `collection_entries`/`wishlist_entries`/`card_migrations` reference `cards.id` **softly**
+  and denormalize `set_code`/`collector_number`/`lang` (and `name`, on the wishlist). A row
+  whose card vanishes is **flagged** (`needs_review`, a sentence) and never deleted —
+  `reconcile::sweep_orphans` runs after every ingest and clears the flag if the card returns.
+- Grain: `(card_id, finish, condition, lang, altered, signed, proxy, misprint, serial, grading)`,
+  as `schema::COLLECTION_GRAIN` — one constant, because the UNIQUE index and every
+  `ON CONFLICT` target must match verbatim. The `coalesce(…, '')`s are load-bearing: NULLs in
+  a UNIQUE index are distinct. `grading` enters identity as **raw text**, so it is only ever
+  written through the one fixed-field struct that owns its key order.
+- **Quantity 0 keeps the collection row** — the condition, purchase price, tags and
+  acquisition story survive the day the user owns none of the card. Deleting is
+  `remove_entry` and only ever `remove_entry`. The wishlist is the opposite by table CHECK
+  (`quantity > 0`): a wish for none of something is not a wish, so zero removes it. Both
+  refuse a negative through the one `collection::valid_quantity`.
+- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
+  are CHECK-constrained in SQL *and* validated in Rust, and the imported string is kept in
+  `condition_original`.
+- **A finish's price is a lookup in the `prices` blob** (`usd`/`usd_foil`/`usd_etched`;
+  `eur_etched` does not exist, so etched is unpriced in EUR). `cards.price_usd` is a
+  sort/display fallback chain and must never be summed. `tix` is never summed with fiat.
+- **Wishlist fulfillment is finish-aware.** A foil wish is not filled by a nonfoil copy; a
+  wish naming no finish is filled by any. `wishlist::OWNED_SQL` sums `quantity`, so a
+  collection row stepped to zero contributes nothing.
+- `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
+  the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
+  counted, and asking to be looked at", never "hidden".
+- Writes take `AppState.db` through `db::lock_for(…, WRITE_LOCK_WAIT)` and answer
+  `collection::BUSY` if they cannot — reads go through `db_read` like everything else.
+- `cards.oracle_id` is NULLABLE and **no live row is null** — 0 of 116,568, all 81
+  reversible printings included, because `card_row` falls back to `card_faces[0]`. Every
+  `oracleId === null` branch in the app is a fence around the type, not a card you can find.
 
 ## Hard rules
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.

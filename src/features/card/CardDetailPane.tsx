@@ -99,7 +99,13 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   const printings = useQuery({
     queryKey: ["card", "printings", oracleId],
     queryFn: () => ipc.cardPrintings(oracleId as string),
-    // A reversible card has no `oracle_id` at all, so there is nothing to ask for.
+    // `oracleId` is nullable on the wire, so there is a state with nothing to ask for.
+    //
+    // It is *not* the reversible-card state, whatever the comment here used to say:
+    // Scryfall omits only the top-level `oracle_id` on those, and `card_row` falls back to
+    // `card_faces[0]`, so the column is filled. 0 of 116,568 live rows are null, all 81
+    // reversible printings included. This gate is a fence around the type, not around a
+    // card — which is why the section below renders nothing instead of explaining itself.
     enabled: oracleId !== null,
   });
 
@@ -388,8 +394,9 @@ function Printings({
   error: string | null;
 }) {
   const headingId = useId();
-  // A reversible card has no `oracle_id`, so it has no printings list to fail at loading:
-  // nothing to say, and no empty section to say it in.
+  // A card with no `oracleId` never asked for printings, so it has no list to fail at
+  // loading: nothing to say, and no empty section to say it in. (Nor does a card whose
+  // printings all left `cards` — same shape, same silence.)
   if (!loading && !error && items.length === 0) return null;
 
   const groups = groupByIllustration(items);

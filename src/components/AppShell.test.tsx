@@ -22,6 +22,7 @@ const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   lastIngestSkipped: 0,
   dataDir: "D:\\app\\data",
   syncing: false,
+  imageStoreFailures: 0,
   ...over,
 });
 
@@ -208,6 +209,7 @@ describe("the error banner", () => {
       lastIngestSkipped: null,
       dataDir: "D:\\app\\data",
       syncing: true,
+      imageStoreFailures: 0,
     });
     render(<AppShell>{null}</AppShell>);
     const button = await screen.findByRole("button", { name: /refresh/i });

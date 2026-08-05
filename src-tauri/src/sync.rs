@@ -100,11 +100,11 @@ pub struct SyncOutcome {
 
 /// What the UI polls.
 ///
-/// `syncing` and `data_dir` are always answered. The five database-derived fields are
-/// `None` only when the read-only connection could not be used at all — not, as they once
-/// were, for the whole of every ingest (see [`status`]). `None` there means "not readable
-/// right now", never "zero"; a UI should keep showing its last value rather than render
-/// an empty collection.
+/// `syncing`, `data_dir` and `image_store_failures` are always answered — none of them
+/// needs the database. The five database-derived fields are `None` only when the read-only
+/// connection could not be used at all — not, as they once were, for the whole of every
+/// ingest (see [`status`]). `None` there means "not readable right now", never "zero"; a UI
+/// should keep showing its last value rather than render an empty collection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
@@ -119,6 +119,19 @@ pub struct SyncStatus {
     pub last_ingest_skipped: Option<i64>,
     pub data_dir: String,
     pub syncing: bool,
+    /// Card images fetched successfully and then refused by the filesystem this process
+    /// run — a read-only data folder, a full disk (see [`crate::images::Cache`]).
+    ///
+    /// Not an `Option`: it is a process counter, not a database read, so there is no state
+    /// in which it cannot be answered. It resets with the app because the failures it
+    /// counts are about *this* run's data folder; a stale count carried across restarts
+    /// would report a disk that has since been emptied.
+    ///
+    /// Surfaced because the counter existed for a whole plan with nothing reading it, and
+    /// the condition it reports is otherwise invisible: images still *display* (the bytes
+    /// are in hand), they simply are never cached, so the only symptom is a grid that
+    /// re-downloads itself forever.
+    pub image_store_failures: u64,
 }
 
 /// Every value [`Progress::phase`] takes, in the order a run that does all of them
@@ -871,6 +884,10 @@ async fn do_sync(
 /// app runs from a USB stick, and the database going away underneath it is the case they
 /// are `Option` *for*. `None` means "not readable right now", never "zero".
 ///
+/// `image_store_failures` is the one field here that never touches the connection at all —
+/// it is read straight off the image cache's atomic, which is what makes it answerable on
+/// exactly the polls where a full disk has also made the database unreadable.
+///
 /// `card_count` is counted live rather than read from `sync_meta`, so it is right even if
 /// a previous run died before writing its meta — and it is counted *here* rather than
 /// through [`count_cards`], whose `unwrap_or(0)` is right for its own callers (an empty
@@ -891,6 +908,8 @@ pub fn status(state: &AppState) -> SyncStatus {
         last_ingest_skipped: get_meta(&conn, K_LAST_INGEST_SKIPPED).and_then(|s| s.parse().ok()),
         data_dir: state.data_dir.display().to_string(),
         syncing: state.syncing.load(Ordering::SeqCst),
+        // An atomic in memory, so this one is answered even when the read above was not.
+        image_store_failures: state.images.store_failures(),
     }
 }
 
@@ -1233,6 +1252,7 @@ mod tests {
             last_ingest_skipped: Some(12),
             data_dir: "D:\\app\\data".into(),
             syncing: true,
+            image_store_failures: 3,
         })
         .unwrap();
         assert_eq!(
@@ -1244,11 +1264,14 @@ mod tests {
                 "lastError": "rate limited by Scryfall",
                 "lastIngestSkipped": 12,
                 "dataDir": "D:\\app\\data",
-                "syncing": true
+                "syncing": true,
+                "imageStoreFailures": 3
             })
         );
         // The unreadable shape: nothing the database owns could be read, and `cardCount`
         // says so with `null` rather than lying with a `0` the UI would render as "empty".
+        // `imageStoreFailures` is a number regardless — it is the field whose *cause* is
+        // most likely to be the same full disk, so it must not go missing with the rest.
         let busy = serde_json::to_value(SyncStatus {
             card_count: None,
             last_check_at: None,
@@ -1257,6 +1280,7 @@ mod tests {
             last_ingest_skipped: None,
             data_dir: "D:\\app\\data".into(),
             syncing: true,
+            image_store_failures: 7,
         })
         .unwrap();
         assert_eq!(
@@ -1268,7 +1292,8 @@ mod tests {
                 "lastError": null,
                 "lastIngestSkipped": null,
                 "dataDir": "D:\\app\\data",
-                "syncing": true
+                "syncing": true,
+                "imageStoreFailures": 7
             })
         );
 

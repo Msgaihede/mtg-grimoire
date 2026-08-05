@@ -10,6 +10,11 @@ export interface RibbonProps {
   statusLine: string | null;
   /** Tooltip on the status line: which data folder is live (spec §3). */
   dataDir: string | undefined;
+  /**
+   * Card images this run fetched and could not cache. Appended to the same tooltip when
+   * non-zero, because it is a statement about that data folder and nothing else.
+   */
+  imageStoreFailures?: number;
   /** A sync is running — this window's Refresh, or the one spawned at startup. */
   busy: boolean;
   /** The last Refresh came back with nothing new. */
@@ -34,12 +39,27 @@ export function Ribbon({
   title,
   statusLine,
   dataDir,
+  imageStoreFailures = 0,
   busy,
   upToDate,
   hasError,
   onRefresh,
   sync,
 }: RibbonProps) {
+  // Two sentences about one folder, in the tooltip that already names it. Not a banner:
+  // every affected image still *displays* — the bytes were in hand when the write failed
+  // — so nothing is broken on screen and interrupting the reader would overstate it. What
+  // is wrong is invisible without this: the cache never fills, and every revisit
+  // re-downloads. A settings screen (Plan 6) is where this graduates to a visible number.
+  const tooltip =
+    [
+      dataDir,
+      imageStoreFailures > 0 &&
+        `${imageStoreFailures} card image${imageStoreFailures === 1 ? "" : "s"} could not be saved to the cache — the data folder may be read-only or full.`,
+    ]
+      .filter((s): s is string => typeof s === "string" && s.length > 0)
+      .join("\n") || undefined;
+
   return (
     <div className="shrink-0">
       <div className="flex h-12 items-center gap-3 bg-surface px-4">
@@ -62,7 +82,7 @@ export function Ribbon({
             </p>
           )}
           {statusLine && (
-            <p className="truncate text-xs text-dim" title={dataDir}>
+            <p className="truncate text-xs text-dim" title={tooltip}>
               {statusLine}
             </p>
           )}

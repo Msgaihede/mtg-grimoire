@@ -15,7 +15,7 @@ export interface AddTarget {
   name: string;
   setCode: string;
   collectorNumber: string;
-  /** For an "any printing" wish. `null` on a reversible card, which has no oracle id. */
+  /** For an "any printing" wish. `null` mirrors the column's nullability; no live row is. */
   oracleId: string | null;
   /** The finishes this printing exists in. Empty means "unknown", and nonfoil is offered. */
   finishes: Finish[];
@@ -315,12 +315,15 @@ function AddPopup({
               key={label}
               type="button"
               aria-pressed={anyPrinting === any}
-              // A wish for "any printing" is keyed on the oracle card, and a reversible
-              // card has none — Scryfall gives those printings no `oracle_id`, anywhere,
-              // so no surface can offer this and none of them tells the reader to go
-              // looking elsewhere for it. Disabled rather than hidden: a choice that
-              // silently disappears on some cards is one the reader has no reason to
-              // believe exists.
+              // A wish for "any printing" is keyed on the oracle card, so a card that
+              // reaches this popup without an `oracleId` cannot make one.
+              //
+              // That is a fence around the nullable type, not around a kind of card. The
+              // belief that reversible cards have no `oracle_id` is false: Scryfall omits
+              // only the *top-level* one, and `card_row` falls back to `card_faces[0]`, so
+              // 0 of 116,568 live rows are null and all 81 reversible printings can be
+              // wished for by oracle. Disabled rather than hidden all the same: a choice
+              // that silently disappears is one the reader has no reason to believe exists.
               disabled={any && target.oracleId === null}
               onClick={() => setAnyPrinting(any)}
               className={cn(
