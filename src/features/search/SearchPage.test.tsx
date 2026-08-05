@@ -622,6 +622,27 @@ describe("the result layout toggle", () => {
     expect(useAppStore.getState().selectedCardId).toBe("1");
   });
 
+  /**
+   * The wall is generic now — it draws anything with a name, a set and a number, and the
+   * collection view draws its own rows through it — so the tile's quick-add is built *here*,
+   * from the search row it is about. Which is the only place it can be honest: the backend
+   * takes any finish for any card, and a tile that always offered nonfoil is how a foil-only
+   * printing takes a nonfoil entry that then prices through a `usd` key its blob lacks.
+   */
+  it("builds a tile's quick-add from the row it is about", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, finishes: `["foil"]` }]));
+    wrap(<SearchPage />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ }),
+    );
+
+    const chips = within(await screen.findByRole("group", { name: "Finish" })).getAllByRole(
+      "button",
+    );
+    expect(chips.map((c) => c.textContent)).toEqual(["Foil"]);
+  });
+
   it("says which layout is showing", async () => {
     wrap(<SearchPage />);
 

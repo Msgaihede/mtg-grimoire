@@ -315,6 +315,26 @@ function Results({
             searchKey={searchKey}
             selectedId={selectedCardId}
             onSelect={selectCard}
+            // The tile's one control, built from the row it is about: the popup offers the
+            // finishes this printing exists in — a foil-only card must not take a nonfoil
+            // entry — and a wish made here can be for the card rather than for this piece of
+            // cardboard. `static` hands the anchoring to the tile's caption, so a 256px
+            // popup on a 170px tile opens from the tile's left edge instead of off the
+            // scroller's.
+            action={(card) => (
+              <AddToCollectionButton
+                align="start"
+                className={cn(REVEAL_ON_HOVER, "static")}
+                target={{
+                  cardId: card.id,
+                  name: card.name,
+                  setCode: card.setCode,
+                  collectorNumber: card.collectorNumber,
+                  oracleId: card.oracleId,
+                  finishes: parseFinishes(card.finishes),
+                }}
+              />
+            )}
             onNeedNextPage={() => {
               if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
                 void query.fetchNextPage();

@@ -1,4 +1,6 @@
+import { LayoutGrid, Rows3 } from "lucide-react";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
+import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -132,25 +134,81 @@ export function ManaValueChips({
  * The plain member of the family — "Owned", a finish, a condition grade. It carries its
  * label rather than a symbol because these are app vocabulary rather than Magic's, and a
  * letter in a circle for "Lightly played" would be a puzzle.
+ *
+ * `hint` is the exception that keeps that true where the word will not fit: the five
+ * condition grades are printed on every marketplace listing as `NM`/`LP`/`MP`/`HP`/`DMG`,
+ * and five spelled-out grades are 400px of chrome above the table they filter. The
+ * abbreviation is drawn, the grade is spoken, and the accessible name *begins* with the
+ * visible text so the chip is still addressable by what is written on it (WCAG 2.5.3).
  */
 export function ToggleChip({
   label,
   pressed,
   onClick,
+  hint,
 }: {
   label: string;
   pressed: boolean;
   onClick: () => void;
+  /** What the label is short for. Becomes the tooltip, and joins the accessible name. */
+  hint?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={pressed}
+      title={hint}
+      aria-label={hint ? `${label}, ${hint}` : undefined}
       className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(pressed))}
     >
       {label}
     </button>
+  );
+}
+
+/** The two layouts, and the words for them a reader would use. */
+const LAYOUTS = [
+  { id: "grid", label: "Card view", Icon: LayoutGrid },
+  { id: "table", label: "Table view", Icon: Rows3 },
+] as const satisfies readonly { id: SearchView; label: string; Icon: typeof LayoutGrid }[];
+
+/**
+ * How a list of cards is drawn — art, or a table.
+ *
+ * Not a filter, and it rides the filter row anyway: it is the only other control that
+ * governs the list below, and a second row holding one pair of buttons would be a whole
+ * band of chrome above the art. `ml-auto` sends it to the far end so the filters still read
+ * as a group without it, and the pair is icon-only because two 36px squares carry "grid or
+ * rows" at a glance in a way two words on a busy row do not.
+ *
+ * Takes its state rather than reading the store, because the two views that offer it are
+ * laid out independently: the search opens on art, the collection on the table (a
+ * collection is read for what is *in* it, and forty tiles answer none of that).
+ */
+export function LayoutToggle({
+  view,
+  onChange,
+}: {
+  view: SearchView;
+  onChange: (view: SearchView) => void;
+}) {
+  return (
+    <div role="group" aria-label="Result layout" className="ml-auto flex gap-1">
+      {LAYOUTS.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => onChange(id)}
+          aria-pressed={view === id}
+          aria-label={label}
+          title={label}
+          className={cn(FILTER_CONTROL, FILTER_FOCUS, "size-9", filterChipState(view === id))}
+        >
+          <Icon className="mx-auto size-4" aria-hidden="true" />
+        </button>
+      ))}
+    </div>
   );
 }
 

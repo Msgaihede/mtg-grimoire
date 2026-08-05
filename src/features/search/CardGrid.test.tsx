@@ -16,6 +16,32 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
+import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { parseFinishes } from "@/lib/finish";
+import { cn } from "@/lib/utils";
+
+/**
+ * The tile's trailing control, as `SearchPage` builds it.
+ *
+ * It lives at the call site now: the wall is generic over anything with a name, a set and a
+ * number, and a quick-add needs two fields — the finishes this printing exists in, and the
+ * oracle card it is of — that only a search row carries. A collection row has neither, and a
+ * tile that guessed would offer a nonfoil entry for a foil-only printing.
+ */
+const quickAdd = (card: CardSummary) => (
+  <AddToCollectionButton
+    align="start"
+    className={cn(REVEAL_ON_HOVER, "static")}
+    target={{
+      cardId: card.id,
+      name: card.name,
+      setCode: card.setCode,
+      collectorNumber: card.collectorNumber,
+      oracleId: card.oracleId,
+      finishes: parseFinishes(card.finishes),
+    }}
+  />
+);
 
 const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSummary => ({
   id,
@@ -112,6 +138,7 @@ describe("CardGrid", () => {
         onSelect={onSelect}
         onNeedNextPage={vi.fn()}
         searchKey="k"
+        action={quickAdd}
       />,
     );
 
@@ -139,6 +166,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         searchKey="k"
+        action={quickAdd}
       />,
     );
 
@@ -161,6 +189,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         searchKey="k"
+        action={quickAdd}
       />,
     );
 
@@ -207,12 +236,52 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         searchKey="k"
+        action={quickAdd}
       />,
     );
 
     const add = screen.getByRole("button", { name: /^Add Lightning Bolt/ });
     expect(add.closest("span")).toHaveClass("opacity-0", "group-hover:opacity-100");
     expect(add).not.toHaveAttribute("tabindex", "-1");
+  });
+
+  /**
+   * The two slots that make one wall serve two views. A badge is a fact about the *card* —
+   * how many are owned — so it sits over the art rather than in a caption line that is
+   * already a set, a number and a control at 12px; and it sits *outside* the button, because
+   * inside it a wall of forty cards would be forty buttons named "Lightning Bolt ×3".
+   */
+  it("marks a tile without renaming the button underneath it", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+        badge={(c) => <span>owned: {c.name}</span>}
+      />,
+    );
+
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const badge = screen.getByText(/owned: Lightning Bolt/);
+    expect(badge).toBeInTheDocument();
+    expect(art.contains(badge)).toBe(false);
+    expect(art).toHaveAccessibleName("Lightning Bolt");
+  });
+
+  /** The wall says what it is a wall of — the search's results, or somebody's collection. */
+  it("takes the name of the list it is showing", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+        label="Your collection"
+      />,
+    );
+
+    expect(screen.getByRole("group", { name: "Your collection" })).toBeInTheDocument();
   });
 
   /**

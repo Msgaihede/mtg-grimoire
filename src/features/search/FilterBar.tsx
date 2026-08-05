@@ -1,14 +1,13 @@
-import { LayoutGrid, Rows3 } from "lucide-react";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
-  filterChipState,
+  LayoutToggle,
   ManaChip,
   ManaValueChips,
   ResetAll,
 } from "@/components/FilterChips";
 import { MANA_KEYS } from "@/lib/mana";
-import { useAppStore, type SearchView } from "@/lib/store";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { SetCombobox } from "./SetCombobox";
 import { FORMATS, type CardSearch } from "./useCardSearch";
@@ -93,40 +92,10 @@ export function FilterBar({ search }: { search: CardSearch }) {
   );
 }
 
-/** The two layouts, and the words for them a reader would use. */
-const LAYOUTS = [
-  { id: "grid", label: "Card view", Icon: LayoutGrid },
-  { id: "table", label: "Table view", Icon: Rows3 },
-] as const satisfies readonly { id: SearchView; label: string; Icon: typeof LayoutGrid }[];
-
-/**
- * How the results are drawn — art, or a table.
- *
- * Not a filter, and it rides the filter row anyway: it is the only other control that
- * governs the list below, and a second row holding one pair of buttons would be a whole
- * band of chrome above the art. `ml-auto` sends it to the far end so the filters still
- * read as a group without it, and the pair is icon-only because two 36px squares carry
- * "grid or rows" at a glance in a way two words on a busy row do not.
- */
+/** The layout pair, bound to the search's own preference — the collection keeps a separate
+ *  one, because a search is for looking at cards and a collection for counting them. */
 function ViewToggle() {
   const view = useAppStore((s) => s.searchView);
   const setSearchView = useAppStore((s) => s.setSearchView);
-
-  return (
-    <div role="group" aria-label="Result layout" className="ml-auto flex gap-1">
-      {LAYOUTS.map(({ id, label, Icon }) => (
-        <button
-          key={id}
-          type="button"
-          onClick={() => setSearchView(id)}
-          aria-pressed={view === id}
-          aria-label={label}
-          title={label}
-          className={cn(FILTER_CONTROL, FILTER_FOCUS, "size-9", filterChipState(view === id))}
-        >
-          <Icon className="mx-auto size-4" aria-hidden="true" />
-        </button>
-      ))}
-    </div>
-  );
+  return <LayoutToggle view={view} onChange={setSearchView} />;
 }

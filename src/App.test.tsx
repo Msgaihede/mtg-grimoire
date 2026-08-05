@@ -6,6 +6,8 @@ const syncStatus = vi.hoisted(() => vi.fn());
 const searchCards = vi.hoisted(() => vi.fn());
 const cardDetail = vi.hoisted(() => vi.fn());
 const cardPrintings = vi.hoisted(() => vi.fn());
+const collectionList = vi.hoisted(() => vi.fn());
+const collectionSummary = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -21,6 +23,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     prefetchImages: vi.fn().mockResolvedValue(undefined),
     cardDetail,
     cardPrintings,
+    // The collection view is live too, and asks two questions on the way up: its rows, and
+    // what they add up to.
+    collectionList,
+    collectionSummary,
   },
 }));
 
@@ -86,6 +92,18 @@ beforeEach(() => {
   searchCards.mockReset().mockResolvedValue({ items: [BOLT], total: 1, totalIsCapped: false });
   cardDetail.mockReset().mockResolvedValue(BOLT_DETAIL);
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
+  collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  collectionSummary.mockReset().mockResolvedValue({
+    totalCards: 3,
+    uniqueCards: 2,
+    entries: 2,
+    tradelistCards: 0,
+    valueUsd: 801,
+    valueEur: 700,
+    unpricedUsd: 0,
+    unpricedEur: 0,
+    needsReview: 0,
+  });
   syncStatus.mockReset().mockResolvedValue({
     cardCount: 116_568,
     lastCheckAt: "1800000000",
@@ -112,6 +130,18 @@ it("swaps the main pane when a sidebar entry is picked", async () => {
   expect(screen.getByRole("heading", { name: "Wishlist", level: 1 })).toBeInTheDocument();
   expect(screen.getByText(/coming in a later plan/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
+});
+
+/** The second live view. The sidebar entry has to reach the real thing, not the blurb that
+ *  stood in for it — which is the one thing `CollectionPage`'s own tests cannot see. */
+it("opens the collection on the collection entry", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Collection" }));
+
+  expect(await screen.findByText("$801.00")).toBeInTheDocument();
+  expect(screen.getByText(/nothing here yet/i)).toBeInTheDocument();
+  expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
 });
 
 /**

@@ -1,12 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RarityGem } from "@/components/RarityGem";
-import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { parseFinishes } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
-import type { CardSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
+
+/**
+ * What a wall of art needs to know about a card: enough to draw it, name it and caption it.
+ *
+ * `CardSummary` satisfies this structurally and so does a mapped `CollectionRow`, which is
+ * the whole point — the collection view shows the same wall over rows the search has never
+ * heard of. Anything a *particular* wall needs beyond this arrives through {@link CardGrid}'s
+ * two slots rather than by widening this shape: the quick-add needs `finishes` and an oracle
+ * id that a collection row simply does not have, and a tile that guessed at them would offer
+ * a nonfoil entry for a foil-only printing.
+ */
+export interface GridCard {
+  id: string;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  rarity: string | null;
+}
 
 /**
  * Narrowest a tile is allowed to get, in px — the number that decides how many columns
@@ -70,19 +85,32 @@ export function tileWidthFor(width: number): number {
  * inside Scryfall's image policy without a separate credit line: the artist's name is
  * printed on the card. An art crop here would need one.
  */
-export function CardGrid({
+export function CardGrid<T extends GridCard>({
   rows,
   onSelect,
   onNeedNextPage,
   searchKey,
   selectedId = null,
+  label = "Search results",
+  badge,
+  action,
 }: {
-  rows: CardSummary[];
+  rows: T[];
   onSelect: (cardId: string) => void;
   onNeedNextPage: () => void;
   searchKey: string;
   /** The card the detail pane is showing, so the wall can say which one that is. */
   selectedId?: string | null;
+  /** What the wall is, for anyone who cannot see that it is a wall of cards. */
+  label?: string;
+  /**
+   * A mark over the art's bottom-left corner — how many copies are owned, in the collection.
+   * Over the art rather than in the caption because it is a fact about the *card*, and the
+   * caption line is already a set, a number and a control at 12px.
+   */
+  badge?: (card: T) => ReactNode;
+  /** The one control a tile carries, at the end of its caption. The search's quick-add. */
+  action?: (card: T) => ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -143,7 +171,7 @@ export function CardGrid({
     <div
       ref={scrollRef}
       role="group"
-      aria-label="Search results"
+      aria-label={label}
       // No `tabIndex`: every tile is a button, so the scroller is reachable and
       // scrollable from the keyboard through its own contents. A tab stop on the box
       // around them would be one more press between the reader and the cards.
@@ -178,6 +206,8 @@ export function CardGrid({
                 width={tileWidth}
                 onSelect={onSelect}
                 selected={card.id === selectedId}
+                badge={badge}
+                action={action}
               />
             ))}
           </div>
@@ -204,16 +234,20 @@ type TileState = "showing" | "waiting" | "failed";
  * the tile that is not the card's own, and a filled badge there would out-shout what it
  * annotates.
  */
-function Tile({
+function Tile<T extends GridCard>({
   card,
   width,
   onSelect,
   selected,
+  badge,
+  action,
 }: {
-  card: CardSummary;
+  card: T;
   width: number;
   onSelect: (id: string) => void;
   selected: boolean;
+  badge?: (card: T) => ReactNode;
+  action?: (card: T) => ReactNode;
 }) {
   const [state, setState] = useState<TileState>("showing");
   const [attempt, setAttempt] = useState(0);
@@ -258,53 +292,63 @@ function Tile({
     // and a button inside a button is invalid HTML that React warns about and browsers
     // render as they please. The art is the button; the quick-add is its neighbour.
     <div style={{ width }} className="group flex shrink-0 flex-col gap-1">
-      <button
-        type="button"
-        onClick={() => onSelect(card.id)}
-        // The name is the card and nothing else — the quick-add beside it says what it
-        // does to the card, and two buttons whose names both start with it would be two
-        // buttons a screen reader cannot tell apart in a wall of forty.
-        className={cn("block w-full rounded-lg text-left", FOCUS)}
-      >
-        <span
-          className={cn(
-            "block w-full overflow-hidden rounded-lg bg-surface",
-            // Which card the open pane is about. A ring, because gold says "focus" as an
-            // outline and "state" as a ring everywhere else in the app — and it hugs the
-            // art rather than standing off it, so the wall keeps its rhythm.
-            selected && "ring-2 ring-accent",
-          )}
-          style={{ aspectRatio: CARD_ASPECT }}
+      {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
+          join the button's accessible name, and a wall of forty cards would be forty
+          buttons called "Lightning Bolt 3 in your collection". */}
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => onSelect(card.id)}
+          // The name is the card and nothing else — the quick-add beside it says what it
+          // does to the card, and two buttons whose names both start with it would be two
+          // buttons a screen reader cannot tell apart in a wall of forty.
+          className={cn("block w-full rounded-lg text-left", FOCUS)}
         >
-          {state === "showing" ? (
-            <img
-              // The name, not "card image": this string is what a screen reader announces
-              // and what shows when a fetch fails, and both readers want the card.
-              alt={card.name}
-              // The retry is a different URL so nothing between here and the handler can
-              // answer it from whatever it made of the failure. The query string is not
-              // part of the path the protocol parses, so it changes nothing else.
-              src={attempt === 0 ? url : `${url}?retry=${attempt}`}
-              // 117 k results is 117 k requests if every mounted tile fetches eagerly. The
-              // virtualizer bounds the DOM; this bounds what the DOM asks for.
-              loading="lazy"
-              decoding="async"
-              onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
-              className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-            />
-          ) : (
-            // A tile with no art is still a card. The name is what the reader came for and
-            // it is known without the image, so a rate-limited screen reads as a list of
-            // cards rather than a wall of broken-image icons.
-            <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
-              <span className="line-clamp-3 text-xs">{card.name}</span>
-              <span className="text-[0.7rem] text-dim">
-                {state === "waiting" ? "Retrying…" : "No image"}
+          <span
+            className={cn(
+              "block w-full overflow-hidden rounded-lg bg-surface",
+              // Which card the open pane is about. A ring, because gold says "focus" as an
+              // outline and "state" as a ring everywhere else in the app — and it hugs the
+              // art rather than standing off it, so the wall keeps its rhythm.
+              selected && "ring-2 ring-accent",
+            )}
+            style={{ aspectRatio: CARD_ASPECT }}
+          >
+            {state === "showing" ? (
+              <img
+                // The name, not "card image": this string is what a screen reader announces
+                // and what shows when a fetch fails, and both readers want the card.
+                alt={card.name}
+                // The retry is a different URL so nothing between here and the handler can
+                // answer it from whatever it made of the failure. The query string is not
+                // part of the path the protocol parses, so it changes nothing else.
+                src={attempt === 0 ? url : `${url}?retry=${attempt}`}
+                // 117 k results is 117 k requests if every mounted tile fetches eagerly. The
+                // virtualizer bounds the DOM; this bounds what the DOM asks for.
+                loading="lazy"
+                decoding="async"
+                onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
+                className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+              />
+            ) : (
+              // A tile with no art is still a card. The name is what the reader came for and
+              // it is known without the image, so a rate-limited screen reads as a list of
+              // cards rather than a wall of broken-image icons.
+              <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
+                <span className="line-clamp-3 text-xs">{card.name}</span>
+                <span className="text-[0.7rem] text-dim">
+                  {state === "waiting" ? "Retrying…" : "No image"}
+                </span>
               </span>
-            </span>
-          )}
-        </span>
-      </button>
+            )}
+          </span>
+        </button>
+        {badge && (
+          // `pointer-events-none`: the whole tile opens the card, and a mark that swallowed
+          // the click over its own two square centimetres would be a dead spot in the wall.
+          <span className="pointer-events-none absolute bottom-1 left-1">{badge(card)}</span>
+        )}
+      </div>
 
       {/* The gem carries no word here — a tile has room for a set and a number and nothing
           else. `RarityGem` keeps the rarity in the accessible name anyway, which is what
@@ -318,22 +362,11 @@ function Tile({
         <span className="min-w-0 flex-1 truncate">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
-        {/* The row's own `finishes` and `oracleId`, both on the search DTO: the popup offers
-            what this printing exists in — a foil-only card must not take a nonfoil entry —
-            and a wish made here can be for the card rather than for this piece of cardboard.
-            `static` hands the anchoring to the caption above. */}
-        <AddToCollectionButton
-          align="start"
-          className={cn(REVEAL_ON_HOVER, "static")}
-          target={{
-            cardId: card.id,
-            name: card.name,
-            setCode: card.setCode,
-            collectorNumber: card.collectorNumber,
-            oracleId: card.oracleId,
-            finishes: parseFinishes(card.finishes),
-          }}
-        />
+        {/* Whatever the caller hangs here — the search's quick-add, anchored to this
+            caption. The tile does not build it, because what a control needs to be honest
+            (which finishes this printing exists in, which oracle card it is of) is on the
+            search's row and on no other. */}
+        {action?.(card)}
       </span>
     </div>
   );
