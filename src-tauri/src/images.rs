@@ -550,7 +550,8 @@ impl Cache {
 
         // Single flight from here on: a tile and its own prefetch, or two prefetch loops
         // from two pages that landed together, ask for one key at the same instant. One of
-        // them does the round trip and the others read what it wrote.
+        // them does the round trip and the others read what it wrote — when it managed to
+        // write. See [`Cache::fetch_and_store`] for the two states in which it did not.
         let served = {
             let lock = self.key_lock(key);
             let _held = lock.lock().await;
@@ -571,6 +572,27 @@ impl Cache {
     /// bytes on disk and the row that vouches for them. Releasing the key after the fetch
     /// but before the store would wake the waiter into a cache that is still empty, which
     /// is the duplicate round trip this whole mechanism is for.
+    ///
+    /// **What "one fetch per key" is conditional on.** The waiter does not receive the
+    /// winner's bytes; it re-reads the cache, and the cache is the pair (file, row). So the
+    /// guarantee holds exactly when the winner leaves both behind, and it degrades to two
+    /// fetches in the two states where it cannot:
+    ///
+    /// * The **write connection was contended** — an ingest holds it, and `record`'s
+    ///   `try_lock` with [`Duration::ZERO`] declines to wait (deliberately: see the arm
+    ///   below). The bytes are on disk, but no row vouches for them, so the waiter's
+    ///   [`is_current`] misses and it fetches again. This is the common one: it is true for
+    ///   the ~44 s of every ingest.
+    /// * The **store failed** — a read-only data directory, a full disk. Nothing is on disk
+    ///   to re-read, and nothing may be recorded, so the waiter necessarily fetches.
+    ///
+    /// Both are acceptable rather than merely tolerated. The cost is one extra request to an
+    /// origin Scryfall documents as having no rate limit, still paced by this cache's own
+    /// semaphore and 100 ms gate, in a window the app is already busy in — against a design
+    /// that would have to hold the fetched bytes in the single-flight map to hand them over,
+    /// which turns a map of empty mutexes into a map of image buffers whose lifetime nothing
+    /// currently bounds. That handoff is the upgrade if the degraded mode ever measures as a
+    /// problem; the ledger carries it.
     async fn fetch_and_store(
         &self,
         client: &scryfall::Client,
@@ -582,7 +604,9 @@ impl Cache {
     ) -> Result<Served, ImageError> {
         // Someone may have fetched exactly these bytes while this call was waiting for the
         // key. Asking the disk again is cheaper than asking Scryfall, and it is the whole
-        // payoff of having waited.
+        // payoff of having waited — when there is a row to find. A miss here is not a bug:
+        // it is a winner whose bookkeeping lost the race for the write connection, or whose
+        // store failed, and the honest answer to both is to fetch.
         let fresh = {
             let conn = crate::sync::lock_conn(read);
             is_current(&conn, key, uri)
@@ -2278,6 +2302,83 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("too large"), "{err}");
+    }
+
+    /// A host that declares no length at all, and keeps sending.
+    ///
+    /// `stop_after` is a safety net rather than the response's length: this host means to
+    /// stream forever, and a client that read it to the end would run out of memory before
+    /// it ran out of chunks. `sent` counts what actually left the socket, so the test can
+    /// show the stream was *cut* rather than drained.
+    fn a_host_that_streams_forever(stop_after: u64) -> (String, Arc<AtomicU64>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let sent = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&sent);
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.read(&mut [0u8; 2048]);
+            // No `content-length`, which is the whole point: chunked transfer is the shape
+            // the cheap header check cannot see.
+            if stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: image/webp\r\n\
+                      transfer-encoding: chunked\r\n\r\n",
+                )
+                .is_err()
+            {
+                return;
+            }
+            let chunk = vec![0u8; 64 * 1024];
+            let size = format!("{:x}\r\n", chunk.len());
+            while counter.load(Ordering::Relaxed) < stop_after {
+                if stream.write_all(size.as_bytes()).is_err()
+                    || stream.write_all(&chunk).is_err()
+                    || stream.write_all(b"\r\n").is_err()
+                {
+                    // The client hung up mid-stream, which is exactly the behaviour under
+                    // test. Never send the terminating `0\r\n\r\n`: a client that got one
+                    // would have a complete body rather than an abandoned one.
+                    return;
+                }
+                counter.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+        });
+        (base, sent)
+    }
+
+    /// The half of the cap the `Content-Length` check cannot cover.
+    ///
+    /// A chunked response declares no length, so the header check waves it through and the
+    /// only thing between this process and an unbounded body is that the body is read as a
+    /// stream against a running total. Buffering first and measuring afterwards would be a
+    /// report, not a cap — it would read every byte the host cared to send before deciding
+    /// it was too many.
+    #[tokio::test]
+    async fn a_body_with_no_declared_length_is_cut_off_rather_than_drained() {
+        // Eight times the cap: far more than any socket buffer can absorb, so reaching it
+        // would mean the whole body really was read.
+        let ceiling = crate::scryfall::MAX_IMAGE_BYTES * 8;
+        let (base, sent) = a_host_that_streams_forever(ceiling);
+        let client = crate::scryfall::Client::new(base.clone());
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(20),
+            client.fetch_image(&format!("{base}/endless.webp?17")),
+        )
+        .await
+        .expect("a stream with no end must be cut off, not followed")
+        .unwrap_err();
+
+        assert!(err.to_string().contains("too large"), "{err}");
+        assert!(
+            sent.load(Ordering::Relaxed) < ceiling,
+            "the host got to send all {ceiling} bytes, so nothing was reading with a bound"
+        );
     }
 
     /// Spec §5's pre-warm, scoped to what the user owns rather than to the database — 116 k

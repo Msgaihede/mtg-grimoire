@@ -69,17 +69,23 @@ pub fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
 /// honest answer is to say so rather than to hold a button down.
 pub const WRITE_LOCK_WAIT: Duration = Duration::from_secs(5);
 
-/// Take `mutex`, waiting as long as it takes.
+/// Take any std mutex, waiting as long as it takes, and recover from poisoning.
 ///
-/// Poisoning means some other thread panicked while holding the lock; the `Connection`
-/// itself survives that (rusqlite rolls an open transaction back as it unwinds), so
-/// refusing to lock ever again would brick every later sync and search for no gain.
+/// Poisoning means some other thread panicked while holding the lock. A `Connection`
+/// survives that (rusqlite rolls an open transaction back as it unwinds), and so does every
+/// other thing this crate locks — a `HashMap`, a counter — so refusing to lock ever again
+/// would brick the app for no gain.
 ///
-/// This is the *one* definition of that rule — `sync::lock_conn`, `sync::lock_db` and
-/// `sync::lock_db_read` all reach it, and [`lock_for`] applies the same recovery to the
-/// bounded case.
-pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+/// This is the *one* definition of that rule. [`lock_blocking`] is it over a `Connection`,
+/// `sync::lock_conn`/`lock_db`/`lock_db_read`/`lock_plain` are the names the rest of the
+/// crate reaches it by, and [`lock_for`] applies the same recovery to the bounded case.
+pub fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// [`lock_plain`] over the one type most of this crate locks.
+pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    lock_plain(mutex)
 }
 
 /// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,

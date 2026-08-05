@@ -28,6 +28,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // what they add up to.
     collectionList,
     collectionSummary,
+    // And warms the art for everything it holds, on the first load that has rows. Mocked
+    // even where the fixture is empty: the call site is `void ipc.prewarmCollection()
+    // .catch(…)`, and a `.catch` cannot catch the synchronous `TypeError` of calling
+    // `undefined` — so a fixture that later gains a row would fail inside an effect rather
+    // than at the assertion.
+    prewarmCollection: vi.fn().mockResolvedValue(0),
     // And so is the wishlist, which asks one question on the way up.
     wishlistList,
   },

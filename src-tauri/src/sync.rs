@@ -346,9 +346,14 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 }
 
 /// Lock any std mutex, recovering from poisoning — the same rule as [`lock_conn`], for the
-/// maps and counters that are not connections.
+/// maps and counters that are not connections ([`crate::images::Cache`]'s single-flight
+/// map is the one caller today).
+///
+/// A one-line delegate for the same reason [`lock_conn`] is one: the recovery rule has
+/// exactly one definition, in [`crate::db::lock_plain`], and a second copy of
+/// `unwrap_or_else(|e| e.into_inner())` is a second place for it to drift.
 pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+    crate::db::lock_plain(mutex)
 }
 
 /// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.

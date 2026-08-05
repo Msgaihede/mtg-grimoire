@@ -56,6 +56,13 @@ pub const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
 /// think it is hand this process an arbitrary number of bytes. `fetch_image` has a
 /// production caller now (every tile in the app), so "the CDN would not do that" is no
 /// longer the only thing standing between here and a memory exhaustion.
+///
+/// Enforced twice, and the second time is the one that counts. A declared `Content-Length`
+/// past this is refused before the body is read at all, which is free; but that header is a
+/// claim, and a chunked or HTTP/2 response makes no claim at all — so the body is *streamed*
+/// against a running total and abandoned the moment it crosses. The bound is therefore on
+/// what this process will hold, not on what a host says it will send: peak memory is at most
+/// this plus one chunk, whatever the response headers do or do not say.
 pub const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Pages `fetch_sets` will follow before it stops. ~1 050 sets arrive in a handful of
@@ -447,32 +454,43 @@ impl Client {
     /// no rate limits. The ≤10/s the spec still asks for is paced by `images::Cache`,
     /// which is where the request *rate* is known — this call does exactly one fetch.
     ///
-    /// Buffered, not streamed: the largest variant this app stores is ~93 KB, and a file
-    /// that small does not repay the complexity streaming buys the 77 MB bulk download.
-    /// Bounded by [`MAX_IMAGE_BYTES`], which is what makes buffering safe.
+    /// Buffered into memory rather than to a file — the largest variant this app stores is
+    /// ~93 KB, and a file that small does not repay the temporary and the rename the 77 MB
+    /// bulk download needs. **Read** as a stream all the same, so that "buffered into
+    /// memory" is a bounded claim: see [`MAX_IMAGE_BYTES`].
     pub async fn fetch_image(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
+        use futures_util::StreamExt;
+
         let resp = self.get_from(uri, None).await?;
         match resp.status().as_u16() {
             200 => {
-                // The declared length first: refusing before the body is read is the only
-                // check that costs nothing.
+                // The declared length first: refusing before a byte of the body is read is
+                // the only check that costs nothing.
                 if let Some(len) = resp.content_length() {
                     if len > MAX_IMAGE_BYTES {
-                        return Err(ScryfallError::Unexpected(format!(
-                            "image is too large: {len} bytes"
-                        )));
+                        return Err(image_too_large(len));
                     }
                 }
-                let bytes = resp.bytes().await?;
-                // And again after: `Content-Length` is a claim, and a chunked response
-                // makes none at all.
-                if bytes.len() as u64 > MAX_IMAGE_BYTES {
-                    return Err(ScryfallError::Unexpected(format!(
-                        "image is too large: {} bytes",
-                        bytes.len()
-                    )));
+                // Then the body itself, chunk by chunk, against a running total.
+                //
+                // `Content-Length` is a *claim*, and a chunked or HTTP/2 response makes no
+                // claim at all — so a `resp.bytes()` here would read an unbounded body into
+                // memory and check its size after the fact, which is not a cap, it is a
+                // report. The header check above is the cheap path; this is the one that
+                // actually holds, and it holds against a host that simply omits the header.
+                let mut stream = resp.bytes_stream();
+                let mut body: Vec<u8> = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk?;
+                    let total = body.len() as u64 + chunk.len() as u64;
+                    if total > MAX_IMAGE_BYTES {
+                        // Before the copy, so the refusal costs one chunk of headroom and
+                        // not a second buffer the size of the first.
+                        return Err(image_too_large(total));
+                    }
+                    body.extend_from_slice(&chunk);
                 }
-                Ok(bytes.to_vec())
+                Ok(body)
             }
             404 => Err(ScryfallError::NotFound),
             429 => Err(ScryfallError::RateLimited {
@@ -481,6 +499,12 @@ impl Client {
             s => Err(ScryfallError::Unexpected(format!("status {s}"))),
         }
     }
+}
+
+/// The refusal both halves of the image size cap answer with — one message, so a caller
+/// (and a test) does not have to know which check caught it.
+fn image_too_large(bytes: u64) -> ScryfallError {
+    ScryfallError::Unexpected(format!("image is too large: {bytes} bytes"))
 }
 
 /// First byte of a `Content-Range: bytes 400-999/1000` header.
