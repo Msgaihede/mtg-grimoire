@@ -156,6 +156,25 @@ describe("DecksPage", () => {
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
   });
 
+  /**
+   * The ruling's real case, and the only one that can put the word "null" on a tile: the deck
+   * *has* a cover, and the printing it names has left the card database — so `cards` answers
+   * no artist for it. The art still resolves (the id is still an id); the credit does not.
+   */
+  it("draws no credit for a cover whose printing has left the card database", async () => {
+    deckList.mockResolvedValue([{ ...BURN, coverArtist: null }]);
+
+    wrap(<DecksPage />);
+
+    const tile = await tileFor("Burn");
+    expect(tile.querySelector("img")).toHaveAttribute(
+      "src",
+      cardImageUrl(BURN.coverCardId!, 0, "art"),
+    );
+    expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
+
   /** A filed deck is kept, not shown: it is behind its own disclosure, shut. */
   it("keeps archived decks in a section of their own, collapsed", async () => {
     wrap(<DecksPage />);
@@ -198,7 +217,9 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
 
     const format = await screen.findByLabelText("Format");
-    const options = within(format).getAllByRole("option").map((o) => o.textContent);
+    const options = within(format)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
 
     expect(options).toEqual(["Standard", "Modern", "Commander", "Casual"]);
     expect(format).toHaveValue("casual");
@@ -270,6 +291,51 @@ describe("DecksPage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(deckDelete).not.toHaveBeenCalled();
     expect(remove).toHaveFocus();
+  });
+
+  /**
+   * The other half of the same rule, and the half a single shared handler gets wrong: a
+   * reader who clicked somewhere else is *already* somewhere else, so the layer goes and the
+   * caret stays where they put it. Yanking it back to the trash icon is what makes a Tab
+   * forward out of Cancel bounce backwards.
+   */
+  it("closes the delete question on a click away, and leaves the caret where it went", async () => {
+    wrap(<DecksPage />);
+    const remove = await screen.findByRole("button", { name: "Delete Burn" });
+    await userEvent.click(remove);
+    await screen.findByRole("dialog");
+
+    await userEvent.click(document.body);
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(remove).not.toHaveFocus();
+    expect(deckDelete).not.toHaveBeenCalled();
+  });
+
+  /** Cancel is a control *in* the layer, so it is the keyboard way out and hands back. */
+  it("hands the caret back when the question is cancelled", async () => {
+    wrap(<DecksPage />);
+    const remove = await screen.findByRole("button", { name: "Delete Burn" });
+    await userEvent.click(remove);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(remove).toHaveFocus();
+    expect(deckDelete).not.toHaveBeenCalled();
+  });
+
+  /** Every other popup in the app closes when the reader looks away; this one too. */
+  it("closes the create form on a click away, without handing the caret back", async () => {
+    wrap(<DecksPage />);
+    const newDeck = await screen.findByRole("button", { name: "New deck" });
+    await userEvent.click(newDeck);
+    await screen.findByLabelText("Name");
+
+    await userEvent.click(document.body);
+
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(newDeck).not.toHaveFocus();
   });
 
   /**

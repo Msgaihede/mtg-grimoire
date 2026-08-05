@@ -233,8 +233,8 @@ it("closes the set filter on the first Escape and the card on the second", async
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 });
 
-/** A card left open through a view change would dock beside a page it has nothing to do
- *  with — and the Decks placeholder has no way to dismiss it. */
+/** A card left open through a view change would dock beside a list it did not come from —
+ *  a printing from the search, pinned open next to a wall of decks. */
 it("closes the card when the reader leaves the view", async () => {
   render(<App />);
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Archive, ArchiveRestore, ChevronRight, Copy, Plus, Trash2 } from "lucide-react";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { ART_ASPECT, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -78,12 +78,21 @@ export function DecksPage() {
 
   // Focus first, then close: the opener is still mounted at this point, and an element that
   // unmounts with the caret on it drops focus to `<body>` — after which the next Tab
-  // restarts from the top of the app. An outside click deliberately does not do this; the
-  // reader is already somewhere else.
+  // restarts from the top of the app.
+  //
+  // This is the **keyboard** way out — Escape, and the panels' own Cancel controls. The
+  // click-away way out is `close` below and is a different function on purpose: CLAUDE.md's
+  // rule is that an outside click does *not* hand the caret back, because the reader is
+  // already somewhere else, and one function wired to both paths breaks it in two visible
+  // ways (a Tab forward out of Cancel bounces backwards, and a control that disables itself
+  // mid-write blurs into a hand-back nobody asked for).
   const dismiss = useCallback(() => {
     openerRef.current?.focus();
     setPanel(null);
   }, []);
+
+  /** The click-away way out: the layer goes, the caret stays where the reader put it. */
+  const close = useCallback(() => setPanel(null), []);
 
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: panel !== null });
 
@@ -147,6 +156,7 @@ export function DecksPage() {
           open={panel?.kind === "create"}
           onOpen={openCreate}
           onDismiss={dismiss}
+          onClose={close}
           create={decks.create}
           onCreated={onCreated}
         />
@@ -177,14 +187,17 @@ export function DecksPage() {
 
         {!status && decks.decks.length === 0 && (
           <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
-            A deck is a list you build for a format. Start one and the app checks it as you go
-            — deck size, copy limits, the commander's colours — and tells you which of the
-            cards you already own.
+            A deck is a list you build for a format. Start one and the app checks it as you go —
+            deck size, copy limits, the commander's colours — and tells you which of the cards you
+            already own.
           </p>
         )}
 
         {live.length > 0 && (
-          <ul className={GRID}>
+          // Named, the way the search's wall of art is (`CardGrid`'s `role="group"` +
+          // `aria-label`) — but left a list rather than made a group, because these tiles are
+          // countable and a list says how many there are on the way in.
+          <ul aria-label="Your decks" className={GRID}>
             {live.map((deck) => (
               <DeckTile
                 key={deck.id}
@@ -195,6 +208,7 @@ export function DecksPage() {
                 onAskDelete={askDelete}
                 onConfirmDelete={confirmDelete}
                 onCancelDelete={dismiss}
+                onCloseDelete={close}
               />
             ))}
           </ul>
@@ -229,7 +243,7 @@ export function DecksPage() {
               Archived <span className="font-mono tabular-nums">{archived.length}</span>
             </button>
             {showArchived && (
-              <ul className={cn(GRID, "mt-3")}>
+              <ul aria-label="Archived decks" className={cn(GRID, "mt-3")}>
                 {archived.map((deck) => (
                   <DeckTile
                     key={deck.id}
@@ -240,6 +254,7 @@ export function DecksPage() {
                     onAskDelete={askDelete}
                     onConfirmDelete={confirmDelete}
                     onCancelDelete={dismiss}
+                    onCloseDelete={close}
                   />
                 ))}
               </ul>
@@ -269,6 +284,7 @@ function DeckTile({
   onAskDelete,
   onConfirmDelete,
   onCancelDelete,
+  onCloseDelete,
 }: {
   deck: DeckRow;
   decks: Decks;
@@ -276,9 +292,13 @@ function DeckTile({
   onOpen: (id: number) => void;
   onAskDelete: (deck: DeckRow, opener: HTMLButtonElement) => void;
   onConfirmDelete: (deck: DeckRow) => void;
+  /** Cancel: a control *in* the layer, so the caret goes back to what opened it. */
   onCancelDelete: () => void;
+  /** Clicked or tabbed away: the layer goes and the caret stays where it went. */
+  onCloseDelete: () => void;
 }) {
-  const cards = `${deck.cardCount} ${deck.cardCount === 1 ? "card" : "cards"}`;
+  /** One derivation of the plural, for the caption and the question that quotes it. */
+  const unit = deck.cardCount === 1 ? "card" : "cards";
   return (
     <li className="group relative">
       {/* The art and the caption are one button — a deck is picked by looking at it, and a
@@ -289,36 +309,11 @@ function DeckTile({
         onClick={() => onOpen(deck.id)}
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
-        <span
-          className="grid w-full place-items-center overflow-hidden rounded-lg bg-surface"
-          style={{ aspectRatio: ART_ASPECT }}
-        >
-          {deck.coverCardId ? (
-            <img
-              // Decorative: the deck's name is in the caption two lines down, and an `alt`
-              // here would announce the tile twice.
-              alt=""
-              src={cardImageUrl(deck.coverCardId, 0, "art")}
-              loading="lazy"
-              decoding="async"
-              className={cn(
-                "size-full object-cover transition-transform duration-150",
-                "group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100",
-              )}
-            />
-          ) : (
-            // Says what the empty frame is for rather than leaving a grey rectangle that
-            // reads as a rendering fault. Out of the accessible name, which is the deck.
-            <span aria-hidden="true" className="text-[0.7rem] text-dim">
-              No cover
-            </span>
-          )}
-        </span>
+        <Cover cardId={deck.coverCardId} />
         <span className="mt-2 block truncate text-sm">{deck.name}</span>
         <span className="mt-0.5 block truncate text-xs text-dim">
           {deck.formatName ?? deck.formatKey} ·{" "}
-          <span className="font-mono tabular-nums">{deck.cardCount}</span>{" "}
-          {deck.cardCount === 1 ? "card" : "cards"}
+          <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
         </span>
       </button>
 
@@ -383,13 +378,76 @@ function DeckTile({
       {confirming && (
         <DeleteConfirm
           deck={deck}
-          cards={cards}
+          cards={`${deck.cardCount} ${unit}`}
           pending={decks.remove.isPending}
           onConfirm={() => onConfirmDelete(deck)}
           onCancel={onCancelDelete}
+          onClose={onCloseDelete}
         />
       )}
     </li>
+  );
+}
+
+/**
+ * What a cover is doing about its image — `CardGrid`'s `Tile`, in the one shape a deck needs.
+ *
+ * Not shared with it, because the two disagree about what a failure *looks* like: a card tile
+ * falls back to the card's own name inside the frame, while a deck tile already has its name
+ * in the caption underneath and needs the frame to say what happened instead. What is shared
+ * is the schedule (`imageRetryDelayMs`) and the reason for it: an `<img>` that errors once
+ * stays broken for the session, and a 429 in the fetcher fails every uncached image fast with
+ * a 503 — so the frame comes back on its own, twice, on a dithered doubling delay that never
+ * starts sooner than the floor the protocol clamps its own penalty to. Without this a rate
+ * limit left a gallery of silent grey rectangles that only a restart could fill.
+ */
+function Cover({ cardId }: { cardId: string | null }) {
+  const [state, setState] = useState<"showing" | "waiting" | "failed">("showing");
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (state !== "waiting") return;
+    const next = attempt + 1;
+    const timer = setTimeout(() => {
+      setAttempt(next);
+      setState("showing");
+    }, imageRetryDelayMs(next));
+    return () => clearTimeout(timer);
+  }, [state, attempt]);
+
+  const url = cardId ? cardImageUrl(cardId, 0, "art") : null;
+
+  return (
+    <span
+      className="grid w-full place-items-center overflow-hidden rounded-lg bg-surface"
+      style={{ aspectRatio: ART_ASPECT }}
+    >
+      {url && state === "showing" ? (
+        <img
+          // Decorative: the deck's name is in the caption two lines down, and an `alt` here
+          // would announce the tile twice.
+          alt=""
+          // The retry is a different URL so nothing between here and the handler can answer
+          // it from whatever it made of the failure.
+          src={attempt === 0 ? url : `${url}?retry=${attempt}`}
+          loading="lazy"
+          decoding="async"
+          onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
+          className={cn(
+            "size-full object-cover transition-transform duration-150",
+            "group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100",
+          )}
+        />
+      ) : (
+        // Says what the empty frame is for rather than leaving a grey rectangle that reads as
+        // a rendering fault — and tells "this deck has no cover yet" apart from "the art did
+        // not arrive", which are two different things to do something about. Out of the
+        // accessible name, which is the deck.
+        <span aria-hidden="true" className="text-[0.7rem] text-dim">
+          {!url ? "No cover" : state === "waiting" ? "Retrying…" : "No image"}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -406,12 +464,16 @@ function DeleteConfirm({
   pending,
   onConfirm,
   onCancel,
+  onClose,
 }: {
   deck: DeckRow;
   cards: string;
   pending: boolean;
   onConfirm: () => void;
+  /** The Cancel control, which is *in* here: hands the caret back to what opened the layer. */
   onCancel: () => void;
+  /** Focus left the layer on its own. Closes and hands nothing back. */
+  onClose: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -441,9 +503,18 @@ function DeleteConfirm({
         "text-xs shadow-lg",
         FOCUS,
       )}
-      // Clicking or tabbing away is an answer too, and it is the safe one.
+      // Clicking or tabbing away is an answer too, and it is the safe one — `onClose`, not
+      // `onCancel`: the reader is already somewhere else, and yanking the caret back to the
+      // trash icon would bounce a Tab forward straight backwards.
+      //
+      // Not while the delete is in flight. `Delete deck` disables itself on the press, a
+      // disabled control is blurred by the browser with no `relatedTarget` at all, and this
+      // handler would read that as the reader leaving and take the panel down mid-write —
+      // so the pending state is never seen and the answer arrives over a question that is
+      // no longer on screen.
       onBlur={(e) => {
-        if (!panelRef.current?.contains(e.relatedTarget)) onCancel();
+        if (pending) return;
+        if (!panelRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >
       <p>Delete “{deck.name}”?</p>
@@ -487,18 +558,39 @@ function NewDeck({
   open,
   onOpen,
   onDismiss,
+  onClose,
   create,
   onCreated,
 }: {
   buttonRef: RefObject<HTMLButtonElement | null>;
   open: boolean;
   onOpen: () => void;
+  /** Escape, and the trigger pressed a second time: the caret comes back here. */
   onDismiss: () => void;
+  /** Focus left the form on its own. Closes and hands nothing back. */
+  onClose: () => void;
   create: Decks["create"];
   onCreated: (deck: DeckRow) => void;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
   return (
-    <div className="relative">
+    <div
+      ref={rootRef}
+      className="relative"
+      // Clicking or tabbing away closes the form, and does it without a window listener that
+      // could fight the Escape handshake — `AddToCollection`'s arrangement, for its reason.
+      // The boundary is the whole control rather than the panel: on `relatedTarget` being the
+      // trigger, closing here would race the toggle below and leave the form open forever.
+      //
+      // A half-typed name is discarded, exactly as every other popup in this app discards its
+      // half-made decision (the quick-add loses its quantity, the set picker its query). One
+      // rule for all of them is worth more than a rescued word — and the alternative, a
+      // trigger that refuses to close while the field is dirty, is a control that stops
+      // working for a reason the reader cannot see.
+      onBlur={(e) => {
+        if (open && !rootRef.current?.contains(e.relatedTarget)) onClose();
+      }}
+    >
       <button
         ref={buttonRef}
         type="button"

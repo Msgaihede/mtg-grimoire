@@ -15,8 +15,9 @@
 //     node scripts/cdp.mjs click "button[aria-label='Add Lightning Bolt to collection']"
 //     node scripts/cdp.mjs text "Wishlist"            # click the first element with this text
 //     node scripts/cdp.mjs key Escape
-//     node scripts/cdp.mjs size 1024 768             # or `size reset`
+//     node scripts/cdp.mjs size 1024 768 "expr"      # or `size reset`; expr runs in-session
 //     node scripts/cdp.mjs media prefers-reduced-motion reduce "expr"  # measured in-session
+//     node scripts/cdp.mjs shot out.png 1024 768     # sized and captured in one session
 //     node scripts/cdp.mjs shot out.png
 //     node scripts/cdp.mjs console out.jsonl          # stays attached; Ctrl-C to stop
 //
@@ -191,17 +192,45 @@ async function main() {
         console.log("typed");
         break;
 
-      case "size":
-        if (args[0] === "reset") await cdp.send("Emulation.clearDeviceMetricsOverride");
-        else
+      // The responsive pass every UI task owes (the direction's floor is 1024).
+      //
+      // Takes an optional trailing expression, and measuring through it is not optional
+      // discipline: an emulation override belongs to the session, and every invocation of
+      // this script is its own socket, so `size` followed by a separate `eval` is a claim
+      // about a viewport nobody proved was there.
+      //
+      //     node scripts/cdp.mjs size 1024 768 "document.documentElement.scrollWidth"
+      //
+      // **Two WebView2 behaviours, measured 2026-08-05, and they are opposites of each
+      // other's danger.** This override *outlives* its session — set 1024 from one
+      // invocation and the next one, and a page reload, still measure 1024 — where
+      // `setEmulatedMedia` is reverted on detach. And `clearDeviceMetricsOverride` is
+      // accepted and does **nothing**: neither it nor the protocol's `width: 0, height: 0`
+      // restores the window. So `size reset` cannot get you back, and the way back is to set
+      // the natural size explicitly — read it (`innerWidth`/`innerHeight`) *before* the
+      // first override, and put it back when you are done, or the app window stays that
+      // size for the rest of the session.
+      case "size": {
+        const reset = args[0] === "reset";
+        if (reset) {
+          await cdp.send("Emulation.clearDeviceMetricsOverride");
+          console.error(
+            "warning: WebView2 ignores clearDeviceMetricsOverride — pass the natural size " +
+              "explicitly (e.g. `size 1280 800`) to get the window back.",
+          );
+        } else
           await cdp.send("Emulation.setDeviceMetricsOverride", {
             width: Number(args[0]),
             height: Number(args[1] ?? 800),
             deviceScaleFactor: 1,
             mobile: false,
           });
-        console.log("sized");
+        const expression = reset ? args.slice(1).join(" ") : args.slice(2).join(" ");
+        console.log(
+          expression ? JSON.stringify(await evaluate(cdp, expression), null, 2) : "sized",
+        );
         break;
+      }
 
       // `prefers-reduced-motion`, `prefers-color-scheme` and friends, for the pass the
       // direction doc asks every UI task to make.
@@ -235,11 +264,27 @@ async function main() {
         break;
       }
 
+      // `shot out.png [width height]` — the size is set *in this session*, which is the only
+      // place an emulation override is provably real (see `size`). A shot at a width some
+      // earlier invocation asked for is a picture that cannot say what it is a picture of.
+      //
+      // The size is left in force afterwards rather than cleared, because clearing does not
+      // work here and pretending otherwise is worse than saying so: put the window back with
+      // an explicit `size <natural w> <natural h>` when the pass is over.
       case "shot": {
+        const [file, width, height] = args;
+        if (width) {
+          await cdp.send("Emulation.setDeviceMetricsOverride", {
+            width: Number(width),
+            height: Number(height ?? 800),
+            deviceScaleFactor: 1,
+            mobile: false,
+          });
+        }
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
         const { writeFileSync } = await import("node:fs");
-        writeFileSync(args[0], Buffer.from(data, "base64"));
-        console.log(args[0]);
+        writeFileSync(file, Buffer.from(data, "base64"));
+        console.log(file);
         break;
       }
 
