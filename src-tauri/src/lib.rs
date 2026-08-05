@@ -2,6 +2,7 @@ pub mod card;
 pub mod card_row;
 pub mod collection;
 pub mod db;
+pub mod filters;
 pub mod images;
 pub mod ingest;
 pub mod maintenance;
@@ -95,7 +96,9 @@ pub fn run() {
             collection::collection_add,
             collection::collection_set_quantity,
             collection::collection_update,
-            collection::collection_remove
+            collection::collection_remove,
+            collection::collection_list,
+            collection::collection_summary
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the

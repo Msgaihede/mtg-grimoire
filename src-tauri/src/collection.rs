@@ -545,6 +545,352 @@ pub async fn collection_remove(
         .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
+/// What one owned card is worth in USD, read from the `prices` blob **by finish**.
+///
+/// Never `cards.price_usd`: that column is a display/sort fallback chain
+/// (`usd → usd_foil → usd_etched`) and would price a plain copy of a card whose only
+/// listed price is its foil at the foil's price. A finish with no price is `NULL` —
+/// which is a different statement from `0.00`, and is counted as such.
+pub const FINISH_PRICE_USD: &str = "CAST(json_extract(c.prices,
+        CASE e.finish WHEN 'foil' THEN '$.usd_foil'
+                      WHEN 'etched' THEN '$.usd_etched'
+                      ELSE '$.usd' END) AS REAL)";
+
+/// The same in EUR, with the hole the data actually has: **`eur_etched` does not exist**.
+/// An etched card is unpriced in euros rather than valued at the nonfoil rate.
+pub const FINISH_PRICE_EUR: &str = "CASE e.finish WHEN 'etched' THEN NULL ELSE
+        CAST(json_extract(c.prices,
+            CASE e.finish WHEN 'foil' THEN '$.eur_foil' ELSE '$.eur' END) AS REAL) END";
+
+/// Rows per page. The collection is not 116 k rows, but it can be tens of thousands, and
+/// the table is virtualised for the same reason the search results are.
+const DEFAULT_LIMIT: u32 = 100;
+const MAX_LIMIT: u32 = 500;
+
+/// A collection list, as the UI asks for it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CollectionQuery {
+    /// The card filters, flattened onto the same JSON object — so `{"sets":["lea"],
+    /// "finishes":["foil"]}` is one payload rather than a nested shape the UI has to build.
+    #[serde(flatten)]
+    pub cards: crate::filters::CardFilters,
+    pub finishes: Option<Vec<String>>,
+    pub conditions: Option<Vec<String>>,
+    /// `Some(true)` narrows to the rows a Scryfall migration or a vanished printing flagged.
+    pub needs_review: Option<bool>,
+    /// `"name"` (default) | `"set"` | `"added"` | `"quantity"` | `"price"`.
+    pub sort: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// One row of the collection table: the entry, plus whatever `cards` still knows about the
+/// printing it names. Every `cards`-derived field is `Option` — a row whose printing has
+/// left the database is still a card the user owns.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionRow {
+    pub id: i64,
+    pub card_id: String,
+    pub name: Option<String>,
+    /// From the *entry*, not the card: this is what the user recorded owning.
+    pub set_code: String,
+    pub set_name: Option<String>,
+    pub collector_number: String,
+    pub lang: String,
+    pub rarity: Option<String>,
+    pub mana_cost: Option<String>,
+    pub type_line: Option<String>,
+    pub layout: Option<String>,
+    pub finish: String,
+    pub condition: String,
+    pub quantity: i64,
+    pub tradelist_quantity: i64,
+    /// Per copy, per finish, from the blob. `None` when there is no price for that finish.
+    pub unit_price_usd: Option<f64>,
+    pub unit_price_eur: Option<f64>,
+    pub purchase_price: Option<f64>,
+    pub purchase_currency: Option<String>,
+    pub acquired_at: Option<String>,
+    pub acquisition_source: Option<String>,
+    pub serial_number: Option<String>,
+    pub altered: bool,
+    pub signed: bool,
+    pub proxy: bool,
+    pub misprint: bool,
+    pub grading: Option<String>,
+    pub tags: String,
+    pub notes: Option<String>,
+    /// A sentence when this row needs the user's attention, `None` otherwise.
+    pub needs_review: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionPage {
+    pub items: Vec<CollectionRow>,
+    /// Rows matching the filters, counted in full — a collection is thousands of rows, not
+    /// the 116 k the search has to cap.
+    pub total: i64,
+}
+
+/// The aggregate header (spec §7): total cards, unique cards, estimated value.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionSummary {
+    /// Copies, not rows. A row emptied to zero (see [`set_quantity`]) contributes 0 here —
+    /// which is the whole reason this sums `quantity` rather than counting rows.
+    pub total_cards: i64,
+    /// Distinct printings **recorded**, not distinct printings currently held: a row taken
+    /// to zero still names a card the user has an entry for, and it is still on the screen
+    /// this number captions. Counting only what has copies today would make the header
+    /// disagree with the list under it every time a playset is traded away.
+    pub unique_cards: i64,
+    pub entries: i64,
+    pub tradelist_cards: i64,
+    pub value_usd: f64,
+    pub value_eur: f64,
+    /// Copies with no price for their finish. Shown beside the value, because a total that
+    /// silently omits 400 cards is a number that lies by rounding down.
+    pub unpriced_usd: i64,
+    pub unpriced_eur: i64,
+    pub needs_review: i64,
+}
+
+/// `FROM` + `WHERE` shared by the page, the count and the summary — because a summary
+/// taken over different rows than the list is a header that describes a different screen.
+fn scope(q: &CollectionQuery) -> (String, crate::filters::Predicates) {
+    let mut p = crate::filters::Predicates::default();
+    // LEFT JOIN, always: an entry whose printing is gone is the case the denormalised
+    // columns exist for, and an inner join would delete exactly those rows from the view
+    // that most needs them.
+    let mut from = "collection_entries e LEFT JOIN cards c ON c.id = e.card_id".to_owned();
+
+    if let Some(text) = crate::filters::nonblank(&q.cards.text) {
+        if let Some(query) = crate::filters::fts_query(text) {
+            // Searching by text is a statement about a card's name or rules, so it can only
+            // match rows that still have a card — this join narrows the list to those, on
+            // purpose.
+            from.push_str(" JOIN cards_fts ON cards_fts.rowid = c.rowid");
+            p.push("cards_fts MATCH ?".to_owned(), Box::new(query));
+        }
+    }
+    // `paper_only` is forced off: the user owns what the user owns, and `c.is_paper = 1`
+    // over a LEFT JOIN would also throw away every orphan (`NULL = 1` is not true).
+    let cards = crate::filters::CardFilters {
+        text: None,
+        paper_only: Some(false),
+        ..q.cards.clone()
+    };
+    crate::filters::push_card_filters(&mut p, &cards, "c");
+
+    push_in_list(&mut p, "e.finish", q.finishes.as_deref(), &FINISHES);
+    push_in_list(&mut p, "e.condition", q.conditions.as_deref(), &CONDITIONS);
+    match q.needs_review {
+        Some(true) => p.wheres.push("e.needs_review IS NOT NULL".to_owned()),
+        Some(false) => p.wheres.push("e.needs_review IS NULL".to_owned()),
+        None => {}
+    }
+    (from, p)
+}
+
+/// `column IN (…)` for a filter over a known enum.
+///
+/// Values outside the enum are dropped rather than bound: they can only come from a stale
+/// or hand-made payload, they can never match, and binding them would turn a typo into an
+/// empty list with no explanation.
+fn push_in_list(
+    p: &mut crate::filters::Predicates,
+    column: &str,
+    picked: Option<&[String]>,
+    allowed: &[&str],
+) {
+    let Some(picked) = picked else { return };
+    let values: Vec<String> = picked
+        .iter()
+        .filter(|v| allowed.contains(&v.as_str()))
+        .cloned()
+        .collect();
+    if values.is_empty() {
+        return;
+    }
+    let holes = vec!["?"; values.len()].join(",");
+    p.wheres.push(format!("{column} IN ({holes})"));
+    for v in values {
+        p.params.push(Box::new(v));
+    }
+}
+
+/// The `ORDER BY` for a sort key, matched against literals and never interpolated.
+///
+/// Every one ends in `e.id` so that ties — which are the common case, one card name
+/// covering a dozen rows — page deterministically. `set` is the binder order: natural
+/// collector number, which is a `CAST` because ~9% of them are not numeric (`741z`,
+/// `1★`, `A-123`) and a plain string sort puts `100` before `2`.
+fn order_by(sort: Option<&str>) -> &'static str {
+    match sort {
+        Some("set") => {
+            "e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC, e.collector_number ASC, e.id ASC"
+        }
+        Some("added") => "e.created_at DESC, e.id DESC",
+        Some("quantity") => "e.quantity DESC, coalesce(c.name, e.card_id) ASC, e.id ASC",
+        Some("price") => "unit_price_usd DESC NULLS LAST, coalesce(c.name, e.card_id) ASC, e.id ASC",
+        // Name order, with the orphans under their card id rather than at the top under
+        // an empty string.
+        _ => "coalesce(c.name, e.card_id) ASC, e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC, e.id ASC",
+    }
+}
+
+pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<CollectionPage, String> {
+    let limit = if q.limit == 0 {
+        DEFAULT_LIMIT
+    } else {
+        q.limit.min(MAX_LIMIT)
+    };
+    let (from, p) = scope(q);
+    let where_sql = p.where_sql();
+    let mut params = p.params;
+
+    // The count first, while `params` holds exactly the filter parameters. Counted in
+    // full — this is a collection, not a 116 k-row table, and a pager that says "1 240
+    // cards" should mean it.
+    let total: i64 = conn
+        .query_row(
+            &format!("SELECT count(*) FROM {from} WHERE {where_sql}"),
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let sql = format!(
+        "SELECT e.id, e.card_id, c.name, e.set_code, c.set_name, e.collector_number, e.lang,
+                c.rarity, c.mana_cost, c.type_line, c.layout,
+                e.finish, e.condition, e.quantity, e.tradelist_quantity,
+                {FINISH_PRICE_USD} AS unit_price_usd, {FINISH_PRICE_EUR} AS unit_price_eur,
+                e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
+                e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
+                e.tags, e.notes, e.needs_review, e.updated_at
+         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+        order = order_by(q.sort.as_deref())
+    );
+    params.push(Box::new(limit));
+    params.push(Box::new(q.offset));
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |r| {
+                Ok(CollectionRow {
+                    id: r.get(0)?,
+                    card_id: r.get(1)?,
+                    name: r.get(2)?,
+                    set_code: r.get(3)?,
+                    set_name: r.get(4)?,
+                    collector_number: r.get(5)?,
+                    lang: r.get(6)?,
+                    rarity: r.get(7)?,
+                    mana_cost: r.get(8)?,
+                    type_line: r.get(9)?,
+                    layout: r.get(10)?,
+                    finish: r.get(11)?,
+                    condition: r.get(12)?,
+                    quantity: r.get(13)?,
+                    tradelist_quantity: r.get(14)?,
+                    unit_price_usd: r.get(15)?,
+                    unit_price_eur: r.get(16)?,
+                    purchase_price: r.get(17)?,
+                    purchase_currency: r.get(18)?,
+                    acquired_at: r.get(19)?,
+                    acquisition_source: r.get(20)?,
+                    serial_number: r.get(21)?,
+                    altered: r.get(22)?,
+                    signed: r.get(23)?,
+                    proxy: r.get(24)?,
+                    misprint: r.get(25)?,
+                    grading: r.get(26)?,
+                    tags: r.get(27)?,
+                    notes: r.get(28)?,
+                    needs_review: r.get(29)?,
+                    updated_at: r.get(30)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    let items = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(CollectionPage { items, total })
+}
+
+/// The aggregate header, over the *same* rows the list is showing.
+pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSummary, String> {
+    let (from, p) = scope(q);
+    let where_sql = p.where_sql();
+    let sql = format!(
+        "SELECT coalesce(sum(e.quantity), 0),
+                count(DISTINCT e.card_id),
+                count(*),
+                coalesce(sum(e.tradelist_quantity), 0),
+                coalesce(sum(e.quantity * coalesce({usd}, 0.0)), 0.0),
+                coalesce(sum(e.quantity * coalesce({eur}, 0.0)), 0.0),
+                coalesce(sum(CASE WHEN {usd} IS NULL THEN e.quantity ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN {eur} IS NULL THEN e.quantity ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN e.needs_review IS NOT NULL THEN 1 ELSE 0 END), 0)
+         FROM {from} WHERE {where_sql}",
+        usd = FINISH_PRICE_USD,
+        eur = FINISH_PRICE_EUR
+    );
+    conn.query_row(
+        &sql,
+        rusqlite::params_from_iter(p.params.iter().map(|p| p.as_ref())),
+        |r| {
+            Ok(CollectionSummary {
+                total_cards: r.get(0)?,
+                unique_cards: r.get(1)?,
+                entries: r.get(2)?,
+                tradelist_cards: r.get(3)?,
+                value_usd: r.get(4)?,
+                value_eur: r.get(5)?,
+                unpriced_usd: r.get(6)?,
+                unpriced_eur: r.get(7)?,
+                needs_review: r.get(8)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The collection list. **Read-only** connection, blocking pool — as every read in this
+/// app is, so a list never queues behind a sync.
+#[tauri::command]
+pub async fn collection_list(
+    state: tauri::State<'_, Arc<AppState>>,
+    query: CollectionQuery,
+) -> Result<CollectionPage, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        list_entries(&crate::sync::lock_db_read(&state), &query)
+    })
+    .await
+    .map_err(|e| format!("the collection could not be read: {e}"))?
+}
+
+#[tauri::command]
+pub async fn collection_summary(
+    state: tauri::State<'_, Arc<AppState>>,
+    query: CollectionQuery,
+) -> Result<CollectionSummary, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        summarise(&crate::sync::lock_db_read(&state), &query)
+    })
+    .await
+    .map_err(|e| format!("the collection could not be read: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1310,6 +1656,326 @@ mod tests {
             with_write(&state, |c| add_entry(c, &input("nope", "foil", 1))
                 .map(|_| ()))
             .is_err()
+        );
+    }
+
+    /// Money, per finish, out of the blob. The fixture is built so that using `price_usd`
+    /// — the derived fallback chain — instead would give a *different, higher* number:
+    /// the Alpha printing has no foil price at all, and `price_usd` would fall through to
+    /// the nonfoil one and quietly value a foil that does not exist at $400.
+    #[test]
+    fn value_is_summed_per_finish_from_the_prices_blob() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap(); // 2 × 400.50
+        add_entry(&conn, &input("bolt-jp", "foil", 3)).unwrap(); //     3 × 90.00
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap(); //  1 × 12.00
+
+        let s = summarise(&conn, &CollectionQuery::default()).unwrap();
+
+        assert_eq!(s.total_cards, 6);
+        assert_eq!(s.unique_cards, 2, "two printings, three rows");
+        assert_eq!(s.entries, 3);
+        assert!(
+            (s.value_usd - (2.0 * 400.50 + 3.0 * 90.00 + 12.00)).abs() < 0.005,
+            "got {}",
+            s.value_usd
+        );
+        // The Japanese printing has no EUR price of any kind, so those four cards are
+        // counted as unpriced rather than valued at their dollar figure.
+        assert!(
+            (s.value_eur - 2.0 * 320.00).abs() < 0.005,
+            "got {}",
+            s.value_eur
+        );
+        assert_eq!(s.unpriced_eur, 4);
+        assert_eq!(s.unpriced_usd, 0);
+    }
+
+    /// `eur_etched` is documented and **does not exist in the data**. An etched card is
+    /// therefore unpriced in euros — never priced at the nonfoil rate, which is what a
+    /// naive `coalesce` chain would do.
+    #[test]
+    fn an_etched_card_has_no_euro_price_at_all() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                finishes,prices,raw)
+             VALUES ('bolt-etch','o1','Lightning Bolt','sld','1','en','normal',
+                '[\"etched\"]','{\"usd\":\"5.00\",\"usd_etched\":\"25.00\",\"eur\":\"4.00\"}','{}')",
+            [],
+        )
+        .unwrap();
+        add_entry(&conn, &input("bolt-etch", "etched", 2)).unwrap();
+
+        let s = summarise(&conn, &CollectionQuery::default()).unwrap();
+
+        assert!((s.value_usd - 50.00).abs() < 0.005, "got {}", s.value_usd);
+        assert_eq!(s.value_eur, 0.0, "there is no eur_etched key in the data");
+        assert_eq!(s.unpriced_eur, 2);
+    }
+
+    /// Collector numbers are TEXT and ~9% of them are not numeric. A plain string sort puts
+    /// `100` before `2`; this is the sort a printed binder is in.
+    #[test]
+    fn the_set_sort_orders_collector_numbers_naturally() {
+        let conn = seeded();
+        for (id, cn) in [
+            ("c-100", "100"),
+            ("c-2", "2"),
+            ("c-9", "9"),
+            ("c-741z", "741z"),
+            ("c-star", "1★"),
+            ("c-a", "A-123"),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,raw)
+                 VALUES (?1,'o9','Filler','tst',?2,'en','normal','{}')",
+                rusqlite::params![id, cn],
+            )
+            .unwrap();
+            add_entry(&conn, &input(id, "nonfoil", 1)).unwrap();
+        }
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                sort: Some("set".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let numbers: Vec<&str> = page
+            .items
+            .iter()
+            .filter(|r| r.set_code == "tst")
+            .map(|r| r.collector_number.as_str())
+            .collect();
+        assert_eq!(numbers, ["A-123", "1★", "2", "9", "100", "741z"]);
+    }
+
+    /// The card filters are the *same* filters the search view uses — that is what
+    /// `filters.rs` is for — and the entry filters AND with them.
+    #[test]
+    fn the_card_filters_and_the_entry_filters_combine() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+
+        let by_set = list_entries(
+            &conn,
+            &CollectionQuery {
+                cards: crate::filters::CardFilters {
+                    sets: Some(vec!["lea".into()]),
+                    ..Default::default()
+                },
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(by_set.total, 1);
+        assert_eq!(by_set.items[0].set_code, "lea");
+
+        let foils = list_entries(
+            &conn,
+            &CollectionQuery {
+                finishes: Some(vec!["foil".into()]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(foils.total, 1);
+        assert_eq!(foils.items[0].finish, "foil");
+
+        let neither = list_entries(
+            &conn,
+            &CollectionQuery {
+                cards: crate::filters::CardFilters {
+                    sets: Some(vec!["lea".into()]),
+                    ..Default::default()
+                },
+                finishes: Some(vec!["foil".into()]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(neither.total, 0, "the filters AND, they do not OR");
+    }
+
+    /// A row whose printing has left the card database still lists, still counts, and
+    /// still says which card it is — from the columns denormalised at write time. This is
+    /// the payoff for spec §6's insurance, and the reason the join is a LEFT JOIN.
+    #[test]
+    fn an_orphaned_entry_still_lists_with_its_denormalised_printing() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
+            .unwrap();
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.total, 1);
+        let row = &page.items[0];
+        assert_eq!(row.name, None, "there is no card row to name it");
+        assert_eq!(
+            (row.set_code.as_str(), row.collector_number.as_str()),
+            ("lea", "161")
+        );
+        assert_eq!(row.unit_price_usd, None, "and no price either — not zero");
+        let s = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(s.total_cards, 2, "the cards are still owned");
+        assert_eq!(s.unpriced_usd, 2);
+    }
+
+    /// The digital-printing rule the search applies does **not** apply here: the user owns
+    /// what the user owns, and a paper-only predicate over a LEFT JOIN would also delete
+    /// every orphan from the list, because `NULL = 1` is not true.
+    #[test]
+    fn the_collection_does_not_hide_rows_behind_the_paper_only_default() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                is_paper,digital,raw)
+             VALUES ('bolt-mtgo','o1','Lightning Bolt','pmtg1','7','en','normal',0,1,'{}')",
+            [],
+        )
+        .unwrap();
+        add_entry(&conn, &input("bolt-mtgo", "nonfoil", 1)).unwrap();
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(page.total, 1);
+    }
+
+    /// Every sort key is a *string interpolated into the statement*, so one that names a
+    /// column or an alias the query does not have is a `prepare` error at run time — an
+    /// empty list and an error dialog, not a differently-ordered one. `price` is the one
+    /// that earns this on its own: it orders by the `unit_price_usd` **output alias**, not
+    /// by any column of either table. Paged two at a time as well, so a sort that is not a
+    /// total order shows a row twice here rather than in front of a reader.
+    #[test]
+    fn every_sort_key_prepares_and_pages_without_repeating_a_row() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+
+        for sort in ["name", "set", "added", "quantity", "price", "nonsense"] {
+            let mut seen: Vec<i64> = Vec::new();
+            for page in 0..2 {
+                let p = list_entries(
+                    &conn,
+                    &CollectionQuery {
+                        sort: Some(sort.into()),
+                        limit: 2,
+                        offset: page * 2,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("sorting by `{sort}` failed: {e}"));
+                assert_eq!(p.total, 3, "the count is the same set whatever the order");
+                seen.extend(p.items.iter().map(|r| r.id));
+            }
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                (unique.len(), seen.len()),
+                (3, 3),
+                "paging by `{sort}` returned a row twice or lost one: {seen:?}"
+            );
+        }
+    }
+
+    /// The hand-mirrored wire contract, pinned whole so a field added on this side and
+    /// never mirrored in `src/lib/ipc.ts` fails here rather than rendering as `undefined`.
+    #[test]
+    fn collection_row_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(CollectionRow {
+            id: 7,
+            card_id: "bolt-lea".into(),
+            name: Some("Lightning Bolt".into()),
+            set_code: "lea".into(),
+            set_name: Some("Limited Edition Alpha".into()),
+            collector_number: "161".into(),
+            lang: "en".into(),
+            rarity: Some("common".into()),
+            mana_cost: Some("{R}".into()),
+            type_line: Some("Instant".into()),
+            layout: Some("normal".into()),
+            finish: "nonfoil".into(),
+            condition: "NM".into(),
+            quantity: 4,
+            tradelist_quantity: 1,
+            unit_price_usd: Some(400.5),
+            unit_price_eur: Some(320.0),
+            purchase_price: Some(12.5),
+            purchase_currency: Some("USD".into()),
+            acquired_at: Some("2020-05-01".into()),
+            acquisition_source: Some("Local shop".into()),
+            serial_number: None,
+            altered: false,
+            signed: true,
+            proxy: false,
+            misprint: false,
+            grading: None,
+            tags: "[]".into(),
+            notes: None,
+            needs_review: None,
+            updated_at: 1_800_000_000,
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": 7, "cardId": "bolt-lea", "name": "Lightning Bolt", "setCode": "lea",
+                "setName": "Limited Edition Alpha", "collectorNumber": "161", "lang": "en",
+                "rarity": "common", "manaCost": "{R}", "typeLine": "Instant", "layout": "normal",
+                "finish": "nonfoil", "condition": "NM", "quantity": 4, "tradelistQuantity": 1,
+                "unitPriceUsd": 400.5, "unitPriceEur": 320.0, "purchasePrice": 12.5,
+                "purchaseCurrency": "USD", "acquiredAt": "2020-05-01",
+                "acquisitionSource": "Local shop", "serialNumber": null, "altered": false,
+                "signed": true, "proxy": false, "misprint": false, "grading": null,
+                "tags": "[]", "notes": null, "needsReview": null, "updatedAt": 1800000000
+            })
+        );
+
+        let summary = serde_json::to_value(CollectionSummary {
+            total_cards: 6,
+            unique_cards: 2,
+            entries: 3,
+            tradelist_cards: 1,
+            value_usd: 1213.0,
+            value_eur: 640.0,
+            unpriced_usd: 0,
+            unpriced_eur: 4,
+            needs_review: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            summary,
+            serde_json::json!({
+                "totalCards": 6, "uniqueCards": 2, "entries": 3, "tradelistCards": 1,
+                "valueUsd": 1213.0, "valueEur": 640.0, "unpricedUsd": 0, "unpricedEur": 4,
+                "needsReview": 0
+            })
         );
     }
 }

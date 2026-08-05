@@ -20,6 +20,7 @@
 //!   ~10 ms, and [`SearchResponse::total_is_capped`] tells the UI to render `5,000+`
 //!   rather than a number that would be a lie.
 
+use crate::filters;
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -43,8 +44,8 @@ pub struct SearchRequest {
     /// Set codes to include. ORed with each other, ANDed with every other filter — two
     /// sets means "printed in either", which is what a multi-select means everywhere else.
     pub sets: Option<Vec<String>>,
-    /// Mana-value chips. 0–7 match `cmc` exactly; [`MANA_VALUE_OPEN_ENDED`] means "or
-    /// more". A card with no `cmc` matches none of them.
+    /// Mana-value chips. 0–7 match `cmc` exactly; [`filters::MANA_VALUE_OPEN_ENDED`] means
+    /// "or more". A card with no `cmc` matches none of them.
     pub mana_values: Option<Vec<u8>>,
     pub rarity: Option<String>,
     /// Defaults to true: digital-only printings are hidden unless asked for.
@@ -54,6 +55,26 @@ pub struct SearchRequest {
     pub sort: Option<String>,
     pub limit: u32,
     pub offset: u32,
+}
+
+impl SearchRequest {
+    /// The card half of this request, in the shape every other list uses.
+    ///
+    /// Cloned rather than borrowed, and the fields stay flat on this struct rather than
+    /// moving behind a `#[serde(flatten)]`: the wire shape is what `src/lib/ipc.ts` sends
+    /// and thirty tests construct, and a request is a handful of small strings.
+    fn card_filters(&self) -> filters::CardFilters {
+        filters::CardFilters {
+            text: None, // handled above, with the join it needs
+            format: self.format.clone(),
+            colors: self.colors.clone(),
+            set_code: self.set_code.clone(),
+            sets: self.sets.clone(),
+            mana_values: self.mana_values.clone(),
+            rarity: self.rarity.clone(),
+            paper_only: self.paper_only,
+        }
+    }
 }
 
 /// One row of a result page — the columns a card grid needs, not the whole card.
@@ -98,19 +119,6 @@ const MAX_LIMIT: u32 = 200;
 /// scanning every remaining row on every keystroke.
 const TOTAL_CAP: i64 = 5_000;
 
-/// The five colour-identity letters, in WUBRG order. Interpolated into SQL, so it must
-/// stay a hard-coded list — see [`run_search`].
-const COLORS: [&str; 5] = ["W", "U", "B", "R", "G"];
-
-/// Sets one request will filter on. The picker is a multi-select over ~1 050 sets; past a
-/// few dozen the filter has stopped narrowing anything, and this is what bounds the
-/// generated placeholder list.
-const MAX_SET_FILTER: usize = 64;
-
-/// The last mana-value chip, which is open-ended: "8" means 8 *or more*, because the tail
-/// past Emrakul is a handful of cards nobody filters by exact cost.
-const MANA_VALUE_OPEN_ENDED: u8 = 8;
-
 /// Columns of `cards` in name order, the default for a browse.
 ///
 /// `idx_cards_name` supplies the leading term, so SQLite sorts only within each group of
@@ -135,135 +143,25 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         req.limit.min(MAX_LIMIT)
     };
 
-    let mut wheres: Vec<String> = Vec::new();
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    let mut p = filters::Predicates::default();
     // Joined only when there is something to match, because the join is also what makes
     // `bm25(cards_fts, …)` legal: naming an FTS table's auxiliary function in a query that
     // does not read that table is a *prepare* error, not a bad ranking.
     let mut from_sql = "cards c";
     let mut ranked = false;
-
-    // FTS5 has its own query language: `"`, `*`, `:`, `(`, `AND`/`OR`/`NOT` and `NEAR`
-    // are all operators, and a stray one is a syntax *error*, not a zero-result search.
-    // Splitting on everything non-alphanumeric leaves tokens that cannot contain an
-    // operator by construction; quoting each makes it a literal phrase, and the trailing
-    // `*` is the one operator kept, for prefix matching. Tokens are ANDed by FTS5's
-    // default, so "light bol" needs both.
-    //
-    // Splitting, not stripping: the index is built by `unicode61`, which breaks on the
-    // same boundaries. Deleting punctuation inside a word instead would weld its halves
-    // into a token nothing indexes — `Ajani's` → `ajanis`, `God-Pharaoh` → `godpharaoh` —
-    // so the natural spelling of a great many card names would find nothing at all.
-    if let Some(text) = nonblank(&req.text) {
-        let toks: Vec<String> = text
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|t| !t.is_empty())
-            .map(|t| format!("\"{t}\"*"))
-            .collect();
+    if let Some(text) = filters::nonblank(&req.text) {
         // All-punctuation input leaves nothing to match on. Dropping the clause searches
         // everything, which is what an empty search box does anyway.
-        if !toks.is_empty() {
-            // A join rather than the `rowid IN (SELECT …)` this used to be: the match has
-            // to be part of the query being ordered for `bm25` to have a row to score.
+        if let Some(query) = filters::fts_query(text) {
             from_sql = "cards c JOIN cards_fts ON cards_fts.rowid = c.rowid";
-            wheres.push("cards_fts MATCH ?".into());
-            params.push(Box::new(toks.join(" ")));
+            p.push("cards_fts MATCH ?".to_owned(), Box::new(query));
             ranked = true;
         }
     }
+    filters::push_card_filters(&mut p, &req.card_filters(), "c");
+    let where_sql = p.where_sql();
+    let mut params = p.params;
 
-    // `restricted` counts as playable — a Vintage search that hid Black Lotus would be
-    // wrong. Formats the card has no entry for yield NULL, which fails the IN.
-    if let Some(f) = nonblank(&req.format) {
-        wheres.push("json_extract(c.legalities, '$.' || ?) IN ('legal','restricted')".into());
-        params.push(Box::new(f.to_owned()));
-    }
-
-    // Subset semantics, as in a deckbuilder: show what this identity can *cast*, so "RW"
-    // returns mono-R, mono-W, RW — and colourless, which fits in any deck. Expressed as
-    // exclusions ("contains no letter outside the filter") so the number of clauses stays
-    // fixed and each one is a plain `instr`. The interpolated letter comes from `COLORS`;
-    // `colors` itself is never spliced into the SQL.
-    if let Some(colors) = nonblank(&req.colors) {
-        let colors = colors.to_ascii_uppercase();
-        if colors == "C" {
-            wheres.push("(c.color_identity = '' OR c.color_identity IS NULL)".into());
-        } else {
-            for ch in COLORS {
-                if !colors.contains(ch) {
-                    wheres.push(format!("instr(coalesce(c.color_identity,''), '{ch}') = 0"));
-                }
-            }
-        }
-    }
-
-    if let Some(s) = nonblank(&req.set_code) {
-        wheres.push("c.set_code = ?".into());
-        params.push(Box::new(s.to_owned()));
-    }
-
-    // OR within, AND without. Blank entries are dropped rather than matched: a picker's
-    // cleared state sends `[]`, and some send `[""]`.
-    if let Some(sets) = req.sets.as_deref() {
-        let picked: Vec<String> = sets
-            .iter()
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| !s.is_empty())
-            .take(MAX_SET_FILTER)
-            .collect();
-        if !picked.is_empty() {
-            let holes = vec!["?"; picked.len()].join(",");
-            wheres.push(format!("c.set_code IN ({holes})"));
-            for code in picked {
-                params.push(Box::new(code));
-            }
-        }
-    }
-
-    // Discrete chips, not a range: 0–7 are exact and 8 is open-ended. `cmc` is REAL and
-    // nullable — a fractional un-card cost matches no chip, and a card with no cost at all
-    // matches none either, because `NULL IN (…)` and `NULL >= 8` are both NULL. That is
-    // the right answer: "mana value 3" is a claim about a card that has one.
-    if let Some(values) = req.mana_values.as_deref() {
-        let mut exact: Vec<f64> = Vec::new();
-        let mut open_ended = false;
-        for v in values {
-            if *v >= MANA_VALUE_OPEN_ENDED {
-                open_ended = true;
-            } else {
-                exact.push(f64::from(*v));
-            }
-        }
-        let mut alternatives: Vec<String> = Vec::new();
-        if !exact.is_empty() {
-            let holes = vec!["?"; exact.len()].join(",");
-            alternatives.push(format!("c.cmc IN ({holes})"));
-            for v in exact {
-                params.push(Box::new(v));
-            }
-        }
-        if open_ended {
-            // A constant from the line above, never a request value.
-            alternatives.push(format!("c.cmc >= {MANA_VALUE_OPEN_ENDED}.0"));
-        }
-        if !alternatives.is_empty() {
-            wheres.push(format!("({})", alternatives.join(" OR ")));
-        }
-    }
-
-    if let Some(r) = nonblank(&req.rarity) {
-        wheres.push("c.rarity = ?".into());
-        params.push(Box::new(r.to_owned()));
-    }
-    if req.paper_only.unwrap_or(true) {
-        wheres.push("c.is_paper = 1".into());
-    }
-
-    let where_sql = if wheres.is_empty() {
-        "1=1".to_owned()
-    } else {
-        wheres.join(" AND ")
-    };
     // Matched against literals, never interpolated from `req.sort`. `released_at` and
     // `price_usd` are both nullable, so each has an explicit null rule; every sort ends in
     // `name, id` so that ties — which at 116 k printings are the common case, not the
@@ -333,15 +231,6 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         total,
         total_is_capped,
     })
-}
-
-/// A filter the user actually set: trimmed, and `None` when blank.
-///
-/// A UI whose "Any set"/"Any format" option carries an empty value sends `Some("")`.
-/// Taken literally that would mean `set_code = ''` (matches nothing) or the json path
-/// `'$.'` — which is a *SQLite error*, failing the whole search rather than one filter.
-fn nonblank(v: &Option<String>) -> Option<&str> {
-    v.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// Search the card database.
