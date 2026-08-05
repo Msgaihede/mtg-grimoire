@@ -27,12 +27,33 @@ describe("RarityGem", () => {
    * `special` and `bonus` exist in the data and have no token, and `rarity` is nullable
    * besides. The gem falls back to the border colour — so the word must not be tinted with
    * it, which would be a label drawn in the colour of a hairline.
+   *
+   * The two cases are *not* one case: a null rarity has no word to tint, while `special` is
+   * a real word the fallback would happily paint at about 1.9:1 on the app background —
+   * legible to nobody, and below the AA floor the direction sets as a quality baseline.
    */
-  it("says so when there is no rarity, and does not tint the word with the fallback", () => {
-    render(<RarityGem rarity={null} withLabel />);
+  it("never tints a word with the no-token fallback", () => {
+    const { rerender } = render(<RarityGem rarity={null} withLabel />);
+    expect(screen.getByText("unknown")).not.toHaveStyle({ color: "var(--color-border)" });
 
-    const word = screen.getByText("unknown");
-    expect(word).not.toHaveStyle({ color: "var(--color-border)" });
+    rerender(<RarityGem rarity="special" withLabel />);
+    const special = screen.getByText("special");
+    expect(special).not.toHaveStyle({ color: "var(--color-border)" });
+    // And it stays dim text rather than losing its colour altogether.
+    expect(special).toHaveClass("text-dim");
+
+    rerender(<RarityGem rarity="bonus" withLabel />);
+    expect(screen.getByText("bonus")).not.toHaveStyle({ color: "var(--color-border)" });
+  });
+
+  /** The gem itself still carries the fallback: a dot in the hairline colour reads as "no
+   *  rarity stated", which is the truth, and it is 6px of decoration rather than a label. */
+  it("still draws the gem for a rarity it has no token for", () => {
+    const { container } = render(<RarityGem rarity="special" withLabel />);
+
+    expect(container.querySelector('[aria-hidden="true"]')).toHaveStyle({
+      backgroundColor: "var(--color-border)",
+    });
   });
 
   /** The dot is decoration; the word beside it already carries the fact. */

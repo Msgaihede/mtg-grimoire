@@ -166,9 +166,13 @@
   --color-border: oklch(0.3 0.01 270);
   --color-text: oklch(0.93 0.005 90);
   /* Dim text. Named `dim` rather than `muted` because shadcn's `muted` means a subtle
-     *surface*, Tailwind derives `bg-muted` and `text-muted` from the same literal, and one
-     token cannot be both. Renaming ours is what finally lets `--color-muted` below mean
-     what every vendored component expects it to. */
+     *surface*, Tailwind derives `bg-muted` and the matching text utility from that one
+     literal, and one token cannot be both. Renaming ours is what finally lets
+     `--color-muted` below mean what every vendored component expects it to.
+
+     (Spelled "the matching text utility" rather than written out, so that this file passes
+     the sweep in `lib/tokens.test.ts` — and so Tailwind's scanner, which reads prose as
+     eagerly as code, stops emitting a dead rule for a class the app no longer uses.) */
   --color-dim: oklch(0.65 0.01 90);
   /* shadcn's meaning, restored: `bg-muted` is now a subtle panel, as every generated
      component assumes. Vendoring one no longer needs the `bg-muted` → `bg-surface`

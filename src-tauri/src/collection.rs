@@ -16,8 +16,8 @@ use std::sync::Arc;
 pub const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
 
 /// The NA condition scale, in descending order. The EU scale (`M/NM/EX/GD/LP/PL/PO`) is
-/// normalised into this one at the edge — see `src/features/collection/conditions.ts` —
-/// and the string it arrived as is kept in `condition_original`.
+/// normalised into this one at the edge — see `src/lib/conditions.ts` — and the string it
+/// arrived as is kept in `condition_original`.
 pub const CONDITIONS: [&str; 5] = ["NM", "LP", "MP", "HP", "DMG"];
 
 /// What a card is assumed to be when nobody says otherwise.

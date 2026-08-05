@@ -17,7 +17,12 @@ describe("normalizeCondition", () => {
       ["GD", "MP"],
       ["Played", "MP"],
       ["Heavily Played", "HP"],
-      ["PO", "HP"],
+      // Cardmarket's two worst grades, from the research doc's mapping row: `PL→HP,
+      // PO→DMG`. `PO` is *not* Heavily Played — the EU scale has one more grade below
+      // Played than the NA scale does, and Poor is the bottom of it.
+      ["PL", "HP"],
+      ["PO", "DMG"],
+      ["Poor", "DMG"],
       ["Damaged", "DMG"],
       ["DM", "DMG"],
       ["D", "DMG"],

@@ -34,7 +34,13 @@ describe("ToggleChip", () => {
  * construction instead of by three people copying a class list.
  */
 describe("the shared filter row", () => {
-  it("gives every control one height and one focus outline", () => {
+  /**
+   * The bordered chips only. `ManaChip` is deliberately outside this: it is a 36px circle
+   * carrying a printed symbol on its own fill, and its focus outline stands 5px off rather
+   * than 2 so that a chip which is both focused and pressed shows the outline clear of the
+   * ring. One exemption, for a reason, rather than a rule with no exceptions and no chips.
+   */
+  it("gives the bordered chips one height and one focus outline", () => {
     render(
       <>
         <ToggleChip label="Owned" pressed={false} onClick={vi.fn()} />

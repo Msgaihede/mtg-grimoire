@@ -6,8 +6,14 @@ import { describe, expect, it } from "vitest";
  */
 import css from "@/index.css?raw";
 
-/** Every source file in the app, as text, for the sweep below. */
-const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
+/**
+ * Every source file in the app, as text, for the sweep below.
+ *
+ * The stylesheet is in the sweep too, and not only the components: Tailwind's scanner reads
+ * prose as eagerly as code, so a class named in a *comment* is a class the build emits a
+ * rule for — which is how a retired name goes on looking alive in `dist/`.
+ */
+const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
   query: "?raw",
   import: "default",
   eager: true,

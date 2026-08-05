@@ -1,4 +1,4 @@
-import { rarityColor } from "@/lib/rarity";
+import { hasRarityColor, rarityColor } from "@/lib/rarity";
 import { cn } from "@/lib/utils";
 
 /**
@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
  *
  * The gem alone is colour-only information, which is why every call site had grown its own
  * `sr-only` label or its own `title`. One component, one accessible name, four call sites:
- * the search table, the art grid, the card pane and the collection table.
+ * the search table, the art grid, and the card pane twice — the printing it is about, and
+ * every row of its printings list.
  *
  * Never a filled badge: the direction's colour budget is spent on mana and card art, and a
  * mythic-orange pill would out-shout the art it annotates.
@@ -33,7 +34,10 @@ export function RarityGem({
           a colour, and a colour is not information anyone can be required to see. */}
       <span
         className={cn("truncate capitalize", withLabel ? "text-dim" : "sr-only")}
-        style={withLabel && rarity ? { color } : undefined}
+        // Tinted only when the rarity *has* a colour. `special` and `bonus` are real values
+        // with no token, and the fallback they fall to is the hairline colour — fine under
+        // 6px of dot, about 1.9:1 as a word, which is a caption nobody can read.
+        style={withLabel && hasRarityColor(rarity) ? { color } : undefined}
       >
         <span className="sr-only">Rarity: </span>
         {rarity ?? "unknown"}
