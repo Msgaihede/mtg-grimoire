@@ -259,7 +259,17 @@ export function CollectionTable({
                   //
                   // Not a colour-only signal and not a destructive one: the card is still
                   // owned, and the row says what happened in the words the reconciler wrote.
-                  <span className="absolute inset-x-3 bottom-0.5 truncate text-[0.7rem] text-dim">
+                  //
+                  // The band is one line and the reconciler writes 130–190 characters, of
+                  // which the *second* half is what to do about it ("check the printing and
+                  // re-add it… or remove this entry"). A truncation that eats the instruction
+                  // and offers no way to read it is half an error message, so the whole
+                  // sentence rides as the tooltip — and is in the accessible name either way,
+                  // because a screen reader reads the text, not the clip.
+                  <span
+                    title={row.needsReview}
+                    className="absolute inset-x-3 bottom-0.5 truncate text-[0.7rem] text-dim"
+                  >
                     <span className="mr-1 font-medium text-destructive">Needs review:</span>
                     {row.needsReview}
                   </span>

@@ -94,7 +94,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt"), card("bbb", "Lightning Helix")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -114,7 +114,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={onSelect}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -137,7 +137,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={onSelect}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
         action={quickAdd}
       />,
     );
@@ -165,7 +165,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt", `["foil"]`)]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
         action={quickAdd}
       />,
     );
@@ -188,7 +188,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
         action={quickAdd}
       />,
     );
@@ -216,7 +216,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -235,7 +235,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
         action={quickAdd}
       />,
     );
@@ -257,7 +257,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
         badge={(c) => <span>owned: {c.name}</span>}
       />,
     );
@@ -276,7 +276,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
         label="Your collection"
       />,
     );
@@ -297,7 +297,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -330,7 +330,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -357,7 +357,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -384,7 +384,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
-        searchKey="k"
+        listKey="k"
       />,
     );
 
@@ -409,13 +409,13 @@ describe("CardGrid", () => {
    * with the card it belonged to.
    */
   it("gives a new card in a reused slot its own attempt", () => {
-    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), searchKey: "k" };
+    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), listKey: "k" };
     const { rerender } = render(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
 
     fireEvent.error(screen.getByAltText("Lightning Bolt"));
     expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
 
-    rerender(<CardGrid rows={[card("ccc", "Ancestral Recall")]} {...props} searchKey="k2" />);
+    rerender(<CardGrid rows={[card("ccc", "Ancestral Recall")]} {...props} listKey="k2" />);
 
     expect(screen.getByAltText("Ancestral Recall")).toHaveAttribute(
       "src",
@@ -457,7 +457,7 @@ describe("CardGrid", () => {
         rows={[card("aaa", "Lightning Bolt"), card("bbb", "Lightning Helix")]}
         onSelect={vi.fn()}
         onNeedNextPage={onNeedNextPage}
-        searchKey="k"
+        listKey="k"
       />,
     );
 

@@ -82,6 +82,11 @@ export function CollectionPage() {
    */
   const settle = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["collection", "summary"] });
+    // The wishlist counts this list: a wish's `ownedQuantity` is computed from
+    // `collection_entries`, so a stepper press has just made every cached wish for that card
+    // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
+    // is the same write it makes.
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
     // Marked stale and deliberately not refetched: the only thing on a search result this
     // changes is `ownedQuantity`/`wishlisted`, which no view renders yet (the badges are
     // Task 12's). Drop `refetchType` when they land.
@@ -106,6 +111,9 @@ export function CollectionPage() {
       // copies, the value and the unique count that row was part of — measured live: the
       // header went on counting a deleted entry until this reached past the table.
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      // And the wishlist with it, for the same reason a success invalidates it: the copies
+      // an out-of-band deletion took are copies some wish was counting as owned.
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
@@ -179,35 +187,38 @@ export function CollectionPage() {
 
       <CollectionSummaryHeader summary={summary.data} />
 
-      {/* Only while there are flagged rows *and* the reader is not already looking at them —
-          with the filter on, the list is the answer and the banner would be a second copy of
-          the question. */}
-      {!collection.needsReview && (summary.data?.needsReview ?? 0) > 0 && (
-        <div
-          role="status"
-          aria-label="Needs review"
-          className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs"
-        >
-          <span className="min-w-0">
-            <span className="mr-1 font-medium text-destructive">Needs review:</span>
-            <span className="font-mono tabular-nums">{summary.data?.needsReview}</span>{" "}
-            {summary.data?.needsReview === 1 ? "entry names" : "entries name"} a printing that
-            changed or left the card database.
-          </span>
-          <button
-            type="button"
-            onClick={() => collection.setNeedsReview(true)}
-            className={cn(
-              "ml-auto shrink-0 rounded-md border border-accent px-2 py-1 text-accent",
-              "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-              "motion-reduce:transition-none",
-            )}
-          >
-            Show them
-          </button>
-        </div>
-      )}
+      {/* The region is mounted for the life of the view and the banner is swapped into it: a
+          live region that appears together with its own text announces nothing, because there
+          was no change for a screen reader to notice — the same rule as the status line below
+          and as the quick-add's report. `empty:-mt-4` gives back the flex gap it would
+          otherwise hold open under the header while it is saying nothing at all. */}
+      <div role="status" aria-label="Needs review" className="empty:-mt-4">
+        {/* Only while there are flagged rows *and* the reader is not already looking at them —
+            with the filter on, the list is the answer and the banner would be a second copy of
+            the question. */}
+        {!collection.needsReview && (summary.data?.needsReview ?? 0) > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs">
+            <span className="min-w-0">
+              <span className="mr-1 font-medium text-destructive">Needs review:</span>
+              <span className="font-mono tabular-nums">{summary.data?.needsReview}</span>{" "}
+              {summary.data?.needsReview === 1 ? "entry names" : "entries name"} a printing that
+              changed or left the card database.
+            </span>
+            <button
+              type="button"
+              onClick={() => collection.setNeedsReview(true)}
+              className={cn(
+                "ml-auto shrink-0 rounded-md border border-accent px-2 py-1 text-accent",
+                "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
+                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                "motion-reduce:transition-none",
+              )}
+            >
+              Show them
+            </button>
+          </div>
+        )}
+      </div>
 
       <CollectionFilterBar collection={collection} />
 
@@ -243,21 +254,31 @@ export function CollectionPage() {
             <CardGrid
               rows={tiles}
               label="Your collection"
-              searchKey={collection.queryKeyString}
+              listKey={collection.queryKeyString}
               selectedId={selectedCardId}
               onSelect={selectCard}
               onNeedNextPage={onNeedNextPage}
               badge={(tile) => <QuantityBadge copies={tile.copies} />}
             />
           ) : (
-            <CollectionTable
-              rows={rows}
-              total={total}
-              listKey={collection.queryKeyString}
-              onNeedNextPage={onNeedNextPage}
-              onSetQuantity={onSetQuantity}
-              onRemove={onRemove}
-            />
+            <>
+              <CollectionTable
+                rows={rows}
+                total={total}
+                listKey={collection.queryKeyString}
+                onNeedNextPage={onNeedNextPage}
+                onSetQuantity={onSetQuantity}
+                onRemove={onRemove}
+              />
+              {/* The one thing about this table a reader cannot see: removal is offered on a
+                  row at zero and nowhere else, so a mis-added four-copy row would only ever
+                  be got rid of by accident. Said once, under the table, at the end of the
+                  line the removal itself lives on — not per row, where forty copies of a
+                  sentence about a rare action would be louder than the rows. */}
+              <p className="text-right text-[0.7rem] text-dim">
+                To remove an entry, set its copies to zero.
+              </p>
+            </>
           ))}
       </div>
     </section>

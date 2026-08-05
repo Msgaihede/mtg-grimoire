@@ -150,10 +150,12 @@ export function SearchPage() {
     if (!latestPage || latestPage.length === 0) return;
     // Fire-and-forget by design: the command resolves as soon as the work is queued, and
     // a tile whose prefetch failed simply fetches when it renders.
-    void ipc.prefetchImages(
-      latestPage.map((c) => c.id),
-      "grid",
-    ).catch(() => {});
+    void ipc
+      .prefetchImages(
+        latestPage.map((c) => c.id),
+        "grid",
+      )
+      .catch(() => {});
     // `latestPage` and `view` are both deliberately out of the dependency list.
     // `latestPage` is a fresh array on every render, and `latestKey` is the part that
     // means "a different page is now the newest one". `view` is read but not depended on:
@@ -312,7 +314,7 @@ function Results({
         (view === "grid" ? (
           <CardGrid
             rows={rows}
-            searchKey={searchKey}
+            listKey={searchKey}
             selectedId={selectedCardId}
             onSelect={selectCard}
             // The tile's one control, built from the row it is about: the popup offers the

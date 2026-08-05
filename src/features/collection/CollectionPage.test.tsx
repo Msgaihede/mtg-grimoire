@@ -69,12 +69,27 @@ const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({
 
 const page = (items: CollectionRow[], total = items.length) => ({ items, total });
 
+/**
+ * What the reconciler actually writes into `needs_review` — `reconcile::flag_deleted`'s
+ * sentence, date and all, at its real length of 175 characters.
+ *
+ * Length is the point: the band is one line of a 44px row and holds ~110 of them, and the
+ * half that goes over the edge is the half that says what to *do*. A fixture reading "This
+ * printing left the card database." would pass a rendering that throws the instruction away.
+ */
+const REVIEW_NOTE =
+  "Scryfall removed this printing from its database on 2026-04-12. Your copies are still " +
+  "recorded — check the printing and re-add it if you can identify it, or remove this entry.";
+
 const lastQuery = () =>
   collectionList.mock.calls[collectionList.mock.calls.length - 1][0] as CollectionQuery;
 
 function wrap(ui: ReactElement) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    client,
+    ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
+  };
 }
 
 /**
@@ -185,6 +200,39 @@ describe("CollectionPage", () => {
   });
 
   /**
+   * Everything else that counts these copies. The header is re-read because a wrong total is
+   * a worse lie than a slow one, and the *wishlist* is re-read because a wish's
+   * `ownedQuantity` is computed from `collection_entries` — a stepper press has just made
+   * every cached wish for this card wrong. The same pair the quick-add invalidates.
+   */
+  it("re-reads the header and the wishlist after a write, and marks the search stale", async () => {
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Quantity of Lightning Bolt (Foil, NM)" }),
+    );
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "summary"] }),
+    );
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // Marked stale and deliberately *not* refetched: an infinite search holds up to 100
+    // pages, and the only thing this write changes on one of them is a badge no view renders
+    // yet. Drop `refetchType` when the badges land.
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["cards", "search"],
+      refetchType: "none",
+    });
+    // And the header really is re-read — not just marked.
+    await waitFor(() => expect(collectionSummary).toHaveBeenCalledTimes(2));
+    // The list is not: the row's own number came back from the write, and re-reading a
+    // hundred rows because one changed by one is a round trip nobody is waiting for.
+    expect(collectionList).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * Task 5's ruling: `set_quantity(0)` keeps the row, with its condition, its purchase price
    * and its acquisition story. So the list keeps it too — dimmed, because a row with no
    * copies is a record rather than a holding — and offers the explicit removal that is the
@@ -195,6 +243,11 @@ describe("CollectionPage", () => {
     collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 1 }]));
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
+
+    // And the reader is told so before they get there: removal is offered on a row at zero
+    // and nowhere else, so a mis-added four-copy row would otherwise only be got rid of by
+    // accidental discovery.
+    expect(screen.getByText(/to remove an entry, set its copies to zero/i)).toBeInTheDocument();
 
     await userEvent.click(
       screen.getByRole("button", { name: "Decrease Quantity of Lightning Bolt (Foil, NM)" }),
@@ -231,27 +284,37 @@ describe("CollectionPage", () => {
     await waitFor(() =>
       expect(screen.getByRole("spinbutton", { name: /Quantity of Lightning Bolt/ })).toHaveValue(2),
     );
+    // The whole view, not just the list: a collection that has lost a row has also lost the
+    // copies, the value and the unique count that row was part of. Seen live — the header
+    // went on counting a deleted entry until the refusal reached past the table.
+    await waitFor(() => expect(collectionSummary).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(collectionList).toHaveBeenCalledTimes(2));
   });
 
   it("offers the flagged rows when a sync left any behind", async () => {
     collectionSummary.mockResolvedValue(summary({ totalCards: 2, needsReview: 3 }));
     wrap(<CollectionPage />);
 
-    const banner = await screen.findByRole("status", { name: /needs review/i });
-    expect(banner).toHaveTextContent("3");
+    // The region is mounted with the view and the banner is swapped into it — a live region
+    // that arrives together with its own text announces nothing, because nothing changed for
+    // a screen reader to notice.
+    const banner = screen.getByRole("status", { name: /needs review/i });
+    await waitFor(() => expect(banner).toHaveTextContent("3"));
 
     await userEvent.click(within(banner).getByRole("button", { name: /show them/i }));
 
     await waitFor(() => expect(lastQuery().needsReview).toBe(true));
-    // The list is those rows now, so the banner has nothing left to offer.
-    expect(screen.queryByRole("status", { name: /needs review/i })).not.toBeInTheDocument();
+    // The list is those rows now, so the banner has nothing left to offer — and the region
+    // it lived in stays, empty.
+    await waitFor(() => expect(banner).toBeEmptyDOMElement());
+    expect(banner).toBeInTheDocument();
   });
 
   it("says nothing about review when nothing is flagged", async () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    expect(screen.queryByRole("status", { name: /needs review/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /needs review/i })).toBeEmptyDOMElement();
   });
 
   /**
@@ -271,15 +334,19 @@ describe("CollectionPage", () => {
           typeLine: null,
           unitPriceUsd: null,
           unitPriceEur: null,
-          needsReview: "This printing left the card database in the last sync.",
+          needsReview: REVIEW_NOTE,
         },
       ]),
     );
     wrap(<CollectionPage />);
 
     const row = (await screen.findByText(/LEA · 161/)).closest('[role="row"]') as HTMLElement;
-    expect(within(row).getByText(/left the card database/i)).toBeInTheDocument();
+    const band = within(row).getByText(REVIEW_NOTE);
     expect(within(row).getByText("Needs review:")).toBeInTheDocument();
+    // The band is one line and the sentence is 175 characters, so what is on screen is the
+    // half that says what happened and not the half that says what to do about it. The whole
+    // of it is one hover away — and a screen reader reads the text, never the clip.
+    expect(band).toHaveAttribute("title", REVIEW_NOTE);
     // A price the data does not have is a dash, never an invented `$0.00`.
     expect(within(row).queryByText(/\$/)).not.toBeInTheDocument();
     expect(within(row).getAllByText("—").length).toBeGreaterThanOrEqual(2);

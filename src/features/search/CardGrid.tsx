@@ -75,7 +75,7 @@ export function tileWidthFor(width: number): number {
 }
 
 /**
- * Search results as card art.
+ * A list of cards as a wall of art — search results, or a collection.
  *
  * Virtualised by *row*, not by tile: the virtualizer measures a list, and a grid is a
  * list of rows that each hold `columns` cards. An unfiltered browse is ~117 k cards, so
@@ -89,7 +89,7 @@ export function CardGrid<T extends GridCard>({
   rows,
   onSelect,
   onNeedNextPage,
-  searchKey,
+  listKey,
   selectedId = null,
   label = "Search results",
   badge,
@@ -98,7 +98,9 @@ export function CardGrid<T extends GridCard>({
   rows: T[];
   onSelect: (cardId: string) => void;
   onNeedNextPage: () => void;
-  searchKey: string;
+  /** Identity of the current list — a search, or a filtered collection — so a new one
+   *  starts at the top. */
+  listKey: string;
   /** The card the detail pane is showing, so the wall can say which one that is. */
   selectedId?: string | null;
   /** What the wall is, for anyone who cannot see that it is a wall of cards. */
@@ -157,11 +159,11 @@ export function CardGrid<T extends GridCard>({
     ? Math.min(rows.length - 1, (virtualRows[virtualRows.length - 1].index + 1) * columns - 1)
     : -1;
 
-  // A new search reuses this scroll container, and a browser clamps the old offset into
+  // A new list reuses this scroll container, and a browser clamps the old offset into
   // the new content rather than resetting it.
   useEffect(() => {
     virtualizer.scrollToOffset(0);
-  }, [searchKey, virtualizer]);
+  }, [listKey, virtualizer]);
 
   useEffect(() => {
     if (needsNextPage(lastRendered, rows.length)) onNeedNextPage();
