@@ -87,7 +87,28 @@ pub fn fts_query(text: &str) -> Option<String> {
 }
 
 /// Push every non-text card predicate onto `p`, qualified with `alias`.
-pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str) {
+///
+/// `rows` names the table that carries the *denormalised* printing beside its soft card
+/// reference — `Some("e")` for the collection's `collection_entries`, `None` for the search,
+/// which reads `cards` and nothing else. It changes exactly one filter, and the asymmetry is
+/// the point:
+///
+/// * **Set code** is a statement the row itself can answer. The collection copies
+///   `set_code` onto the entry at write time precisely so a row stays identifiable after
+///   its printing leaves `cards` (spec §6), and the list *shows* that value. A row
+///   displayed as `lea` that vanished when the reader filtered to `lea` would be the
+///   filter contradicting the column beside it.
+/// * **Format, colours, rarity and mana value** are claims only a card row can answer.
+///   There is nowhere to read them from for an orphan, and inventing an answer would be a
+///   claim about a printing that is gone — so those stay `{alias}.…`, and an orphan simply
+///   fails them.
+pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows: Option<&str>) {
+    // The one column with two places to read it from. See the doc comment above.
+    let set_code = match rows {
+        Some(rows) => format!("coalesce({alias}.set_code, {rows}.set_code)"),
+        None => format!("{alias}.set_code"),
+    };
+
     // `restricted` counts as playable — a Vintage search that hid Black Lotus would be
     // wrong. Formats the card has no entry for yield NULL, which fails the IN.
     if let Some(v) = nonblank(&f.format) {
@@ -118,7 +139,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str) {
     }
 
     if let Some(s) = nonblank(&f.set_code) {
-        p.push(format!("{alias}.set_code = ?"), Box::new(s.to_owned()));
+        p.push(format!("{set_code} = ?"), Box::new(s.to_owned()));
     }
 
     // OR within, AND without. Blank entries are dropped rather than matched: a picker's
@@ -134,7 +155,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str) {
         picked.truncate(MAX_SET_FILTER);
         if !picked.is_empty() {
             let holes = vec!["?"; picked.len()].join(",");
-            p.wheres.push(format!("{alias}.set_code IN ({holes})"));
+            p.wheres.push(format!("{set_code} IN ({holes})"));
             for code in picked {
                 p.params.push(Box::new(code));
             }

@@ -158,7 +158,9 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             ranked = true;
         }
     }
-    filters::push_card_filters(&mut p, &req.card_filters(), "c");
+    // `None`: this query reads `cards` and nothing else, so there is no second place a set
+    // code could come from — see `push_card_filters`.
+    filters::push_card_filters(&mut p, &req.card_filters(), "c", None);
     let where_sql = p.where_sql();
     let mut params = p.params;
 

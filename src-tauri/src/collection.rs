@@ -701,7 +701,10 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
         paper_only: Some(false),
         ..q.cards.clone()
     };
-    crate::filters::push_card_filters(&mut p, &cards, "c");
+    // `Some("e")`: the entry carries its own `set_code`, so a set filter reads through to it
+    // for the rows `cards` no longer knows about — the ones this list still shows under that
+    // very code. Every other card filter stays card-only; `push_card_filters` says why.
+    crate::filters::push_card_filters(&mut p, &cards, "c", Some("e"));
 
     push_in_list(&mut p, "e.finish", q.finishes.as_deref(), &FINISHES);
     push_in_list(&mut p, "e.condition", q.conditions.as_deref(), &CONDITIONS);
@@ -1852,6 +1855,131 @@ mod tests {
         let s = summarise(&conn, &CollectionQuery::default()).unwrap();
         assert_eq!(s.total_cards, 2, "the cards are still owned");
         assert_eq!(s.unpriced_usd, 2);
+    }
+
+    /// The zero-quantity ruling, fenced. A stepper taken to zero keeps the row (Task 5), and
+    /// every aggregate over this table therefore has to say *deliberately* what it does with
+    /// one. Three separate positions, each of which a plausible "tidy-up" would break, and
+    /// none of which any other test notices: a `WHERE e.quantity > 0` bolted onto the scope,
+    /// or a `count(*)` in place of `sum(e.quantity)`, or a `unique_cards` narrowed to what is
+    /// held today, all pass the rest of this module.
+    ///
+    /// * The row still **lists** — it is a real row, and it is where the user's condition,
+    ///   price paid, tags and acquisition story still live.
+    /// * `total_cards` is **copies**, so it drops by exactly the copies that left.
+    /// * `unique_cards` is printings **recorded**, not printings held, so it does not move:
+    ///   the row is still on the screen this number captions, and a header that stopped
+    ///   counting it would disagree with the list underneath it.
+    #[test]
+    fn a_row_emptied_to_zero_still_lists_and_is_still_a_printing_the_collection_knows() {
+        let conn = seeded();
+        let lea = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 3)).unwrap();
+
+        let before = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(
+            (before.total_cards, before.unique_cards, before.entries),
+            (5, 2, 2)
+        );
+
+        set_quantity(&conn, lea.id, 0).unwrap();
+        let after = summarise(&conn, &CollectionQuery::default()).unwrap();
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(page.total, 2, "an emptied row is a row");
+        let emptied = page
+            .items
+            .iter()
+            .find(|r| r.id == lea.id)
+            .expect("the row the user emptied is still the row the user is looking at");
+        assert_eq!(emptied.quantity, 0);
+
+        assert_eq!(
+            after.total_cards, 3,
+            "copies, not rows — the two Alpha copies are gone"
+        );
+        assert_eq!(
+            after.unique_cards, 2,
+            "printings recorded, not printings held"
+        );
+        assert_eq!(after.entries, 2, "and the entry is still an entry");
+        // The value follows the copies, which is the same statement seen from the money
+        // side: an emptied row is worth nothing and is not unpriced.
+        assert!(
+            (after.value_usd - 3.0 * 90.00).abs() < 0.005,
+            "got {}",
+            after.value_usd
+        );
+    }
+
+    /// The set filter is the one card filter whose value the *entry* also carries, and it has
+    /// to read through to it. The list shows an orphan under the set code denormalised at
+    /// write time; a filter that then hid that row would be contradicting the column printed
+    /// beside it — the reader clicks `lea` on a row that says `lea` and it disappears.
+    ///
+    /// The other half is the part that keeps this honest: `rarity` (and format, colours, mana
+    /// value) is a claim only a card row can answer, so the orphan still fails it. There is
+    /// nowhere to read it from, and inventing an answer would be a claim about a printing
+    /// that is gone.
+    #[test]
+    fn an_orphan_still_matches_the_set_it_is_recorded_under_but_not_a_card_only_filter() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
+            .unwrap();
+
+        let filtered = |cards: crate::filters::CardFilters| {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    cards,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let by_sets = |code: &str| {
+            filtered(crate::filters::CardFilters {
+                sets: Some(vec![code.to_owned()]),
+                ..Default::default()
+            })
+        };
+
+        let lea = by_sets("lea");
+        assert_eq!(
+            lea.total, 1,
+            "the list shows this row as `lea`, so filtering to `lea` has to find it"
+        );
+        assert_eq!(lea.items[0].card_id, "bolt-lea");
+        assert_eq!(
+            by_sets("4ed").total,
+            1,
+            "and a row with a card still matches"
+        );
+        assert_eq!(by_sets("zzz").total, 0, "it is still a filter");
+
+        // The single-set filter is the same claim and answers the same way.
+        let single = filtered(crate::filters::CardFilters {
+            set_code: Some("lea".into()),
+            ..Default::default()
+        });
+        assert_eq!(single.total, 1);
+
+        let commons = filtered(crate::filters::CardFilters {
+            rarity: Some("common".into()),
+            ..Default::default()
+        });
+        assert_eq!(commons.total, 1, "the orphan has no rarity to match");
+        assert_eq!(commons.items[0].card_id, "bolt-jp");
     }
 
     /// The digital-printing rule the search applies does **not** apply here: the user owns
