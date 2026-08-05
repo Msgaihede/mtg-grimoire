@@ -58,4 +58,29 @@ describe("normalizeCondition", () => {
   it("has five grades, worst last", () => {
     expect(CONDITIONS).toEqual(["NM", "LP", "MP", "HP", "DMG"]);
   });
+
+  /**
+   * A cell in someone's CSV is not a property name.
+   *
+   * This is the importer's seam (Plan 5), so the strings it sees come from a file rather
+   * than from us — and read as an object key, `constructor` answers with the `Object`
+   * function and `__proto__` with `Object.prototype`. Both then look *recognised*
+   * (`matched: true`), which is the worse half: an unknown condition is supposed to become a
+   * warning row in the import preview, and these two would sail past it carrying a function
+   * where a grade belongs.
+   *
+   * Note which spellings are dangerous and which are not: the lookup lower-cases first, so
+   * `toString` and `hasOwnProperty` arrive as `tostring` and `hasownproperty` and miss by
+   * accident. Only the all-lowercase members of `Object.prototype` get through — which is
+   * exactly why this is a lookup that must not consult a prototype at all, rather than a
+   * list of names to exclude.
+   */
+  it("treats a JavaScript property name as the unknown condition it is", () => {
+    for (const raw of ["constructor", "__proto__", "Constructor", "  __proto__  "]) {
+      const result = normalizeCondition(raw);
+      expect(result.matched, raw).toBe(false);
+      expect(result.condition, raw).toBe("NM");
+      expect(CONDITIONS, raw).toContain(result.condition);
+    }
+  });
 });

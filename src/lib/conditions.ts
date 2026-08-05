@@ -45,36 +45,44 @@ export const CONDITION_LABEL: Record<Condition, string> = {
  *   the whole word `Played` is Moxfield's, whose scale runs Mint / Near Mint / Good (Lightly
  *   Played) / Played / Heavily Played / Damaged, so it lands on `MP`. Two spellings of what
  *   looks like one word, from two vendors who mean different cards by it.
+ *
+ * A `Map`, not a `Record`, and here that is not a nicety. The keys are cells from somebody
+ * else's CSV — this is the importer's seam — and an object lookup answers for every member
+ * of `Object.prototype`: `constructor` comes back as the `Object` function, `__proto__` as
+ * the prototype itself, and both look *recognised*, so they would slip past the very
+ * warning row that exists to catch a condition the app does not know. (Only the
+ * all-lowercase members reach it, because the lookup lower-cases first — which is an
+ * accident protecting `toString`, not a design.)
  */
-const SYNONYMS: Record<string, Condition> = {
-  mint: "NM",
-  m: "NM",
-  mt: "NM",
-  "near mint": "NM",
-  nm: "NM",
-  "nm-mint": "NM",
-  sp: "LP",
-  "slightly played": "LP",
-  excellent: "LP",
-  ex: "LP",
-  "lightly played": "LP",
-  lp: "LP",
-  "good (lightly played)": "LP",
-  "moderately played": "MP",
-  mp: "MP",
-  played: "MP",
-  good: "MP",
-  gd: "MP",
-  "heavily played": "HP",
-  hp: "HP",
-  pl: "HP",
-  damaged: "DMG",
-  dmg: "DMG",
-  dm: "DMG",
-  d: "DMG",
-  poor: "DMG",
-  po: "DMG",
-};
+const SYNONYMS = new Map<string, Condition>([
+  ["mint", "NM"],
+  ["m", "NM"],
+  ["mt", "NM"],
+  ["near mint", "NM"],
+  ["nm", "NM"],
+  ["nm-mint", "NM"],
+  ["sp", "LP"],
+  ["slightly played", "LP"],
+  ["excellent", "LP"],
+  ["ex", "LP"],
+  ["lightly played", "LP"],
+  ["lp", "LP"],
+  ["good (lightly played)", "LP"],
+  ["moderately played", "MP"],
+  ["mp", "MP"],
+  ["played", "MP"],
+  ["good", "MP"],
+  ["gd", "MP"],
+  ["heavily played", "HP"],
+  ["hp", "HP"],
+  ["pl", "HP"],
+  ["damaged", "DMG"],
+  ["dmg", "DMG"],
+  ["dm", "DMG"],
+  ["d", "DMG"],
+  ["poor", "DMG"],
+  ["po", "DMG"],
+]);
 
 /**
  * One incoming condition string, as a grade plus what it said.
@@ -92,6 +100,6 @@ export function normalizeCondition(raw: string | null | undefined): {
 } {
   const original = raw?.trim() ?? null;
   if (!original) return { condition: "NM", original: null, matched: true };
-  const found = SYNONYMS[original.toLowerCase()];
+  const found = SYNONYMS.get(original.toLowerCase());
   return { condition: found ?? "NM", original, matched: found !== undefined };
 }

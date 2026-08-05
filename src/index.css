@@ -1,4 +1,15 @@
-@import "tailwindcss";
+/* `source(none)` plus the two explicit sources below, because Tailwind's automatic
+   detection scans the *whole repository* — and this repository keeps its plans, specs and
+   carryover notes in tracked Markdown that quotes component source. The scanner cannot tell
+   a class in a fenced code block from a class in a component, so `docs/` was emitting live
+   CSS rules: a retired utility went on being generated out of the plan that described
+   retiring it. Documentation must be free to name a class without shipping it.
+
+   Anything that holds classes has to be listed here now. Today that is `src/` and the app
+   shell; a new one is a silently missing style, so add it in the same commit. */
+@import "tailwindcss" source(none);
+@source "../src";
+@source "../index.html";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
@@ -171,8 +182,10 @@
      `--color-muted` below mean what every vendored component expects it to.
 
      (Spelled "the matching text utility" rather than written out, so that this file passes
-     the sweep in `lib/tokens.test.ts` — and so Tailwind's scanner, which reads prose as
-     eagerly as code, stops emitting a dead rule for a class the app no longer uses.) */
+     the sweep in `lib/tokens.test.ts`. What keeps the retired class out of the *build* is
+     the `@source` narrowing at the top of this file, not this wording — a comment here is
+     as much a class source to Tailwind as a component is, but so was every mention of it in
+     `docs/`, and only narrowing the scan reaches those.) */
   --color-dim: oklch(0.65 0.01 90);
   /* shadcn's meaning, restored: `bg-muted` is now a subtle panel, as every generated
      component assumes. Vendoring one no longer needs the `bg-muted` → `bg-surface`
