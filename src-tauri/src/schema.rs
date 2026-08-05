@@ -1,5 +1,7 @@
-//! Database schema: `cards`, `sets`, `sync_meta`, the `cards_fts` search index, and the
-//! user's own tables — `collection_entries`, `wishlist_entries`, `card_migrations`.
+//! Database schema: `cards`, `sets`, `sync_meta`, the `cards_fts` search index, the user's
+//! own tables — `collection_entries`, `wishlist_entries`, `card_migrations`, `decks`,
+//! `deck_cards`, `deck_allocations` — and `format_specs`, which is seeded *data*: the
+//! format rules the validation engine reads instead of embodying.
 //!
 //! Nullability here is load-bearing. Scryfall omits `oracle_id`, `cmc` and `type_line` at
 //! the top level on some printings (reversible cards, art series), `collector_number` is
@@ -11,9 +13,17 @@
 //!
 //! The line that runs through the whole file: the first four tables are *sync data* and
 //! `cards` is dropped and recreated wholesale on every sync (see [`swap_staging`]); the
-//! last three are the user's, are never dropped, and therefore reference `cards.id`
-//! **softly** — no `REFERENCES` clause anywhere, with the printing denormalised beside
+//! rest are the user's, are never dropped, and therefore reference `cards.id` **softly** —
+//! no `REFERENCES` clause anywhere near a card id, with the printing denormalised beside
 //! the id so a row stays identifiable after the id it points at stops resolving.
+//!
+//! Enforced foreign keys exist only *between user tables*, and there are exactly three, all
+//! `ON DELETE CASCADE`: `deck_cards.deck_id`, `deck_allocations.deck_id` and
+//! `deck_allocations.collection_entry_id`. CASCADE is chosen per delete-site — it is right
+//! at both user-initiated ones (deleting a deck takes its list and its reservations;
+//! `collection::remove_entry` frees reservations on copies that no longer exist), and the
+//! one non-user delete, [`crate::reconcile`]'s fold, repoints allocations onto the
+//! surviving entry *before* the delete so its cascade fires over nothing.
 
 use rusqlite::Connection;
 
@@ -138,7 +148,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -169,6 +179,94 @@ pub const COLLECTION_GRAIN: &str = "card_id, finish, condition, lang, altered, s
 /// specific one rather than a looser version of it.
 pub const WISHLIST_GRAIN: &str =
     "coalesce(oracle_id, ''), coalesce(card_id, ''), coalesce(preferred_finish, '')";
+
+/// The five deck zones, spec §6 verbatim. CHECK-constrained in SQL and mirrored in TS.
+///
+/// The v5 DDL spells the five words out rather than interpolating this constant, for the
+/// reason [`CARDS_COLUMNS`] is frozen: a migration step is history. Editing this list would
+/// silently rewrite the CHECK a *fresh* install creates while every upgraded database kept
+/// the old one, and the two would then disagree about what a deck can hold. A sixth zone is
+/// a new migration step. What this constant is for is everything that is not history — the
+/// TypeScript mirror, and `the_deck_card_grain_folds_and_the_zone_and_quantity_checks_hold`,
+/// which walks it against the live CHECK so the copies cannot drift apart unnoticed.
+pub const DECK_ZONES: [&str; 5] = ["main", "side", "commander", "companion", "maybe"];
+
+/// What makes two deck-card rows the same row: one printing in one zone of one deck.
+///
+/// Written once for [`COLLECTION_GRAIN`]'s reason — the UNIQUE index and every
+/// `ON CONFLICT(…)` target must match verbatim, and a target that matches no index is a
+/// runtime error at the first quick-add rather than a compile error. No `coalesce` is
+/// needed here: all three columns are `NOT NULL`, so none of them can go distinct-by-NULL.
+///
+/// `zone` is *in* the grain because the same printing in `main` and in `maybe` is two
+/// intentions, not one row that moved.
+pub const DECK_CARD_GRAIN: &str = "deck_id, card_id, zone";
+
+/// One deck's claim on one collection entry. Both columns are `NOT NULL` enforced foreign
+/// keys, so the grain is the pair and nothing else: a deck reserves copies *of a collection
+/// row*, and a second claim on the same row by the same deck is the same claim.
+pub const ALLOCATION_GRAIN: &str = "deck_id, collection_entry_id";
+
+/// The format rules as DATA (spec §6), so a rules change is an UPDATE and not a release,
+/// and the validation engine reads rules rather than embodying them.
+///
+/// Source of every cell: `docs/superpowers/research/2026-08-04-mtg-domain-rules.md` — its
+/// format table, TRAP A, and the CR citations there. Columns, in the order below:
+/// (key, display_name, picker, deck_min, deck_max, copies, sb, singleton, cmdr,
+///  cmdr_rule, life, restricted, has_legality, max_mv, companion_ok, sort)
+///
+/// The 23 keys are Scryfall's legality keys **in the order it emits them**, then the two
+/// pseudo-formats. `INSERT OR REPLACE`, so a future correction is a new migration step
+/// re-running this same constant over the rows a user already has.
+///
+/// # What the numbers mean
+///
+/// * `deck_min`/`deck_max` count the **`main` + `commander` zones together** — "exactly 100
+///   incl cmdr", "exactly 60 incl OB + signature spell" (Oathbreaker's planeswalker and its
+///   signature spell both live in the `commander` zone). `deck_max` NULL is CR 100.5: a
+///   60-card format has a minimum and no maximum.
+/// * The **companion never counts toward deck size**: EDH's is "effectively a 101st card",
+///   and in a 60-card format it occupies a sideboard slot, which is counted against
+///   `sideboard_max` instead.
+/// * `sideboard_max` 0 means *no sideboard*; NULL means *uncapped* (Limited plays the rest
+///   of its pool). `max_copies` NULL means unlimited — the two pseudo-formats only.
+/// * `restricted_semantic` is TRAP A and is never inferred from the key: `restricted` means
+///   max one copy in vintage/timeless/oldschool and **banned as commander** in the two
+///   singleton formats that use it, duel and tlr.
+/// * `predh` carries `'edh'` as its commander rule on purpose. The 2026 Vehicle/Spacecraft
+///   clause is harmless there because the `predh` legality key already excludes everything
+///   after 2011 — the pool check does the narrowing. That is not deriving one format from
+///   another (this seed never copies a *legality*); it is two formats genuinely sharing one
+///   eligibility rule.
+const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
+    (key, display_name, enabled_in_picker, deck_min, deck_max, max_copies, sideboard_max,
+     singleton, requires_commander, commander_rule, life, restricted_semantic,
+     has_legality_data, max_mana_value, allows_companion, sort_order) VALUES
+    ('standard',        'Standard',             1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 1),
+    ('future',          'Future Standard',      0, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 2),
+    ('historic',        'Historic',             1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 3),
+    ('timeless',        'Timeless',             1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 4),
+    ('gladiator',       'Gladiator',            1, 100, NULL, 1,    0,    1, 0, NULL,          20, 'max_one',             1, NULL, 0, 5),
+    ('pioneer',         'Pioneer',              1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 6),
+    ('modern',          'Modern',               1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 7),
+    ('legacy',          'Legacy',               1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 8),
+    ('pauper',          'Pauper',               1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 9),
+    ('vintage',         'Vintage',              1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 10),
+    ('penny',           'Penny Dreadful',       1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 11),
+    ('commander',       'Commander',            1, 100, 100,  1,    0,    1, 1, 'edh',         40, 'max_one',             1, NULL, 1, 12),
+    ('oathbreaker',     'Oathbreaker',          1, 60,  60,   1,    0,    1, 1, 'oathbreaker', 20, 'max_one',             1, NULL, 1, 13),
+    ('standardbrawl',   'Standard Brawl',       1, 60,  60,   1,    0,    1, 1, 'brawl',       25, 'max_one',             1, NULL, 1, 14),
+    ('brawl',           'Brawl',                1, 100, 100,  1,    0,    1, 1, 'brawl',       25, 'max_one',             1, NULL, 1, 15),
+    ('competitivebrawl','Competitive Brawl',    1, 100, 100,  1,    0,    1, 1, 'brawl',       25, 'max_one',             1, NULL, 1, 16),
+    ('alchemy',         'Alchemy',              1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 17),
+    ('paupercommander', 'Pauper Commander',     1, 100, 100,  1,    0,    1, 1, 'pdh',         30, 'max_one',             1, NULL, 1, 18),
+    ('duel',            'Duel Commander',       1, 100, 100,  1,    0,    1, 1, 'duel',        20, 'banned_as_commander', 1, NULL, 1, 19),
+    ('oldschool',       'Old School',           1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 20),
+    ('premodern',       'Premodern',            1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 21),
+    ('predh',           'PreDH',                1, 100, 100,  1,    0,    1, 1, 'edh',         40, 'max_one',             1, NULL, 1, 22),
+    ('tlr',             'Tiny Leaders: Reborn', 1, 50,  50,   1,    10,   1, 1, 'tlr',         20, 'banned_as_commander', 1, 3,    1, 23),
+    ('casual',          'Casual',               1, 0,   NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 24),
+    ('limited',         'Limited',              1, 40,  NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 25);";
 
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
 /// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
@@ -276,9 +374,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ))?;
 
         // Literal `3`, not `SCHEMA_VERSION`: this step is what makes a database version 3,
-        // and head is 4. Writing head here would commit "migrated" before the v4 step had
-        // run, so a v4 that then failed would leave a database claiming a schema it does
-        // not have — with no way back, because `migrate` only ever walks upwards.
+        // and head is 5. Writing head here would commit "migrated" before the steps after
+        // it had run, so a v4 or v5 that then failed would leave a database claiming a
+        // schema it does not have — with no way back, because `migrate` only ever walks
+        // upwards.
         tx.execute_batch("PRAGMA user_version = 3;")?;
         tx.commit()?;
     }
@@ -406,12 +505,161 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             wish = WISHLIST_GRAIN
         ))?;
         // Literal `4`, for the same reason v3 writes a literal `3`: this step is what makes
-        // a database version 4, and the next step added here will make head 5. Writing
+        // a database version 4, and the step after it makes head 5. Writing
         // `SCHEMA_VERSION` would commit "migrated" before that step had run — and it would
         // also quietly defang `migrate_is_idempotent_and_creates_tables`, which pins
         // `user_version == SCHEMA_VERSION` and would keep passing while the last step was
         // never reached. **Every future step ends with its own literal.**
         tx.execute_batch("PRAGMA user_version = 4;")?;
+        tx.commit()?;
+    }
+    if v < 5 {
+        let tx = conn.unchecked_transaction()?;
+        // Plan 4 (spec §6). Two invariants meet here and the DDL is their treaty:
+        //
+        // * Everything that names a CARD is a soft reference — `deck_cards.card_id` and
+        //   `decks.cover_card_id` carry no REFERENCES clause, and the printing (plus the
+        //   name: a deck list that cannot name an orphaned card is not a list) is
+        //   denormalised beside `card_id`, exactly as the collection and wishlist do.
+        // * Everything that names USER DATA is an enforced reference — the only three
+        //   in the schema, all ON DELETE CASCADE, an action chosen per delete-site:
+        //   right for the two user-initiated deletes (deck delete, `remove_entry`), and
+        //   made safe for the one non-user delete (the reconciler's fold) by
+        //   `reconcile::fold_into_existing` repointing allocations BEFORE it deletes.
+        tx.execute_batch(&format!(
+            "ALTER TABLE cards ADD COLUMN power TEXT;
+             ALTER TABLE cards ADD COLUMN toughness TEXT;
+
+             CREATE TABLE IF NOT EXISTS decks (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                format_key TEXT NOT NULL DEFAULT 'casual',
+                description TEXT,
+                -- Spec §6: card_art today; 'custom' + cover_image_path are Plan 6's
+                -- (a user file copied into data/covers/), reserved here so the column
+                -- story is stable.
+                cover_kind TEXT NOT NULL DEFAULT 'card_art'
+                    CHECK (cover_kind IN ('card_art','custom')),
+                -- Soft reference, like every other card id in a user table.
+                cover_card_id TEXT,
+                cover_image_path TEXT,
+                -- Reserves availability, never decrements the collection (spec §6).
+                is_built INTEGER NOT NULL DEFAULT 0,
+                -- Spec §7 'duplicate/archive decks'. A flag, not a delete.
+                archived INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+
+             CREATE TABLE IF NOT EXISTS deck_cards (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                card_id TEXT NOT NULL,
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                name TEXT NOT NULL,
+                zone TEXT NOT NULL
+                    CHECK (zone IN ('main','side','commander','companion','maybe')),
+                -- Zero removes, like the wishlist and unlike the collection: a zone slot
+                -- at zero holds no condition, no price and no acquisition story.
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_cards_grain
+                ON deck_cards ({deck_grain});
+             CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards (card_id);
+
+             CREATE TABLE IF NOT EXISTS deck_allocations (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                collection_entry_id INTEGER NOT NULL
+                    REFERENCES collection_entries(id) ON DELETE CASCADE,
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_allocations_grain
+                ON deck_allocations ({alloc_grain});
+             -- The child index a CASCADE scans: without it every `remove_entry` is a
+             -- full table scan of the allocations, and the reconciler's fold repoints
+             -- through the same column.
+             CREATE INDEX IF NOT EXISTS idx_deck_allocations_entry
+                ON deck_allocations (collection_entry_id);
+
+             CREATE TABLE IF NOT EXISTS format_specs (
+                key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                enabled_in_picker INTEGER NOT NULL DEFAULT 1,
+                deck_min INTEGER NOT NULL,
+                deck_max INTEGER,             -- NULL = no maximum
+                max_copies INTEGER,           -- NULL = unlimited (casual, limited)
+                sideboard_max INTEGER,        -- 0 = no sideboard; NULL = uncapped (limited)
+                singleton INTEGER NOT NULL DEFAULT 0,
+                requires_commander INTEGER NOT NULL DEFAULT 0,
+                -- Which eligibility rule the TS engine applies. Data, not code:
+                -- NULL | 'edh' | 'brawl' | 'oathbreaker' | 'pdh' | 'duel' | 'tlr'.
+                commander_rule TEXT,
+                life INTEGER NOT NULL,
+                -- TRAP A: what `restricted` MEANS here. Never inferred from the key.
+                restricted_semantic TEXT NOT NULL DEFAULT 'max_one'
+                    CHECK (restricted_semantic IN ('max_one','banned_as_commander')),
+                -- 0 for the two pseudo-formats: casual and limited check no legality
+                -- and no pool (spec §6).
+                has_legality_data INTEGER NOT NULL DEFAULT 1,
+                -- Tiny Leaders: every card AND every face, MV <= this.
+                max_mana_value INTEGER,
+                -- Gladiator: no sideboard → no companions. EDH has sideboard_max 0 and
+                -- DOES allow one ('effectively a 101st card'), so this cannot be derived
+                -- from sideboard_max — it is its own fact.
+                allows_companion INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL
+             );",
+            deck_grain = DECK_CARD_GRAIN,
+            alloc_grain = ALLOCATION_GRAIN
+        ))?;
+
+        // The backfill, THROUGH [`json_raw`] — `raw` is a gzip BLOB on every database that
+        // has synced since v3, and an unguarded `json_extract` there is a hard error that
+        // fails this whole migration in the field while passing every fixture test
+        // (CLAUDE.md). `faces` needs no guard: compact JSON or NULL, and `json_extract`
+        // over a NULL is a NULL.
+        //
+        // Two nullable, unindexed columns on `cards`, so — as in v2 and v3 — no entry in
+        // `CARDS_INDEXES`, no edit to `CARDS_COLUMNS` (frozen), and no FTS rebuild: the
+        // index covers name/type_line/search_text, none of which this touches, and an
+        // UPDATE renumbers no rowid. `the_v5_backfill_leaves_the_search_index_answering`
+        // is the evidence, exactly as v2's and v3's twins were.
+        //
+        // Restricted to rows that have something to give, which is v2's reasoning and here
+        // it is nearly the whole cost. On a database that has synced since v3 the guard
+        // answers NULL for every `raw`, so all this step can recover is what the
+        // double-faced cards keep in `faces`: **1 510 of 116 590 rows**. Without the extra
+        // term the UPDATE rewrites all 116 590 — each carrying its ~2 KB `raw` blob — to
+        // store NULL over NULL. Measured through `prepare_database` on a copy of the live
+        // 547 MB database: **725 ms with it, 5.40 s without**, the same 1 510 rows filled
+        // either way, and `migrate` runs before there is a window to say anything in.
+        // The remaining P/T arrive with the next sync, exactly as v3's `artist` did — the
+        // ingest writes both columns from here on.
+        tx.execute_batch(&format!(
+            "UPDATE cards
+                SET power     = coalesce(json_extract({raw}, '$.power'),
+                                         json_extract(faces, '$[0].power')),
+                    toughness = coalesce(json_extract({raw}, '$.toughness'),
+                                         json_extract(faces, '$[0].toughness'))
+              WHERE power IS NULL AND toughness IS NULL
+                AND (json_extract(faces, '$[0].power') IS NOT NULL
+                     OR json_extract(faces, '$[0].toughness') IS NOT NULL
+                     OR json_extract({raw}, '$.power') IS NOT NULL
+                     OR json_extract({raw}, '$.toughness') IS NOT NULL);",
+            raw = json_raw("raw")
+        ))?;
+
+        tx.execute_batch(FORMAT_SPECS_SEED)?;
+        // Literal `5`, for the reason v3 writes a literal `3` and v4 a literal `4`.
+        tx.execute_batch("PRAGMA user_version = 5;")?;
         tx.commit()?;
     }
     Ok(())
@@ -601,8 +849,11 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
     tx.commit()
 }
 
+/// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
+/// reconciler tests need the same deck-shaped fixture, and a second hand-rolled copy of
+/// it is a second thing to keep true. `#[cfg(test)]` still bounds all of it to test builds.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -614,12 +865,13 @@ mod tests {
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name IN
                  ('cards','sets','sync_meta','cards_fts',
-                  'collection_entries','wishlist_entries','card_migrations')",
+                  'collection_entries','wishlist_entries','card_migrations',
+                  'decks','deck_cards','deck_allocations','format_specs')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 7);
+        assert_eq!(n, 11);
 
         // Without this the test would still pass while `migrate` re-ran its whole batch
         // every call (the CREATEs are all `IF NOT EXISTS`), silently rebuilding FTS each
@@ -1630,6 +1882,11 @@ mod tests {
     /// NULL. No database can be in that state when this step runs (a database with gzip
     /// rows is already past 3), but the guard is what makes that a fact rather than an
     /// argument — and it costs one `json_valid`.
+    ///
+    /// The whole ladder is walked, not just v3: every later step that reads `raw` is on
+    /// the same hook, and this is the only test that puts a real gzip member in the column
+    /// — fixture databases hold text `raw`, so an unguarded read passes everything else and
+    /// breaks only in the field. Reaching `SCHEMA_VERSION` is therefore half the assertion.
     #[test]
     fn the_v3_backfill_steps_over_a_row_whose_raw_is_not_json() {
         let conn = v1_database();
@@ -1637,17 +1894,30 @@ mod tests {
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
              VALUES ('gz','Compressed','tst','1','en','normal', ?1)",
             [crate::card_row::gzip_raw(
-                r#"{"object":"card","artist":"Rebecca Guay"}"#,
+                r#"{"object":"card","artist":"Rebecca Guay","power":"3","toughness":"3"}"#,
             )],
         )
         .unwrap();
 
         migrate(&conn).expect("a non-JSON `raw` must not fail the migration");
 
-        let artist: Option<String> = conn
-            .query_row("SELECT artist FROM cards WHERE id='gz'", [], |r| r.get(0))
+        let (artist, power, toughness): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT artist, power, toughness FROM cards WHERE id='gz'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .unwrap();
         assert_eq!(artist, None, "skipped, not guessed at");
+        assert_eq!((power, toughness), (None, None), "v5 reads `raw` too");
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            version, SCHEMA_VERSION,
+            "an unguarded read anywhere on the ladder stops the migration here"
+        );
     }
 
     /// A column added by a migration has to survive the sync that drops and recreates the
@@ -1723,5 +1993,513 @@ mod tests {
             .query_row("SELECT count(*) FROM image_cache", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    // ---- v5: the deck tables -------------------------------------------------------
+    //
+    // Five seed helpers, written once here because Task 3's reconciler tests need the
+    // same fixture — a deck that owns cards and holds a claim on the collection — and a
+    // second hand-rolled copy of it is a second thing to keep true. Plain INSERTs
+    // returning ids: nothing clever, so a test that fails fails about its own subject.
+
+    /// A `cards` row good enough to be pointed at. Not a foreign key anywhere — that is
+    /// the point of most of the tests below — but the printing has to exist for the
+    /// soft reference to be *resolving* before a swap drops it.
+    pub(crate) fn seed_card(conn: &Connection, id: &str, set: &str, cn: &str) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout, raw)
+             VALUES (?1, 'o-' || ?1, 'Lightning Bolt', ?2, ?3, 'en', 'normal', '{}')",
+            rusqlite::params![id, set, cn],
+        )
+        .unwrap();
+    }
+
+    /// A deck, taking every default the table offers (`casual`, `card_art`, not built,
+    /// not archived) so a change to one of them shows up somewhere.
+    pub(crate) fn deck(conn: &Connection, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO decks (name, created_at, updated_at)
+             VALUES (?1, unixepoch(), unixepoch()) RETURNING id",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One collection row, nonfoil NM, at the one grain these tests need.
+    pub(crate) fn entry(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil','NM',?2,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![card_id, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One printing in one zone of one deck, with the printing denormalised beside the
+    /// soft `card_id` exactly as `deck.rs` will write it.
+    pub(crate) fn deck_card(
+        conn: &Connection,
+        deck_id: i64,
+        card_id: &str,
+        zone: &str,
+        quantity: i64,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_cards
+                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                 created_at,updated_at)
+             VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,?4,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![deck_id, card_id, zone, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One deck's claim on one collection entry. A reservation, never a transfer: the
+    /// collection row it points at keeps every copy it had.
+    pub(crate) fn allocate(conn: &Connection, deck_id: i64, entry_id: i64, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_allocations
+                (deck_id, collection_entry_id, quantity, created_at, updated_at)
+             VALUES (?1,?2,?3,unixepoch(),unixepoch()) RETURNING id",
+            rusqlite::params![deck_id, entry_id, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The three enforced FKs, exercised at their delete sites. `foreign_keys=ON`, as
+    /// `db::open` sets it — these tests fail without the pragma, which is the point.
+    #[test]
+    fn deleting_a_deck_cascades_its_cards_and_allocations() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate(&conn).unwrap();
+        seed_card(&conn, "bolt", "lea", "161");
+        let deck = deck(&conn, "Burn");
+        let entry = entry(&conn, "bolt", 4);
+        deck_card(&conn, deck, "bolt", "main", 4);
+        allocate(&conn, deck, entry, 4);
+
+        conn.execute("DELETE FROM decks WHERE id = ?1", [deck])
+            .unwrap();
+
+        for table in ["deck_cards", "deck_allocations"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} rows die with their deck");
+        }
+        // …and the collection entry is untouched: a deck is a claim, never custody.
+        let q: i64 = conn
+            .query_row("SELECT quantity FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(q, 4);
+    }
+
+    /// `collection::remove_entry`'s CASCADE site — the second of the two *user-initiated*
+    /// deletes the action was chosen for. The allocation goes (a reservation on copies
+    /// that no longer exist is a lie); the deck card stays, because the deck still wants
+    /// the card and is simply missing it now, which is what Task 5's availability
+    /// computes rather than something the schema decides.
+    #[test]
+    fn removing_a_collection_entry_frees_its_allocations_and_nothing_else() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate(&conn).unwrap();
+        seed_card(&conn, "bolt", "lea", "161");
+        let deck = deck(&conn, "Burn");
+        let entry = entry(&conn, "bolt", 4);
+        deck_card(&conn, deck, "bolt", "main", 4);
+        allocate(&conn, deck, entry, 4);
+
+        conn.execute("DELETE FROM collection_entries WHERE id = ?1", [entry])
+            .unwrap();
+
+        let allocations: i64 = conn
+            .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(allocations, 0, "a claim on copies that are gone is a lie");
+        let (cards, wanted): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), coalesce(sum(quantity), 0) FROM deck_cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (cards, wanted),
+            (1, 4),
+            "the deck still wants the card — it is missing it, which is not the same thing"
+        );
+        // The deck itself is nobody's child here: only its own delete takes it.
+        let decks: i64 = conn
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(decks, 1);
+    }
+
+    /// `user_rows_survive_the_swap_that_drops_cards`, grown to the deck tables. Both
+    /// references to a card here — `deck_cards.card_id` and `decks.cover_card_id` — are
+    /// soft, and a declared `REFERENCES cards(id)` on either would abort this swap (or,
+    /// with CASCADE, quietly delete the user's decks on the next refresh).
+    #[test]
+    fn deck_rows_survive_the_swap_that_drops_cards() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate(&conn).unwrap();
+        seed_card(&conn, "bolt", "lea", "161");
+        let deck = deck(&conn, "Burn");
+        // The cover art is a printing too, and it is the other soft reference.
+        conn.execute(
+            "UPDATE decks SET cover_card_id = 'bolt' WHERE id = ?1",
+            [deck],
+        )
+        .unwrap();
+        let entry = entry(&conn, "bolt", 4);
+        deck_card(&conn, deck, "bolt", "main", 4);
+        allocate(&conn, deck, entry, 4);
+
+        create_staging(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('bolt','Lightning Bolt','2ed','162','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        swap_staging(&conn).expect("a sync must not be blocked by the user's decks");
+
+        for table in ["decks", "deck_cards", "deck_allocations"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "`{table}` is not sync data");
+        }
+        let cover: Option<String> = conn
+            .query_row("SELECT cover_card_id FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cover.as_deref(), Some("bolt"), "the cover keeps its card");
+        // The denormalised printing is the one the user put in the deck, not whatever the
+        // new `cards` row says — that is the whole reason it is stored beside the id.
+        let (card_id, set, cn, name, qty): (String, String, String, String, i64) = conn
+            .query_row(
+                "SELECT card_id, set_code, collector_number, name, quantity FROM deck_cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                card_id.as_str(),
+                set.as_str(),
+                cn.as_str(),
+                name.as_str(),
+                qty
+            ),
+            ("bolt", "lea", "161", "Lightning Bolt", 4),
+            "a deck list that cannot name its own cards is not a list"
+        );
+    }
+
+    /// The grain is what a zone write upserts against, so it has to fold — and the two
+    /// CHECKs are the enum and the zero rule, both enforced where they cannot be argued
+    /// with. `zone` is in the grain because the same printing in `main` and in `maybe` is
+    /// two different intentions, not one row with two homes.
+    #[test]
+    fn the_deck_card_grain_folds_and_the_zone_and_quantity_checks_hold() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        seed_card(&conn, "bolt", "lea", "161");
+        let d = deck(&conn, "Burn");
+
+        let add = |zone: &str, qty: i64| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO deck_cards
+                        (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                         created_at,updated_at)
+                     VALUES (?1,'bolt','lea','161','en','Lightning Bolt',?2,?3,
+                             unixepoch(),unixepoch())
+                     ON CONFLICT ({DECK_CARD_GRAIN}) DO UPDATE
+                        SET quantity = quantity + excluded.quantity"
+                ),
+                rusqlite::params![d, zone, qty],
+            )
+        };
+        add("main", 2).unwrap();
+        add("main", 3).expect("a second add must fold into the first, not raise");
+        add("maybe", 1).expect("`zone` is in the grain: `maybe` is a different row");
+
+        let (rows, main): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), (SELECT quantity FROM deck_cards WHERE zone='main')
+                 FROM deck_cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, main), (2, 5));
+
+        // The enum is the five spec words and not their synonyms — 'sideboard' is what
+        // every other deck site calls this zone, which is exactly why it has to bounce.
+        // And zero removes here, as on the wishlist: `deck.rs` owns that translation, so
+        // a zero that reaches SQL is a bug and must not be storable.
+        for (zone, qty) in [("sideboard", 4), ("side", 0)] {
+            let err = add(zone, qty).expect_err(&format!("({zone}, {qty}) must not be storable"));
+            assert!(
+                matches!(&err, rusqlite::Error::SqliteFailure(e, _)
+                         if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
+                "({zone}, {qty}) was rejected, but not by a CHECK: {err}"
+            );
+        }
+        // Every zone the constant names is a zone the CHECK accepts. `DECK_ZONES` is
+        // mirrored in TypeScript and spelled out again in the frozen v5 DDL, so this is
+        // what keeps the three copies saying the same five words.
+        for zone in DECK_ZONES {
+            add(zone, 1).unwrap_or_else(|e| panic!("`{zone}` must be a legal zone, but: {e}"));
+        }
+    }
+
+    /// The seed is the research doc's format table as data, and the engine reads rules
+    /// from it rather than embodying them — so a wrong cell here is a wrong rule
+    /// everywhere, with nothing else in the app to contradict it.
+    #[test]
+    fn format_specs_is_seeded_with_all_25_formats_and_the_load_bearing_cells() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM format_specs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 25, "23 legality keys + casual + limited");
+
+        // Scryfall's 23 legality keys in the order it emits them (research doc), then the
+        // two pseudo-formats. `sort_order` is what the format picker reads, so the list
+        // and its order are one assertion.
+        let mut stmt = conn
+            .prepare("SELECT key FROM format_specs ORDER BY sort_order")
+            .unwrap();
+        let keys: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            keys,
+            [
+                "standard",
+                "future",
+                "historic",
+                "timeless",
+                "gladiator",
+                "pioneer",
+                "modern",
+                "legacy",
+                "pauper",
+                "vintage",
+                "penny",
+                "commander",
+                "oathbreaker",
+                "standardbrawl",
+                "brawl",
+                "competitivebrawl",
+                "alchemy",
+                "paupercommander",
+                "duel",
+                "oldschool",
+                "premodern",
+                "predh",
+                "tlr",
+                "casual",
+                "limited",
+            ]
+        );
+
+        // The twelve cells the engine actually branches on, read as text so that NULL
+        // stays visible: NULL is a *rule* here (no maximum, unlimited copies, an uncapped
+        // sideboard), never a missing value, and a 0 that should be a NULL is a different
+        // format. Order: deck_min, deck_max, max_copies, sideboard_max, singleton,
+        // requires_commander, commander_rule, life, restricted_semantic, has_legality_data,
+        // max_mana_value, allows_companion.
+        const CELLS: &str = "CAST(deck_min AS TEXT), CAST(deck_max AS TEXT),
+             CAST(max_copies AS TEXT), CAST(sideboard_max AS TEXT), CAST(singleton AS TEXT),
+             CAST(requires_commander AS TEXT), commander_rule, CAST(life AS TEXT),
+             restricted_semantic, CAST(has_legality_data AS TEXT),
+             CAST(max_mana_value AS TEXT), CAST(allows_companion AS TEXT)";
+        let cells = |key: &str| -> Vec<Option<String>> {
+            conn.query_row(
+                &format!("SELECT {CELLS} FROM format_specs WHERE key = ?1"),
+                [key],
+                |r| (0..12).map(|i| r.get(i)).collect(),
+            )
+            .unwrap_or_else(|e| panic!("no format_specs row for `{key}`: {e}"))
+        };
+        let want = |v: [&str; 12]| -> Vec<Option<String>> {
+            v.iter()
+                .map(|s| (*s != "NULL").then(|| (*s).to_owned()))
+                .collect()
+        };
+
+        // Exactly 100 including the commander, singleton, no sideboard — and a companion
+        // all the same, "effectively a 101st card", which is why `allows_companion` is its
+        // own fact and not `sideboard_max > 0`.
+        assert_eq!(
+            cells("commander"),
+            want(["100", "100", "1", "0", "1", "1", "edh", "40", "max_one", "1", "NULL", "1"])
+        );
+        // 60 *minimum* (deck_max NULL, CR 100.5 — no maximum), four copies, 15 sideboard.
+        assert_eq!(
+            cells("vintage"),
+            want(["60", "NULL", "4", "15", "0", "0", "NULL", "20", "max_one", "1", "NULL", "1"])
+        );
+        // TRAP A, the other half: `restricted` in a singleton format cannot mean "max 1".
+        assert_eq!(
+            cells("duel")[8].as_deref(),
+            Some("banned_as_commander"),
+            "TRAP A: what `restricted` means is per format, never inferred from the key"
+        );
+        // Exactly 50, a 10-card sideboard, every card *and every face* at MV <= 3.
+        assert_eq!(
+            cells("tlr"),
+            want([
+                "50",
+                "50",
+                "1",
+                "10",
+                "1",
+                "1",
+                "tlr",
+                "20",
+                "banned_as_commander",
+                "1",
+                "3",
+                "1"
+            ])
+        );
+        // 99 commons plus an uncommon commander, at 30 life. TRAP C's rule is `pdh`.
+        assert_eq!(cells("paupercommander")[7].as_deref(), Some("30"));
+        assert_eq!(cells("paupercommander")[6].as_deref(), Some("pdh"));
+        // No sideboard at all, so no companion — the one format where the two coincide.
+        assert_eq!(
+            cells("gladiator")[11].as_deref(),
+            Some("0"),
+            "no sideboard means no companion"
+        );
+        // The two pseudo-formats: no legality data, no pool, no copy limit.
+        assert_eq!(
+            cells("limited"),
+            want([
+                "40", "NULL", "NULL", "NULL", "0", "0", "NULL", "20", "max_one", "0", "NULL", "1"
+            ])
+        );
+        assert_eq!(
+            cells("casual")[9].as_deref(),
+            Some("0"),
+            "checks no legality"
+        );
+        assert_eq!(cells("casual")[0].as_deref(), Some("0"), "and no size");
+
+        // Future Standard is a real legality key and not a format anyone plays.
+        let hidden: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT key FROM format_specs WHERE enabled_in_picker = 0")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+            rows.collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(hidden, ["future"]);
+
+        // NEVER derive one format from another: two Brawls that differ only in deck size,
+        // and a third at 100 like the first. Each is seeded, none is computed.
+        for (key, size) in [
+            ("brawl", "100"),
+            ("standardbrawl", "60"),
+            ("competitivebrawl", "100"),
+        ] {
+            let row = cells(key);
+            assert_eq!(
+                (row[0].as_deref(), row[1].as_deref(), row[7].as_deref()),
+                (Some(size), Some(size), Some("25")),
+                "{key} is its own row"
+            );
+        }
+    }
+
+    /// Carryover of the v3 `artist` playbook, one version on: CR 903.3 asks whether a
+    /// Vehicle or Spacecraft has a P/T *box*, and nothing else in the database can answer
+    /// it — `faces` is NULL on every single-faced card, and `raw` is a gzip BLOB nothing
+    /// reads at runtime. So the two columns are filled out of the JSON already on disk,
+    /// with the same top-level-then-front-face fallback the artist uses.
+    #[test]
+    fn the_v5_backfill_fills_power_and_toughness_from_raw_and_faces() {
+        let conn = v1_database();
+        insert_raw(
+            &conn,
+            "creature",
+            "Grizzly Bears",
+            r#"{"object":"card","power":"3","toughness":"3"}"#,
+        );
+        // A transform carries no top-level P/T at all: the front face has them, and the
+        // `faces` column is where a v1 ingest put that array verbatim.
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, faces, raw)
+             VALUES ('dfc','Delver of Secrets','isd','51','en','transform',
+                json_array(json_object('name','Delver of Secrets','power','1','toughness','1'),
+                           json_object('name','Insectile Aberration','power','3','toughness','2')),
+                '{\"object\":\"card\"}')",
+            [],
+        )
+        .unwrap();
+        insert_raw(&conn, "land", "Forest", r#"{"object":"card"}"#);
+
+        migrate(&conn).unwrap();
+
+        let pt = |id: &str| -> (Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT power, toughness FROM cards WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(pt("creature"), (Some("3".into()), Some("3".into())));
+        assert_eq!(
+            pt("dfc"),
+            (Some("1".into()), Some("1".into())),
+            "a transform's P/T live on its front face, not at the top level"
+        );
+        assert_eq!(pt("land"), (None, None), "no box is not a zero");
+    }
+
+    /// Same rule as v2 and v3: the step writes two new, unindexed columns and renumbers no
+    /// rowid, so it deliberately does not rebuild the FTS index — and this is the evidence
+    /// that search still answers afterwards.
+    #[test]
+    fn the_v5_backfill_leaves_the_search_index_answering() {
+        let conn = v1_database();
+        insert_raw(
+            &conn,
+            "bolt",
+            "Lightning Bolt",
+            r#"{"object":"card","power":"3","toughness":"3"}"#,
+        );
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "the FTS index must survive the v5 backfill");
     }
 }

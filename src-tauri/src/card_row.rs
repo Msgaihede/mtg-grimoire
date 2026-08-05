@@ -71,6 +71,15 @@ pub struct CardRow {
     /// that blob in the hot path. Top level first, then the front face — a reversible card
     /// has no top-level artist.
     pub artist: Option<String>,
+    /// The printed power and toughness, **as text**, columns of their own since v5.
+    ///
+    /// Text because that is what they are: `"*"`, `"1+*"`, `"7-*"` and `"∞"` all ship in
+    /// real data, and `"0"` is a printed zero while absent means *no P/T box at all* — the
+    /// distinction CR 903.3 turns on, since a Vehicle or Spacecraft **with a P/T box** can
+    /// be a commander in 2026 and one without cannot. Same fallback as [`CardRow::artist`]:
+    /// top level, then `card_faces[0]`, because a transform's P/T live only on its faces.
+    pub power: Option<String>,
+    pub toughness: Option<String>,
     pub search_text: String,
     /// The original bulk line, gzipped. `raw` is far and away the largest column in the
     /// database — 622 MB of it, measured live over 116 568 rows, in a `mtg.db` of 2 018 MB
@@ -291,6 +300,8 @@ impl CardRow {
                 any.then(|| Value::Array(per).to_string())
             }),
             artist: pick("artist"),
+            power: pick("power"),
+            toughness: pick("toughness"),
             search_text,
             raw: gzip_raw(line),
         })
@@ -547,6 +558,20 @@ mod tests {
         assert_eq!(miara.price_eur, None);
         assert_eq!(miara.finishes.as_deref(), Some(r#"["etched"]"#));
 
+        // P/T, the pair CR 903.3 turns on: printed at the top level on a normal creature,
+        // only on `card_faces[0]` for a transform (a naive top-level read blanks every
+        // double-faced creature in the database), and absent on anything with no P/T box —
+        // which is the *answer*, not a gap, so it may never become a zero.
+        assert_eq!(
+            (miara.power.as_deref(), miara.toughness.as_deref()),
+            (Some("2"), Some("1"))
+        );
+        assert_eq!(
+            (delver.power.as_deref(), delver.toughness.as_deref()),
+            (Some("1"), Some("1")),
+            "a transform's P/T are on its front face"
+        );
+
         // Un-card: half a mana symbol, so `cmc` cannot be an integer.
         assert_eq!(row(&rows, "Little Girl").cmc, Some(0.5));
 
@@ -555,6 +580,11 @@ mod tests {
         assert_eq!(forest.collector_number, "1★");
         assert!(forest.promo);
         assert_eq!(forest.colors.as_deref(), Some(""), "[] stays colorless");
+        assert_eq!(
+            (&forest.power, &forest.toughness),
+            (&None, &None),
+            "a land has no P/T box, which is an answer and not a gap"
+        );
 
         // Alchemy rebalance: digital-only, so not ownable on paper, and unpriced.
         let alchemy = row(&rows, "A-Alrund's Epiphany");
