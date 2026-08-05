@@ -1,5 +1,5 @@
 //! Sync orchestrator: the one place that decides whether to talk to Scryfall, and
-//! drives check → download → ingest → sets as a single supervised run.
+//! drives check → download → ingest → sets → reconcile as a single supervised run.
 //!
 //! Three rules shape everything here:
 //!
@@ -502,9 +502,68 @@ async fn finish_unchanged(
         let conn = lock_db(state);
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
+    // On this path too, and that is the point: 304 is the answer most runs get, so a
+    // reconcile that only ran after an ingest would run about as often as Scryfall rotates
+    // its bulk file — while `/migrations` grows on its own schedule.
+    reconcile_ids(state, app).await;
     compact_once(state, app).await;
     emit_done(app, card_count, None);
     Ok(unchanged(card_count))
+}
+
+/// Poll Scryfall's id-migration log and apply it to the user's rows.
+///
+/// On the same 24 h cadence as everything else here, because it is called from the same two
+/// places a sync can finish. Skipped entirely when there is nothing to reconcile: Scryfall
+/// asks applications not to make requests they do not need, and a database with no
+/// collection and no wishlist has no ids to migrate.
+///
+/// A failure is logged and dropped. The bulk data is ingested either way, and an id
+/// migration that did not apply today applies tomorrow — whereas failing the whole sync
+/// over it would cost the user their card update.
+async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
+    let worth_it = {
+        // The read connection: this is one `count(*)` against each user table, and it must
+        // not queue behind anything — least of all to decide *not* to do any work.
+        let conn = lock_db_read(state);
+        !crate::reconcile::user_data_is_empty(&conn)
+    };
+    if !worth_it {
+        return;
+    }
+    let migrations = match state.client.fetch_migrations().await {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("could not read Scryfall's id migrations: {e}");
+            return;
+        }
+    };
+    // On a blocking thread, and taking the write lock inside it, for the reason the whole
+    // module repeats: the lock is never held across an `.await`, and a pass over the log is
+    // synchronous SQLite work.
+    let state = state.clone();
+    let applied = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = lock_db(&state);
+        crate::reconcile::apply(&mut conn, &migrations)
+    })
+    .await;
+    match applied {
+        Ok(Ok(stats)) if stats.repointed + stats.folded + stats.flagged > 0 => {
+            // Only when something moved. A pass that skipped every already-applied
+            // migration — which is every pass after the first — has nothing to tell anyone.
+            let _ = app.emit(
+                "collection:reconciled",
+                serde_json::json!({
+                    "repointed": stats.repointed,
+                    "folded": stats.folded,
+                    "flagged": stats.flagged,
+                }),
+            );
+        }
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => eprintln!("could not apply Scryfall's id migrations: {e}"),
+        Err(e) => eprintln!("the id-migration task failed: {e}"),
+    }
 }
 
 /// Give the pages the swap just freed back to the filesystem, on the `reclaiming` phase.
@@ -729,6 +788,24 @@ async fn do_sync(
 
     reclaim_freed_pages(state, app).await;
 
+    {
+        // The half that needs no network: after a swap, a row whose printing is gone is
+        // flagged, and a row whose printing came back is cleared. Only on this path,
+        // because only this path replaced `cards` — the answer cannot have changed on a
+        // run that ingested nothing.
+        //
+        // Logged, never fatal: the cards are ingested and swapped in either way, and a
+        // sweep that did not run today runs after the next ingest.
+        let conn = lock_db(state);
+        match crate::reconcile::sweep_orphans(&conn) {
+            Ok((flagged, cleared)) if flagged > 0 || cleared > 0 => {
+                eprintln!("collection review: {flagged} rows flagged, {cleared} cleared")
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("could not sweep for orphaned collection rows: {e}"),
+        }
+    }
+
     let card_count = stats.inserted as i64;
     {
         // Written before `/sets` is called, not after: the download is the expensive
@@ -759,6 +836,7 @@ async fn do_sync(
         let conn = lock_db(state);
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
+    reconcile_ids(state, app).await;
     compact_once(state, app).await;
     emit_done(app, card_count, Some(stats.skipped));
     Ok(SyncOutcome {

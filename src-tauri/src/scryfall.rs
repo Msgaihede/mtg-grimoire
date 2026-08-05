@@ -1,6 +1,6 @@
 //! Async HTTP client for the two Scryfall hosts this app talks to.
 //!
-//! Four operations, each with a rule that is easy to get wrong:
+//! Five operations, each with a rule that is easy to get wrong:
 //!
 //! * **Update check** — `GET /bulk-data/default_cards` with the stored weak ETag in
 //!   `If-None-Match`. A 304 is the common case and costs zero bytes, which is the
@@ -12,6 +12,10 @@
 //! * **Sets** — `GET /sets`, following `has_more`/`next_page`, bounded by
 //!   [`MAX_SET_PAGES`]: a `next_page` chain that cycles A→B→A defeats the
 //!   self-reference guard and would otherwise page forever.
+//! * **Migrations** — `GET /migrations`, the log of ids Scryfall merged or discarded,
+//!   paged and bounded the same way by [`MAX_MIGRATION_PAGES`]. Bulk files are additive
+//!   snapshots, so this endpoint is the *only* notice that a card the user owns has been
+//!   renamed out from under them; [`crate::reconcile`] is what acts on it.
 //! * **Images** — one card image from the `cards.scryfall.io` file origin. A 404 there
 //!   is permanent, so it gets its own variant rather than looking like a transient
 //!   failure a caller would retry.
@@ -49,6 +53,11 @@ pub const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
 /// pages; a `next_page` chain that cycles A→B→A slips past the `next == url` guard and
 /// would otherwise run until the process is killed.
 pub const MAX_SET_PAGES: usize = 20;
+
+/// Pages `fetch_migrations` will follow. ~350 migrations exist in total and the endpoint
+/// pages like every other Scryfall list; the cap is the same guard `fetch_sets` carries
+/// against a `next_page` chain that cycles.
+pub const MAX_MIGRATION_PAGES: usize = 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScryfallError {
@@ -105,6 +114,24 @@ pub struct SetRow {
     pub set_type: Option<String>,
     pub released_at: Option<String>,
     pub icon_svg_uri: Option<String>,
+}
+
+/// One entry of Scryfall's id-migration log.
+///
+/// The reason a collection tracker cares: bulk files are *additive snapshots*, so a card
+/// whose id was merged or discarded simply stops appearing in them, and a user row keyed on
+/// that id is orphaned with no event to explain it. This log is the event.
+#[derive(Debug, Clone)]
+pub struct Migration {
+    pub id: String,
+    pub performed_at: Option<String>,
+    /// `merge` or `delete`. Anything else is a strategy this app does not know, and the
+    /// reconciler skips it rather than guessing at what it means.
+    pub strategy: String,
+    pub old_card_id: String,
+    /// `None` for `delete`, which is the whole difference between the two.
+    pub new_card_id: Option<String>,
+    pub note: Option<String>,
 }
 
 /// Scryfall API client. `base_url` is injectable so the tests can point it at a
@@ -345,6 +372,57 @@ impl Client {
             let next = v["next_page"].as_str().unwrap_or_default().to_owned();
             // A missing or self-referential `next_page` would otherwise spin forever
             // against the same URL.
+            if next.is_empty() || next == url {
+                break;
+            }
+            url = next;
+        }
+        Ok(out)
+    }
+
+    /// The id-migration log, newest page first, bounded by [`MAX_MIGRATION_PAGES`].
+    pub async fn fetch_migrations(&self) -> Result<Vec<Migration>, ScryfallError> {
+        let mut url = format!("{}/migrations", self.base_url);
+        let mut out = Vec::new();
+        for _ in 0..MAX_MIGRATION_PAGES {
+            let resp = self.api_get(&url).send().await?;
+            match resp.status().as_u16() {
+                200 => {}
+                429 => {
+                    return Err(ScryfallError::RateLimited {
+                        retry_after_secs: retry_after_secs(&resp),
+                    })
+                }
+                s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
+            }
+            let v = json_body(resp).await?;
+            for m in v["data"].as_array().into_iter().flatten() {
+                // A row with no id or no old id describes nothing this app can act on —
+                // and the id is the primary key of the bookkeeping that makes a re-poll a
+                // no-op, so a blank one would be a row every later migration folds into.
+                let (Some(id), Some(old)) = (m["id"].as_str(), m["old_scryfall_id"].as_str())
+                else {
+                    continue;
+                };
+                out.push(Migration {
+                    id: id.to_owned(),
+                    performed_at: m["performed_at"].as_str().map(str::to_owned),
+                    strategy: m["migration_strategy"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    old_card_id: old.to_owned(),
+                    new_card_id: m["new_scryfall_id"].as_str().map(str::to_owned),
+                    note: m["note"].as_str().map(str::to_owned),
+                });
+            }
+            if v["has_more"].as_bool() != Some(true) {
+                break;
+            }
+            let next = v["next_page"].as_str().unwrap_or_default().to_owned();
+            // Same guard as `fetch_sets`, for the same reason: a missing or
+            // self-referential `next_page` would spin forever against one URL, and the
+            // page cap above is what catches the cycles this cannot see.
             if next.is_empty() || next == url {
                 break;
             }
@@ -682,6 +760,7 @@ mod tests {
         let mut progress = |_: u64, _: u64| {};
         assert_send(&c.check_bulk_update(None));
         assert_send(&c.fetch_sets());
+        assert_send(&c.fetch_migrations());
         assert_send(&c.download(
             "http://127.0.0.1:1/x.gz",
             Path::new("unused"),
@@ -757,6 +836,10 @@ mod tests {
             then.status(429);
         });
         server.mock(|when, then| {
+            when.method(GET).path("/migrations");
+            then.status(429).header("retry-after", "60");
+        });
+        server.mock(|when, then| {
             when.method(GET).path("/slow.webp");
             then.status(429).header("retry-after", "45");
         });
@@ -772,6 +855,14 @@ mod tests {
             c.fetch_sets().await,
             Err(ScryfallError::RateLimited {
                 retry_after_secs: 30
+            })
+        ));
+        // The migration log is polled on every sync, so it is the endpoint most likely to
+        // meet a 429 — and the one whose backoff a caller has no other way to learn.
+        assert!(matches!(
+            c.fetch_migrations().await,
+            Err(ScryfallError::RateLimited {
+                retry_after_secs: 60
             })
         ));
         assert!(matches!(
@@ -808,6 +899,100 @@ mod tests {
         let sets = c.fetch_sets().await.unwrap();
 
         assert_eq!(sets.len(), MAX_SET_PAGES, "the cap, not an infinite loop");
+    }
+
+    /// The log the reconciler runs on. Both strategies have to survive the trip: a
+    /// `merge` carries a `new_scryfall_id` and a `delete` carries none, and collapsing
+    /// the second into the first would repoint every discarded card at nothing.
+    #[tokio::test]
+    async fn fetch_migrations_reads_both_strategies_across_pages() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/migrations")
+                .query_param("page", "2")
+                // The mandatory headers must survive the pagination hop here too.
+                .header("user-agent", USER_AGENT)
+                .header_exists("accept");
+            then.status(200).json_body(serde_json::json!({
+            "object": "list", "has_more": false,
+            "data": [{
+                "id": "mig-2", "object": "migration",
+                "performed_at": "2026-07-02",
+                "migration_strategy": "delete",
+                "old_scryfall_id": "gone-id",
+                "note": "Not a real card."
+            }]}));
+        });
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/migrations")
+                .header("user-agent", USER_AGENT)
+                .header_exists("accept");
+            then.status(200).json_body(serde_json::json!({
+            "object": "list", "has_more": true,
+            "next_page": format!("{}/migrations?page=2", server.base_url()),
+            "data": [
+                {
+                    "id": "mig-1", "object": "migration",
+                    "performed_at": "2026-07-01",
+                    "migration_strategy": "merge",
+                    "old_scryfall_id": "old-id",
+                    "new_scryfall_id": "new-id"
+                },
+                // No id and no old id: nothing this app could act on, and acting on
+                // it anyway would mean writing a bookkeeping row keyed on "".
+                {"object": "migration", "migration_strategy": "merge"}
+            ]}));
+        });
+        let c = Client::new(server.base_url());
+
+        let migrations = c.fetch_migrations().await.unwrap();
+
+        assert_eq!(migrations.len(), 2, "the unusable row is dropped");
+        assert_eq!(migrations[0].id, "mig-1");
+        assert_eq!(migrations[0].strategy, "merge");
+        assert_eq!(migrations[0].old_card_id, "old-id");
+        assert_eq!(migrations[0].new_card_id.as_deref(), Some("new-id"));
+        assert_eq!(migrations[0].performed_at.as_deref(), Some("2026-07-01"));
+        assert_eq!(migrations[1].strategy, "delete");
+        assert_eq!(
+            migrations[1].new_card_id, None,
+            "a delete migrates to nowhere, and must not be read as a merge"
+        );
+        assert_eq!(migrations[1].note.as_deref(), Some("Not a real card."));
+    }
+
+    /// The same A→B→A chain `fetch_sets` is bounded against, on the same reasoning: the
+    /// `next == url` guard cannot see a two-page cycle, and this call runs on every sync.
+    #[tokio::test]
+    async fn migration_pagination_stops_at_the_page_cap() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/migrations")
+                .query_param("page", "2");
+            then.status(200).json_body(serde_json::json!({
+                "has_more": true,
+                "next_page": format!("{}/migrations?page=1", server.base_url()),
+                "data": [{"id":"b","migration_strategy":"delete","old_scryfall_id":"b-old"}]}));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/migrations");
+            then.status(200).json_body(serde_json::json!({
+                "has_more": true,
+                "next_page": format!("{}/migrations?page=2", server.base_url()),
+                "data": [{"id":"a","migration_strategy":"delete","old_scryfall_id":"a-old"}]}));
+        });
+        let c = Client::new(server.base_url());
+
+        let migrations = c.fetch_migrations().await.unwrap();
+
+        assert_eq!(
+            migrations.len(),
+            MAX_MIGRATION_PAGES,
+            "the cap, not an infinite loop"
+        );
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@ pub mod images;
 pub mod ingest;
 pub mod maintenance;
 pub mod paths;
+pub mod reconcile;
 pub mod schema;
 pub mod scryfall;
 pub mod search;
