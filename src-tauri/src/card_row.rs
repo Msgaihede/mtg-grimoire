@@ -501,7 +501,22 @@ mod tests {
     #[test]
     fn every_fixture_line_parses_and_covers_the_layout_zoo() {
         let rows = fixture_rows();
-        assert_eq!(rows.len(), 10, "fixture must stay at 10 lines");
+        assert_eq!(rows.len(), 11, "fixture must stay at 11 lines");
+
+        // The eleventh line is Rhystic Study (cm1 15), and it is there for one field: it is
+        // the only printing in the fixture that publishes `"game_changer": true`. The
+        // Commander bracket estimate reads nothing else, and the flag can only ever come
+        // from a sync — the Commander Format Panel maintains the list — so the parser
+        // answering `true` here is where that claim starts.
+        assert!(row(&rows, "Rhystic Study").game_changer);
+        assert!(
+            !row(&rows, "Lightning Bolt").game_changer,
+            "absent key is false"
+        );
+        assert!(
+            !row(&rows, "Ragnarok").game_changer,
+            "printed false stays false"
+        );
 
         let layouts: Vec<&str> = rows.iter().map(|r| r.layout.as_str()).collect();
         for want in [

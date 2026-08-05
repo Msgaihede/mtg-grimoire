@@ -301,6 +301,42 @@ mod tests {
             )
             .unwrap();
         assert!(bolt >= 1);
+
+        // The Game Changers flag, end to end on a real printing: Rhystic Study (cm1 15)
+        // publishes `"game_changer": true` and the fixture carries the line verbatim. The
+        // whole Commander bracket estimate hangs on this one boolean and nothing else in
+        // this app can recompute it — the Commander Format Panel maintains the list and a
+        // sync is the only thing that delivers it — so the bulk line reaching the column is
+        // the only place the claim can be proven. Asserted beside a `false` and a missing
+        // key, because a column that answered `1` unconditionally would pass on its own.
+        let flags: Vec<(String, Option<i64>)> = [
+            "Rhystic Study",
+            "Ragnarok, Divine Deliverance",
+            "Lightning Bolt",
+        ]
+        .iter()
+        .map(|name| {
+            let flag = conn
+                .query_row(
+                    "SELECT game_changer FROM cards WHERE name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            ((*name).to_string(), flag)
+        })
+        .collect();
+        assert_eq!(
+            flags,
+            [
+                ("Rhystic Study".to_string(), Some(1)),
+                // Prints the field as `false`.
+                ("Ragnarok, Divine Deliverance".to_string(), Some(0)),
+                // Omits the field entirely, which is what almost every card does.
+                ("Lightning Bolt".to_string(), Some(0)),
+            ]
+        );
+
         assert_eq!(ticks, 1, "the final progress call always fires");
     }
 
