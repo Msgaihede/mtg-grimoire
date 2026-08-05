@@ -190,13 +190,90 @@ describe("mass land denial", () => {
     expect(found.massLandDenial).toEqual(["Armageddon", "Jokulhaups", "Ruination", "Wildfire"]);
   });
 
-  /** Any of it puts the deck at the top, whatever else is in there — the brackets document
-   *  makes mass land denial a bracket 5 signal on its own. */
+  /** Any of it puts the deck at the top, whatever else is in there. That is **this app's
+   *  judgement and not the brackets document's** — the real text makes mass land denial a
+   *  bracket-4-and-up signal, and `bracketFor`'s table says which rows are whose. */
   it("takes a deck with no Game Changers at all to the top bracket", () => {
     const estimate = estimateBracket([ARMAGEDDON, GRIZZLY_BEARS, islands(60)]);
 
     expect(estimate.gameChangers).toBe(0);
     expect(estimate.bracket).toBe(5);
+  });
+
+  /**
+   * `Islands` contains `lands`, and a substring test made sixteen cards named after a land
+   * type into mass land denial — one hit of which pins the whole estimate at bracket 5.
+   */
+  it("does not read a land type as the word lands", () => {
+    const walkTheAeons = card({
+      name: "Walk the Aeons",
+      manaCost: "{3}{U}{U}",
+      cmc: 5,
+      typeLine: "Sorcery",
+      oracleText:
+        "Take an extra turn after this one.\nBuyback—Sacrifice three Islands. (You may " +
+        "sacrifice three Islands in addition to any other costs as you cast this spell. If " +
+        "you do, put this card into your hand as it resolves.)",
+      colors: "U",
+      colorIdentity: "U",
+    });
+
+    const estimate = estimateBracket([walkTheAeons]);
+    expect(estimate.massLandDenial).toEqual([]);
+    // It is still an extra-turn card, which is the only thing it should have been read as.
+    expect(estimate.extraTurns).toEqual(["Walk the Aeons"]);
+  });
+
+  /** Sacrificing your own lands is a cost you pay, not denial aimed at the table — so the
+   *  sacrifice branch asks who the sentence is addressed to. */
+  it("leaves a card that pays with its own lands alone", () => {
+    const lotusField = card({
+      name: "Lotus Field",
+      manaCost: null,
+      cmc: 0,
+      typeLine: "Land",
+      oracleText:
+        "Hexproof\nThis land enters tapped.\nWhen this land enters, sacrifice two lands.\n" +
+        "{T}: Add three mana of any one color.",
+      colors: null,
+      colorIdentity: "",
+    });
+
+    expect(estimateBracket([lotusField]).massLandDenial).toEqual([]);
+  });
+
+  /** A sweeper that names lands only among the things it *spares* is a board wipe. */
+  it("leaves a sweeper that spares lands alone", () => {
+    const scourglass = card({
+      name: "Scourglass",
+      manaCost: "{3}{W}{W}",
+      cmc: 5,
+      typeLine: "Artifact",
+      oracleText:
+        "{T}, Sacrifice this artifact: Destroy all permanents except for artifacts and lands. " +
+        "Activate only during your turn, before attackers are declared.",
+      colors: "W",
+      colorIdentity: "W",
+    });
+
+    expect(estimateBracket([scourglass]).massLandDenial).toEqual([]);
+  });
+
+  /** …and denial *with a remainder* still counts, because there the lands come first. */
+  it("still reads a sacrifice that leaves a few lands behind", () => {
+    const keldonFirebombers = card({
+      name: "Keldon Firebombers",
+      manaCost: "{3}{R}",
+      cmc: 4,
+      typeLine: "Creature — Human Rebel",
+      oracleText:
+        "When this creature enters, each player sacrifices all lands they control except for " +
+        "three.",
+      colors: "R",
+      colorIdentity: "R",
+    });
+
+    expect(estimateBracket([keldonFirebombers]).massLandDenial).toEqual(["Keldon Firebombers"]);
   });
 
   /** "Sacrifice a land" is a cost one card pays, not denial aimed at the table. */
@@ -235,6 +312,29 @@ describe("extra turns", () => {
     const estimate = estimateBracket([TIME_WARP, NEXUS_OF_FATE, islands(60)]);
 
     expect(estimate.extraTurns).toEqual(["Time Warp", "Nexus of Fate"]);
+  });
+
+  /**
+   * Shutting extra turns off is not taking one. Four cards in the corpus say "that player
+   * skips that turn instead" and none of them grants a turn to anybody — a deck built to stop
+   * extra turns is the opposite of the deck this signal is looking for.
+   */
+  it("does not read a card that stops extra turns as one that takes them", () => {
+    const stranglehold = card({
+      name: "Stranglehold",
+      manaCost: "{2}{R}{R}",
+      cmc: 4,
+      typeLine: "Enchantment",
+      oracleText:
+        "Your opponents can't search libraries.\nIf an opponent would begin an extra turn, " +
+        "that player skips that turn instead.",
+      colors: "R",
+      colorIdentity: "R",
+    });
+
+    const estimate = estimateBracket([stranglehold, islands(60)]);
+    expect(estimate.extraTurns).toEqual([]);
+    expect(estimate.bracket).toBe(1);
   });
 
   /** On their own they lift the reading off the casual floor without making the deck

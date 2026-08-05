@@ -70,28 +70,71 @@ function sentencesOf(text: string): string[] {
 }
 
 /**
+ * The word `lands`, and **only** the word.
+ *
+ * A substring test reads `Islands` and `Highlands` as `lands`, which is how Pirate Ship and
+ * Walk the Aeons came to be mass land denial — sixteen cards, all of them named after a land
+ * type. The boundary is the whole fix for that half.
+ */
+const LANDS = /\blands\b/;
+
+/**
+ * Who a sacrifice is aimed at.
+ *
+ * "Sacrifice" and "lands" in one sentence is a *cost* far more often than it is denial —
+ * Lotus Field, Lotus Vale, Mana Seism, Devastating Summons, every `Kicker—Sacrifice two lands`
+ * — and one hit here pins the whole estimate at bracket 5. Real mass land denial is written at
+ * the table: `each player`, `each opponent`, or `all lands`.
+ */
+const TABLE_FACING = /each player|each opponent|all lands/;
+
+/**
  * Mass land denial, read a sentence at a time.
  *
  * The printed shapes, all four of them live: `"Destroy all lands."` (Armageddon),
  * `"Destroy all nonbasic lands."` (Ruination), `"Destroy all artifacts, creatures, and
  * lands."` (Jokulhaups) and `"Each player sacrifices four lands of their choice."` (Wildfire).
- * One phrase cannot cover them, so the test is a sentence holding **`lands`** plus either
- * `destroy all` or a sacrifice.
+ * One phrase cannot cover them, so the test is a sentence about **`lands`** plus either
+ * `destroy all` or a {@link TABLE_FACING} sacrifice.
  *
- * The plural is doing the work: Zuran Orb's `"Sacrifice a land: You gain 2 life."` is a cost
- * one player pays, not denial aimed at the table, and it says `land`.
+ * The last clause is the one that keeps a board wipe out: `"Destroy all permanents except for
+ * artifacts and lands"` (Scourglass) names lands only as the things it *spares*. Where every
+ * mention of them falls after an `except`, the sentence is about what survives — and where one
+ * falls before it, as in Keldon Firebombers' `"sacrifices all lands they control except for
+ * three"`, it is denial with a remainder.
+ *
+ * Measured on the live corpus (2026-08-05): 103 cards before these three clauses, 40 after,
+ * and every one of the well-known pieces — Armageddon, Ravages of War, Ruination, Jokulhaups,
+ * Obliterate, Decree of Annihilation, Wildfire, Death Cloud, Pox, Catastrophe, Global Ruin —
+ * survives the cut.
  */
 function isMassLandDenial(text: string): boolean {
-  return sentencesOf(text).some(
-    (sentence) =>
-      sentence.includes("lands") &&
-      (sentence.includes("destroy all") || sentence.includes("sacrific")),
-  );
+  return sentencesOf(text).some((sentence) => {
+    if (!LANDS.test(sentence) || sparesTheLands(sentence)) return false;
+    if (sentence.includes("destroy all")) return true;
+    return sentence.includes("sacrific") && TABLE_FACING.test(sentence);
+  });
 }
+
+/** Every mention of lands sits after an `except`, so the sentence lists what it leaves alone. */
+function sparesTheLands(sentence: string): boolean {
+  const except = sentence.indexOf("except");
+  return except >= 0 && sentence.slice(0, except).search(LANDS) < 0;
+}
+
+/**
+ * Shutting extra turns off is not taking one.
+ *
+ * Stranglehold, Ugin's Nexus, Trouble in Pairs and Gerrard's Hourglass Pendant all say
+ * `"If a player would begin an extra turn, that player skips that turn instead."` — four of the
+ * 63 cards in the corpus that mention an extra turn, and the only four that take none. Every
+ * other one of the 63 grants a turn to somebody.
+ */
+const TURN_DENIAL = /extra turn[^.\n]*?skips that turn|skips that turn[^.\n]*?instead/;
 
 /** `"Take an extra turn after this one."` and every variant of it, plurals included. */
 function isExtraTurn(text: string): boolean {
-  return text.includes("extra turn");
+  return text.includes("extra turn") && !TURN_DENIAL.test(text);
 }
 
 /**
@@ -161,11 +204,16 @@ export function estimateBracket(cards: CardFacts[]): BracketEstimate {
  *     a tutor for any card                            →  2   core
  *     none of the above                               →  1   exhibition
  *
- * Every row is a **judgement**, and two of them are this app's rather than the document's:
- * mass land denial is a bracket-4-and-up signal in the real text and is treated as a 5 here
- * because a deck that plays it has decided something about the table, and extra turns are read
- * as a 3 rather than a 4 because one Time Warp is not a turn chain. The number moving is the
- * point; the digit is not evidence of anything.
+ * Every row is a **judgement**, and three of them are this app's rather than the document's:
+ *
+ * * **mass land denial → 5.** The real text makes it a bracket-4-and-up signal; it is a 5 here
+ *   because a deck that plays it has decided something about the table.
+ * * **more than 6 Game Changers → 5.** The document names a ceiling for bracket 3 and none
+ *   above it, so where the line between 4 and 5 falls is this file's guess and nobody else's.
+ * * **extra turns → 3.** A 4 in the real text, read as a 3 here because one Time Warp is not
+ *   a turn chain.
+ *
+ * The number *moving* is the point; the digit is not evidence of anything.
  */
 function bracketFor(
   gameChangers: number,

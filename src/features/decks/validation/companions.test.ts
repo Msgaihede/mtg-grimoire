@@ -407,6 +407,40 @@ describe("the companion zone", () => {
     ]);
   });
 
+  /**
+   * The third card outside the ten that prints a companion ability prints a *different* one:
+   * `"Old Companion — …"`, which the line anchor deliberately does not match. It gets the
+   * ordinary refusal rather than the warning, and this test is what keeps the module docblock
+   * honest about which of the three lands where.
+   */
+  it("refuses an Old Companion rather than warning about it", () => {
+    const issues = companionIssues(
+      [
+        card({
+          name: "The Companion of the Wilds",
+          zone: "companion",
+          typeLine: "Legendary Creature — Beast Noble",
+          oracleText:
+            "Old Companion — Your starting deck contains only cards from WOE, WOC, and " +
+            "playtest cards. (You may cast this from outside the game if this is companion " +
+            "without paying {3} first.)",
+        }),
+      ],
+      [islands(60)],
+      spec("modern"),
+    );
+
+    expect(issues).toEqual([
+      {
+        severity: "error",
+        code: "companion-eligibility",
+        message:
+          "The Companion of the Wilds has no companion ability, so it cannot be your companion.",
+        cardIds: ["c-The Companion of the Wilds"],
+      },
+    ]);
+  });
+
   it("says nothing about an empty companion zone", () => {
     expect(companionIssues([], [islands(60)], spec("modern"))).toEqual([]);
   });
@@ -657,11 +691,70 @@ describe("Zirda, the Dawnwaker — activated abilities", () => {
     expect(messages("Zirda, the Dawnwaker", [deckCard("counterspell")])).toEqual([]);
   });
 
-  /** Equip is an activated ability that Scryfall prints with no colon anywhere — 324 paper
+  /** Equip is an activated ability that Scryfall prints with no colon anywhere — 320 paper
    *  cards read that way. A colon-only test refuses the whole Equipment archetype, which is
    *  the archetype Zirda was printed for. */
   it("reads the keyword activated abilities that print without a colon", () => {
     expect(messages("Zirda, the Dawnwaker", [deckCard("skullclamp")])).toEqual([]);
+  });
+
+  /**
+   * The thirteen "Job select" Equipment print their equip ability behind a flavour name, so
+   * the keyword does not start its line: `"Murasame — Equip {5}"`. A line anchor alone misses
+   * every one of them.
+   */
+  it("reads a keyword that sits behind a flavour name", () => {
+    const katana = card({
+      name: "Samurai's Katana",
+      manaCost: "{2}",
+      cmc: 2,
+      typeLine: "Artifact — Equipment",
+      oracleText:
+        "When this Equipment enters, attach it to target creature you control.\nEquipped " +
+        "creature gets +2/+0 and has first strike.\nMurasame — Equip {5}",
+      colors: null,
+      colorIdentity: "",
+    });
+
+    expect(messages("Zirda, the Dawnwaker", [katana])).toEqual([]);
+  });
+
+  /** Saddle is an activated ability, and six colonless permanents carry it. */
+  it("reads saddle", () => {
+    const steed = card({
+      name: "Fortune, Loyal Steed",
+      manaCost: "{2}{W}",
+      cmc: 3,
+      typeLine: "Legendary Creature — Horse",
+      oracleText:
+        "Whenever this creature attacks while saddled, target creature you control gains " +
+        "protection from a color of your choice until end of turn.\nSaddle 1",
+      colors: "W",
+      colorIdentity: "W",
+    });
+
+    expect(messages("Zirda, the Dawnwaker", [steed])).toEqual([]);
+  });
+
+  /** Morph is a special action rather than an activated ability, and a card that only has
+   *  one is genuinely a Zirda offender. The keyword list is not a list of every keyword. */
+  it("still refuses a permanent whose only keyword is a special action", () => {
+    const beast = card({
+      name: "Ainok Survivalist",
+      manaCost: "{1}{G}",
+      cmc: 2,
+      typeLine: "Creature — Hound Scout",
+      oracleText:
+        "Megamorph {2}{G} (You may cast this card face down as a 2/2 creature for {3}. Turn " +
+        "it face up any time for its megamorph cost and put a +1/+1 counter on it.)",
+      colors: "G",
+      colorIdentity: "G",
+    });
+
+    expect(messages("Zirda, the Dawnwaker", [beast])).toEqual([
+      "Zirda, the Dawnwaker needs every permanent card in your deck to have an activated " +
+        "ability; Ainok Survivalist does not.",
+    ]);
   });
 
   /** Dryad Arbor's only colon is inside reminder text, inside quotes — and the ability it

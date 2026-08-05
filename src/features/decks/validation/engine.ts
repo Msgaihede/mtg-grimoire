@@ -55,6 +55,12 @@ const SIZE_ZONES: readonly DeckZone[] = ["main", "commander"];
  * holding two Lurruses, and the one place in this file that counts cards is the place that
  * says so. It is deliberately *not* in {@link SIZE_ZONES}: a companion is not a card of the
  * starting deck, and counting it there would make every companion deck one card too big.
+ *
+ * **Hand-off to Plan 5's importer:** because the companion counts here, an import must write a
+ * companion as **either** a `side` row **or** a `companion` row and never both. Arena's own
+ * export lists the card twice — its `Companion` section repeats it in `Sideboard` (research
+ * doc, deck-text formats) — and a parser that copies both sections literally would hand this
+ * function two rows for one card and manufacture a copy-limit error out of one Lurrus.
  */
 const COPY_ZONES: readonly DeckZone[] = ["main", "side", "commander", "companion"];
 

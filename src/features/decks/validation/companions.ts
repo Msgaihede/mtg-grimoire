@@ -15,9 +15,16 @@
  * Keyed by **name** rather than by a parse of the printed condition, and that is deliberate:
  * ten cards, printed once each, and their conditions are English sentences that a parser would
  * read wrongly and silently. A name this table does not know is not silently accepted — it is
- * reported, as a warning where the card genuinely prints a companion ability (the corpus holds
- * three such: two playtest cards and a Heroes of the Realm promo, all `not_legal` everywhere)
- * and as an error where it does not.
+ * reported, as a warning where the card genuinely prints a `"Companion —"` line and as an error
+ * where it does not.
+ *
+ * The corpus holds three cards outside the ten that print *some* companion ability, and they
+ * split between those two answers rather than sharing one: Lutri, Pauper Otter (a Mystery
+ * Booster playtest card) and Treizeci, Sun of Serra (a Heroes of the Realm promo) open with
+ * `"Companion —"` and **warn**; The Companion of the Wilds opens with `"Old Companion —"`,
+ * which the line anchor deliberately does not match, and it gets the ordinary
+ * `companion-eligibility` **error**. All three are `not_legal` in all 23 keys, so the legality
+ * pass has already refused every one of them.
  *
  * **The starting deck is `main` + `commander`, and never the sideboard.** A companion's
  * condition is on the deck you begin the game with; the sideboard is not part of it. In the
@@ -269,30 +276,48 @@ const KAHEERA_TYPES = ["Cat", "Elemental", "Nightmare", "Dinosaur", "Beast"];
 const CHANGELING = /^Changeling\b/m;
 
 /**
- * Activated-ability keywords that Scryfall prints with **no colon anywhere**, so Zirda's
- * colon test cannot see them.
+ * Activated-ability keywords that Scryfall prints with **no colon anywhere**, so Zirda's colon
+ * test cannot see them.
  *
- * Derived by probing the live corpus (2026-08-05) for permanent cards whose whole oracle text
- * holds no `:` — `Equip` leads that list with 324 cards and `Crew` follows with 62; the rest
- * appear in single figures. Every other keyword activated ability (cycling, level up, unearth,
- * ninjutsu, …) ships its reminder text, and the reminder contains the colon.
+ * Every entry is measured, not guessed — probed against the live corpus (2026-08-05) over the
+ * 15 593 permanent cards whose whole oracle text holds no `:`, counting what each keyword
+ * rescues from a wrong error:
  *
- * The residual risk is a **false error**, which is the direction this codebase does not
- * accept: an eleventh colonless keyword would refuse a legal deck until this list grows.
+ *     Equip 320 · Crew 62 · Saddle 6 · Cycling 5 · Unearth 3 · Ninjutsu 2 · Scavenge 1
+ *     Embalm 0 · Fortify 0 · Reconfigure 0 · Aura swap 0
+ *
+ * **The four zero-rescue entries are kept deliberately.** They are activated abilities whose
+ * reminder text happens to carry a colon on every printing in the corpus today; the day one
+ * ships without it they are the difference between a right answer and a wrong error, and a
+ * keyword that rescues nothing costs nothing. The counts above are what makes that auditable —
+ * re-probe rather than trust them.
+ *
+ * The `—` alternative is the second half of the fix and is worth as much as the keywords: the
+ * thirteen "Job select" Equipment print their equip ability behind a flavour name
+ * (`"Murasame — Equip {5}"`), which a line anchor alone cannot match. Written as an escape
+ * rather than as the character, like every other dash in this folder.
+ *
+ * Everything left out is left out on purpose: the morph family and disguise are **special
+ * actions**, and suspend, prototype, bestow, evoke and the other alternative costs are ways to
+ * cast a card rather than abilities it has.
  */
 const BARE_ACTIVATED_KEYWORDS =
-  /^(?:Equip|Crew|Cycling|Fortify|Reconfigure|Unearth|Scavenge|Ninjutsu|Aura swap)\b/im;
+  /(?:^|\u2014\s*)(?:Equip|Crew|Saddle|Cycling|Unearth|Ninjutsu|Scavenge|Embalm|Fortify|Reconfigure|Aura swap)\b/im;
 
 /**
  * Zirda's condition is the one that cannot be read exactly, and this is what the reading
- * costs.
+ * costs — **in both directions**, because it has two halves that fail opposite ways.
  *
- * The signal is "a colon in the card's printed text", **reminder text included**. Excluding
- * reminders is the obvious reading and it is wrong twice over: a basic land's entire text is
- * `"({T}: Add {U}.)"`, and Dryad Arbor's is a parenthesis quoting the same ability — both have
- * activated mana abilities, and stripping reminders refuses the most common card in Magic.
- * Reading them costs a **false pass** on a permanent whose only colon belongs to an ability it
- * grants something else, and a false pass is the safe half of the trade.
+ * The colon is read **including reminder text**. Excluding reminders is the obvious reading and
+ * it is wrong twice over: a basic land's entire text is `"({T}: Add {U}.)"`, and Dryad Arbor's
+ * is a parenthesis quoting the same ability. Both have activated mana abilities, so stripping
+ * reminders refuses the most common card in Magic. Reading them costs a false **pass** on a
+ * permanent whose only colon belongs to an ability it grants something else.
+ *
+ * {@link BARE_ACTIVATED_KEYWORDS} is the other half, and its residual risk is a false
+ * **error** — the direction this codebase does not accept. A keyword activated ability that
+ * ships with neither a colon nor an entry on that list refuses a legal deck until the list
+ * grows, and that, not the false pass, is the live risk in this function.
  */
 function hasActivatedAbility(card: CardFacts): boolean {
   const text = allOracleText(card);
@@ -608,9 +633,9 @@ function eligibility(
   if (rule) return rule.applies(startingDeck, spec);
 
   // A card that prints a companion ability this table does not know is **evidence of nothing**
-  // — the same footing an unreadable legality is on, and it warns for the same reason. Three
-  // such cards exist today, all playtest or promo printings that no format admits, and an
-  // eleventh real companion would be a data event rather than a wrong accusation.
+  // — the same footing an unreadable legality is on, and it warns for the same reason. Two
+  // cards reach this branch today (the module docblock names them and the third that does
+  // not), and an eleventh real companion would be a data event rather than a wrong accusation.
   if (COMPANION_LINE.test(frontFace(companion).oracleText ?? "")) {
     return [
       {
