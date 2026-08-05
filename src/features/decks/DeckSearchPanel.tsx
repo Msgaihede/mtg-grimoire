@@ -16,27 +16,32 @@ import { ZONE_LABEL } from "./ZoneColumn";
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
- * How wide the panel is when it is open.
+ * How wide the panel is when it is open, in px and in the class that draws it — the editor
+ * reads the number to decide whether there is room for the panel at all.
  *
- * The direction's docked column is 320px and this is 384, because 320 is a width at which the
- * search view's own filter row stops working: the mana-value chips are nine 36px squares with
- * 4px between them — **356px**, which does not fit in 320 and cannot be made to wrap without
- * forking a control two views share. 384 is the next step up the app's own scale that holds
- * them, and the same 96px module as the card pane beside it.
+ * The direction's docked column is 320 and this is 384, and the reason is the wall rather than
+ * the filter row: 320 leaves **267** inside the panel's padding, the wall's padding and the
+ * scrollbar, which is one tile at any floor a card is still legible at (two would be 127px
+ * each). 384 leaves 331 and holds two. The filter row is the smaller half of it — the
+ * mana-value chips are nine 36px squares 4px apart, **356px**, and at 320 they would wrap to a
+ * second line rather than break anything (one `flex-wrap` on their own group), costing 44px of
+ * the wall's height for the privilege of a narrower panel.
  *
  * Measured in the running window at 1280×800: header 36, filter row 168 (four wrapped lines),
  * count line 16, and 341px of card wall.
  */
+export const PANEL_WIDTH_PX = 384;
 const PANEL_WIDTH = "w-96";
 
 /**
  * The wall's tile floor in here, and the number that decides whether this column shows one
  * card or two.
  *
- * 384 is **343** by the time the panel's scrollbar (17) and the wall's own padding (24) are
- * off it — eleven pixels short of two of `CardGrid`'s standard 170px tiles, which drew one
- * 343×508 card per row in a 341px-tall wall: less than a whole card, ever. At 150 the same
- * 343 is two 165px tiles, which is the "~2 tiles per row" this panel was scoped around.
+ * 384 is **331** by the time the panel's own left padding (12), the scrollbar (17) and the
+ * wall's padding (24) are off it — measured at 330 in the running window — which is 23 short
+ * of two of `CardGrid`'s standard 170px tiles. At the standard floor this column drew one
+ * 330×490 card per row inside a 341px-tall wall: less than a whole card, ever. At 150 the same
+ * 331 is two 159px tiles, which is the "~2 tiles per row" this panel was scoped around.
  */
 const TILE_FLOOR = 150;
 
@@ -67,6 +72,16 @@ export interface DeckSearchPanelProps {
    *  the picked zone away. */
   targetZone: DeckZone;
   onTargetZoneChange: (zone: DeckZone) => void;
+  /**
+   * Whether the editor has room to draw this open — measured, not guessed (see
+   * `DeckEditor`'s `DECK_FLOOR`).
+   *
+   * `false` renders the rail whatever the reader last chose, and the disclosure goes with it:
+   * a control that cannot do the thing it names is worse than one that says why it cannot.
+   * The reader's own choice is untouched by this, so the panel comes back the moment the room
+   * does — closing the card pane at 1024 is enough.
+   */
+  roomy?: boolean;
 }
 
 /**
@@ -91,8 +106,11 @@ export function DeckSearchPanel({
   zones,
   targetZone,
   onTargetZoneChange,
+  roomy = true,
 }: DeckSearchPanelProps) {
+  /** What the *reader* last chose. What is drawn is this and `roomy` together. */
   const [open, setOpen] = useState(true);
+  const shown = open && roomy;
   const zoneFieldId = useId();
 
   const search = useCardSearch();
@@ -105,16 +123,24 @@ export function DeckSearchPanel({
    * The disclosure, in both of its states — one control, one name, and `aria-expanded` for the
    * difference. Named for what it reveals rather than for what pressing it does, so the name
    * does not change under a reader who is looking for it.
+   *
+   * Disabled, with the reason, in the one state where pressing it could not work: there is not
+   * enough width for the deck and the panel both, so the press would be recorded and nothing
+   * would move. The sentence says what to do about it, which is the app's rule for anything
+   * that refuses.
    */
   const toggle = (
     <button
       type="button"
-      aria-expanded={open}
+      aria-expanded={shown}
+      disabled={!roomy}
+      title={roomy ? undefined : "Not enough room — close the card details or widen the window"}
       onClick={() => setOpen((v) => !v)}
       className={cn(
         "flex shrink-0 items-center gap-1.5 rounded-md text-xs text-dim",
         "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-        open ? "px-1 py-1" : "w-9 flex-col justify-start border border-border py-2",
+        "disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-dim",
+        shown ? "px-1 py-1" : "w-9 flex-col justify-start border border-border py-2",
         FOCUS,
       )}
     >
@@ -124,11 +150,11 @@ export function DeckSearchPanel({
           accessible name either way — `aria-label` would be a second, invisible copy of
           them, and a name that differs from the visible text is a control voice control
           cannot reach (WCAG 2.5.3). */}
-      <span style={open ? undefined : { writingMode: "vertical-rl" }}>Search cards</span>
+      <span style={shown ? undefined : { writingMode: "vertical-rl" }}>Search cards</span>
     </button>
   );
 
-  if (!open) return toggle;
+  if (!shown) return toggle;
 
   const addFailure = add.isError ? ipcError(add.error) : null;
   // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
@@ -146,7 +172,10 @@ export function DeckSearchPanel({
       // columns beside it are bordered boxes and these controls sit on the page, so without it
       // the "Add to" select reads as part of the deck's own header row. Everything right of
       // the line is not your deck.
-      className={cn("flex min-h-0 shrink-0 flex-col gap-2 border-l border-border pl-3", PANEL_WIDTH)}
+      className={cn(
+        "flex min-h-0 shrink-0 flex-col gap-2 border-l border-border pl-3",
+        PANEL_WIDTH,
+      )}
     >
       <div className="flex shrink-0 items-center gap-2">
         {toggle}

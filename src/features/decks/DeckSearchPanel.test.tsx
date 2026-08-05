@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CardSummary, DeckZone, SearchResponse } from "@/lib/ipc";
 
@@ -47,10 +47,27 @@ const page = (items: CardSummary[]): SearchResponse => ({
  * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height and
  * renders an empty window — one number is the whole of what it is missing. `scrollTo` is the
  * other thing it reaches for that jsdom does not implement.
+ *
+ * Put back afterwards: these are patches to a *global* prototype, and a file that leaves one
+ * behind is a file that decides how the next one measures the DOM.
  */
+const patched: [string, PropertyDescriptor | undefined][] = [];
+
 beforeAll(() => {
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 600 });
-  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  for (const [name, descriptor] of [
+    ["offsetHeight", { value: 600 }],
+    ["scrollTo", { value: vi.fn() }],
+  ] as const) {
+    patched.push([name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)]);
+    Object.defineProperty(HTMLElement.prototype, name, { configurable: true, ...descriptor });
+  }
+});
+
+afterAll(() => {
+  for (const [name, original] of patched.reverse()) {
+    if (original) Object.defineProperty(HTMLElement.prototype, name, original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+  }
 });
 
 beforeEach(() => {
@@ -71,49 +88,47 @@ const MODERN: DeckZone[] = ["main", "side", "maybe"];
  * The mutation is a prop — the editor holds `useDeck` and hands `addCard` down, so that one
  * open deck is one `deck_get` — and this stands in for the editor holding it.
  */
-function Harness({
-  zones,
-  targetZone,
-  onTargetZoneChange,
-}: {
+interface Props {
   zones: DeckZone[];
   targetZone: DeckZone;
-  onTargetZoneChange: (zone: DeckZone) => void;
-}) {
+  roomy: boolean;
+}
+
+function Harness({
+  onTargetZoneChange,
+  ...props
+}: Props & { onTargetZoneChange: (zone: DeckZone) => void }) {
   const deck = useDeck(4);
-  return (
-    <DeckSearchPanel
-      add={deck.addCard}
-      zones={zones}
-      targetZone={targetZone}
-      onTargetZoneChange={onTargetZoneChange}
-    />
-  );
+  return <DeckSearchPanel add={deck.addCard} onTargetZoneChange={onTargetZoneChange} {...props} />;
 }
 
 function panel({
   zones = MODERN,
   targetZone = "main" as DeckZone,
+  roomy = true,
   onTargetZoneChange = vi.fn(),
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const ui = (props: { zones: DeckZone[]; targetZone: DeckZone }) => (
+  let props: Props = { zones, targetZone, roomy };
+  const ui = (p: Props) => (
     <QueryClientProvider client={client}>
-      <Harness
-        zones={props.zones}
-        targetZone={props.targetZone}
-        onTargetZoneChange={onTargetZoneChange}
-      />
+      <Harness {...p} onTargetZoneChange={onTargetZoneChange} />
     </QueryClientProvider>
   );
-  const view = render(ui({ zones, targetZone }));
+  const view = render(ui(props));
+  /** Re-render with one prop changed — what the editor does when the select moves, or when it
+   *  re-measures the row the deck and the panel share. */
+  const update = (patch: Partial<Props>) => {
+    props = { ...props, ...patch };
+    view.rerender(ui(props));
+  };
   return {
     ...view,
     onTargetZoneChange,
-    /** Re-render with a different target zone — what the editor does when the select moves. */
-    retarget: (zone: DeckZone) => view.rerender(ui({ zones, targetZone: zone })),
+    update,
+    retarget: (zone: DeckZone) => update({ targetZone: zone }),
   };
 }
 
@@ -236,6 +251,79 @@ describe("DeckSearchPanel", () => {
     await userEvent.click(rail);
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+  });
+
+  /**
+   * The editor measures the row the two of them share and says whether there is room. With
+   * none, the rail is what is drawn whatever the reader last chose — and the disclosure is
+   * disabled, because a press could not open anything and a control that records an intention
+   * and moves nothing is worse than one that says why.
+   */
+  it("draws its rail, disabled and explained, when the editor has no room for it", () => {
+    panel({ roomy: false });
+
+    const rail = screen.getByRole("button", { name: "Search cards" });
+    expect(rail).toBeDisabled();
+    expect(rail).toHaveAttribute("aria-expanded", "false");
+    expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two states are kept apart on purpose: the measurement decides what is *drawn*, the
+   * reader decides what they *want*. So a panel that was pushed aside by a card pane comes
+   * back when the pane closes, and one the reader shut stays shut.
+   */
+  it("comes back when the room does, unless the reader was the one who shut it", async () => {
+    const view = panel();
+    await screen.findByRole("searchbox", { name: "Search cards" });
+
+    view.update({ roomy: false });
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    view.update({ roomy: true });
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    view.update({ roomy: false });
+    view.update({ roomy: true });
+
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The Escape stack, from inside the panel: the set picker is an `"inner"` layer and consumes
+   * its press in the capture phase, and the next press reaches `window` untouched — which is
+   * where the card detail pane listens, in the bubble phase. Observed in the running window;
+   * this is what holds it.
+   */
+  it("spends the first Escape on the set picker and lets the second through to the pane", async () => {
+    listSets.mockResolvedValue([
+      {
+        code: "lea",
+        name: "Limited Edition Alpha",
+        setType: "core",
+        releasedAt: "1993-08-05",
+        cardCount: 295,
+      },
+    ]);
+    panel();
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await screen.findByRole("combobox", { name: /search sets/i });
+
+    const heard: boolean[] = [];
+    // The bubble phase, which is the rung the card pane is on.
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("combobox", { name: /search sets/i })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    window.removeEventListener("keydown", listen);
+
+    // Consumed, then not: one layer per press, and the panel itself is not one of them.
+    expect(heard).toEqual([true, false]);
   });
 
   /** A refused add is said in the app's own words, where the reader is looking. */

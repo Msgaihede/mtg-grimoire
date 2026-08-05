@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { CardSummary, DeckCard, DeckDetail, DeckRow, FormatSpec } from "@/lib/ipc";
@@ -102,11 +102,49 @@ async function open() {
  * jsdom lays nothing out, so the docked panel's virtualised wall measures a scroll container
  * of zero height and renders no tiles at all. One number is the whole of what it is missing;
  * `scrollTo` is the other thing the virtualiser reaches for that jsdom does not implement.
+ *
+ * Put back afterwards: these are patches to a *global* prototype, and a file that leaves one
+ * behind is a file that decides how the next one measures the DOM.
  */
+const patched: [string, PropertyDescriptor | undefined][] = [];
+function patch(name: string, descriptor: PropertyDescriptor) {
+  patched.push([name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)]);
+  Object.defineProperty(HTMLElement.prototype, name, { configurable: true, ...descriptor });
+}
+
 beforeAll(() => {
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 600 });
-  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  patch("offsetHeight", { value: 600 });
+  patch("scrollTo", { value: vi.fn() });
 });
+
+afterAll(() => {
+  for (const [name, original] of patched.reverse()) {
+    if (original) Object.defineProperty(HTMLElement.prototype, name, original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+  }
+});
+
+/**
+ * Pretend the editor's desk is `px` wide for the duration of one test.
+ *
+ * jsdom measures every element at zero, which the editor reads as "not measured yet" and
+ * therefore as room — so the narrow case cannot be reached without saying how wide things are.
+ * `clientWidth` is what the desk is measured with, since the `ResizeObserver` in `test-setup`
+ * is a no-op.
+ */
+function desk(px: number) {
+  const original = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => px,
+  });
+  return () => {
+    delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+    if (original && !Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth")) {
+      Object.defineProperty(Element.prototype, "clientWidth", original);
+    }
+  };
+}
 
 beforeEach(() => {
   resetRowIds();
@@ -608,6 +646,59 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * Three docked columns do not fit in a 1024px window — sidebar, page padding, the card pane
+   * and the panel come to 1044 before the deck gets a pixel — and the deck was measured at
+   * **2px** before this existed, which reads as a rendering fault rather than as a squeeze.
+   * The narrowest thing gives way first, which is the rule the zone columns already follow.
+   *
+   * 376 is what a 1024px window leaves this row with the card pane docked beside the view
+   * (measured at 361 once the page's own scrollbar is out); 604 is `DECK_FLOOR` plus the panel
+   * and its gap — the exact width at which all three fit again, so the pair of tests pins the
+   * floor to the pixel.
+   */
+  it("falls back to the rail when the deck and the panel cannot both fit", async () => {
+    const restore = desk(376);
+    try {
+      await open();
+
+      const rail = await screen.findByRole("button", { name: "Search cards" });
+      expect(rail).toHaveAttribute("aria-expanded", "false");
+      // Not a control that records an intention and moves nothing: there is no width for what
+      // it would open, and it says so rather than doing nothing.
+      expect(rail).toBeDisabled();
+      expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
+      expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("draws the panel at the width where the deck still clears its floor", async () => {
+    const restore = desk(604);
+    try {
+      await open();
+
+      expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Search cards" })).toBeEnabled();
+    } finally {
+      restore();
+    }
+  });
+
+  /** And one pixel under it is the rail — the floor is a number, not a feeling. */
+  it("gives way one pixel below that", async () => {
+    const restore = desk(603);
+    try {
+      await open();
+
+      expect(await screen.findByRole("button", { name: "Search cards" })).toBeDisabled();
+      expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
    * The panel is a fixture of the editor, not a dismissible layer: Escape pressed in its
    * search box belongs to the card pane, which listens on `window` in the bubble phase. A
    * panel that consumed the press would leave a card pinned open with nothing to close it.
@@ -669,6 +760,30 @@ describe("DeckEditor", () => {
     await open();
     await userEvent.click(
       screen.getByRole("button", { name: /decrease copies of lightning bolt/i }),
+    );
+
+    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The panel's add is in that family too, and it is the one that could have been left out of
+   * it: `add_card` goes through `touch_deck` like every other write, so a press on a deck that
+   * has been deleted answers the same sentence. Without the re-read the panel would say the
+   * deck is gone while the zone columns beside it went on painting it, and every further press
+   * would fail the same way with nothing on screen explaining it.
+   */
+  it("re-reads the deck when an add from the panel is refused", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    deckAddCard.mockRejectedValue("That deck is not there any more.");
+    deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
+
+    await open();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
     );
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();

@@ -11,7 +11,7 @@ import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { DeckSearchPanel } from "./DeckSearchPanel";
+import { DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { useDeck } from "./useDeck";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { ZONE_LABEL, ZoneColumn, type GroupBy } from "./ZoneColumn";
@@ -38,6 +38,36 @@ const ZONE_WIDTH: Record<DeckZone, string> = {
   companion: "flex-[1_1_16rem]",
   maybe: "w-full",
 };
+
+/**
+ * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
+ * way to its rail.
+ *
+ * The same rule the zone columns already follow — the narrowest thing yields first — one level
+ * up. Three docked columns do not fit in a 1024px window: sidebar, padding, the card pane and
+ * the panel come to 1044 before the deck gets a pixel, and the deck was measured at **2px**
+ * before this existed, which reads as a rendering fault rather than as a squeeze.
+ *
+ * 208 rather than the 224 this was first drawn at, and the 16px is a *scrollbar*: the page's
+ * own, which the arithmetic did not count. At 1280 with a card open the row measures **617**,
+ * not the 632 on paper, so a 224 floor collapsed the panel at the app's default window size —
+ * the common case, where a reader clicking a tile to read a card would have lost their search
+ * to it. Verified in the running window at every width below.
+ *
+ * | window | card pane | row | deck | panel |
+ * |---|---|---|---|---|
+ * | 1024 | closed | 776 | 380 | open |
+ * | 1024 | open | 361 | 313 | rail |
+ * | 1280 | open | 617 | 221 | open |
+ * | 1440 | open | 777 | 381 | open |
+ *
+ * 208 is also the sidebar's width, which is the app's own evidence that a column this wide is
+ * still a column: a zone row at 208 keeps its stepper and truncates the card's name.
+ */
+const DECK_FLOOR = 208;
+
+/** The `gap-3` between the deck and the panel, which the panel's width has to be counted with. */
+const PANEL_GAP = 12;
 
 /** The two ways a deck list can be read, and what each is called on the control. */
 const GROUPINGS: { id: GroupBy; label: string }[] = [
@@ -95,6 +125,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
 
   const editorRef = useRef<HTMLElement>(null);
+  /** The row the deck and the panel share, and the only width either of them can be judged
+   *  against — the window's own is three layouts away from it. */
+  const deskRef = useRef<HTMLDivElement>(null);
+  const [deskWidth, setDeskWidth] = useState(0);
   /** Whatever opened the menu that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /** One per drawn column, so a card that moves takes the caret to where it landed. */
@@ -108,11 +142,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** The read succeeded and answered nothing: another view deleted this deck. */
   const gone = !loading && !deck.query.isError && deck.query.data === null;
 
-  // The three writes an editor makes, newest first. The *latest* of them owns the banner, not
-  // whichever is still holding an error: a refused move used to leave its sentence up while
-  // the reader went on to rename the deck successfully (the collection table's lesson).
+  /** The most recently *started* of a set of writes — which is the one whose refusal is still
+   *  news. Ties go to the later entry, which only happens when none of them has ever run. */
+  const newest = <T extends { submittedAt: number }>(of: T[]): T =>
+    of.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
+
+  // The three writes the editor's **own banner** speaks for, newest first. The *latest* of them
+  // owns it, not whichever is still holding an error: a refused move used to leave its sentence
+  // up while the reader went on to rename the deck successfully (the collection table's
+  // lesson). The docked panel's add is deliberately not here — it says so in the panel, beside
+  // the button that was pressed, and two banners for one refusal would be worse than one in the
+  // wrong place.
   const writes = [deck.setQuantity, deck.moveCard, deck.update];
-  const lastWrite = writes.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
+  const lastWrite = newest(writes);
   const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
 
   /**
@@ -176,13 +218,42 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     editorRef.current?.focus();
   }, [loading]);
 
+  // How much width the deck and the panel have between them. A window resize changes it, and
+  // so does the card pane opening and closing beside the whole view — neither of which this
+  // component would otherwise hear about, which is why it is an observer and not a prop
+  // (`CardGrid`'s arrangement, for its reason). Re-run when the deck lands, because the element
+  // being measured does not exist until then.
+  const hasRow = row !== null;
+  useEffect(() => {
+    const el = deskRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setDeskWidth(entry.contentRect.width));
+    observer.observe(el);
+    setDeskWidth(el.clientWidth);
+    return () => observer.disconnect();
+  }, [hasRow]);
+
+  /**
+   * Whether the panel may draw itself open, or has to fall back to its rail.
+   *
+   * `0` is "not measured yet" and reads as room: the first paint of a wide window should not
+   * flash a rail, and the observer answers on the same frame.
+   */
+  const roomForPanel = deskWidth === 0 || deskWidth - (PANEL_WIDTH_PX + PANEL_GAP) >= DECK_FLOOR;
+
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
   // has been deleted under the reader — so the same refusal is either a busy database (the
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
+  //
+  // **All four writes, banner or no banner.** `add_card` calls `touch_deck` like the rest, so a
+  // press in the docked panel answers the same sentence — and without it here the panel would
+  // report a deck that is gone while the zone columns beside it went on painting it, with every
+  // further press failing the same way and nothing on screen explaining why.
   const refetch = deck.query.refetch;
-  const failedAt = lastWrite.isError ? lastWrite.submittedAt : 0;
+  const lastOfAny = newest([...writes, deck.addCard]);
+  const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;
   useEffect(() => {
     if (failedAt) void refetch();
   }, [failedAt, refetch]);
@@ -448,7 +519,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // row, so the panel is the full height of the editor and the zones keep whatever is
         // left — and `min-w-0` on the deck side, because a wrapping row of columns that
         // cannot shrink is the horizontal scrollbar the 1024px floor forbids.
-        <div className="flex min-h-0 flex-1 gap-3">
+        //
+        // This element is also what `DECK_FLOOR` is measured against: it is the width the two
+        // of them actually have, after the sidebar, the page padding and the card pane have
+        // taken theirs.
+        <div ref={deskRef} className="flex min-h-0 flex-1 gap-3">
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div className="flex min-h-0 flex-1 flex-wrap gap-3 overflow-y-auto">
               {columns.map((zone) => (
@@ -535,6 +610,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             zones={moveTargets}
             targetZone={targetZone}
             onTargetZoneChange={pickTargetZone}
+            roomy={roomForPanel}
           />
         </div>
       )}
