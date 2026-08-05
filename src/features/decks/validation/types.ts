@@ -21,9 +21,12 @@ export interface ValidationIssue {
   /**
    * Stable machine handle, so the panel can group by it and a test can name one without
    * matching prose: `"deck-size"` | `"sideboard-size"` | `"copy-limit"` | `"singleton"` |
-   * `"restricted"` | `"banned"` | `"not-legal"` | `"unknown-legality"` | `"orphan"` |
-   * `"mana-value"`, and — from Tasks 9 and 10 — `"commander-*"`, `"companion-*"`,
-   * `"color-identity"`.
+   * `"restricted"` | `"banned"` | `"not-legal"` | `"unknown-legality"` |
+   * `"unknown-copy-limit"` | `"orphan"` | `"mana-value"`, and — from Tasks 9 and 10 —
+   * `"commander-*"`, `"companion-*"`, `"color-identity"`.
+   *
+   * One `(code, message)` pair is one issue: the engine collapses rows that produce the
+   * same sentence into a single finding whose `cardIds` names all of them.
    */
   code: string;
   /** The whole story in one sentence, card names and numbers included. */

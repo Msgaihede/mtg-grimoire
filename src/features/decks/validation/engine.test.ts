@@ -463,6 +463,33 @@ describe("singleton exceptions (exact phrases)", () => {
     );
   });
 
+  /**
+   * A count no word table knows — the table runs to twenty and reads digits, so this is a
+   * card that has not been printed yet. The card is *known* to allow more than one copy, so
+   * the engine passes the deck rather than reporting a limit the card's own text denies, and
+   * warns that it did not check.
+   */
+  it("passes a printed count it cannot read, and says so", () => {
+    const text = "A deck can have up to thirty cards named Goblin Trapfinder.";
+    const trapfinders = (quantity: number) =>
+      card({ name: "Goblin Trapfinder", quantity, oracleText: text });
+
+    expect(validateDeck(padTo(100, [commander(), trapfinders(8)]), spec("commander"))).toEqual([
+      {
+        severity: "warning",
+        code: "unknown-copy-limit",
+        message:
+          'Goblin Trapfinder\'s text allows up to "thirty" copies, a number this app cannot ' +
+          "read; its 8 copies were not checked.",
+        cardIds: ["c-Goblin Trapfinder"],
+      },
+    ]);
+
+    // One copy clears the format's own limit, so the unread clause did no work and there is
+    // nothing to warn about.
+    expect(validateDeck(padTo(100, [commander(), trapfinders(1)]), spec("commander"))).toEqual([]);
+  });
+
   /** Why the anchor is the whole sentence: this card's text contains the fragment, and five
    *  copies of it in Commander is five copies of it. */
   it("is not fooled by a card that searches for copies of itself", () => {
@@ -661,6 +688,100 @@ describe("legality (per printing — TRAP B)", () => {
         message:
           "Ancient Tomb is not in the card database, so it was not checked against Modern's rules.",
         cardIds: ["c-Ancient Tomb"],
+      },
+    ]);
+  });
+});
+
+/**
+ * The per-card pass runs over rows, and one card is usually several of them — the same
+ * printing in `main` and `side`, or two printings of one card. A panel that says "Lightning
+ * Bolt is banned in Modern." twice is reporting one problem as two.
+ */
+describe("one sentence, one finding", () => {
+  it("collapses identical sentences and keeps every row they are about", () => {
+    // One printing, two zones: one sentence, and the id it already had.
+    const twoZones = padTo(60, [
+      card({ quantity: 2, legalities: '{"modern":"banned"}' }),
+      card({ quantity: 2, zone: "side", legalities: '{"modern":"banned"}' }),
+    ]);
+    expect(validateDeck(twoZones, spec("modern"))).toEqual([
+      {
+        severity: "error",
+        code: "banned",
+        message: "Lightning Bolt is banned in Modern.",
+        cardIds: ["c-Lightning Bolt"],
+      },
+    ]);
+
+    // Two printings of one banned card: still one sentence, now naming both rows.
+    const twoPrintings = padTo(60, [
+      card({ cardId: "bolt-lea", legalities: '{"modern":"banned"}' }),
+      card({ cardId: "bolt-m10", setCode: "m10", legalities: '{"modern":"banned"}' }),
+    ]);
+    expect(validateDeck(twoPrintings, spec("modern"))).toEqual([
+      {
+        severity: "error",
+        code: "banned",
+        message: "Lightning Bolt is banned in Modern.",
+        cardIds: ["bolt-lea", "bolt-m10"],
+      },
+    ]);
+
+    // The same for warnings and for the mana-value ceiling, which are per-row too.
+    const orphan = card({
+      name: "Ancient Tomb",
+      needsReview: "This printing is not in the card database.",
+      oracleId: null,
+      typeLine: null,
+      oracleText: null,
+      cmc: null,
+      manaCost: null,
+      legalities: null,
+      layout: null,
+      rarity: null,
+    });
+    const orphanTwice = padTo(60, [orphan, { ...orphan, zone: "side" as const }]);
+    expect(validateDeck(orphanTwice, spec("modern"))).toEqual([
+      {
+        severity: "warning",
+        code: "orphan",
+        message: "Ancient Tomb: This printing is not in the card database.",
+        cardIds: ["c-Ancient Tomb"],
+      },
+    ]);
+
+    const dreadmaw = card({ name: "Colossal Dreadmaw", manaCost: "{4}{G}{G}", cmc: 6 });
+    const bigTwice = padTo(50, [dreadmaw, { ...dreadmaw, zone: "side" as const }]);
+    expect(validateDeck(bigTwice, spec("tlr")).filter((i) => i.code === "mana-value")).toHaveLength(
+      1,
+    );
+  });
+
+  /**
+   * And the other direction, which is the one that matters for Old School: two printings of
+   * one card whose blobs *disagree* are two different sentences — or, here, one sentence and
+   * silence. Collapsing is by what was said, never by which card said it.
+   */
+  it("keeps sentences that genuinely differ apart", () => {
+    const deck = padTo(60, [
+      card({ name: "Serra Angel", cardId: "serra-lea", legalities: '{"oldschool":"legal"}' }),
+      card({ name: "Serra Angel", cardId: "serra-8ed", legalities: '{"oldschool":"not_legal"}' }),
+      card({ name: "Chaos Orb", cardId: "orb-lea", legalities: '{"oldschool":"banned"}' }),
+    ]);
+
+    expect(validateDeck(deck, spec("oldschool"))).toEqual([
+      {
+        severity: "error",
+        code: "not-legal",
+        message: "Serra Angel is not legal in Old School.",
+        cardIds: ["serra-8ed"],
+      },
+      {
+        severity: "error",
+        code: "banned",
+        message: "Chaos Orb is banned in Old School.",
+        cardIds: ["orb-lea"],
       },
     ]);
   });

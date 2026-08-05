@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ANY_NUMBER_PHRASE, UP_TO_PHRASE, copyException, isBasicLand } from "./singleton";
+import {
+  ANY_NUMBER_PHRASE,
+  UP_TO_PHRASE,
+  copyException,
+  isBasicLand,
+  unreadableCopyCount,
+} from "./singleton";
 
 /**
  * The oracle text of the cards this module exists for, copied from Scryfall rather than
@@ -81,6 +87,29 @@ describe("copyException", () => {
     // A sentence shaped like the anchor but naming no count is not a permission.
     expect(copyException("A deck can have up to as many cards as you like.")).toBeNull();
   });
+
+  /**
+   * The table runs to twenty and digits are read too, so this is a word no card has printed.
+   * The answer is `Infinity` rather than "no exception": the card is *known* to allow more
+   * than one copy, and reporting a copy-limit error its own text contradicts is a worse
+   * failure than passing a deck. The caller is told, so the pass is not silent.
+   */
+  it("passes a count it cannot read, and says which word it was", () => {
+    const text = "A deck can have up to thirty cards named Goblin Trapfinder.";
+
+    expect(copyException(text)).toBe(Infinity);
+    expect(unreadableCopyCount(text)).toBe("thirty");
+  });
+
+  it("reports no unreadable count when there is nothing to read or it read fine", () => {
+    expect(unreadableCopyCount(ORACLE.sevenDwarves)).toBeNull();
+    expect(
+      unreadableCopyCount("A deck can have up to 12 cards named Goblin Trapfinder."),
+    ).toBeNull();
+    expect(unreadableCopyCount(ORACLE.relentlessRats)).toBeNull();
+    expect(unreadableCopyCount(ORACLE.lightningBolt)).toBeNull();
+    expect(unreadableCopyCount(null)).toBeNull();
+  });
 });
 
 describe("isBasicLand", () => {
@@ -96,6 +125,13 @@ describe("isBasicLand", () => {
     expect(isBasicLand("Legendary Land")).toBe(false);
     expect(isBasicLand("Snow Land — Forest")).toBe(false);
     expect(isBasicLand(null)).toBe(false);
+  });
+
+  /** `Basic` is a supertype, not a licence: the printed corpus really contains this one, and
+   *  a supertype-only test hands it an unlimited copy count in every format. */
+  it("needs Basic and Land both, because Basic Creature is a real type line", () => {
+    expect(isBasicLand("Basic Creature — Shapeshifter")).toBe(false);
+    expect(isBasicLand("Basic Land — Island")).toBe(true);
   });
 
   /** The front face decides. A two-faced card whose *back* is a basic land is one card in a

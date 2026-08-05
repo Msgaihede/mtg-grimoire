@@ -229,10 +229,13 @@ pub const ALLOCATION_GRAIN: &str = "deck_id, collection_entry_id";
 ///   Whether it costs a *sideboard* slot is read from `sideboard_max` and never from the
 ///   key: where the format has a sideboard (Modern's 15, Tiny Leaders' 10) the companion
 ///   occupies one of its slots and is counted against that cap, and where `sideboard_max`
-///   is 0 — Commander, all three Brawls, Oathbreaker, Pauper Commander, Duel, PreDH — it is
-///   simply an extra card, EDH-style. Standard Brawl is the row that makes the distinction
-///   visible: a 60-card format with no sideboard at all, so "in a 60-card format it takes a
-///   sideboard slot" would be the wrong rule. `validation/engine.ts` reads it this way.
+///   is 0 — Commander, all three Brawls, Oathbreaker, Pauper Commander, Duel, PreDH and
+///   Gladiator — it is simply an extra card, EDH-style. (Gladiator is the row where
+///   `allows_companion` is 0 as well: no sideboard, so no companion at all — the research
+///   doc's own note. The other eight allow one.) Standard Brawl is the row that makes the
+///   distinction visible: a 60-card format with no sideboard at all, so "in a 60-card format
+///   it takes a sideboard slot" would be the wrong rule. `validation/engine.ts` reads the
+///   cells this way.
 /// * `sideboard_max` 0 means *no sideboard*; NULL means *uncapped* (Limited plays the rest
 ///   of its pool). `max_copies` NULL means unlimited — the two pseudo-formats only.
 /// * `restricted_semantic` is TRAP A and is never inferred from the key: `restricted` means
