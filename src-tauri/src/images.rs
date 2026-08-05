@@ -2439,6 +2439,24 @@ mod tests {
             .iter()
             .all(|k| k.face == 0 && k.variant == Variant::Grid));
 
+        // A card that is both owned and in a deck is one image, not two. `UNION` (never
+        // `UNION ALL`) is what makes that true, and it is the ordinary case rather than an
+        // edge one: a deck is built out of the binder, so most deck cards are owned cards.
+        conn.execute(
+            "INSERT INTO deck_cards
+                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                 created_at,updated_at)
+             VALUES (?1,'0000419b-0bba-4488-8f7a-6194544ce91d','lea','161','en',
+                     'Lightning Bolt','main',4,unixepoch(),unixepoch())",
+            [deck],
+        )
+        .unwrap();
+        assert_eq!(
+            prewarm_keys(&conn, Variant::Grid, 100).unwrap().len(),
+            3,
+            "owned and decked is one key"
+        );
+
         // Once the bytes are on disk the key is not selected again — which is the whole of
         // "resumable", and it costs no bookkeeping of its own.
         conn.execute(

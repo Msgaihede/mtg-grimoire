@@ -112,9 +112,12 @@ pub fn run() {
             deck::deck_delete,
             deck::deck_duplicate,
             deck::deck_list,
+            deck::deck_get,
             deck::deck_add_card,
             deck::deck_set_card_quantity,
-            deck::deck_move_card
+            deck::deck_move_card,
+            deck::deck_missing_to_wishlist,
+            deck::format_specs_list
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the

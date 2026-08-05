@@ -34,6 +34,15 @@ pub const BUSY: &str = "The card database is busy finishing a sync. Try that aga
 /// applied, unlike a delete that finds nothing (see [`remove_entry`]).
 pub const GONE: &str = "That collection entry is not there any more.";
 
+/// What an *add* says when it was asked for no copies.
+///
+/// One sentence for two tables, because it is one rule: adding zero copies is a no-op
+/// dressed as a write, and it would conjure a row out of nothing — a card the user never
+/// said they had here, an intention they never expressed in [`crate::deck::add_card`].
+/// Zero is a state a row can be moved to ([`set_quantity`]), never one it can be created
+/// in. A second copy of the sentence is a second thing to drift.
+pub const ZERO_ADD: &str = "Adding a card needs a quantity of at least one.";
+
 /// One quick-add, as the UI sends it.
 ///
 /// `#[serde(default)]` throughout: the popup sends the three fields it has (`cardId`,
@@ -255,7 +264,7 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
     // conjure a row out of nothing on a card the user never said they had. Zero is a state
     // a row can be moved to (`set_quantity`), never a state it can be created in.
     if input.quantity <= 0 {
-        return Err("Adding a card needs a quantity of at least one.".into());
+        return Err(ZERO_ADD.to_owned());
     }
     valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
     let grading = canonical_grading(input.grading.as_deref())?;

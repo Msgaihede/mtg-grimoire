@@ -1607,7 +1607,10 @@ mod tests {
         let b = deck(&conn, "Storm");
         allocate(&conn, a, old, 2);
         allocate(&conn, a, existing, 1);
-        allocate(&conn, b, old, 3);
+        // Two, not three: A's two claims add up to three, and a B that also claimed three
+        // would make the two halves of the assertion below indistinguishable — a middle
+        // statement that summed B's claim into A's would land on the very same numbers.
+        allocate(&conn, b, old, 2);
 
         apply(
             &mut conn,
@@ -1627,8 +1630,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             claims,
-            vec![(a, existing, 3), (b, existing, 3)],
-            "A's two claims are one claim of three; B's three moved across untouched"
+            vec![(a, existing, 3), (b, existing, 2)],
+            "A's two claims are one claim of three; B's two moved across untouched"
         );
     }
 

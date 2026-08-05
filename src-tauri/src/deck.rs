@@ -15,10 +15,11 @@
 //!   collection's, because a zone slot at zero holds nothing worth keeping — no condition,
 //!   no purchase price, no acquisition story, just an intention the user withdrew.
 
-use crate::collection::{valid_quantity, EntryChange};
+use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// The five zones, re-exported from the schema so the CHECK and its Rust twin cannot drift.
@@ -253,6 +254,13 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     if changed == 0 {
         return Err(GONE.to_owned());
     }
+    // Sleeving a deck up (or taking it apart) is the one edit here that changes what is
+    // available, so it is the one that reallocates. **This deck only:** every other deck's
+    // claims are recomputed the next time it is touched, because walking the whole gallery
+    // on a toggle would make one checkbox a write over every deck the user owns.
+    if patch.is_built.is_some() {
+        allocate_deck(conn, id)?;
+    }
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 
@@ -331,9 +339,10 @@ pub fn add_card(
 ) -> Result<EntryChange, String> {
     let zone = valid_zone(zone)?;
     // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
-    // conjure a row out of nothing. `collection::add_entry` refuses it in the same words.
+    // conjure a row out of nothing. The same refusal `collection::add_entry` gives, from the
+    // one constant that owns the sentence.
     if quantity <= 0 {
-        return Err("Adding a card needs a quantity of at least one.".into());
+        return Err(ZERO_ADD.to_owned());
     }
     let (set_code, collector_number, lang, name) = printing_of(conn, card_id)?;
 
@@ -371,6 +380,7 @@ pub fn add_card(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| e.to_string())?;
+    allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
@@ -413,6 +423,7 @@ pub fn set_card_quantity(
             )
             .optional()
             .map_err(|e| e.to_string())?;
+        allocate_deck(&tx, deck_id)?;
         tx.commit().map_err(|e| e.to_string())?;
         // A slot the caller wanted empty and that is empty: like `remove_entry`, a delete
         // that finds nothing already has what it wanted. There is no row left to name, so
@@ -437,6 +448,7 @@ pub fn set_card_quantity(
     // The [`crate::collection::GONE`] asymmetry: an *adjustment* to a row that is not there
     // could not do what it was asked. Putting a card into a zone is [`add_card`].
     let id = id.ok_or_else(|| card_gone(zone))?;
+    allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
@@ -494,8 +506,575 @@ pub fn move_card(
         params![deck_id, card_id, from],
     )
     .map_err(|e| e.to_string())?;
+    // A move changes what is claimed even though nothing was added or removed: `maybe`
+    // reserves nothing, so a card dragged into or out of it is a claim released or made.
+    allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// The read, the allocator, and what is still missing
+// ---------------------------------------------------------------------------------------
+
+/// The zones in the order copies are handed out in — the allocator's walk and the read's
+/// attribution both take it.
+///
+/// `commander` first, because a deck's commander is the copy it cannot be played without;
+/// `maybe` last, and the allocator never reaches it at all: a maybe pile is a scratchpad,
+/// and copies reserved for a card the user has not decided to play are copies another deck
+/// cannot have. It is in the list because attribution walks *every* row — anything the four
+/// real zones did not take would otherwise have nowhere to land.
+///
+/// A permutation of [`ZONES`], and `the_allocation_order_covers_every_zone_the_schema_knows`
+/// is what keeps it one: a sixth zone added to the schema with no place here would sort last
+/// by accident rather than by decision.
+const ZONE_PRIORITY: [&str; 5] = ["commander", "main", "side", "companion", "maybe"];
+
+/// The scratchpad zone: listed and counted, but never a claim on anything.
+const MAYBE: &str = "maybe";
+
+/// Where a zone sorts in [`ZONE_PRIORITY`]. An unknown zone — impossible past [`valid_zone`]
+/// and the table's CHECK — sorts last rather than panicking.
+fn zone_rank(zone: &str) -> usize {
+    ZONE_PRIORITY
+        .iter()
+        .position(|z| *z == zone)
+        .unwrap_or(ZONE_PRIORITY.len())
+}
+
+/// One card in one zone of one deck: what it is, what the validation engine needs to judge
+/// it, and how much of it the user actually has.
+///
+/// Three groups of columns, and the split is the design:
+///
+/// * **The row's own identity** (`name`, `set_code`, `collector_number`, `lang`) — copied
+///   from `cards` at write time and `NOT NULL` ever since. A deck whose printing left the
+///   card database still says what it is holding.
+/// * **The card facts**, every one an `Option`: an orphaned row is still a card in the deck,
+///   so the LEFT JOIN answers NULL rather than dropping the line — [`crate::collection`]'s
+///   `FROM` discipline, for its reason.
+/// * **The availability numbers**, computed at read time and stored on no row.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckCardRow {
+    pub id: i64,
+    pub card_id: String,
+    pub zone: String,
+    pub quantity: i64,
+    pub name: String,
+    pub set_code: String,
+    pub collector_number: String,
+    pub lang: String,
+    pub needs_review: Option<String>,
+    pub oracle_id: Option<String>,
+    pub mana_cost: Option<String>,
+    pub cmc: Option<f64>,
+    pub type_line: Option<String>,
+    pub oracle_text: Option<String>,
+    /// The card's colours as **concatenated letters** (`"WU"`), not a JSON array: that is
+    /// what [`crate::card_row`] stores, so that is what is returned. Parsing it as JSON on
+    /// the way out would be a second shape for one fact.
+    pub colors: Option<String>,
+    /// Scryfall's precomputed `color_identity`, in the same letter form. Precomputed is the
+    /// point: it already folds in DFC backs, adventures, colour indicators and basic land
+    /// types, so one subset check answers CR 903.5c and 903.5d together.
+    pub color_identity: Option<String>,
+    /// **This printing's** blob, not the oracle card's — the one thing that makes Old School
+    /// come out right with no special case. `oldschool` is the only printing-sensitive
+    /// legality key (Serra Angel is legal from `lea`, not from `8ed`), and a deck card names
+    /// a printing, so each row's own blob answers the question the engine is asking.
+    pub legalities: Option<String>,
+    /// The printed power and toughness **as text**, because that is what they are: `"*"`,
+    /// `"1+*"` and a printed `"0"` all ship in real data.
+    ///
+    /// Both NULL means *unknown*, never "no P/T box" — see [`fill_unknown_power_toughness`],
+    /// which is what makes that true for a database that has not synced since schema v5.
+    pub power: Option<String>,
+    pub toughness: Option<String>,
+    pub layout: Option<String>,
+    pub rarity: Option<String>,
+    /// The `card_faces` array verbatim: per-face mana cost, MV and P/T live only here, and
+    /// Tiny Leaders' per-face MV cap and DFC commander fronts both read them.
+    pub faces: Option<String>,
+    pub game_changer: Option<bool>,
+    /// Printed at uncommon on **any** printing of this oracle card. Computed, not read: a
+    /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
+    /// `paupercommander` legality key answers a different question (the 99).
+    pub ever_uncommon: bool,
+    /// Nonfoil `usd` from the prices blob — `WishRow::unit_price_usd`'s rule. Never
+    /// `cards.price_usd`, which is a display fallback chain and must not be summed.
+    pub unit_price_usd: Option<f64>,
+    /// Copies of this oracle card the allocator secured for this deck, attributed to this
+    /// row in [`ZONE_PRIORITY`] order and clamped to what each entry still holds — so a
+    /// collection that shrank under a stored claim reads honestly.
+    pub owned_quantity: i64,
+}
+
+/// One deck and everything in it: the gallery's row, plus every zone in one answer.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckDetail {
+    pub deck: DeckRow,
+    pub cards: Vec<DeckCardRow>,
+}
+
+/// One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormatSpecRow {
+    pub key: String,
+    pub display_name: String,
+    pub enabled_in_picker: bool,
+    pub deck_min: i64,
+    pub deck_max: Option<i64>,
+    pub max_copies: Option<i64>,
+    pub sideboard_max: Option<i64>,
+    pub singleton: bool,
+    pub requires_commander: bool,
+    pub commander_rule: Option<String>,
+    pub life: i64,
+    pub restricted_semantic: String,
+    pub has_legality_data: bool,
+    pub max_mana_value: Option<i64>,
+    pub allows_companion: bool,
+    pub sort_order: i64,
+}
+
+/// One deck card and every fact about it, as one row.
+///
+/// `deck_cards dc LEFT JOIN cards c` is [`crate::collection`]'s discipline verbatim: an
+/// inner join would delete from the view exactly the rows the denormalised columns exist
+/// for. `ever_uncommon`'s `EXISTS` rides `idx_cards_oracle`, and answers false for an orphan
+/// on its own (`NULL = NULL` is not true), which is the right answer — nothing is known
+/// about a card that is not there.
+const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id, dc.zone, dc.quantity, dc.name,
+            dc.set_code, dc.collector_number, dc.lang, dc.needs_review,
+            c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
+            c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
+            c.faces, c.game_changer,
+            CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
+            EXISTS(SELECT 1 FROM cards u
+                    WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
+       FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
+      WHERE dc.deck_id = ?1";
+
+/// The whole deck in one read: the gallery's row, every card, every fact, every number.
+///
+/// One command rather than three, because the editor and the validation engine ask the same
+/// question — *what is in this deck* — and a screen that draws a curve from one query, a
+/// legality panel from another and an owned badge from a third is a screen whose three
+/// answers can disagree.
+pub fn get_deck(conn: &Connection, id: i64) -> Result<Option<DeckDetail>, String> {
+    let Some(deck) = read_deck(conn, id)? else {
+        return Ok(None);
+    };
+    let mut cards = read_deck_cards(conn, id)?;
+    fill_unknown_power_toughness(conn, &mut cards)?;
+    attribute_owned(&mut cards, &owned_by_oracle(conn, id)?);
+    Ok(Some(DeckDetail { deck, cards }))
+}
+
+/// Every card in the deck, in the order the editor reads them.
+fn read_deck_cards(conn: &Connection, deck_id: i64) -> Result<Vec<DeckCardRow>, String> {
+    let mut stmt = conn.prepare(DECK_CARD_SELECT).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id], |r| {
+            Ok(DeckCardRow {
+                id: r.get(0)?,
+                card_id: r.get(1)?,
+                zone: r.get(2)?,
+                quantity: r.get(3)?,
+                name: r.get(4)?,
+                set_code: r.get(5)?,
+                collector_number: r.get(6)?,
+                lang: r.get(7)?,
+                needs_review: r.get(8)?,
+                oracle_id: r.get(9)?,
+                mana_cost: r.get(10)?,
+                cmc: r.get(11)?,
+                type_line: r.get(12)?,
+                oracle_text: r.get(13)?,
+                colors: r.get(14)?,
+                color_identity: r.get(15)?,
+                legalities: r.get(16)?,
+                power: r.get(17)?,
+                toughness: r.get(18)?,
+                layout: r.get(19)?,
+                rarity: r.get(20)?,
+                faces: r.get(21)?,
+                game_changer: r.get(22)?,
+                unit_price_usd: r.get(23)?,
+                ever_uncommon: r.get(24)?,
+                // Filled by `attribute_owned`, once the claims are known.
+                owned_quantity: 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut cards = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    // Zone order, then the name the row carries — which an orphan has and its card does not.
+    cards.sort_by(|a, b| {
+        zone_rank(&a.zone)
+            .cmp(&zone_rank(&b.zone))
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(cards)
+}
+
+/// Recover a P/T that the `cards` columns do not have yet.
+///
+/// **Both columns NULL means unknown, never "no P/T box"** — and CR 903.3 (2026) turns on
+/// exactly that difference: a legendary Vehicle or Spacecraft *with* a P/T box can be a
+/// commander, one without cannot. `power`/`toughness` are schema v5 columns that the ingest
+/// fills from here on, but the v5 backfill could only recover the **1 510 of 116 590** rows
+/// that keep a `card_faces` array: `raw` is a gzip BLOB, and SQL cannot see into one. Until
+/// the next real sync — which the 24 h throttle and the ETag check can put a day or more
+/// away — every ordinary creature in every deck reads NULL, and a validator told "no P/T
+/// box" would refuse commanders that are legal.
+///
+/// So the read repairs itself, for the rows that ask and only those: one lookup per distinct
+/// printing whose P/T are both missing, gunzipped **in Rust** through
+/// [`crate::card_row::raw_json`] over `CAST(raw AS BLOB)`, because `json_extract` over a gzip
+/// member is a hard `malformed JSON` error rather than a NULL (CLAUDE.md). A deck is a
+/// hundred rows, so this is a hundred 2 KB inflations at worst, and it costs nothing at all
+/// on a database that has synced.
+fn fill_unknown_power_toughness(conn: &Connection, rows: &mut [DeckCardRow]) -> Result<(), String> {
+    let unknown: Vec<String> = {
+        let mut ids: Vec<String> = rows
+            .iter()
+            .filter(|r| r.power.is_none() && r.toughness.is_none())
+            .map(|r| r.card_id.clone())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare("SELECT CAST(raw AS BLOB) FROM cards WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    let mut printed: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    for card_id in unknown {
+        let stored: Option<Vec<u8>> = stmt
+            .query_row(params![card_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        // An orphan has no `raw` to read, and that is the honest answer for it too.
+        let Some(json) = stored.as_deref().and_then(crate::card_row::raw_json) else {
+            continue;
+        };
+        printed.insert(card_id, printed_power_toughness(&json));
+    }
+    for row in rows.iter_mut() {
+        if let Some((power, toughness)) = printed.get(&row.card_id) {
+            row.power.clone_from(power);
+            row.toughness.clone_from(toughness);
+        }
+    }
+    Ok(())
+}
+
+/// A bulk line's printed P/T: top level, then the front face — [`crate::card_row`]'s own
+/// fallback, because a transform card keeps its P/T only on its faces.
+fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return (None, None);
+    };
+    let pick = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                value
+                    .get("card_faces")
+                    .and_then(|f| f.get(0))
+                    .and_then(|f| f.get(key))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(str::to_owned)
+    };
+    (pick("power"), pick("toughness"))
+}
+
+/// Copies this deck has secured, per oracle card, **clamped entry by entry**.
+///
+/// `min(a.quantity, e.quantity)` is the clamp and it is per claim, not per total: a deck that
+/// reserved four copies of a row the user has since stepped to one owns one of them. The
+/// stored claim is left alone — the next zone write recomputes it — because a read is not
+/// the place to discover that the world moved.
+fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i64>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.oracle_id, sum(min(a.quantity, e.quantity))
+               FROM deck_allocations a
+               JOIN collection_entries e ON e.id = a.collection_entry_id
+               JOIN cards c ON c.id = e.card_id
+              WHERE a.deck_id = ?1 AND c.oracle_id IS NOT NULL
+              GROUP BY c.oracle_id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Hand the secured copies out to the rows that wanted them.
+///
+/// Pure, and deliberately so: this is the one piece of the availability story with no SQL in
+/// it. The walk is [`ZONE_PRIORITY`] then row id — the commander is the copy a deck cannot be
+/// played without, and `maybe` is last because it is the pile the allocator never claimed
+/// for. Its own order, not the caller's: a read that sorted differently would attribute
+/// differently, and the number a row shows must not depend on how the list was displayed.
+fn attribute_owned(rows: &mut [DeckCardRow], owned_by_oracle: &HashMap<String, i64>) {
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&i| (zone_rank(&rows[i].zone), rows[i].id));
+    let mut left = owned_by_oracle.clone();
+    for i in order {
+        let Some(oracle) = rows[i].oracle_id.clone() else {
+            rows[i].owned_quantity = 0;
+            continue;
+        };
+        let remaining = left.entry(oracle).or_insert(0);
+        let take = (*remaining).min(rows[i].quantity).max(0);
+        *remaining -= take;
+        rows[i].owned_quantity = take;
+    }
+}
+
+/// One collection row this deck could draw a copy from, and how many it still could.
+struct Candidate {
+    entry_id: i64,
+    card_id: String,
+    proxy: bool,
+    /// The entry's quantity less every **built** other deck's claim on it, floored at zero,
+    /// and then less whatever this walk has already taken.
+    available: i64,
+}
+
+/// Recompute this deck's claims from scratch.
+///
+/// **Delete and rebuild**, which is what makes it both deterministic and idempotent: there is
+/// no incremental state to drift, and running it twice on an unchanged world writes the same
+/// rows. Greedy, in [`ZONE_PRIORITY`] order over the deck's cards (never [`MAYBE`]): for each
+/// one, the entries of the same **oracle** card — a Bolt is a Bolt — taking the exact
+/// printing first, real copies before proxies, then entry id, and never more than the entry
+/// still has free.
+///
+/// Availability is `entry.quantity` minus the claims of other **built** decks. That is the
+/// whole of what `is_built` means: a deck on a table has the cards, a deck being planned is
+/// planning with cards it may share with every other draft. A deck is never blocked by its
+/// own claims, which is why they are deleted before anything is counted.
+///
+/// **Takes `&Connection` and opens no transaction of its own.** Every zone write already runs
+/// inside one and `unchecked_transaction` does not nest — `Transaction` derefs to
+/// `Connection`, so `allocate_deck(&tx, id)` is the call at every site.
+///
+/// The collection is never written to. Not once, not by a column, not by a trigger: an
+/// allocation is a claim recorded beside the binder, and spec §6's non-destructive model is
+/// exactly that sentence.
+pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM deck_allocations WHERE deck_id = ?1",
+        params![deck_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // What the deck wants. An INNER JOIN, because the hunt is for entries of the same oracle
+    // card and an orphaned row names no oracle card — it is listed, flagged and reads owned
+    // 0 until the reconciler or the next sync gives it its identity back.
+    let mut wants: Vec<(i64, String, String, i64, String)> = conn
+        .prepare(
+            "SELECT dc.id, dc.zone, dc.card_id, dc.quantity, c.oracle_id
+               FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
+              WHERE dc.deck_id = ?1 AND dc.zone <> ?2 AND c.oracle_id IS NOT NULL",
+        )
+        .map_err(|e| e.to_string())?
+        .query_map(params![deck_id, MAYBE], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    wants.sort_by_key(|(id, zone, ..)| (zone_rank(zone), *id));
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.id, e.card_id, e.proxy, e.quantity -
+                    coalesce((SELECT sum(a.quantity) FROM deck_allocations a
+                               JOIN decks d ON d.id = a.deck_id
+                              WHERE a.collection_entry_id = e.id
+                                AND a.deck_id <> ?1 AND d.is_built = 1), 0)
+               FROM collection_entries e JOIN cards c ON c.id = e.card_id
+              WHERE c.oracle_id = ?2
+              ORDER BY e.id",
+        )
+        .map_err(|e| e.to_string())?;
+
+    // One candidate list per oracle card, drawn down as the walk spends it — so two zones
+    // wanting the same card cannot both be told the same copies are free.
+    let mut pools: HashMap<String, Vec<Candidate>> = HashMap::new();
+    // BTreeMap: one row per entry drawn from ([`crate::schema::ALLOCATION_GRAIN`] is the
+    // pair), written in a fixed order.
+    let mut taken: BTreeMap<i64, i64> = BTreeMap::new();
+
+    for (_, _, card_id, quantity, oracle_id) in wants {
+        let pool = match pools.entry(oracle_id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let candidates = stmt
+                    .query_map(params![deck_id, e.key()], |r| {
+                        Ok(Candidate {
+                            entry_id: r.get(0)?,
+                            card_id: r.get(1)?,
+                            proxy: r.get(2)?,
+                            available: r.get::<_, i64>(3)?.max(0),
+                        })
+                    })
+                    .map_err(|err| err.to_string())?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(|err| err.to_string())?;
+                e.insert(candidates)
+            }
+        };
+        // Exact printing, then real copies, then the oldest entry. Computed per deck card
+        // rather than once per pool: "exact" is a statement about the card being served.
+        let mut order: Vec<usize> = (0..pool.len()).collect();
+        order.sort_by_key(|&i| (pool[i].card_id != card_id, pool[i].proxy, pool[i].entry_id));
+
+        let mut still = quantity;
+        for i in order {
+            if still == 0 {
+                break;
+            }
+            let candidate = &mut pool[i];
+            let draw = candidate.available.min(still);
+            if draw > 0 {
+                candidate.available -= draw;
+                still -= draw;
+                *taken.entry(candidate.entry_id).or_insert(0) += draw;
+            }
+        }
+    }
+
+    for (entry_id, quantity) in taken {
+        conn.execute(
+            "INSERT INTO deck_allocations
+                (deck_id, collection_entry_id, quantity, created_at, updated_at)
+             VALUES (?1, ?2, ?3, unixepoch(), unixepoch())",
+            params![deck_id, entry_id, quantity],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// One wish per card the deck is still short of. Returns how many wishes were touched.
+///
+/// **Any printing**, always: a shopping list is not a printing preference, and the copy that
+/// fills the hole is whichever one turns up. `maybe` is not counted — the pile is a
+/// scratchpad, and a card the user has not decided to play is not a card they need to buy.
+///
+/// Written *through* [`crate::wishlist::add_wish`] rather than into `wishlist_entries`: the
+/// grain, the canonicalisation and the fold all live there, and a second write path is a
+/// second set of rules to keep in step. Clicking twice therefore raises the quantity of one
+/// line rather than making two, which is `add_wish`'s contract and not this function's.
+///
+/// It reallocates first, in the same transaction. The claims may be a collection edit out of
+/// date (see [`allocate_deck`]'s callers), and a button that puts already-bought cards on a
+/// shopping list is worse than no button.
+///
+/// An orphaned row is skipped: a wish needs an oracle card or a printing that resolves, and
+/// an orphan has neither. It is already carrying a `needs_review` sentence that says so.
+pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    allocate_deck(&tx, deck_id)?;
+    let detail = get_deck(&tx, deck_id)?.ok_or_else(|| GONE.to_owned())?;
+
+    // Oracle-grained, so the same card short in two zones is one wish for the sum — which is
+    // what "one wish per card still missing" means, and what the reader would count.
+    let mut missing: BTreeMap<String, (String, i64)> = BTreeMap::new();
+    for row in &detail.cards {
+        if row.zone == MAYBE {
+            continue;
+        }
+        let Some(oracle_id) = row.oracle_id.as_deref() else {
+            continue;
+        };
+        let short = row.quantity - row.owned_quantity;
+        if short <= 0 {
+            continue;
+        }
+        let entry = missing
+            .entry(oracle_id.to_owned())
+            .or_insert_with(|| (row.name.clone(), 0));
+        entry.1 += short;
+    }
+
+    let touched = missing.len();
+    for (oracle_id, (name, quantity)) in missing {
+        crate::wishlist::add_wish(
+            &tx,
+            &crate::wishlist::WishInput {
+                oracle_id: Some(oracle_id),
+                // The deck row's own name, which is the one name an orphan-safe row always
+                // has — and the same name the list would show for it.
+                name: Some(name),
+                quantity,
+                ..Default::default()
+            },
+        )?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(touched)
+}
+
+/// The format rules, as data (spec §6), in the order a picker shows them.
+///
+/// Read whole and handed to the engine: a new format is a seeded row, never a code branch,
+/// and that is only true if nothing here decides which cells matter.
+pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT key, display_name, enabled_in_picker, deck_min, deck_max, max_copies,
+                    sideboard_max, singleton, requires_commander, commander_rule, life,
+                    restricted_semantic, has_legality_data, max_mana_value, allows_companion,
+                    sort_order
+               FROM format_specs ORDER BY sort_order",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(FormatSpecRow {
+                key: r.get(0)?,
+                display_name: r.get(1)?,
+                enabled_in_picker: r.get(2)?,
+                deck_min: r.get(3)?,
+                deck_max: r.get(4)?,
+                max_copies: r.get(5)?,
+                sideboard_max: r.get(6)?,
+                singleton: r.get(7)?,
+                requires_commander: r.get(8)?,
+                commander_rule: r.get(9)?,
+                life: r.get(10)?,
+                restricted_semantic: r.get(11)?,
+                has_legality_data: r.get(12)?,
+                max_mana_value: r.get(13)?,
+                allows_companion: r.get(14)?,
+                sort_order: r.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Run `f` with the write connection, or answer [`crate::collection::BUSY`].
@@ -567,6 +1146,45 @@ pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Dec
         .map_err(|e| format!("the deck list could not be read: {e}"))?
 }
 
+/// One deck, everything in it, every fact the validator needs. **Read-only** connection.
+#[tauri::command]
+pub async fn deck_get(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+) -> Result<Option<DeckDetail>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || get_deck(&crate::sync::lock_db_read(&state), id))
+        .await
+        .map_err(|e| format!("the deck could not be read: {e}"))?
+}
+
+/// The format rules as data, for the picker and the validation engine. **Read-only.**
+#[tauri::command]
+pub async fn format_specs_list(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<FormatSpecRow>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        list_format_specs(&crate::sync::lock_db_read(&state))
+    })
+    .await
+    .map_err(|e| format!("the format list could not be read: {e}"))?
+}
+
+/// The one click: everything this deck is short of, onto the wishlist.
+#[tauri::command]
+pub async fn deck_missing_to_wishlist(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+) -> Result<usize, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| missing_to_wishlist(c, deck_id))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 #[tauri::command]
 pub async fn deck_add_card(
     state: tauri::State<'_, Arc<AppState>>,
@@ -621,26 +1239,105 @@ pub async fn deck_move_card(
 mod tests {
     use super::*;
 
+    /// Five printings of two oracle cards.
+    ///
+    /// `o1` is three printings of one common — the allocator's cross-printing walk needs a
+    /// second and a third printing of the *same* card to have anything to walk. `o2` is the
+    /// pair the read is judged on: Serra Angel was **uncommon** in Alpha and **rare** in
+    /// Eighth, and Old School accepts the Alpha printing and refuses the Eighth. One
+    /// fixture, both traps, and neither of them invented — those are the real rarities and
+    /// the real legalities.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
-                rarity,artist,raw)
-             VALUES ('bolt-lea','o1','Lightning Bolt','lea','161','en','normal','common',
-                'Christopher Rush','{}')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
-                rarity,artist,raw)
-             VALUES ('bolt-jp','o1','Lightning Bolt','4ed','209','ja','normal','common',
-                'Christopher Rush','{}')",
-            [],
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,artist,mana_cost,cmc,type_line,oracle_text,colors,color_identity,
+                    legalities,power,toughness,prices,raw)
+               VALUES
+                 ('bolt-lea','o1','Lightning Bolt','lea','161','en','normal','common',
+                  'Christopher Rush','{R}',1.0,'Instant',
+                  'Lightning Bolt deals 3 damage to any target.','R','R',
+                  '{"oldschool":"legal","modern":"legal"}',NULL,NULL,
+                  '{"usd":"400.00","usd_foil":null}','{}'),
+                 ('bolt-jp','o1','Lightning Bolt','4ed','209','ja','normal','common',
+                  'Christopher Rush','{R}',1.0,'Instant',
+                  'Lightning Bolt deals 3 damage to any target.','R','R',
+                  '{"oldschool":"not_legal","modern":"legal"}',NULL,NULL,NULL,'{}'),
+                 ('bolt-m10','o1','Lightning Bolt','m10','146','en','normal','common',
+                  'Christopher Moeller','{R}',1.0,'Instant',
+                  'Lightning Bolt deals 3 damage to any target.','R','R',
+                  '{"oldschool":"not_legal","modern":"legal"}',NULL,NULL,
+                  '{"usd":"1.50"}','{}'),
+                 ('serra-lea','o2','Serra Angel','lea','175','en','normal','uncommon',
+                  'Douglas Shuler','{3}{W}{W}',5.0,'Creature — Angel','Flying, vigilance',
+                  'W','W','{"oldschool":"legal","paupercommander":"not_legal"}','4','4',
+                  '{"usd":"120.00"}','{}'),
+                 ('serra-8ed','o2','Serra Angel','8ed','44','en','normal','rare',
+                  'Greg Staples','{3}{W}{W}',5.0,'Creature — Angel','Flying, vigilance',
+                  'W','W','{"oldschool":"not_legal","paupercommander":"not_legal"}','4','4',
+                  '{"usd":"1.00"}','{}');"#,
         )
         .unwrap();
         conn
+    }
+
+    /// One collection row, at the plainest grain there is.
+    fn own(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
+        crate::collection::add_entry(
+            conn,
+            &crate::collection::EntryInput {
+                card_id: card_id.to_owned(),
+                finish: "nonfoil".to_owned(),
+                quantity,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// The same, printed at home.
+    fn own_proxy(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
+        crate::collection::add_entry(
+            conn,
+            &crate::collection::EntryInput {
+                card_id: card_id.to_owned(),
+                finish: "nonfoil".to_owned(),
+                quantity,
+                proxy: true,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// What this deck has reserved, entry id ascending.
+    fn claims(conn: &Connection, deck_id: i64) -> Vec<(i64, i64)> {
+        conn.prepare(
+            "SELECT collection_entry_id, quantity FROM deck_allocations
+              WHERE deck_id = ?1 ORDER BY collection_entry_id",
+        )
+        .unwrap()
+        .query_map(params![deck_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    fn card_row<'a>(detail: &'a DeckDetail, card_id: &str, zone: &str) -> &'a DeckCardRow {
+        detail
+            .cards
+            .iter()
+            .find(|r| r.card_id == card_id && r.zone == zone)
+            .unwrap_or_else(|| panic!("no `{card_id}` in the {zone} zone"))
+    }
+
+    /// What the deck says it owns of one printing, read the way the editor reads it.
+    fn owned_of(conn: &Connection, deck_id: i64, card_id: &str, zone: &str) -> i64 {
+        let detail = get_deck(conn, deck_id).unwrap().unwrap();
+        card_row(&detail, card_id, zone).owned_quantity
     }
 
     fn input(name: &str, format_key: &str) -> DeckInput {
@@ -1082,5 +1779,569 @@ mod tests {
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(patch.is_built, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
+    }
+
+    /// The allocator's whole contract in one scene: 4 Bolts wanted, 3 owned across two
+    /// entries (2 lea + 1 m10 — a DIFFERENT printing of the same oracle card), nothing else
+    /// claiming them → allocations total 3, the deck reads owned 3 of 4, and the collection
+    /// rows still say 2 and 1: availability is computed, never decremented (spec §6,
+    /// Deckbox semantics).
+    #[test]
+    fn the_allocator_reserves_owned_copies_across_printings_without_touching_the_collection() {
+        let conn = seeded();
+        let lea = own(&conn, "bolt-lea", 2);
+        let m10 = own(&conn, "bolt-m10", 1);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(lea, 2), (m10, 1)],
+            "a different printing of the same oracle card is the same card"
+        );
+        let detail = get_deck(&conn, deck.id).unwrap().unwrap();
+        let row = card_row(&detail, "bolt-lea", "main");
+        assert_eq!((row.quantity, row.owned_quantity), (4, 3), "3 of 4");
+
+        let held: Vec<(i64, i64)> = conn
+            .prepare("SELECT id, quantity FROM collection_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            held,
+            vec![(lea, 2), (m10, 1)],
+            "the binder still holds what it held — a deck names copies, it never takes them"
+        );
+    }
+
+    /// Exact printing first: the deck runs the lea Bolt, so the lea entries are drained
+    /// before the m10 entry is touched — and within them the real copies before the proxies,
+    /// which is why the proxy row is the *older* entry here. Deterministic, so a re-run
+    /// allocates identically (delete + rebuild inside one transaction).
+    #[test]
+    fn the_allocator_prefers_the_exact_printing_then_other_printings() {
+        let conn = seeded();
+        // Lowest id first: entry order alone would drain the proxies before the real cards.
+        let proxy = own_proxy(&conn, "bolt-lea", 4);
+        let real = own(&conn, "bolt-lea", 2);
+        let other = own(&conn, "bolt-m10", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        add_card(&conn, deck.id, "bolt-lea", "main", 5).unwrap();
+
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(proxy, 3), (real, 2)],
+            "both real lea copies, then three proxies, and the m10 entry untouched"
+        );
+        assert!(
+            !claims(&conn, deck.id).iter().any(|(e, _)| *e == other),
+            "another printing is the last resort, not the first"
+        );
+
+        allocate_deck(&conn, deck.id).unwrap();
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(proxy, 3), (real, 2)],
+            "delete-and-rebuild lands on exactly the same rows"
+        );
+    }
+
+    /// `is_built` is what makes a claim RESERVE: two decks want the same 4 copies; deck A
+    /// (built) claims them; deck B's allocator finds availability 0 and B reads owned 0 of 4.
+    /// Unbuild A, reallocate B → B reads 4. A deck's own claims never block itself.
+    #[test]
+    fn built_decks_reserve_availability_and_unbuilt_decks_do_not() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let a = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, a.id, "bolt-lea", "main", 4).unwrap();
+        update_deck(
+            &conn,
+            a.id,
+            &DeckPatch {
+                is_built: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(claims(&conn, a.id), vec![(entry, 4)], "sleeved up");
+
+        let b = create_deck(&conn, &input("Burn II", "modern")).unwrap();
+        add_card(&conn, b.id, "bolt-lea", "main", 4).unwrap();
+
+        assert_eq!(claims(&conn, b.id), vec![], "those copies are on a table");
+        assert_eq!(owned_of(&conn, b.id, "bolt-lea", "main"), 0);
+        assert_eq!(
+            owned_of(&conn, a.id, "bolt-lea", "main"),
+            4,
+            "a deck is never blocked by its own claims"
+        );
+
+        update_deck(
+            &conn,
+            a.id,
+            &DeckPatch {
+                is_built: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        allocate_deck(&conn, b.id).unwrap();
+
+        assert_eq!(owned_of(&conn, b.id, "bolt-lea", "main"), 4);
+        assert_eq!(
+            owned_of(&conn, a.id, "bolt-lea", "main"),
+            4,
+            "two drafts may both plan on one playset — only a built deck reserves it"
+        );
+    }
+
+    /// The read clamps: the allocation says 4, the entry has since been stepped to 1 →
+    /// `owned_quantity` reads 1, not 4. A claim on copies that left the binder is not
+    /// ownership.
+    #[test]
+    fn owned_quantity_clamps_to_what_the_entry_still_holds() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
+
+        crate::collection::set_quantity(&conn, entry, 1).unwrap();
+
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(entry, 4)],
+            "a collection edit does not walk every deck…"
+        );
+        assert_eq!(
+            owned_of(&conn, deck.id, "bolt-lea", "main"),
+            1,
+            "…so the read is what has to tell the truth about a shrunken binder"
+        );
+    }
+
+    /// TRAP B and TRAP C ride the read: two printings of one card with different `oldschool`
+    /// legalities come back with their own blobs; a rare printing whose oracle card was ever
+    /// printed at uncommon reads `ever_uncommon = true`.
+    #[test]
+    fn the_read_returns_per_printing_legalities_and_ever_uncommon() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Angels", "oldschool")).unwrap();
+        add_card(&conn, deck.id, "serra-lea", "main", 1).unwrap();
+        add_card(&conn, deck.id, "serra-8ed", "side", 1).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+
+        let detail = get_deck(&conn, deck.id).unwrap().unwrap();
+        let alpha = card_row(&detail, "serra-lea", "main");
+        let eighth = card_row(&detail, "serra-8ed", "side");
+
+        assert!(
+            alpha.legalities.as_deref().unwrap().contains("\"legal\""),
+            "{:?}",
+            alpha.legalities
+        );
+        assert!(
+            eighth
+                .legalities
+                .as_deref()
+                .unwrap()
+                .contains("\"oldschool\":\"not_legal\""),
+            "the printing's own blob, which is the whole of Old School: {:?}",
+            eighth.legalities
+        );
+        assert_eq!(
+            (alpha.rarity.as_deref(), eighth.rarity.as_deref()),
+            (Some("uncommon"), Some("rare"))
+        );
+        assert!(
+            alpha.ever_uncommon && eighth.ever_uncommon,
+            "a RARE printing of a card that was uncommon somewhere is a PDH commander — \
+             eligibility is computed over the oracle card, never read off this printing"
+        );
+        assert!(
+            !card_row(&detail, "bolt-lea", "main").ever_uncommon,
+            "and a card that never was uncommon is not"
+        );
+
+        // The facts the engine reads beside them, from this printing's row.
+        assert_eq!(
+            (
+                alpha.cmc,
+                alpha.color_identity.as_deref(),
+                alpha.type_line.as_deref(),
+                alpha.power.as_deref(),
+                alpha.unit_price_usd
+            ),
+            (
+                Some(5.0),
+                Some("W"),
+                Some("Creature — Angel"),
+                Some("4"),
+                Some(120.0)
+            )
+        );
+        assert_eq!(
+            card_row(&detail, "bolt-lea", "main").unit_price_usd,
+            Some(400.0),
+            "nonfoil `usd` out of the blob, never `price_usd`"
+        );
+    }
+
+    /// An orphaned deck card is still a row: name/set/cn from the entry, card facts NULL,
+    /// owned 0 — listed, never dropped (the LEFT JOIN discipline).
+    #[test]
+    fn an_orphaned_deck_card_is_listed_from_its_denormalized_columns() {
+        let conn = seeded();
+        own(&conn, "bolt-jp", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-jp", "main", 4).unwrap();
+        // What the next sync does to a printing Scryfall stopped publishing.
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-jp'", [])
+            .unwrap();
+
+        let detail = get_deck(&conn, deck.id).unwrap().unwrap();
+
+        assert_eq!(detail.cards.len(), 1, "listed, never dropped");
+        let row = &detail.cards[0];
+        assert_eq!(
+            (
+                row.name.as_str(),
+                row.set_code.as_str(),
+                row.collector_number.as_str(),
+                row.lang.as_str(),
+                row.quantity
+            ),
+            ("Lightning Bolt", "4ed", "209", "ja", 4),
+            "everything the row was written with, and it was written with it for this day"
+        );
+        assert!(row.oracle_id.is_none());
+        assert!(row.legalities.is_none());
+        assert!(row.type_line.is_none());
+        assert!(row.unit_price_usd.is_none());
+        assert!(
+            !row.ever_uncommon,
+            "nothing is known, so nothing is claimed"
+        );
+        assert_eq!(
+            row.owned_quantity, 0,
+            "an oracle card nobody can name is an oracle card nobody can count copies of"
+        );
+    }
+
+    /// NULL power **and** NULL toughness is UNKNOWN, never "no P/T box" — and the difference
+    /// is the whole of CR 903.3 (2026): a legendary Vehicle *with* a P/T box can be a
+    /// commander and one without cannot. Only 1 510 of 116 590 rows have the columns filled
+    /// until the user's next real sync, so the read recovers them from `raw` — which is a
+    /// **gzip BLOB**, where `json_extract` is a hard error and only Rust can look.
+    #[test]
+    fn an_unknown_power_and_toughness_is_recovered_from_the_raw_blob() {
+        let conn = seeded();
+        let ship = r#"{"object":"card","name":"Skysovereign, Consul Flagship","power":"6","toughness":"5"}"#;
+        let delver = r#"{"object":"card","name":"Delver of Secrets","card_faces":[{"name":"Delver of Secrets","power":"1","toughness":"1"},{"name":"Insectile Aberration","power":"3","toughness":"2"}]}"#;
+        for (id, oracle, name, set, cn, type_line, raw) in [
+            (
+                "ship",
+                "o3",
+                "Skysovereign, Consul Flagship",
+                "kld",
+                "234",
+                "Legendary Artifact — Vehicle",
+                ship,
+            ),
+            (
+                "delver",
+                "o4",
+                "Delver of Secrets // Insectile Aberration",
+                "isd",
+                "51",
+                "Creature — Human Wizard",
+                delver,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,raw)
+                 VALUES (?1,?2,?3,?4,?5,'en','normal','rare',?6,?7)",
+                params![
+                    id,
+                    oracle,
+                    name,
+                    set,
+                    cn,
+                    type_line,
+                    crate::card_row::gzip_raw(raw)
+                ],
+            )
+            .unwrap();
+        }
+        let deck = create_deck(&conn, &input("Vehicles", "commander")).unwrap();
+        add_card(&conn, deck.id, "ship", "commander", 1).unwrap();
+        add_card(&conn, deck.id, "delver", "main", 4).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+
+        let stored: Option<String> = conn
+            .query_row("SELECT power FROM cards WHERE id = 'ship'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            stored.is_none(),
+            "the column is empty until the next sync — that is the case under test"
+        );
+
+        let detail = get_deck(&conn, deck.id).unwrap().unwrap();
+
+        let ship = card_row(&detail, "ship", "commander");
+        assert_eq!(
+            (ship.power.as_deref(), ship.toughness.as_deref()),
+            (Some("6"), Some("5")),
+            "a Vehicle WITH a P/T box can be a commander; unknown must never read as `no box`"
+        );
+        let delver = card_row(&detail, "delver", "main");
+        assert_eq!(
+            (delver.power.as_deref(), delver.toughness.as_deref()),
+            (Some("1"), Some("1")),
+            "the front face's, like every other per-face fallback in this app"
+        );
+        let bolt = card_row(&detail, "bolt-lea", "main");
+        assert!(
+            bolt.power.is_none() && bolt.toughness.is_none(),
+            "and an Instant really has no P/T box — recovery is not invention"
+        );
+    }
+
+    /// The claims follow every zone write, because a deck the user is editing is a deck
+    /// whose availability is being asked about a second later — and the `maybe` pile
+    /// reserves nothing at all.
+    #[test]
+    fn every_zone_write_recomputes_the_claims() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
+
+        set_card_quantity(&conn, deck.id, "bolt-lea", "main", 1).unwrap();
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(entry, 1)],
+            "the stepper hands three copies back"
+        );
+
+        move_card(&conn, deck.id, "bolt-lea", "main", "maybe").unwrap();
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![],
+            "a maybe pile is a scratchpad, and a scratchpad reserves nothing"
+        );
+
+        move_card(&conn, deck.id, "bolt-lea", "maybe", "side").unwrap();
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 1)], "a sideboard does");
+
+        set_card_quantity(&conn, deck.id, "bolt-lea", "side", 0).unwrap();
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![],
+            "and a removal releases the last"
+        );
+    }
+
+    /// `missing_to_wishlist`: 4 wanted, 1 owned → an any-printing wish for 3 lands through
+    /// the wishlist grain; run twice → the wish is 6 (the fold is `add_wish`'s contract, not
+    /// double-counted rows); a fully-owned card adds nothing; `maybe` never counts.
+    #[test]
+    fn missing_to_wishlist_writes_any_printing_wishes_through_the_wishlist_grain() {
+        let conn = seeded();
+        own(&conn, "bolt-lea", 1);
+        own(&conn, "serra-lea", 1);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+        add_card(&conn, deck.id, "serra-lea", "main", 1).unwrap();
+        // The same oracle card as the main-deck Bolts, so a `maybe` pile that leaked into
+        // the shortfall would change the number rather than merely add a row.
+        add_card(&conn, deck.id, "bolt-jp", "maybe", 3).unwrap();
+
+        let touched = missing_to_wishlist(&conn, deck.id).unwrap();
+
+        assert_eq!(touched, 1, "one card is short; the Angel is not");
+        let wishes: Vec<(Option<String>, Option<String>, String, i64)> = conn
+            .prepare("SELECT oracle_id, card_id, name, quantity FROM wishlist_entries")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            wishes,
+            vec![(Some("o1".to_owned()), None, "Lightning Bolt".to_owned(), 3)],
+            "any printing will do — a shopping list is not a printing preference"
+        );
+
+        assert_eq!(missing_to_wishlist(&conn, deck.id).unwrap(), 1);
+        let (rows, quantity): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), sum(quantity) FROM wishlist_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (rows, quantity),
+            (1, 6),
+            "the grain folds the repeat — one line, a bigger number"
+        );
+    }
+
+    /// The rules as data, all the way out to the frontend: the nullable cells are the ones
+    /// worth a fence, because `NULL` means *unlimited* here and `0` means *none*.
+    #[test]
+    fn the_format_specs_read_carries_every_cell_including_the_nullable_ones() {
+        let conn = seeded();
+
+        let specs = list_format_specs(&conn).unwrap();
+
+        assert_eq!(specs.len(), 25);
+        assert_eq!(specs[0].key, "standard", "sort_order, not alphabetical");
+        let spec = |key: &str| specs.iter().find(|s| s.key == key).unwrap();
+        let edh = spec("commander");
+        assert_eq!(
+            (
+                edh.display_name.as_str(),
+                edh.deck_min,
+                edh.deck_max,
+                edh.max_copies,
+                edh.sideboard_max,
+                edh.singleton,
+                edh.requires_commander,
+                edh.commander_rule.as_deref(),
+                edh.life,
+                edh.allows_companion,
+            ),
+            (
+                "Commander",
+                100,
+                Some(100),
+                Some(1),
+                Some(0),
+                true,
+                true,
+                Some("edh"),
+                40,
+                true
+            ),
+            "sideboard_max 0 is NO sideboard, and EDH still allows a companion"
+        );
+        let casual = spec("casual");
+        assert_eq!(
+            (
+                casual.deck_max,
+                casual.max_copies,
+                casual.sideboard_max,
+                casual.has_legality_data,
+                casual.commander_rule.as_deref(),
+            ),
+            (None, None, None, false, None),
+            "NULL is unlimited, and a pseudo-format checks no legality at all"
+        );
+        assert_eq!(
+            spec("duel").restricted_semantic,
+            "banned_as_commander",
+            "TRAP A rides the read: `restricted` means something else here"
+        );
+        assert_eq!(spec("tlr").max_mana_value, Some(3));
+        assert!(!spec("future").enabled_in_picker);
+        assert!(!spec("gladiator").allows_companion);
+    }
+
+    /// A zone the schema knows and the allocator does not would sort last by accident. The
+    /// two lists are deliberately in different orders — one is the DDL's, one is the order
+    /// copies are handed out in — so only their contents can be compared.
+    #[test]
+    fn the_allocation_order_covers_every_zone_the_schema_knows() {
+        assert_eq!(ZONE_PRIORITY.len(), ZONES.len());
+        for zone in ZONES {
+            assert!(
+                ZONE_PRIORITY.contains(&zone),
+                "`{zone}` has no place in the allocation order"
+            );
+        }
+        assert_eq!(
+            ZONE_PRIORITY[ZONE_PRIORITY.len() - 1],
+            MAYBE,
+            "the scratchpad is always last"
+        );
+    }
+
+    #[test]
+    fn deck_card_and_format_spec_json_use_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(DeckCardRow {
+            id: 7,
+            card_id: "bolt-lea".to_owned(),
+            zone: "main".to_owned(),
+            quantity: 4,
+            name: "Lightning Bolt".to_owned(),
+            set_code: "lea".to_owned(),
+            collector_number: "161".to_owned(),
+            lang: "en".to_owned(),
+            needs_review: None,
+            oracle_id: Some("o1".to_owned()),
+            mana_cost: Some("{R}".to_owned()),
+            cmc: Some(1.0),
+            type_line: Some("Instant".to_owned()),
+            oracle_text: Some("Deal 3 damage.".to_owned()),
+            colors: Some("R".to_owned()),
+            color_identity: Some("R".to_owned()),
+            legalities: Some(r#"{"modern":"legal"}"#.to_owned()),
+            power: None,
+            toughness: None,
+            layout: Some("normal".to_owned()),
+            rarity: Some("common".to_owned()),
+            faces: None,
+            game_changer: Some(false),
+            ever_uncommon: false,
+            unit_price_usd: Some(400.0),
+            owned_quantity: 3,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": 7, "cardId": "bolt-lea", "zone": "main", "quantity": 4,
+                "name": "Lightning Bolt", "setCode": "lea", "collectorNumber": "161",
+                "lang": "en", "needsReview": null, "oracleId": "o1", "manaCost": "{R}",
+                "cmc": 1.0, "typeLine": "Instant", "oracleText": "Deal 3 damage.",
+                "colors": "R", "colorIdentity": "R",
+                "legalities": "{\"modern\":\"legal\"}", "power": null, "toughness": null,
+                "layout": "normal", "rarity": "common", "faces": null,
+                "gameChanger": false, "everUncommon": false, "unitPriceUsd": 400.0,
+                "ownedQuantity": 3
+            })
+        );
+
+        let conn = seeded();
+        let spec = serde_json::to_value(&list_format_specs(&conn).unwrap()[11]).unwrap();
+        assert_eq!(
+            spec,
+            serde_json::json!({
+                "key": "commander", "displayName": "Commander", "enabledInPicker": true,
+                "deckMin": 100, "deckMax": 100, "maxCopies": 1, "sideboardMax": 0,
+                "singleton": true, "requiresCommander": true, "commanderRule": "edh",
+                "life": 40, "restrictedSemantic": "max_one", "hasLegalityData": true,
+                "maxManaValue": null, "allowsCompanion": true, "sortOrder": 12
+            })
+        );
+
+        // The wrapper the command actually answers with.
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let detail = serde_json::to_value(get_deck(&conn, deck.id).unwrap().unwrap()).unwrap();
+        assert_eq!(detail["deck"]["formatKey"], "modern");
+        assert_eq!(detail["cards"], serde_json::json!([]));
     }
 }
