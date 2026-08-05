@@ -260,3 +260,16 @@ still `errors.scryfall.com/soon.jpg` in every slot. A query for
    reintroduces identity forks.
 6. **Verify in the running app, with `scripts/cdp.mjs`.** Every UI task in Plans 2 and 3
    found something the suite could not.
+
+## Final-review addendum (post-wave, 2026-08-05)
+
+The final fix wave (`3161459`) closed the sync-completion invalidation seam (CDP-proven), corrected the doc-truth items, and recorded three rulings (escape comment correct as written; merge-repoint needs_review overwrite is the rule not an exception; zero migration chains live). Three parked residuals are PLAN 4 EARLY FOLDS:
+1. `useSyncInvalidation.test.ts` asserts against its own `SYNC_INVALIDATED` constant — one literal five-key assertion makes the guard real (deleting `["sets"]` currently stays green).
+2. A successful ingest followed by a failed `/sets` surfaces as the `error` phase — the swapped 116k-row corpus never invalidates (reachable: one network blip in the gap). Either invalidate on `error` when an ingest committed, or move `/sets` before the swap's success signal.
+3. Four surviving `116,568` doc copies (schema.rs:9, card.rs:218, CardDetailPane.tsx:106, AddToCollection.tsx:329) now contradict the wave's updated cross-referencing docs; sweep to 116,590 or date-stamp. While in scryfall.rs: consider raising `MAX_MIGRATION_PAGES` (10 → 20; unused pages cost nothing, the log is at 8/10, eprintln! is invisible in release builds).
+
+## THE Plan-4 design gate (from the final review, I6)
+
+**`deck_allocations.collection_entry_id` as an enforced FK collides with the reconciler.** `reconcile::fold_into_existing` DELETEs the source collection row during a Scryfall merge (the app's only non-user delete); `foreign_keys=ON` everywhere. CASCADE would silently destroy deck allocations on a merge; plain REFERENCES aborts the reconcile. Plan 4 must: repoint allocations to the fold survivor inside `fold_into_existing` BEFORE the delete, and choose FK actions per delete-site (CASCADE is right for user-initiated `remove_entry`, wrong for the fold). Design this into the v5 migration from the start.
+
+Also natural Plan-4 companions: `WishlistQuery.needsReview` (backend half of the flagged-wish filter); deck cards join `prewarm_collection`'s UNION (also fixes the wishlist-only-user-never-warms asymmetry); wishlist header EUR twin (spec §7 "mirrors this").
