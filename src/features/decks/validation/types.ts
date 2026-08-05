@@ -20,10 +20,17 @@ export interface ValidationIssue {
   severity: "error" | "warning";
   /**
    * Stable machine handle, so the panel can group by it and a test can name one without
-   * matching prose: `"deck-size"` | `"sideboard-size"` | `"copy-limit"` | `"singleton"` |
-   * `"restricted"` | `"banned"` | `"not-legal"` | `"unknown-legality"` |
-   * `"unknown-copy-limit"` | `"orphan"` | `"mana-value"`, and — from Tasks 9 and 10 —
-   * `"commander-*"`, `"companion-*"`, `"color-identity"`.
+   * matching prose.
+   *
+   * The whole vocabulary, in the order the modules that emit them run:
+   *
+   * * `engine.ts` — `"deck-size"` | `"sideboard-size"` | `"copy-limit"` | `"singleton"` |
+   *   `"restricted"` | `"banned"` | `"not-legal"` | `"unknown-legality"` |
+   *   `"unknown-copy-limit"` | `"orphan"` | `"mana-value"`
+   * * `commanders.ts` — `"commander-zone"` (a commander in a format that has none) |
+   *   `"commander-missing"` | `"commander-count"` | `"commander-eligibility"` |
+   *   `"commander-partner"` | `"commander-banned"` | `"color-identity"`
+   * * `companions.ts` — `"companion-*"`, from Task 10.
    *
    * One `(code, message)` pair is one issue: the engine collapses rows that produce the
    * same sentence into a single finding whose `cardIds` names all of them.

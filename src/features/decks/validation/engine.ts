@@ -23,12 +23,14 @@
  *   no sideboard, so no companion at all — and refusing the card is Task 10's, not this
  *   file's sideboard arithmetic.) Whether the card may be a companion is Task 10's too.
  *
- * Commander eligibility, partners and colour identity are Task 9's; companion conditions
- * and the bracket advisory are Task 10's. This file knows nothing about any of them.
+ * Commander eligibility, partners and colour identity live in `commanders.ts` and are called
+ * from {@link commanderIssues} at the bottom of this file; companion conditions and the
+ * bracket advisory are Task 10's, and this file still knows nothing about those.
  */
 import type { DeckZone, FormatSpec } from "@/lib/ipc";
 import type { CardFacts, ValidationIssue } from "./types";
 import { copyException, isBasicLand, unreadableCopyCount } from "./singleton";
+import { colorIdentityIssues, commanderIdentity, validateCommanderZone } from "./commanders";
 
 /** The zones `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**", "exactly 60
  *  incl Oathbreaker + signature spell" (both of those live in the `commander` zone). */
@@ -66,6 +68,7 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
     ...sideboardIssues(deck, spec),
     ...copyIssues(deck, spec, legalities),
     ...cardIssues(deck, spec, legalities),
+    ...commanderIssues(deck, spec),
   ]);
 }
 
@@ -437,19 +440,19 @@ function legalityIssues(
   }
   // A list that does not mention a card is a pool that does not contain it.
   if (read.kind === "missing") {
-    return [error("not-legal", `${name} is not legal in ${format}.`, [card.cardId])];
+    return outsidePoolIssues(card, spec);
   }
   switch (read.status) {
     case "legal":
       return [];
     // Both meanings of `restricted` are somebody else's: max-one is a copy count (above),
-    // banned-as-commander is a commander-zone rule (Task 9).
+    // banned-as-commander is a commander-zone rule (`commanders.ts`).
     case "restricted":
       return [];
     case "banned":
       return [error("banned", `${name} is banned in ${format}.`, [card.cardId])];
     case "not_legal":
-      return [error("not-legal", `${name} is not legal in ${format}.`, [card.cardId])];
+      return outsidePoolIssues(card, spec);
     default:
       return [
         warning(
@@ -459,6 +462,49 @@ function legalityIssues(
         ),
       ];
   }
+}
+
+/**
+ * "This card is not in the format's pool" — one sentence with one exception, and the
+ * exception is TRAP C.
+ *
+ * `paupercommander` answers for the **99**, which are commons: every uncommon reads
+ * `not_legal` there, and a Pauper Commander commander must be uncommon. So the key genuinely
+ * says nothing about the card in the commander zone, and reporting it would make every legal
+ * PDH deck accuse its own commander. Rarity judges that card instead
+ * (`commanderIneligibility` under the `pdh` rule), and a `banned` still speaks — it is only
+ * the pool answer that is being ignored, not the ban list.
+ *
+ * Keyed on `commanderRule`, which is a seeded cell, so this stays a data-driven rule rather
+ * than the format comparison this file refuses to grow.
+ */
+function outsidePoolIssues(card: CardFacts, spec: FormatSpec): ValidationIssue[] {
+  if (spec.commanderRule === "pdh" && card.zone === "commander") return [];
+  return [error("not-legal", `${card.name} is not legal in ${spec.displayName}.`, [card.cardId])];
+}
+
+/**
+ * The commander zone, and the colour identity it puts on the rest of the deck.
+ *
+ * Called for every format, because a card parked in the commander zone of a Modern deck is a
+ * finding of its own. The identity check runs only where there is a commander to derive one
+ * from: `commanderIdentity` answers `null` for an empty zone, and an empty *set* is a real
+ * answer (a colourless commander admits only colourless cards), so the two cannot be
+ * conflated.
+ *
+ * Two zones are deliberately left out of the identity pass. The commander zone judges itself
+ * (Oathbreaker's signature spell is measured against its oathbreaker, and partners are inside
+ * their own union by construction), and the `companion` zone is Task 10's — it runs the
+ * identity and singleton rules over `[...deck, companion]`, and checking it here would report
+ * the same card twice.
+ */
+function commanderIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
+  const zone = deck.filter((card) => card.zone === "commander");
+  const issues = validateCommanderZone(zone, spec);
+  const identity = spec.commanderRule === null ? null : commanderIdentity(zone, spec);
+  if (identity === null) return issues;
+  const judged = deck.filter((card) => card.zone === "main" || card.zone === "side");
+  return [...issues, ...colorIdentityIssues(judged, identity)];
 }
 
 /**

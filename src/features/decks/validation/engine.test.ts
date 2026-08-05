@@ -1,260 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DeckZone, FormatSpec } from "@/lib/ipc";
-import type { CardFacts } from "./types";
+import type { FormatSpec } from "@/lib/ipc";
+import { card, commander, islands, padTo, resetRowIds, spec, tinyCommander } from "./fixtures";
 import { copyLimitFor, manaValueOf, validateDeck } from "./engine";
 
 /**
- * The seeded `format_specs` rows these tests judge against, hand-copied from
- * `schema.rs`'s `FORMAT_SPECS_SEED`.
- *
- * The seed's **authority** is Task 2's Rust test
- * (`format_specs_is_seeded_with_all_25_formats_and_the_load_bearing_cells`), which checks
- * every load-bearing cell of all 25 rows against the research doc. These are mirrors, so
- * the engine can be exercised without a database — and so that a test that fails here is
- * about the engine, never about a number.
+ * The card builders and the `format_specs` mirror these tests run on live in `./fixtures`, so
+ * that Tasks 9 and 10 share one copy of them rather than hand-copying the seed a second and a
+ * third time. What is left in this file is the engine's own behaviour.
  */
-const SPECS: Record<string, FormatSpec> = {
-  modern: {
-    key: "modern",
-    displayName: "Modern",
-    enabledInPicker: true,
-    deckMin: 60,
-    deckMax: null,
-    maxCopies: 4,
-    sideboardMax: 15,
-    singleton: false,
-    requiresCommander: false,
-    commanderRule: null,
-    life: 20,
-    restrictedSemantic: "max_one",
-    hasLegalityData: true,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 7,
-  },
-  vintage: {
-    key: "vintage",
-    displayName: "Vintage",
-    enabledInPicker: true,
-    deckMin: 60,
-    deckMax: null,
-    maxCopies: 4,
-    sideboardMax: 15,
-    singleton: false,
-    requiresCommander: false,
-    commanderRule: null,
-    life: 20,
-    restrictedSemantic: "max_one",
-    hasLegalityData: true,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 10,
-  },
-  commander: {
-    key: "commander",
-    displayName: "Commander",
-    enabledInPicker: true,
-    deckMin: 100,
-    deckMax: 100,
-    maxCopies: 1,
-    sideboardMax: 0,
-    singleton: true,
-    requiresCommander: true,
-    commanderRule: "edh",
-    life: 40,
-    restrictedSemantic: "max_one",
-    hasLegalityData: true,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 12,
-  },
-  duel: {
-    key: "duel",
-    displayName: "Duel Commander",
-    enabledInPicker: true,
-    deckMin: 100,
-    deckMax: 100,
-    maxCopies: 1,
-    sideboardMax: 0,
-    singleton: true,
-    requiresCommander: true,
-    commanderRule: "duel",
-    life: 20,
-    // TRAP A: the same word means something else here than it does in Vintage.
-    restrictedSemantic: "banned_as_commander",
-    hasLegalityData: true,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 19,
-  },
-  oldschool: {
-    key: "oldschool",
-    displayName: "Old School",
-    enabledInPicker: true,
-    deckMin: 60,
-    deckMax: null,
-    maxCopies: 4,
-    sideboardMax: 15,
-    singleton: false,
-    requiresCommander: false,
-    commanderRule: null,
-    life: 20,
-    restrictedSemantic: "max_one",
-    hasLegalityData: true,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 20,
-  },
-  tlr: {
-    key: "tlr",
-    displayName: "Tiny Leaders: Reborn",
-    enabledInPicker: true,
-    deckMin: 50,
-    deckMax: 50,
-    maxCopies: 1,
-    sideboardMax: 10,
-    singleton: true,
-    requiresCommander: true,
-    commanderRule: "tlr",
-    life: 20,
-    restrictedSemantic: "banned_as_commander",
-    hasLegalityData: true,
-    maxManaValue: 3,
-    allowsCompanion: true,
-    sortOrder: 23,
-  },
-  casual: {
-    key: "casual",
-    displayName: "Casual",
-    enabledInPicker: true,
-    deckMin: 0,
-    deckMax: null,
-    maxCopies: null,
-    sideboardMax: null,
-    singleton: false,
-    requiresCommander: false,
-    commanderRule: null,
-    life: 20,
-    restrictedSemantic: "max_one",
-    hasLegalityData: false,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 24,
-  },
-  limited: {
-    key: "limited",
-    displayName: "Limited",
-    enabledInPicker: true,
-    deckMin: 40,
-    deckMax: null,
-    maxCopies: null,
-    sideboardMax: null,
-    singleton: false,
-    requiresCommander: false,
-    commanderRule: null,
-    life: 20,
-    restrictedSemantic: "max_one",
-    hasLegalityData: false,
-    maxManaValue: null,
-    allowsCompanion: true,
-    sortOrder: 25,
-  },
-};
-
-function spec(key: keyof typeof SPECS): FormatSpec {
-  return SPECS[key];
-}
-
-/** Legal in every format these tests use, so a fixture only says what it is *about*. */
-const LEGAL = JSON.stringify({
-  modern: "legal",
-  vintage: "legal",
-  commander: "legal",
-  duel: "legal",
-  oldschool: "legal",
-  tlr: "legal",
-});
-
-let nextRow = 1;
-beforeEach(() => {
-  nextRow = 1;
-});
-
-/**
- * One `deck_cards` row as Task 5's read answers it.
- *
- * `cardId` and `oracleId` default from the name, which is what makes two rows of the same
- * card in two zones group together the way they do in the database — a printing can sit in
- * `main` and `side` at once (the unique index is on `(deck, card, zone)`).
- */
-function card(overrides: Partial<CardFacts> = {}): CardFacts {
-  const name = overrides.name ?? "Lightning Bolt";
-  return {
-    id: nextRow++,
-    cardId: `c-${name}`,
-    zone: "main",
-    quantity: 1,
-    name,
-    setCode: "lea",
-    collectorNumber: "161",
-    lang: "en",
-    needsReview: null,
-    oracleId: `o-${name}`,
-    manaCost: "{R}",
-    cmc: 1,
-    typeLine: "Instant",
-    oracleText: null,
-    colors: "R",
-    colorIdentity: "R",
-    legalities: LEGAL,
-    power: null,
-    toughness: null,
-    layout: "normal",
-    rarity: "common",
-    faces: null,
-    gameChanger: false,
-    everUncommon: false,
-    unitPriceUsd: null,
-    ownedQuantity: 0,
-    ...overrides,
-  };
-}
-
-/** Filler that no rule objects to: basics are exempt from every copy limit (CR 100.2a). */
-function islands(quantity: number, zone: DeckZone = "main"): CardFacts {
-  return card({
-    name: "Island",
-    typeLine: "Basic Land — Island",
-    manaCost: null,
-    cmc: 0,
-    colors: null,
-    colorIdentity: "U",
-    quantity,
-    zone,
-  });
-}
-
-/** A commander, so a Commander-format fixture is about the card it is about. */
-function commander(): CardFacts {
-  return card({
-    name: "Krenko, Mob Boss",
-    zone: "commander",
-    typeLine: "Legendary Creature — Goblin Warrior",
-    manaCost: "{2}{R}{R}",
-    cmc: 4,
-    power: "3",
-    toughness: "3",
-  });
-}
-
-/** Pad the size-counting zones (`main` + `commander`) out to a legal deck with basics, so
- *  a test about copies or legality does not also trip the deck-size rule. */
-function padTo(size: number, cards: CardFacts[]): CardFacts[] {
-  const counted = cards
-    .filter((c) => c.zone === "main" || c.zone === "commander")
-    .reduce((n, c) => n + c.quantity, 0);
-  return counted < size ? [...cards, islands(size - counted)] : cards;
-}
+beforeEach(resetRowIds);
 
 describe("deck size", () => {
   it("counts main and commander, and says how short a 60-card deck is", () => {
@@ -395,8 +149,9 @@ describe("copy limits", () => {
       {
         severity: "error",
         code: "singleton",
-        message: "Commander decks are singleton: max 1 copy of Krenko, Mob Boss; you have 2.",
-        cardIds: ["c-Krenko, Mob Boss"],
+        message:
+          "Commander decks are singleton: max 1 copy of Kenrith, the Returned King; you have 2.",
+        cardIds: ["c-Kenrith, the Returned King"],
       },
     ]);
   });
@@ -753,7 +508,7 @@ describe("one sentence, one finding", () => {
     ]);
 
     const dreadmaw = card({ name: "Colossal Dreadmaw", manaCost: "{4}{G}{G}", cmc: 6 });
-    const bigTwice = padTo(50, [dreadmaw, { ...dreadmaw, zone: "side" as const }]);
+    const bigTwice = padTo(50, [tinyCommander(), dreadmaw, { ...dreadmaw, zone: "side" as const }]);
     expect(validateDeck(bigTwice, spec("tlr")).filter((i) => i.code === "mana-value")).toHaveLength(
       1,
     );
@@ -852,7 +607,10 @@ describe("sideboard and mana value", () => {
       typeLine: "Creature — Dinosaur",
     });
 
-    expect(validateDeck(padTo(50, [dreadmaw]), spec("tlr"))).toEqual([
+    // Tiny Leaders needs a commander like every other commander format, and `tinyCommander`
+    // is the one that fits under its own ceiling (Najeela, mana value 3) and inside every
+    // colour identity (WUBRG), so this stays a test about a 6-drop.
+    expect(validateDeck(padTo(50, [tinyCommander(), dreadmaw]), spec("tlr"))).toEqual([
       {
         severity: "error",
         code: "mana-value",
@@ -883,7 +641,7 @@ describe("sideboard and mana value", () => {
       ]),
     });
 
-    expect(validateDeck(padTo(50, [fae]), spec("tlr"))).toEqual([
+    expect(validateDeck(padTo(50, [tinyCommander(), fae]), spec("tlr"))).toEqual([
       {
         severity: "error",
         code: "mana-value",
