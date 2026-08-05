@@ -337,6 +337,29 @@ describe("extra turns", () => {
     expect(estimate.bracket).toBe(1);
   });
 
+  /**
+   * …and a card that does **both** still counts, which is why the denial is tested one
+   * sentence at a time. Ugin's Nexus stops the table's extra turns in its first sentence and
+   * hands its controller one in its second; it is a Commander-legal extra-turn engine, and it
+   * is the only card in the corpus the whole-text and per-sentence readings disagree about.
+   */
+  it("still reads a card that denies extra turns and then takes one", () => {
+    const uginsNexus = card({
+      name: "Ugin's Nexus",
+      manaCost: "{5}",
+      cmc: 5,
+      typeLine: "Legendary Artifact",
+      oracleText:
+        "If a player would begin an extra turn, that player skips that turn instead.\n" +
+        "If Ugin's Nexus would be put into a graveyard from the battlefield, instead exile it " +
+        "and take an extra turn after this one.",
+      colors: null,
+      colorIdentity: "",
+    });
+
+    expect(estimateBracket([uginsNexus, islands(60)]).extraTurns).toEqual(["Ugin's Nexus"]);
+  });
+
   /** On their own they lift the reading off the casual floor without making the deck
    *  optimized — the mapping's own judgement, and it is a judgement. */
   it("lifts a deck that flags nothing else", () => {

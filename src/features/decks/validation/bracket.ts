@@ -73,8 +73,8 @@ function sentencesOf(text: string): string[] {
  * The word `lands`, and **only** the word.
  *
  * A substring test reads `Islands` and `Highlands` as `lands`, which is how Pirate Ship and
- * Walk the Aeons came to be mass land denial — sixteen cards, all of them named after a land
- * type. The boundary is the whole fix for that half.
+ * Walk the Aeons came to be mass land denial — **twenty** cards, nearly every one of them an
+ * old blue creature that cares about Islands. The boundary is the whole fix for that half.
  */
 const LANDS = /\blands\b/;
 
@@ -103,10 +103,14 @@ const TABLE_FACING = /each player|each opponent|all lands/;
  * falls before it, as in Keldon Firebombers' `"sacrifices all lands they control except for
  * three"`, it is denial with a remainder.
  *
- * Measured on the live corpus (2026-08-05): 103 cards before these three clauses, 40 after,
- * and every one of the well-known pieces — Armageddon, Ravages of War, Ruination, Jokulhaups,
- * Obliterate, Decree of Annihilation, Wildfire, Death Cloud, Pox, Catastrophe, Global Ruin —
- * survives the cut.
+ * Measured on the live corpus (2026-08-05) as **this function reads it** — every face's text,
+ * not just the row's — the three clauses come off one at a time:
+ *
+ *     105  the naive test          →  85  word boundary  →  42  table-facing  →  39  except
+ *
+ * and every one of the well-known pieces survives the cut: Armageddon, Ravages of War,
+ * Ruination, Jokulhaups, Obliterate, Decree of Annihilation, Wildfire, Death Cloud, Pox,
+ * Catastrophe, Devastation, Global Ruin, Tectonic Break, Fall of the Thran, From the Ashes.
  */
 function isMassLandDenial(text: string): boolean {
   return sentencesOf(text).some((sentence) => {
@@ -125,16 +129,27 @@ function sparesTheLands(sentence: string): boolean {
 /**
  * Shutting extra turns off is not taking one.
  *
- * Stranglehold, Ugin's Nexus, Trouble in Pairs and Gerrard's Hourglass Pendant all say
- * `"If a player would begin an extra turn, that player skips that turn instead."` — four of the
- * 63 cards in the corpus that mention an extra turn, and the only four that take none. Every
- * other one of the 63 grants a turn to somebody.
+ * Stranglehold, Trouble in Pairs and Gerrard's Hourglass Pendant say `"If a player would begin
+ * an extra turn, that player skips that turn instead."` and nothing else about turns — three of
+ * the 68 cards in the corpus that mention an extra turn, and the only three that take none.
  */
 const TURN_DENIAL = /extra turn[^.\n]*?skips that turn|skips that turn[^.\n]*?instead/;
 
-/** `"Take an extra turn after this one."` and every variant of it, plurals included. */
+/**
+ * `"Take an extra turn after this one."` and every variant of it, plurals included.
+ *
+ * **Read a sentence at a time, and that is the rule rather than this file's habit.** Ugin's
+ * Nexus does both things: it denies the table's extra turns in its first sentence and hands its
+ * controller one in its second (`"instead exile it and take an extra turn after this one"`). It
+ * is a Commander-legal extra-turn engine, and a card that says one denial sentence anywhere
+ * must not be able to hide every turn it grants — the whole text tested at once loses exactly
+ * this card, and it is the only card in the corpus the two readings disagree about (65 against
+ * 64).
+ */
 function isExtraTurn(text: string): boolean {
-  return text.includes("extra turn") && !TURN_DENIAL.test(text);
+  return sentencesOf(text).some(
+    (sentence) => sentence.includes("extra turn") && !TURN_DENIAL.test(sentence),
+  );
 }
 
 /**

@@ -691,7 +691,7 @@ describe("Zirda, the Dawnwaker — activated abilities", () => {
     expect(messages("Zirda, the Dawnwaker", [deckCard("counterspell")])).toEqual([]);
   });
 
-  /** Equip is an activated ability that Scryfall prints with no colon anywhere — 320 paper
+  /** Equip is an activated ability that Scryfall prints with no colon anywhere — 329 paper
    *  cards read that way. A colon-only test refuses the whole Equipment archetype, which is
    *  the archetype Zirda was printed for. */
   it("reads the keyword activated abilities that print without a colon", () => {

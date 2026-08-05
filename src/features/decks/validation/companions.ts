@@ -279,12 +279,15 @@ const CHANGELING = /^Changeling\b/m;
  * Activated-ability keywords that Scryfall prints with **no colon anywhere**, so Zirda's colon
  * test cannot see them.
  *
- * Every entry is measured, not guessed — probed against the live corpus (2026-08-05) over the
- * 15 593 permanent cards whose whole oracle text holds no `:`, counting what each keyword
- * rescues from a wrong error:
+ * Every entry is measured, not guessed — probed against the live corpus (2026-08-05) **the way
+ * this module reads a card**, which is {@link allOracleText} over every face and
+ * {@link frontFace} for the type line. That is 16 530 permanent cards holding no `:` anywhere,
+ * and each keyword rescues this many of them from a wrong error:
  *
- *     Equip 320 · Crew 62 · Saddle 6 · Cycling 5 · Unearth 3 · Ninjutsu 2 · Scavenge 1
+ *     Equip 329 · Crew 63 · Saddle 6 · Cycling 5 · Unearth 3 · Ninjutsu 2 · Scavenge 1
  *     Embalm 0 · Fortify 0 · Reconfigure 0 · Aura swap 0
+ *
+ * 407 cards in total, against 391 before the two repairs below.
  *
  * **The four zero-rescue entries are kept deliberately.** They are activated abilities whose
  * reminder text happens to carry a colon on every printing in the corpus today; the day one
