@@ -659,22 +659,39 @@ pub struct CollectionSummary {
     pub needs_review: i64,
 }
 
-/// `FROM` + `WHERE` shared by the page, the count and the summary — because a summary
-/// taken over different rows than the list is a header that describes a different screen.
-fn scope(q: &CollectionQuery) -> (String, crate::filters::Predicates) {
+/// The rows every statement here reads, and the only join any of them makes.
+///
+/// LEFT JOIN, always: an entry whose printing is gone is the case the denormalised columns
+/// exist for, and an inner join would delete exactly those rows from the view that most
+/// needs them. Nothing widens this — see [`scope`] for why even the text filter reaches
+/// `cards_fts` through a subquery rather than a second join.
+const FROM: &str = "collection_entries e LEFT JOIN cards c ON c.id = e.card_id";
+
+/// The `WHERE` shared by the page, the count and the summary — because a summary taken
+/// over different rows than the list is a header that describes a different screen.
+fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
     let mut p = crate::filters::Predicates::default();
-    // LEFT JOIN, always: an entry whose printing is gone is the case the denormalised
-    // columns exist for, and an inner join would delete exactly those rows from the view
-    // that most needs them.
-    let mut from = "collection_entries e LEFT JOIN cards c ON c.id = e.card_id".to_owned();
 
     if let Some(text) = crate::filters::nonblank(&q.cards.text) {
         if let Some(query) = crate::filters::fts_query(text) {
             // Searching by text is a statement about a card's name or rules, so it can only
-            // match rows that still have a card — this join narrows the list to those, on
+            // match rows that still have a card — this narrows the list to those, on
             // purpose.
-            from.push_str(" JOIN cards_fts ON cards_fts.rowid = c.rowid");
-            p.push("cards_fts MATCH ?".to_owned(), Box::new(query));
+            //
+            // A subquery over `c.rowid`, **not** the `JOIN cards_fts ON cards_fts.rowid =
+            // c.rowid` the search uses, and the difference is not style. Joined, SQLite
+            // offers `cards_fts.rowid = c.rowid` to FTS5's own `xBestIndex`, which drops a
+            // rowid constraint whose value is NULL rather than failing it — so on this
+            // query's LEFT JOIN *every orphaned row* would survive any text at all that
+            // matched something, and a search for "counterspell" would list a Lightning
+            // Bolt whose printing had vanished. `NULL IN (…)` is NULL, which is the answer
+            // this needs. (`a_text_filter_matches_through_the_search_index_and_never_lists
+            // _an_orphan` is the evidence; the search's own join is safe because it has no
+            // LEFT JOIN and so no NULL rowid to offer.)
+            p.push(
+                "c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+                Box::new(query),
+            );
         }
     }
     // `paper_only` is forced off: the user owns what the user owns, and `c.is_paper = 1`
@@ -693,7 +710,7 @@ fn scope(q: &CollectionQuery) -> (String, crate::filters::Predicates) {
         Some(false) => p.wheres.push("e.needs_review IS NULL".to_owned()),
         None => {}
     }
-    (from, p)
+    p
 }
 
 /// `column IN (…)` for a filter over a known enum.
@@ -749,7 +766,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     } else {
         q.limit.min(MAX_LIMIT)
     };
-    let (from, p) = scope(q);
+    let p = scope(q);
     let where_sql = p.where_sql();
     let mut params = p.params;
 
@@ -758,7 +775,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     // cards" should mean it.
     let total: i64 = conn
         .query_row(
-            &format!("SELECT count(*) FROM {from} WHERE {where_sql}"),
+            &format!("SELECT count(*) FROM {FROM} WHERE {where_sql}"),
             rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
             |r| r.get(0),
         )
@@ -772,7 +789,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at
-         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+         FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         order = order_by(q.sort.as_deref())
     );
     params.push(Box::new(limit));
@@ -827,7 +844,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
 
 /// The aggregate header, over the *same* rows the list is showing.
 pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSummary, String> {
-    let (from, p) = scope(q);
+    let p = scope(q);
     let where_sql = p.where_sql();
     let sql = format!(
         "SELECT coalesce(sum(e.quantity), 0),
@@ -839,7 +856,7 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 coalesce(sum(CASE WHEN {usd} IS NULL THEN e.quantity ELSE 0 END), 0),
                 coalesce(sum(CASE WHEN {eur} IS NULL THEN e.quantity ELSE 0 END), 0),
                 coalesce(sum(CASE WHEN e.needs_review IS NOT NULL THEN 1 ELSE 0 END), 0)
-         FROM {from} WHERE {where_sql}",
+         FROM {FROM} WHERE {where_sql}",
         usd = FINISH_PRICE_USD,
         eur = FINISH_PRICE_EUR
     );
@@ -1861,6 +1878,73 @@ mod tests {
         )
         .unwrap();
         assert_eq!(page.total, 1);
+    }
+
+    /// Text is the one filter that is not a column comparison: it reaches `cards_fts`, and
+    /// its parameter has to bind ahead of every card and entry predicate that follows it in
+    /// the `WHERE`. A `?` bound one position out here would search the index for a set code.
+    ///
+    /// It is also the one filter that *narrows to rows that still have a card*, because
+    /// "matches this rules text" is a claim only a card row can answer — and the last third
+    /// of this test is why `scope` reaches the index through a subquery rather than through
+    /// the join the search uses. Written as `JOIN cards_fts ON cards_fts.rowid = c.rowid`
+    /// over this query's LEFT JOIN, FTS5's `xBestIndex` **drops** the rowid constraint when
+    /// the value is NULL instead of failing it, and every orphaned row is returned by every
+    /// text that matches anything at all.
+    #[test]
+    fn a_text_filter_matches_through_the_search_index_and_never_lists_an_orphan() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+        // External-content FTS with no triggers: rows added after `migrate` are invisible
+        // to the index until it is rebuilt.
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        let by_text = |text: &str, sets: Option<Vec<String>>| {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    cards: crate::filters::CardFilters {
+                        text: Some(text.to_owned()),
+                        sets,
+                        ..Default::default()
+                    },
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(by_text("light bol", None).total, 2, "both printings match");
+        assert_eq!(by_text("counterspell", None).total, 0);
+        // The MATCH parameter and the set list, in one statement: bound out of order, the
+        // set code would be fed to `cards_fts` and this would be an FTS syntax error or a
+        // silent zero.
+        let narrowed = by_text("light bol", Some(vec!["lea".into()]));
+        assert_eq!(narrowed.total, 1);
+        assert_eq!(narrowed.items[0].set_code, "lea");
+
+        // An orphan has no card row and therefore no rules text — the inner join is what
+        // says so, and it is the one thing a text search is allowed to hide.
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
+            .unwrap();
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        assert_eq!(by_text("light bol", None).total, 1);
+        let unfiltered = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            unfiltered.total, 2,
+            "and the list without one still has both"
+        );
     }
 
     /// Every sort key is a *string interpolated into the statement*, so one that names a
