@@ -56,8 +56,8 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  * settles) would otherwise divide the row count by zero and hand the virtualizer
  * `Infinity` rows.
  */
-export function columnsFor(width: number): number {
-  return Math.max(1, Math.floor((width + GAP) / (TILE_MIN_WIDTH + GAP)));
+export function columnsFor(width: number, minWidth: number = TILE_MIN_WIDTH): number {
+  return Math.max(1, Math.floor((width + GAP) / (minWidth + GAP)));
 }
 
 /**
@@ -68,9 +68,9 @@ export function columnsFor(width: number): number {
  * rather than a layout. Stretching keeps the art flush to both edges at every window
  * size, and 5:7 is preserved because only the width is ever set.
  */
-export function tileWidthFor(width: number): number {
-  if (width <= 0) return TILE_MIN_WIDTH;
-  const columns = columnsFor(width);
+export function tileWidthFor(width: number, minWidth: number = TILE_MIN_WIDTH): number {
+  if (width <= 0) return minWidth;
+  const columns = columnsFor(width, minWidth);
   return (width - (columns - 1) * GAP) / columns;
 }
 
@@ -94,6 +94,7 @@ export function CardGrid<T extends GridCard>({
   label = "Search results",
   badge,
   action,
+  minTileWidth = TILE_MIN_WIDTH,
 }: {
   rows: T[];
   onSelect: (cardId: string) => void;
@@ -117,6 +118,19 @@ export function CardGrid<T extends GridCard>({
   badge?: (card: T) => ReactNode;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
+  /**
+   * Narrowest a tile may get here, overriding {@link TILE_MIN_WIDTH}.
+   *
+   * For the one wall that is not a page-width wall: the deck editor's docked panel is 384px,
+   * and 384 is **343** once the panel's own scrollbar and the wall's padding are off it —
+   * eleven pixels short of two 170px tiles, so the whole column drew one 343px card per row
+   * at 508px of height, less than one of which was ever on screen. Measured in the running
+   * window; the arithmetic looked fine until the scrollbar was counted.
+   *
+   * A floor, not a width: tiles still share out the leftover ({@link tileWidthFor}), and the
+   * `grid` image is 488px wide, so a smaller floor is a deeper downscale and never a blowup.
+   */
+  minTileWidth?: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -137,9 +151,9 @@ export function CardGrid<T extends GridCard>({
     return () => observer.disconnect();
   }, []);
 
-  const columns = columnsFor(width);
+  const columns = columnsFor(width, minTileWidth);
   const rowCount = Math.ceil(rows.length / columns);
-  const tileWidth = tileWidthFor(width);
+  const tileWidth = tileWidthFor(width, minTileWidth);
   const tileHeight = Math.round(tileWidth * (7 / 5)) + CAPTION_HEIGHT;
 
   const virtualizer = useVirtualizer({

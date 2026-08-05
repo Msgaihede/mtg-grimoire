@@ -11,6 +11,7 @@ import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { DeckSearchPanel } from "./DeckSearchPanel";
 import { useDeck } from "./useDeck";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { ZONE_LABEL, ZoneColumn, type GroupBy } from "./ZoneColumn";
@@ -70,6 +71,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
   const [menu, setMenu] = useState<Menu>(null);
   const [showMaybe, setShowMaybe] = useState(false);
+  /** Where the docked panel's adds land. Here rather than in the panel because it is a fact
+   *  about the deck being edited, and the zones it may take are this editor's own. */
+  const [targetZone, setTargetZone] = useState<DeckZone>("main");
   /** What is in the name field while it is being typed in, or `null` when the field is simply
    *  the deck's name (`QuantityStepper`'s draft, for its reason). */
   const [nameDraft, setNameDraft] = useState<string | null>(null);
@@ -153,8 +157,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (zone === "commander") return spec.requiresCommander;
     return spec.allowsCompanion;
   });
-  /** Where a row can go. The scratchpad is always one of them — it is what it is for. */
+  /** Where a row can go, and where the search panel can put one. The scratchpad is always one
+   *  of them — it is what it is for. */
   const moveTargets: DeckZone[] = [...columns, "maybe"];
+
+  // A re-format can take the add target away — pick Sideboard on a Modern deck, switch it to
+  // Commander, and the select is left holding a zone that is not on screen and not in its own
+  // options. Reset during render, which is React's own answer to state that has to follow a
+  // prop; `main` is in `columns` unconditionally, so it is always a zone this deck has.
+  if (!moveTargets.includes(targetZone)) setTargetZone("main");
 
   // The caret comes here on the way in, once the deck's name is known so the region announces
   // which deck it is. The gallery's New deck button had the caret and unmounts the moment this
@@ -234,6 +245,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     },
     [deck.moveCard],
   );
+
+  /** Somewhere to look, exactly as a move into the scratchpad arranges: the pile is shut by
+   *  default, and a card added into a closed drawer is a card that has vanished. */
+  const pickTargetZone = useCallback((zone: DeckZone) => {
+    if (zone === "maybe") setShowMaybe(true);
+    setTargetZone(zone);
+  }, []);
 
   const setCover = useCallback(
     (card: DeckCard) => {
@@ -345,7 +363,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       {row && (
         <div className="flex flex-wrap items-center gap-2">
           <select
-            aria-label="Format"
+            // "Deck format", not "Format": the docked search panel offers a format *filter*
+            // of its own, and two controls called Format in one view are two controls a
+            // screen reader — and a test — cannot tell apart. Named like the field beside it
+            // ("Deck name"), which is what it belongs to.
+            aria-label="Deck format"
             value={row.formatKey}
             onChange={(e) => deck.update.mutate({ formatKey: e.target.value })}
             disabled={formats.length === 0}
@@ -422,86 +444,99 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {row && (
-        <>
-          <div className="flex min-h-0 flex-1 flex-wrap gap-3 overflow-y-auto">
-            {columns.map((zone) => (
-              <ZoneColumn
-                key={zone}
-                ref={(el) => {
-                  zoneRefs.current[zone] = el;
-                }}
-                zone={zone}
-                title={ZONE_LABEL[zone]}
-                cards={byZone[zone]}
-                // The compact zones hold one card or two, and a "Creature 1" heading over a
-                // single commander is a heading that says nothing.
-                groupBy={zone === "main" || zone === "side" ? groupBy : null}
-                moveTargets={moveTargets}
-                openMenuCardId={menu?.zone === zone ? menu.cardId : null}
-                busy={menuBusy}
-                onOpenMenu={openMenu}
-                onCloseMenu={closeMenu}
-                onSetQuantity={setQuantity}
-                onMove={move}
-                onSetCover={setCover}
-                onSelect={setSelectedCardId}
-                // `max-h-full` is what makes a column scroll rather than the editor: in a
-                // *wrapping* flex row, `align-items: stretch` stretches an item to its line's
-                // cross size — which is the tallest item's content — and never to the
-                // container. Without the cap, a 60-card main deck makes the whole zone row as
-                // tall as itself and takes the sideboard off the bottom of the window with it.
-                className={cn("min-h-48 max-h-full", ZONE_WIDTH[zone])}
-              />
-            ))}
+        // The deck on the left, the way cards get into it on the right (spec §7). One flex
+        // row, so the panel is the full height of the editor and the zones keep whatever is
+        // left — and `min-w-0` on the deck side, because a wrapping row of columns that
+        // cannot shrink is the horizontal scrollbar the 1024px floor forbids.
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="flex min-w-0 flex-1 flex-col gap-3">
+            <div className="flex min-h-0 flex-1 flex-wrap gap-3 overflow-y-auto">
+              {columns.map((zone) => (
+                <ZoneColumn
+                  key={zone}
+                  ref={(el) => {
+                    zoneRefs.current[zone] = el;
+                  }}
+                  zone={zone}
+                  title={ZONE_LABEL[zone]}
+                  cards={byZone[zone]}
+                  // The compact zones hold one card or two, and a "Creature 1" heading over a
+                  // single commander is a heading that says nothing.
+                  groupBy={zone === "main" || zone === "side" ? groupBy : null}
+                  moveTargets={moveTargets}
+                  openMenuCardId={menu?.zone === zone ? menu.cardId : null}
+                  busy={menuBusy}
+                  onOpenMenu={openMenu}
+                  onCloseMenu={closeMenu}
+                  onSetQuantity={setQuantity}
+                  onMove={move}
+                  onSetCover={setCover}
+                  onSelect={setSelectedCardId}
+                  // `max-h-full` is what makes a column scroll rather than the editor: in a
+                  // *wrapping* flex row, `align-items: stretch` stretches an item to its line's
+                  // cross size — which is the tallest item's content — and never to the
+                  // container. Without the cap, a 60-card main deck makes the whole zone row as
+                  // tall as itself and takes the sideboard off the bottom of the window with it.
+                  className={cn("min-h-48 max-h-full", ZONE_WIDTH[zone])}
+                />
+              ))}
+            </div>
+
+            {/* The scratchpad, under the deck rather than beside it: cards go here to be
+                thought about, they count toward nothing, and Task 15's stats and validation
+                never read them. Shut by default for the same reason. */}
+            <div className="shrink-0">
+              <button
+                type="button"
+                aria-expanded={showMaybe}
+                onClick={() => setShowMaybe((v) => !v)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md text-xs text-dim",
+                  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                  FOCUS,
+                )}
+              >
+                <ChevronRight
+                  className={cn(
+                    "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                    showMaybe && "rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+                {ZONE_LABEL.maybe}{" "}
+                <span className="font-mono tabular-nums">{byZone.maybe.length}</span>
+              </button>
+              {showMaybe && (
+                <ZoneColumn
+                  ref={(el) => {
+                    zoneRefs.current.maybe = el;
+                  }}
+                  zone="maybe"
+                  title={ZONE_LABEL.maybe}
+                  cards={byZone.maybe}
+                  groupBy={groupBy}
+                  moveTargets={moveTargets}
+                  openMenuCardId={menu?.zone === "maybe" ? menu.cardId : null}
+                  busy={menuBusy}
+                  onOpenMenu={openMenu}
+                  onCloseMenu={closeMenu}
+                  onSetQuantity={setQuantity}
+                  onMove={move}
+                  onSetCover={setCover}
+                  onSelect={setSelectedCardId}
+                  className={cn("mt-2 max-h-64", ZONE_WIDTH.maybe)}
+                />
+              )}
+            </div>
           </div>
 
-          {/* The scratchpad, under the deck rather than beside it: cards go here to be thought
-              about, they count toward nothing, and Task 15's stats and validation never read
-              them. Shut by default for the same reason. */}
-          <div className="shrink-0">
-            <button
-              type="button"
-              aria-expanded={showMaybe}
-              onClick={() => setShowMaybe((v) => !v)}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md text-xs text-dim",
-                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                FOCUS,
-              )}
-            >
-              <ChevronRight
-                className={cn(
-                  "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
-                  showMaybe && "rotate-90",
-                )}
-                aria-hidden="true"
-              />
-              {ZONE_LABEL.maybe}{" "}
-              <span className="font-mono tabular-nums">{byZone.maybe.length}</span>
-            </button>
-            {showMaybe && (
-              <ZoneColumn
-                ref={(el) => {
-                  zoneRefs.current.maybe = el;
-                }}
-                zone="maybe"
-                title={ZONE_LABEL.maybe}
-                cards={byZone.maybe}
-                groupBy={groupBy}
-                moveTargets={moveTargets}
-                openMenuCardId={menu?.zone === "maybe" ? menu.cardId : null}
-                busy={menuBusy}
-                onOpenMenu={openMenu}
-                onCloseMenu={closeMenu}
-                onSetQuantity={setQuantity}
-                onMove={move}
-                onSetCover={setCover}
-                onSelect={setSelectedCardId}
-                className={cn("mt-2 max-h-64", ZONE_WIDTH.maybe)}
-              />
-            )}
-          </div>
-        </>
+          <DeckSearchPanel
+            add={deck.addCard}
+            zones={moveTargets}
+            targetZone={targetZone}
+            onTargetZoneChange={pickTargetZone}
+          />
+        </div>
       )}
 
       {/* Spec §5: a price is never shown without saying how old it is. Once, under the deck,

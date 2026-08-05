@@ -26,7 +26,21 @@ import { FORMATS, type CardSearch } from "./useCardSearch";
  * builds its own row out of. This file owns the layout and *which* filters the search
  * offers, and nothing else.
  */
-export function FilterBar({ search }: { search: CardSearch }) {
+export function FilterBar({
+  search,
+  layoutToggle = true,
+}: {
+  search: CardSearch;
+  /**
+   * Whether the grid-or-table pair rides the row.
+   *
+   * Off in the deck editor's docked panel, which is a wall of art and has no table to switch
+   * to: the toggle there would move the *search view's* stored preference and change nothing
+   * the reader can see, which is a control that lies. Everything else on the row is a
+   * statement about which cards to show and means the same thing in both places.
+   */
+  layoutToggle?: boolean;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <label htmlFor="card-search-text" className="sr-only">
@@ -99,7 +113,7 @@ export function FilterBar({ search }: { search: CardSearch }) {
           control, so every view that offers a reset offers the same one. */}
       <ResetAll count={search.activeCount} onReset={search.resetAll} />
 
-      <ViewToggle />
+      {layoutToggle && <ViewToggle />}
     </div>
   );
 }

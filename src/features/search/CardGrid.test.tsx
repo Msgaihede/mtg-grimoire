@@ -496,6 +496,19 @@ describe("CardGrid", () => {
     expect(tile).toBeGreaterThanOrEqual(170);
   });
 
+  /**
+   * The one wall that is not a page-width wall: the deck editor's docked panel measures 343px
+   * inside its scrollbar and padding, which is eleven pixels short of two standard tiles — so
+   * it drew one 343px card per row in a 341px-tall column, less than a whole card ever on
+   * screen. The floor is a prop for exactly that, and the numbers here are the measured ones.
+   */
+  it("fits two tiles in the deck panel's column when it is given a lower floor", () => {
+    expect(columnsFor(343)).toBe(1);
+    expect(columnsFor(343, 150)).toBe(2);
+    // Still a floor and not a width: the pair share out the whole column, gap included.
+    expect(tileWidthFor(343, 150)).toBeCloseTo((343 - 12) / 2);
+  });
+
   it("asks for the next page once the reader is near the bottom of the loaded rows", () => {
     const onNeedNextPage = vi.fn();
     // Two rows of one column each, both rendered: the last tile on screen is also the

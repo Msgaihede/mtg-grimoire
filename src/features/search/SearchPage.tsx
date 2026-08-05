@@ -227,8 +227,15 @@ function countOf(total: number, capped: boolean): string {
   return `${n} ${total === 1 && !capped ? "card" : "cards"}`;
 }
 
-/** The one line that says what the result area is currently showing. */
-function summaryOf(search: CardSearch, failure: string | null): string {
+/**
+ * The one line that says what the result area is currently showing.
+ *
+ * Exported for the deck editor's docked panel, which shows the same six states over the same
+ * hook in a 384px column. Two copies of these sentences would be two answers to "why is this
+ * list empty" — and the one that matters most (an empty database still syncing, which is not
+ * a search that missed) is the one a second copy would be likeliest to get wrong.
+ */
+export function summaryOf(search: CardSearch, failure: string | null): string {
   const { query, rows, total, totalIsCapped, unfiltered } = search;
 
   if (rows.length === 0) {

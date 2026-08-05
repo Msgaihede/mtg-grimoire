@@ -1,19 +1,32 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { DeckCard, DeckDetail, DeckRow, FormatSpec } from "@/lib/ipc";
+import type { CardSummary, DeckCard, DeckDetail, DeckRow, FormatSpec } from "@/lib/ipc";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
+const deckAddCard = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+// The docked search panel is the editor's own filter bar, set picker and result wall.
+const searchCards = vi.hoisted(() => vi.fn());
+const listSets = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckGet, deckUpdate, deckSetCardQuantity, deckMoveCard, formatSpecs },
+  ipc: {
+    deckGet,
+    deckUpdate,
+    deckSetCardQuantity,
+    deckMoveCard,
+    deckAddCard,
+    formatSpecs,
+    searchCards,
+    listSets,
+  },
 }));
 
 import { DeckEditor } from "./DeckEditor";
@@ -51,6 +64,26 @@ function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
   });
 }
 
+/** One search result, for the tests that drive the docked panel. */
+function found(name: string): CardSummary {
+  return {
+    id: `s-${name}`,
+    name,
+    setCode: "mh2",
+    setName: "Modern Horizons 2",
+    collectorNumber: "12",
+    rarity: "rare",
+    typeLine: "Creature — Goblin",
+    manaCost: "{R}",
+    priceUsd: 1.5,
+    layout: "normal",
+    oracleId: `o-${name}`,
+    finishes: `["nonfoil"]`,
+    ownedQuantity: 0,
+    wishlisted: false,
+  };
+}
+
 function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -65,6 +98,16 @@ async function open() {
   return view;
 }
 
+/**
+ * jsdom lays nothing out, so the docked panel's virtualised wall measures a scroll container
+ * of zero height and renders no tiles at all. One number is the whole of what it is missing;
+ * `scrollTo` is the other thing the virtualiser reaches for that jsdom does not implement.
+ */
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 600 });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+});
+
 beforeEach(() => {
   resetRowIds();
   useAppStore.setState({ openDeckId: 4, selectedCardId: null });
@@ -76,7 +119,12 @@ beforeEach(() => {
   deckUpdate.mockReset().mockResolvedValue(DECK);
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
+  deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   formatSpecs.mockReset().mockResolvedValue(PICKER);
+  // Nothing found by default: a result named after a card already in the deck would be a
+  // second button by that name, and every test here addresses rows by the card's name.
+  searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  listSets.mockReset().mockResolvedValue([]);
 });
 
 describe("DeckEditor", () => {
@@ -85,7 +133,7 @@ describe("DeckEditor", () => {
     await open();
 
     expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
-    expect(screen.getByLabelText("Format")).toHaveValue("modern");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
     const built = screen.getByRole("button", { name: /^Built/ });
     expect(built).toHaveAttribute("aria-pressed", "false");
     expect(built).toHaveAttribute("title", "Reserves your copies for this deck");
@@ -162,7 +210,7 @@ describe("DeckEditor", () => {
   it("re-formats the deck from the header select", async () => {
     await open();
 
-    await userEvent.selectOptions(screen.getByLabelText("Format"), "commander");
+    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "commander");
 
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
   });
@@ -480,6 +528,101 @@ describe("DeckEditor", () => {
     };
     window.addEventListener("keydown", listen);
     await userEvent.keyboard("{Escape}");
+    window.removeEventListener("keydown", listen);
+    expect(heard).toEqual([false]);
+  });
+
+  /**
+   * The path by which cards enter a deck. Docked rather than a dialog, so the deck it is
+   * filling stays on screen next to it.
+   */
+  it("docks a card search beside the deck and adds what it finds", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
+    );
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", "main", 1);
+  });
+
+  /** The same seeded rules that decide which columns are drawn decide where a card may land:
+   *  a Modern deck is never offered a commander zone to add to. */
+  it("offers only the zones this format has as add targets", async () => {
+    await open();
+
+    const select = (await screen.findByLabelText("Add to")) as HTMLSelectElement;
+    // Modern's seeded row has a sideboard and allows a companion, and has no commander zone —
+    // the same four the row menus offer as move targets, from the same derivation.
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      "Main deck",
+      "Sideboard",
+      "Companion",
+      "Maybe",
+    ]);
+    expect([...select.options].map((o) => o.textContent)).not.toContain("Commander");
+  });
+
+  /**
+   * A re-format can take the add target away — Commander has no sideboard at all — and a
+   * select left holding a zone that is not among its own options shows nothing selected while
+   * every press files a card somewhere the editor is not drawing.
+   */
+  it("falls back to the main deck when a re-format takes the add target away", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+    await userEvent.selectOptions(await screen.findByLabelText("Add to"), "side");
+    await screen.findByRole("button", { name: "Add Goblin Guide to Sideboard" });
+
+    deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, []));
+    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "commander");
+
+    // Read off the Add button rather than off the select, because the select cannot see this
+    // bug: HTML selects the first option when the selected one is removed, so the control
+    // *shows* "Main deck" whatever the state behind it says. Without the reset, every press
+    // would still file its card into a sideboard this format does not have and the editor is
+    // no longer drawing.
+    expect(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
+    ).toBeInTheDocument();
+  });
+
+  /** The scratchpad is shut by default, and a card added into a closed drawer is a card that
+   *  has vanished — the same hand-off a move into it makes. */
+  it("opens the maybe pile when it becomes the add target", async () => {
+    await open();
+
+    await userEvent.selectOptions(await screen.findByLabelText("Add to"), "maybe");
+
+    expect(screen.getByRole("region", { name: /^Maybe/ })).toBeInTheDocument();
+  });
+
+  /**
+   * The panel is a fixture of the editor, not a dismissible layer: Escape pressed in its
+   * search box belongs to the card pane, which listens on `window` in the bubble phase. A
+   * panel that consumed the press would leave a card pinned open with nothing to close it.
+   */
+  it("lets Escape through from the docked search panel", async () => {
+    await open();
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    screen.getByRole("searchbox", { name: "Search cards" }).focus();
+    await userEvent.keyboard("{Escape}");
+
     window.removeEventListener("keydown", listen);
     expect(heard).toEqual([false]);
   });
