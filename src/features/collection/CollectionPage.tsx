@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
@@ -183,6 +183,17 @@ export function CollectionPage() {
     }
     return out;
   }, [rows]);
+
+  // Once per session, on the first load that has rows: everything the user owns gets its
+  // art cached in the background, so the collection browses without a network. Keys already
+  // on disk are skipped by the query, which is what makes repeat calls cheap and the job
+  // resumable across sessions.
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (warmed.current || rows.length === 0) return;
+    warmed.current = true;
+    void ipc.prewarmCollection().catch(() => {});
+  }, [rows.length]);
 
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write, not either of them: with `isError` on both, a refused stepper press

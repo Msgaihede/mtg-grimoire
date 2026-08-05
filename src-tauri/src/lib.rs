@@ -95,6 +95,7 @@ pub fn run() {
             card::card_detail,
             card::card_printings,
             images::prefetch_images,
+            images::prewarm_collection,
             collection::collection_add,
             collection::collection_set_quantity,
             collection::collection_update,

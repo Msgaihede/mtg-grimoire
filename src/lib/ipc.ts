@@ -583,6 +583,15 @@ export const ipc = {
    */
   prefetchImages: (cardIds: string[], variant: ImageVariant) =>
     invoke<void>("prefetch_images", { cardIds, variant }),
+  /**
+   * Warm the image cache for every card in the collection and the wishlist, so what the
+   * user owns browses without a network (spec §5). Fire-and-forget like `prefetchImages`,
+   * and it answers how many images were *queued*, not fetched.
+   *
+   * Resumable by construction and therefore cheap to repeat: a key already on disk is not
+   * selected, so a second call after a full pass queues nothing.
+   */
+  prewarmCollection: () => invoke<number>("prewarm_collection"),
   /** Add copies. The same printing, finish and condition twice is one row with a bigger
    *  number — the backend upserts on the grain. */
   collectionAdd: (entry: EntryInput) => invoke<EntryChange>("collection_add", { entry }),

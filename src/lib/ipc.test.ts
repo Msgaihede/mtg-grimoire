@@ -170,6 +170,19 @@ describe("ipc argument names match the Rust command signatures", () => {
       variant: "grid",
     });
   });
+
+  it("asks for a collection pre-warm with no arguments and reads back the queue size", async () => {
+    invoke.mockResolvedValue(412);
+
+    const queued = await ipc.prewarmCollection();
+
+    // `prewarm_collection()` takes only the managed state, so an argument object here
+    // would be a deserialization error rather than a type error.
+    expect(invoke).toHaveBeenCalledWith("prewarm_collection");
+    // The count is what was *queued*, not fetched — the command resolves as soon as the
+    // background loop owns the batch.
+    expect(queued).toBe(412);
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {

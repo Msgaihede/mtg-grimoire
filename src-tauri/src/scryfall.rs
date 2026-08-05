@@ -49,6 +49,15 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// when the response carries no `Retry-After` of its own.
 pub const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
 
+/// The largest image body this app will read into memory.
+///
+/// The biggest variant it stores is `display` at ~93 KB, so this is two orders of magnitude
+/// of headroom — it is not a budget, it is a refusal to let a host that is not the one we
+/// think it is hand this process an arbitrary number of bytes. `fetch_image` has a
+/// production caller now (every tile in the app), so "the CDN would not do that" is no
+/// longer the only thing standing between here and a memory exhaustion.
+pub const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Pages `fetch_sets` will follow before it stops. ~1 050 sets arrive in a handful of
 /// pages; a `next_page` chain that cycles A→B→A slips past the `next == url` guard and
 /// would otherwise run until the process is killed.
@@ -440,10 +449,31 @@ impl Client {
     ///
     /// Buffered, not streamed: the largest variant this app stores is ~93 KB, and a file
     /// that small does not repay the complexity streaming buys the 77 MB bulk download.
+    /// Bounded by [`MAX_IMAGE_BYTES`], which is what makes buffering safe.
     pub async fn fetch_image(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
         let resp = self.get_from(uri, None).await?;
         match resp.status().as_u16() {
-            200 => Ok(resp.bytes().await?.to_vec()),
+            200 => {
+                // The declared length first: refusing before the body is read is the only
+                // check that costs nothing.
+                if let Some(len) = resp.content_length() {
+                    if len > MAX_IMAGE_BYTES {
+                        return Err(ScryfallError::Unexpected(format!(
+                            "image is too large: {len} bytes"
+                        )));
+                    }
+                }
+                let bytes = resp.bytes().await?;
+                // And again after: `Content-Length` is a claim, and a chunked response
+                // makes none at all.
+                if bytes.len() as u64 > MAX_IMAGE_BYTES {
+                    return Err(ScryfallError::Unexpected(format!(
+                        "image is too large: {} bytes",
+                        bytes.len()
+                    )));
+                }
+                Ok(bytes.to_vec())
+            }
             404 => Err(ScryfallError::NotFound),
             429 => Err(ScryfallError::RateLimited {
                 retry_after_secs: retry_after_secs(&resp),

@@ -345,6 +345,12 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
     crate::db::lock_blocking(mutex)
 }
 
+/// Lock any std mutex, recovering from poisoning — the same rule as [`lock_conn`], for the
+/// maps and counters that are not connections.
+pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.
 ///
 /// A different mutex from `db`, which is the point: this one is only ever held for a short

@@ -17,9 +17,10 @@
 
 use crate::scryfall::{self, ScryfallError};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Concurrent fetches. `*.scryfall.io` is documented as having no rate limit, but the
@@ -47,7 +48,7 @@ pub const SVG: &str = "image/svg+xml";
 /// The image sizes this app stores. WEBP only — the JPG/PNG family Scryfall's own docs
 /// mark as *replaced* is never fetched, and `png` alone would be 161 GB across the
 /// library.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Variant {
     Thumb,
     Grid,
@@ -94,7 +95,10 @@ impl Variant {
 }
 
 /// One cacheable image: a printing, a physical face, a size.
-#[derive(Debug, Clone)]
+///
+/// `Hash`/`Eq` because it is also the key of [`Cache`]'s single-flight map: "the same
+/// image" and "the same map entry" have to be the same question.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ImageKey {
     pub card_id: String,
     /// 0 = front. A face beyond what the card physically has resolves to a card back.
@@ -273,6 +277,21 @@ pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> 
         return Ok(if is_fetchable(&uri) {
             Resolution::Uri(uri)
         } else {
+            // Once per process, not once per tile: a CDN move would make this true of every
+            // image in the app, and forty thousand identical lines is not a signal. The
+            // version rule is the common case and is silent — a `soon.jpg` is Scryfall
+            // saying "no image", which the placeholder already says. An *off-host* URI is
+            // different: it means the allowlist and Scryfall's data no longer agree, and
+            // the symptom (every card shows "No image") looks nothing like the cause.
+            if !(is_image_host(&uri) || (cfg!(test) && is_loopback(&uri))) {
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "image cache: refusing an image URI from an unexpected host \
+                         (expected {IMAGE_HOST}…): {uri}"
+                    );
+                }
+            }
             Resolution::Missing(Placeholder::NoImage)
         });
     }
@@ -422,6 +441,15 @@ pub struct Cache {
     /// user a slower grid rather than a blank one, which is right — but it is also
     /// invisible, and a number that only ever climbs is what makes it findable.
     store_failures: AtomicU64,
+    /// One lock per key, so two callers who want the same image do not both fetch it.
+    ///
+    /// A `Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>` rather than the shared
+    /// *future* the carryover sketched: a `Shared<BoxFuture<…>>` has to be `'static`, which
+    /// would mean an `Arc<Cache>` plus owned clones of the client and both connections
+    /// threaded through the protocol handler. The second caller here waits on the key,
+    /// then re-reads the disk — a 2 ms read instead of a shared buffer, for a fraction of
+    /// the surface, and the network saving is identical.
+    inflight: Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Cache {
@@ -431,6 +459,29 @@ impl Cache {
             permits: tokio::sync::Semaphore::new(MAX_CONCURRENT_FETCHES),
             gate: tokio::sync::Mutex::new(tokio::time::Instant::now()),
             store_failures: AtomicU64::new(0),
+            inflight: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The lock for one key, created if this is the first caller to ask.
+    fn key_lock(&self, key: &ImageKey) -> Arc<tokio::sync::Mutex<()>> {
+        let mut map = crate::sync::lock_plain(&self.inflight);
+        Arc::clone(
+            map.entry(key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    }
+
+    /// Drop the entry once nobody is holding it. Without this the map is a leak with a
+    /// pleasant name: one entry per image the app has ever served.
+    ///
+    /// Called only after this caller's own `Arc` has gone — a count of one then means the
+    /// map is the last owner, and any caller still waiting on the key is holding a clone
+    /// that keeps the entry (and therefore the coalescing) alive.
+    fn release_key(&self, key: &ImageKey) {
+        let mut map = crate::sync::lock_plain(&self.inflight);
+        if map.get(key).is_some_and(|l| Arc::strong_count(l) == 1) {
+            map.remove(key);
         }
     }
 
@@ -497,9 +548,57 @@ impl Cache {
             }
         }
 
-        let bytes = self.fetch(client, &uri).await?;
+        // Single flight from here on: a tile and its own prefetch, or two prefetch loops
+        // from two pages that landed together, ask for one key at the same instant. One of
+        // them does the round trip and the others read what it wrote.
+        let served = {
+            let lock = self.key_lock(key);
+            let _held = lock.lock().await;
+            self.fetch_and_store(client, read, write, key, &uri, &path)
+                .await
+        };
+        // After the block, never inside it: `lock` and its guard are both dropped at the
+        // closing brace above, so a strong count of one here really does mean nobody else
+        // is holding the key. Releasing while this caller still held its own `Arc` would
+        // leave the entry in the map forever — the exact leak `release_key` exists to stop.
+        self.release_key(key);
+        served
+    }
 
-        match store(&path, &bytes).await {
+    /// The miss path, run under the key's lock: re-check, fetch, store, record.
+    ///
+    /// Everything that makes the *next* caller's re-check succeed happens in here — the
+    /// bytes on disk and the row that vouches for them. Releasing the key after the fetch
+    /// but before the store would wake the waiter into a cache that is still empty, which
+    /// is the duplicate round trip this whole mechanism is for.
+    async fn fetch_and_store(
+        &self,
+        client: &scryfall::Client,
+        read: &Mutex<Connection>,
+        write: &Mutex<Connection>,
+        key: &ImageKey,
+        uri: &str,
+        path: &Path,
+    ) -> Result<Served, ImageError> {
+        // Someone may have fetched exactly these bytes while this call was waiting for the
+        // key. Asking the disk again is cheaper than asking Scryfall, and it is the whole
+        // payoff of having waited.
+        let fresh = {
+            let conn = crate::sync::lock_conn(read);
+            is_current(&conn, key, uri)
+        };
+        if fresh {
+            if let Ok(bytes) = tokio::fs::read(path).await {
+                return Ok(Served {
+                    bytes,
+                    content_type: WEBP,
+                });
+            }
+        }
+
+        let bytes = self.fetch(client, uri).await?;
+
+        match store(path, &bytes).await {
             // Bookkeeping last, and optional. Losing the row costs one re-fetch from an
             // origin with no rate limit — so this is a single `try_lock`
             // ([`Duration::ZERO`]) rather than a wait: a *contended* write lock means an
@@ -507,7 +606,7 @@ impl Cache {
             // worker thread on a lock it was never going to win, once per image.
             Ok(()) => {
                 if let Some(conn) = crate::db::lock_for(write, Duration::ZERO) {
-                    let _ = record(&conn, key, &uri, bytes.len());
+                    let _ = record(&conn, key, uri, bytes.len());
                 }
             }
             // A cache that cannot be written is still a cache that can serve *this*
@@ -769,6 +868,78 @@ pub async fn prefetch_images(
         .await;
     });
     Ok(())
+}
+
+/// Images one pre-warm pass will fetch.
+///
+/// A pass, not a budget: keys already on disk are never selected, so a collection of ten
+/// thousand cards warms over several sessions and each one starts where the last stopped.
+/// At the measured 100 ms pacing this is a little over three minutes of background work.
+pub const MAX_PREWARM: usize = 2_000;
+
+/// The cards the user owns or wants, that have no cached image yet.
+///
+/// **`grid` only.** Spec §5 says `thumb` + `grid`; the app has no `thumb` surface yet (the
+/// tables show no art), and fetching 9 KB per card for a view that does not exist is a
+/// download rather than a pre-warm. When a list view with art lands, this is one more
+/// variant in the call and nothing else.
+pub fn prewarm_keys(
+    conn: &Connection,
+    variant: Variant,
+    limit: usize,
+) -> rusqlite::Result<Vec<ImageKey>> {
+    let mut stmt = conn.prepare(
+        "SELECT card_id FROM (
+            SELECT card_id FROM collection_entries
+            UNION
+            SELECT card_id FROM wishlist_entries WHERE card_id IS NOT NULL)
+          WHERE card_id NOT IN
+                (SELECT card_id FROM image_cache WHERE variant = ?1 AND face = 0)
+          LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![variant.key(), limit as i64], |r| {
+        r.get::<_, String>(0)
+    })?;
+    Ok(rows
+        .filter_map(Result::ok)
+        .filter(|id| is_card_id(id))
+        // Front faces only: the back of a double-faced card is not on screen until someone
+        // opens the pane and flips it, and that fetch is one tile's worth.
+        .map(|card_id| ImageKey {
+            card_id,
+            face: 0,
+            variant,
+        })
+        .collect())
+}
+
+/// Warm the cache for what the user owns. Returns how many images were queued.
+///
+/// Fire-and-forget in the same sense as [`prefetch_images`]: it resolves when the work is
+/// queued. The loop shares the cache's own semaphore and 100 ms gate with the live grid, so
+/// a pre-warm running behind a browsing session competes for the same budget rather than
+/// doubling it, and it abandons the batch on the first rate limit.
+#[tauri::command]
+pub async fn prewarm_collection(
+    state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
+) -> Result<usize, String> {
+    let state = state.inner().clone();
+    let keys = {
+        let conn = crate::sync::lock_db_read(&state);
+        prewarm_keys(&conn, Variant::Grid, MAX_PREWARM).map_err(|e| e.to_string())?
+    };
+    let queued = keys.len();
+    tauri::async_runtime::spawn(async move {
+        warm(
+            &state.images,
+            &state.client,
+            &state.db_read,
+            &state.db,
+            keys,
+        )
+        .await;
+    });
+    Ok(queued)
 }
 
 /// Walk a batch, stopping at the first rate limit. Returns how many keys were attempted.
@@ -2014,5 +2185,136 @@ mod tests {
 
         assert_eq!(r.status(), tauri::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(header(&r, "retry-after"), Some("1"));
+    }
+
+    /// Carryover item 3, ledgered twice: nothing deduplicated two requests for the same
+    /// key in flight at once, so a tile and its own prefetch — or two prefetch loops from
+    /// two pages that landed together — could each spend a permit, a 100 ms slot and a
+    /// round trip on the same bytes. One fetch per key, and the second caller reads what
+    /// the first one wrote.
+    #[tokio::test]
+    async fn two_requests_for_one_image_make_one_round_trip() {
+        const CARD: &str = "0000419b-0bba-4488-8f7a-6194544ce91d";
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/grid/front/0/0/x.webp");
+            then.status(200)
+                .header("content-type", "image/webp")
+                .body(b"webp-bytes");
+        });
+        let f = Fixture::new("single-flight");
+        f.card(
+            CARD,
+            &format!("{}/grid/front/0/0/x.webp?17", server.base_url()),
+        );
+        let client = scryfall::Client::new(server.base_url());
+        let key = ImageKey {
+            card_id: CARD.into(),
+            face: 0,
+            variant: Variant::Grid,
+        };
+
+        // Both start before either can have finished, which is the race a tile and its own
+        // prefetch run every time a page lands.
+        let (a, b) = tokio::join!(
+            f.cache.get(&client, &f.read, &f.write, &key),
+            f.cache.get(&client, &f.read, &f.write, &key),
+        );
+
+        assert_eq!(a.unwrap().bytes, b"webp-bytes");
+        assert_eq!(
+            b.unwrap().bytes,
+            b"webp-bytes",
+            "the waiter reads what the fetcher wrote"
+        );
+        mock.assert_calls(1);
+    }
+
+    /// One connection that *claims* a body of `declared` bytes and sends 32, then hangs up.
+    ///
+    /// Hand-written rather than an `httpmock` route because `httpmock` cannot be made to
+    /// lie: hyper panics rather than write a response whose `Content-Length` disagrees with
+    /// its body, and the lie is the whole point — a caller that read the body instead of
+    /// refusing on the declared length gets 32 bytes and a broken-connection error, never
+    /// "too large". That is what makes the assertion below about *ordering* and not merely
+    /// about the cap.
+    fn a_host_that_overstates_its_body(declared: u64) -> String {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // The request, read and discarded: closing a socket with unread bytes still
+            // waiting on it is how a clean hang-up becomes an RST the client reports
+            // instead of the headers.
+            let _ = stream.read(&mut [0u8; 2048]);
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: image/webp\r\n\
+                     content-length: {declared}\r\nconnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            let _ = stream.write_all(&[0u8; 32]);
+            let _ = stream.flush();
+        });
+        base
+    }
+
+    /// Carryover item 7: `fetch_image` now has a production caller and points at a host
+    /// that can serve whatever it likes. The largest variant this app stores is ~93 KB;
+    /// a body that claims to be gigabytes is refused before it is read, not after.
+    #[tokio::test]
+    async fn an_oversized_image_body_is_refused_before_it_is_read() {
+        let base = a_host_that_overstates_its_body(crate::scryfall::MAX_IMAGE_BYTES + 1);
+        let client = crate::scryfall::Client::new(base.clone());
+
+        let err = client
+            .fetch_image(&format!("{base}/huge.webp?17"))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("too large"), "{err}");
+    }
+
+    /// Spec §5's pre-warm, scoped to what the user owns rather than to the database — 116 k
+    /// `grid` images would be ~7 GB. Resumable by construction: a key already in
+    /// `image_cache` is not selected, so the next pass picks up where this one stopped.
+    #[test]
+    fn the_prewarm_selects_owned_cards_that_are_not_cached_yet() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d','lea','161','en','nonfoil','NM',1,
+                     unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES ('o1','11111111-1111-4111-8111-111111111111','Wanted',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let keys = prewarm_keys(&conn, Variant::Grid, 100).unwrap();
+        assert_eq!(keys.len(), 2, "owned and wished, front faces only");
+        assert!(keys
+            .iter()
+            .all(|k| k.face == 0 && k.variant == Variant::Grid));
+
+        // Once the bytes are on disk the key is not selected again — which is the whole of
+        // "resumable", and it costs no bookkeeping of its own.
+        conn.execute(
+            "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
+             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'grid','https://x?1',10,unixepoch())",
+            [],
+        )
+        .unwrap();
+        assert_eq!(prewarm_keys(&conn, Variant::Grid, 100).unwrap().len(), 1);
     }
 }

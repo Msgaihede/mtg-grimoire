@@ -12,9 +12,18 @@ const collectionSetQuantity = vi.hoisted(() => vi.fn());
 const collectionRemove = vi.hoisted(() => vi.fn());
 // The set picker rides the filter row and asks for the set list on the way up.
 const listSets = vi.hoisted(() => vi.fn());
+// The wall pre-warms its own art in the background on the first load that has rows.
+const prewarmCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionList, collectionSummary, collectionSetQuantity, collectionRemove, listSets },
+  ipc: {
+    collectionList,
+    collectionSummary,
+    collectionSetQuantity,
+    collectionRemove,
+    listSets,
+    prewarmCollection,
+  },
 }));
 
 import { CollectionPage } from "./CollectionPage";
@@ -109,6 +118,7 @@ beforeEach(() => {
   collectionSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 3, removed: false });
   collectionRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
   listSets.mockReset().mockResolvedValue([]);
+  prewarmCollection.mockReset().mockResolvedValue(0);
   useAppStore.setState({ collectionView: "table", selectedCardId: null });
 });
 
@@ -138,6 +148,43 @@ describe("CollectionPage", () => {
     expect(
       await screen.findByText(/no cards in your collection match these filters/i),
     ).toBeVisible();
+  });
+
+  /**
+   * Spec §5's pre-warm, from the one screen that knows the collection has anything in it:
+   * the art for every owned and wished card is fetched in the background so the wall browses
+   * without a network. Once per session — the backend skips what is already on disk, but a
+   * call per re-render would still be a round trip per re-render.
+   */
+  it("warms the images for what the user owns, once, on the first load that has rows", async () => {
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await waitFor(() => expect(prewarmCollection).toHaveBeenCalledTimes(1));
+
+    // A filter click re-renders and re-fetches; the warm must not go again with it.
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(1));
+    expect(prewarmCollection).toHaveBeenCalledTimes(1);
+  });
+
+  /** Nothing owned is nothing to warm, and a first launch should not spend a round trip
+   *  finding that out. */
+  it("does not warm anything for an empty collection", async () => {
+    collectionList.mockResolvedValue(page([]));
+    wrap(<CollectionPage />);
+    await screen.findByText(/nothing here yet/i);
+
+    expect(prewarmCollection).not.toHaveBeenCalled();
+  });
+
+  /** A pre-warm is best-effort background work: a refusal must never reach the user as an
+   *  unhandled rejection, and must not disturb the list it ran behind. */
+  it("swallows a failed pre-warm", async () => {
+    prewarmCollection.mockRejectedValue("no such command");
+    wrap(<CollectionPage />);
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
   });
 
   it("adds the collection up in the header, and says how old the prices are", async () => {
