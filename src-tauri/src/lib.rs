@@ -1,5 +1,6 @@
 pub mod card;
 pub mod card_row;
+pub mod collection;
 pub mod db;
 pub mod images;
 pub mod ingest;
@@ -90,7 +91,11 @@ pub fn run() {
             search::list_sets,
             card::card_detail,
             card::card_printings,
-            images::prefetch_images
+            images::prefetch_images,
+            collection::collection_add,
+            collection::collection_set_quantity,
+            collection::collection_update,
+            collection::collection_remove
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
