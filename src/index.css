@@ -75,14 +75,9 @@
     --primary-foreground: var(--color-accent-fg);
     --secondary: var(--color-surface);
     --secondary-foreground: var(--color-text);
-    /* A *surface*, which is what `--muted` means in shadcn's model — the pair is "a subtle
-       panel and the text on it". It used to name the dim text colour on both halves, which
-       made the pair self-cancelling for any component that read it. Nothing generated reads
-       `var(--muted)` today (Tailwind derives `bg-muted` from the palette token below, not
-       from here), so this is correctness for the next vendored component rather than a
-       visual change — and see the palette block for the tripwire it does *not* remove. */
+    /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
     --muted: var(--color-surface);
-    --muted-foreground: var(--color-muted);
+    --muted-foreground: var(--color-dim);
     --accent: var(--color-accent);
     --accent-foreground: var(--color-accent-fg);
     --destructive: oklch(0.704 0.191 22.216);
@@ -116,14 +111,9 @@
     --primary-foreground: var(--color-accent-fg);
     --secondary: var(--color-surface);
     --secondary-foreground: var(--color-text);
-    /* A *surface*, which is what `--muted` means in shadcn's model — the pair is "a subtle
-       panel and the text on it". It used to name the dim text colour on both halves, which
-       made the pair self-cancelling for any component that read it. Nothing generated reads
-       `var(--muted)` today (Tailwind derives `bg-muted` from the palette token below, not
-       from here), so this is correctness for the next vendored component rather than a
-       visual change — and see the palette block for the tripwire it does *not* remove. */
+    /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
     --muted: var(--color-surface);
-    --muted-foreground: var(--color-muted);
+    --muted-foreground: var(--color-dim);
     --accent: var(--color-accent);
     --accent-foreground: var(--color-accent-fg);
     --destructive: oklch(0.704 0.191 22.216);
@@ -166,26 +156,24 @@
    maps every shadcn semantic variable onto these, so `border-border` (which reads the
    literal below) and `var(--border)` are always the same colour.
 
-   Three names are shared with shadcn and this block wins, which collapses shadcn's
-   30-token model onto 7. Consequence for anyone adding components: `muted` and
-   `accent` here mean "dim text" and "gold", not "subtle surface" as in stock shadcn.
-   When vendoring a component, rewrite its subtle-surface classes
-   (`bg-muted`, `bg-accent`) to `bg-surface`; `text-muted-foreground` and
-   `text-accent-foreground` already resolve correctly and need no change.
-
-   That rewrite is still required, and pointing the `--muted` semantic variable at a
-   surface (above) does not lift it — a fix that looks like it should. Tailwind builds
-   `bg-muted` *and* `text-muted` from the one `--color-muted` literal below, so the
-   generated rule is `background-color: var(--color-muted)` and never reaches `--muted`
-   at all. Giving `bg-muted` a surface therefore means giving `text-muted` one too, which
-   is the 42 places in `src/` that use it for dim text. Untangling that is a rename of
-   this token, not an edit to the block above. */
+   One name is still shared with shadcn and this block wins: `accent` here means "gold",
+   not "a subtle surface". When vendoring a component, rewrite its `bg-accent` to
+   `bg-surface`; `text-accent-foreground` already resolves correctly and needs no change.
+   `bg-muted` no longer needs that rewrite — see `--color-dim` below for what changed. */
 @theme {
   --color-bg: oklch(0.16 0.01 270);
   --color-surface: oklch(0.21 0.012 270);
   --color-border: oklch(0.3 0.01 270);
   --color-text: oklch(0.93 0.005 90);
-  --color-muted: oklch(0.65 0.01 90);
+  /* Dim text. Named `dim` rather than `muted` because shadcn's `muted` means a subtle
+     *surface*, Tailwind derives `bg-muted` and `text-muted` from the same literal, and one
+     token cannot be both. Renaming ours is what finally lets `--color-muted` below mean
+     what every vendored component expects it to. */
+  --color-dim: oklch(0.65 0.01 90);
+  /* shadcn's meaning, restored: `bg-muted` is now a subtle panel, as every generated
+     component assumes. Vendoring one no longer needs the `bg-muted` → `bg-surface`
+     rewrite CLAUDE.md used to require. */
+  --color-muted: var(--color-surface);
   --color-accent: oklch(0.75 0.12 85);      /* gold */
   --color-accent-fg: oklch(0.2 0.02 85);
 

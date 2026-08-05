@@ -37,6 +37,8 @@ const BOLT: CardSummary = {
   manaCost: "{R}",
   priceUsd: 400.5,
   layout: "normal",
+  ownedQuantity: 0,
+  wishlisted: false,
 };
 
 /** Every nullable column at once — the shape a token or an unpriced printing arrives in. */
@@ -51,6 +53,8 @@ const SPARSE: CardSummary = {
   manaCost: null,
   priceUsd: null,
   layout: "normal",
+  ownedQuantity: 0,
+  wishlisted: false,
 };
 
 const page = (
@@ -284,9 +288,13 @@ describe("SearchPage", () => {
     // Set code uppercased, collector number verbatim.
     expect(screen.getByText(/CHR/)).toBeInTheDocument();
     expect(screen.getByText(/99b/)).toBeInTheDocument();
-    // Missing type, rarity and price each read as an em dash, never as "null" or "$0.00".
+    // A missing type and a missing price read as an em dash, never as "null" or "$0.00".
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
-    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    // A missing rarity gets a word rather than a dash, because `RarityGem`'s dash would be
+    // the *accessible name* of the gem — and "Rarity: —" is announced as "Rarity:" and then
+    // nothing at all. An em dash is a mark that reads as blank; "unknown" is what it means.
+    expect(screen.getByText("unknown")).toBeInTheDocument();
   });
 
   /**

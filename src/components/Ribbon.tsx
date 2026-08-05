@@ -44,10 +44,10 @@ export function Ribbon({
     <div className="shrink-0">
       <div className="flex h-12 items-center gap-3 bg-surface px-4">
         {/* The mark, not the product name: the window title bar already says that in full,
-            and 48px of vertical space is not where a five-word name earns its keep. Muted
+            and 48px of vertical space is not where a five-word name earns its keep. Dim
             rather than gold — gold means "you can act on this, or this is where you are",
             and a wordmark is neither. Quiet, it reads as the first step of app › view. */}
-        <span aria-hidden="true" className="font-heading text-lg leading-none text-muted">
+        <span aria-hidden="true" className="font-heading text-lg leading-none text-dim">
           MTG
         </span>
         <span aria-hidden="true" className="h-4 w-px bg-border" />
@@ -57,12 +57,12 @@ export function Ribbon({
 
         <div className="ml-auto flex min-w-0 items-center gap-3">
           {upToDate && !busy && !hasError && (
-            <p role="status" className="shrink-0 text-xs text-muted">
+            <p role="status" className="shrink-0 text-xs text-dim">
               Already up to date
             </p>
           )}
           {statusLine && (
-            <p className="truncate text-xs text-muted" title={dataDir}>
+            <p className="truncate text-xs text-dim" title={dataDir}>
               {statusLine}
             </p>
           )}

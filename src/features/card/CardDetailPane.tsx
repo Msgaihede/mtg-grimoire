@@ -2,36 +2,14 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FlipHorizontal2, X } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
+import { RarityGem } from "@/components/RarityGem";
+import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
-import { rarityColor } from "@/lib/rarity";
+import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import {
-  faceCount,
-  finishPrice,
-  groupByIllustration,
-  legalityChips,
-  parseFinishes,
-  type Finish,
-} from "./printings";
-
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-
-const FINISH_LABEL: Record<Finish, string> = {
-  nonfoil: "Nonfoil",
-  foil: "Foil",
-  etched: "Etched",
-};
-
-/**
- * How a finish is marked in the printings list, where there is no room for a word.
- *
- * Nonfoil is unmarked because it is the default a price is assumed to be; the two that
- * are not carry a letter, and the letter is an `<abbr>` so its full word is one hover — or
- * one screen reader — away.
- */
-const FINISH_MARK: Record<Finish, string> = { nonfoil: "", foil: "F", etched: "E" };
+import { faceCount, groupByIllustration, legalityChips } from "./printings";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
@@ -50,7 +28,7 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  */
 const STATUS_CLASS: Record<string, string> = {
   legal: "border-border text-text",
-  restricted: "border-border text-muted",
+  restricted: "border-border text-dim",
   banned: "border-destructive/40 text-destructive",
 };
 
@@ -148,7 +126,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
           onClick={close}
           aria-label="Close card details"
           className={cn(
-            "shrink-0 rounded-md border border-border p-1 text-muted",
+            "shrink-0 rounded-md border border-border p-1 text-dim",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
             FOCUS,
           )}
@@ -164,7 +142,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       )}
 
       {!card.isPending && !card.isError && card.data === null && (
-        <p className="text-sm text-muted">
+        <p className="text-sm text-dim">
           This printing is not in the card database any more. It may have been removed by the last
           sync — close this and search again.
         </p>
@@ -186,7 +164,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
               to be identifiable in the same interface that shows the art. The artist is
               the one whose art is on screen — the two sides of a double-faced card are not
               always the same illustrator. */}
-          <p className="border-t border-border pt-3 text-[0.7rem] leading-relaxed text-muted">
+          <p className="border-t border-border pt-3 text-[0.7rem] leading-relaxed text-dim">
             {artistOf(card.data, face) && <>Illustrated by {artistOf(card.data, face)}. </>}
             Card images © Wizards of the Coast · Data © Scryfall
           </p>
@@ -225,7 +203,7 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
           className="flex w-full flex-col items-center justify-center gap-1 rounded-xl bg-bg px-6 text-center"
         >
           <span className="text-sm">{shown?.name || card.name}</span>
-          <span className="text-xs text-muted">
+          <span className="text-xs text-dim">
             No image yet — it may still be downloading. Reopen the card to try again.
           </span>
         </div>
@@ -254,7 +232,7 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
           onClick={onFlip}
           className={cn(
             "flex w-full items-center justify-center gap-1.5 rounded-md border border-border",
-            "py-1.5 text-xs text-muted transition-colors duration-150 hover:text-text",
+            "py-1.5 text-xs text-dim transition-colors duration-150 hover:text-text",
             "motion-reduce:transition-none",
             FOCUS,
           )}
@@ -295,29 +273,15 @@ function Facts({ card, face }: { card: CardDetail; face: number }) {
   return (
     <div className="space-y-3">
       {/* Provenance, in the data face: set, collector number, printing language. */}
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-dim">
         <span className="font-mono" title={card.setName ?? undefined}>
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
         {card.setName && <span className="min-w-0 truncate">{card.setName}</span>}
         {card.lang !== "en" && <LangBadge lang={card.lang} />}
-        {card.rarity && (
-          // Tinted text with a gem, never a filled badge: the colour budget is spent on
-          // mana and art, and a rarity is a footnote. The word is here rather than only the
-          // dot because the dot is the thing a screen reader cannot see.
-          <span
-            className="inline-flex items-center gap-1 capitalize"
-            style={{ color: rarityColor(card.rarity) }}
-          >
-            <span
-              aria-hidden="true"
-              className="size-1.5 rounded-full"
-              style={{ backgroundColor: rarityColor(card.rarity) }}
-            />
-            <span className="sr-only">Rarity: </span>
-            {card.rarity}
-          </span>
-        )}
+        {/* Tinted text with a gem, never a filled badge — the shared component, which is
+            where that judgement now lives for all four surfaces that show a rarity. */}
+        {card.rarity && <RarityGem rarity={card.rarity} withLabel />}
       </p>
 
       {faces.map((f, i) => (
@@ -327,7 +291,7 @@ function Facts({ card, face }: { card: CardDetail; face: number }) {
               {/* Named only when both halves are on screen at once — otherwise the pane's
                   own heading already carries the name. */}
               {faces.length > 1 && f.name && <span className="mr-1.5 font-medium">{f.name}</span>}
-              <span className="text-muted">{f.typeLine ?? "—"}</span>
+              <span className="text-dim">{f.typeLine ?? "—"}</span>
             </span>
             <ManaText source={f.manaCost} className="shrink-0" />
           </div>
@@ -346,14 +310,14 @@ function Facts({ card, face }: { card: CardDetail; face: number }) {
           <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             {finishes.map((f) => (
               <div key={f} className="flex items-baseline gap-1.5">
-                <dt className="text-muted">{FINISH_LABEL[f]}</dt>
-                <dd className="font-mono tabular-nums">{price(finishPrice(card.prices, f))}</dd>
+                <dt className="text-dim">{FINISH_LABEL[f]}</dt>
+                <dd className="font-mono tabular-nums">{usdPrice(finishPrice(card.prices, f))}</dd>
               </div>
             ))}
           </dl>
           {/* Spec §5: a price is never shown without saying how old it is. The ribbon
               carries the date of the data these came in with. */}
-          <p className="text-[0.7rem] text-muted">Prices as of the last card-data sync.</p>
+          <p className="text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
         </>
       )}
     </div>
@@ -380,7 +344,7 @@ function Legalities({ card }: { card: CardDetail }) {
           key={format}
           className={cn(
             "rounded-full border px-2 py-0.5 text-[0.7rem] capitalize",
-            STATUS_CLASS[status] ?? "border-border text-muted",
+            STATUS_CLASS[status] ?? "border-border text-dim",
           )}
         >
           {format}
@@ -430,10 +394,10 @@ function Printings({
     // heavier rule: three sections, two hairlines, no boxes. The heading is rendered while
     // the list is still loading so the pane does not reflow around it when it arrives.
     <section aria-labelledby={headingId} className="space-y-2 border-t border-border pt-3">
-      <h3 id={headingId} className="text-xs uppercase tracking-wide text-muted">
+      <h3 id={headingId} className="text-xs uppercase tracking-wide text-dim">
         Printings
       </h3>
-      {loading && <p className="text-xs text-muted">Loading printings…</p>}
+      {loading && <p className="text-xs text-dim">Loading printings…</p>}
       {error && (
         <p className="text-xs text-destructive">
           Could not read the other printings — {error}. The card above is unaffected.
@@ -443,7 +407,7 @@ function Printings({
           `total` is not — saying only the first would report a Forest as having 400
           printings when it has 862. */}
       {items.length > 0 && (
-        <p className="font-mono text-[0.7rem] tabular-nums text-muted">
+        <p className="font-mono text-[0.7rem] tabular-nums text-dim">
           {items.length < total
             ? `${items.length} of ${total} printings`
             : `${total} printing${total === 1 ? "" : "s"}`}
@@ -453,7 +417,7 @@ function Printings({
       )}
       {groups.map((group, i) => (
         <div key={group.illustrationId ?? `ungrouped-${i}`} className="space-y-0.5">
-          <p className="flex items-baseline gap-1.5 pt-1 text-[0.7rem] text-muted">
+          <p className="flex items-baseline gap-1.5 pt-1 text-[0.7rem] text-dim">
             <span className="min-w-0 truncate">
               {group.printings[0].artist ?? "Artist unknown"}
             </span>
@@ -478,15 +442,10 @@ function PrintingRow({ printing, current }: { printing: Printing; current: boole
         // The one printing this pane is about. A gold hairline down its edge rather than a
         // fill: gold means "here" everywhere else in the app, and a filled row in a list of
         // forty would be the brightest thing under the art.
-        current ? "border-l-2 border-accent bg-bg pl-1.5 text-text" : "text-muted",
+        current ? "border-l-2 border-accent bg-bg pl-1.5 text-text" : "text-dim",
       )}
     >
-      <span
-        aria-hidden="true"
-        title={printing.rarity ?? undefined}
-        className="size-1.5 shrink-0 translate-y-px rounded-full"
-        style={{ backgroundColor: rarityColor(printing.rarity) }}
-      />
+      <RarityGem rarity={printing.rarity} className="shrink-0 translate-y-px" />
       <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
         {printing.setCode.toUpperCase()} · {printing.collectorNumber}
         {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
@@ -496,18 +455,13 @@ function PrintingRow({ printing, current }: { printing: Printing; current: boole
       {parseFinishes(printing.finishes).map((f) => (
         <span key={f} className="shrink-0 font-mono tabular-nums">
           {FINISH_MARK[f] && (
-            <abbr title={FINISH_LABEL[f]} className="mr-0.5 text-[0.65rem] text-muted no-underline">
+            <abbr title={FINISH_LABEL[f]} className="mr-0.5 text-[0.65rem] text-dim no-underline">
               {FINISH_MARK[f]}
             </abbr>
           )}
-          {price(finishPrice(printing.prices, f))}
+          {usdPrice(finishPrice(printing.prices, f))}
         </span>
       ))}
     </li>
   );
-}
-
-/** A price, or an em dash. Never `$0.00`, which is a price nobody quoted. */
-function price(value: number | null): string {
-  return value === null ? "—" : usd.format(value);
 }

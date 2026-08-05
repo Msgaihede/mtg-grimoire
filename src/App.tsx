@@ -26,7 +26,7 @@ function ActiveView() {
 
   return (
     <section className="mx-auto max-w-prose py-16 text-center">
-      <p className="text-sm text-muted">{BLURB[activeView]}</p>
+      <p className="text-sm text-dim">{BLURB[activeView]}</p>
     </section>
   );
 }

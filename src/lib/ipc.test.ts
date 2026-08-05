@@ -92,6 +92,71 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(printings).toEqual({ items: [], total: 0 });
   });
 
+  /**
+   * The ten writes and reads Plan 3 added, in one table.
+   *
+   * Every one of them is a name `invoke` matches positionally-by-key against the Rust
+   * command's parameters — `collection_add(entry)`, `collection_update(id, patch)`,
+   * `wishlist_add(wish)` — and a wrapper that spells one of them `input` or `body` is a
+   * runtime deserialization error that no type in this file would catch.
+   */
+  it("sends every collection write under the name its command declares", async () => {
+    invoke.mockResolvedValue({ id: 1, quantity: 4, removed: false });
+
+    await ipc.collectionAdd({ cardId: "p1", finish: "foil", quantity: 4 });
+    expect(invoke).toHaveBeenCalledWith("collection_add", {
+      entry: { cardId: "p1", finish: "foil", quantity: 4 },
+    });
+
+    await ipc.collectionSetQuantity(7, 0);
+    expect(invoke).toHaveBeenCalledWith("collection_set_quantity", { id: 7, quantity: 0 });
+
+    await ipc.collectionUpdate(7, { condition: "LP" });
+    expect(invoke).toHaveBeenCalledWith("collection_update", { id: 7, patch: { condition: "LP" } });
+
+    await ipc.collectionRemove(7);
+    expect(invoke).toHaveBeenCalledWith("collection_remove", { id: 7 });
+  });
+
+  it("sends both collection reads under `query`", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0 });
+    await ipc.collectionList({ sort: "set", limit: 100, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_list", {
+      query: { sort: "set", limit: 100, offset: 0 },
+    });
+
+    invoke.mockResolvedValue({ totalCards: 0 });
+    // The header is taken over the *same* filters as the list it captions, which is why
+    // both take one query shape rather than the summary taking a narrower one.
+    await ipc.collectionSummary({ finishes: ["foil"], limit: 100, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_summary", {
+      query: { finishes: ["foil"], limit: 100, offset: 0 },
+    });
+  });
+
+  it("sends every wishlist command under the name its command declares", async () => {
+    invoke.mockResolvedValue({ id: 2, quantity: 1, removed: false });
+
+    // `wish`, not `entry`: the two modules name their input differently and Tauri matches
+    // by name, so the one that is copied from the other is the one that fails at runtime.
+    await ipc.wishlistAdd({ oracleId: "o1", name: "Lightning Bolt", quantity: 1 });
+    expect(invoke).toHaveBeenCalledWith("wishlist_add", {
+      wish: { oracleId: "o1", name: "Lightning Bolt", quantity: 1 },
+    });
+
+    await ipc.wishlistSetQuantity(2, 3);
+    expect(invoke).toHaveBeenCalledWith("wishlist_set_quantity", { id: 2, quantity: 3 });
+
+    await ipc.wishlistRemove(2);
+    expect(invoke).toHaveBeenCalledWith("wishlist_remove", { id: 2 });
+
+    invoke.mockResolvedValue({ items: [], total: 0 });
+    await ipc.wishlistList({ fulfilled: false, limit: 100, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("wishlist_list", {
+      query: { fulfilled: false, limit: 100, offset: 0 },
+    });
+  });
+
   it("sends a prefetch batch under `cardIds` and `variant`", async () => {
     invoke.mockResolvedValue(undefined);
 

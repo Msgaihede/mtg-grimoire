@@ -28,8 +28,13 @@ export const FORMATS = [
  */
 export type ColorKey = ManaKey;
 
-/** The mana-value chips. The last one is open-ended — `8` means "8 or more". */
-export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
+/**
+ * The mana-value chips. The last one is open-ended — `8` means "8 or more".
+ *
+ * Declared with the chips that draw it now that a second view has the same row, and
+ * re-exported here for the importers that knew it by this name.
+ */
+export { MANA_VALUES } from "@/components/FilterChips";
 
 /** Add or remove one value. The order values were picked in is not information. */
 export function toggleIn<T>(list: readonly T[], value: T): T[] {

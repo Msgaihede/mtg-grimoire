@@ -16,6 +16,8 @@ const card = (id: string, name: string): CardSummary => ({
   manaCost: "{R}",
   priceUsd: 400.5,
   layout: "normal",
+  ownedQuantity: 0,
+  wishlisted: false,
 });
 
 /**

@@ -208,7 +208,7 @@ export function SetCombobox({
           "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
           selected.length > 0
             ? "border-accent text-accent"
-            : "border-border text-muted hover:text-text",
+            : "border-border text-dim hover:text-text",
         )}
       >
         {label}
@@ -233,7 +233,7 @@ export function SetCombobox({
             }}
             onKeyDown={onListKeyDown}
             placeholder="Name or code"
-            className="mb-2 h-8 w-full rounded-md border border-border bg-bg px-2 text-sm placeholder:text-muted focus:border-accent focus:outline-none"
+            className="mb-2 h-8 w-full rounded-md border border-border bg-bg px-2 text-sm placeholder:text-dim focus:border-accent focus:outline-none"
           />
           <ul
             id={listboxId}
@@ -244,7 +244,7 @@ export function SetCombobox({
             {options.length === 0 && (
               // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
               // options are allowed. `presentation` makes it the sentence it looks like.
-              <li role="presentation" className="px-2 py-3 text-center text-xs text-muted">
+              <li role="presentation" className="px-2 py-3 text-center text-xs text-dim">
                 {sets.isPending
                   ? "Loading sets…"
                   : sets.isError
@@ -265,12 +265,12 @@ export function SetCombobox({
             ))}
           </ul>
           {full && (
-            <p className="pt-2 text-center text-[0.7rem] text-muted">
+            <p className="pt-2 text-center text-[0.7rem] text-dim">
               {MAX_SETS} sets is the most one search can name — remove one to add another.
             </p>
           )}
           {matches.length > options.length && (
-            <p className="pt-2 text-center text-[0.7rem] text-muted">
+            <p className="pt-2 text-center text-[0.7rem] text-dim">
               Showing {options.length} of {matches.length} — keep typing to narrow it down.
             </p>
           )}
@@ -319,7 +319,7 @@ function Option({
           for the ones where that glyph is not the set's own. */}
       <i className={cn(glyph, "w-4 shrink-0 text-center")} aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">{set.name}</span>
-      <span className="shrink-0 font-mono text-xs text-muted">{set.code.toUpperCase()}</span>
+      <span className="shrink-0 font-mono text-xs text-dim">{set.code.toUpperCase()}</span>
       {/* Gold text alone reads as "hovered" in a list the reader is moving through. The
           slot is held open on every row so picking one does not shuffle the column. */}
       <span className="w-3.5 shrink-0">

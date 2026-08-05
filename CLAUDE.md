@@ -113,10 +113,13 @@ Scryfall as the only external dependency.
   decimal strings. `legalities` is JSON (23 keys, grows). Finishes: enum, never boolean.
 - npm `xlsx` is banned (CVEs). TypeScript stays on 6.0.x until TS 7.1.
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).
-  The app palette maps `muted`/`accent` to **text** colours, so rewrite a vendored
-  component's `bg-muted`/`bg-accent` surfaces to `bg-surface` (stock `bg-muted` renders
-  text on the same colour — a stock `TabsList` has invisible labels). `text-muted-foreground`
-  and `text-accent-foreground` already resolve correctly.
+  The app palette maps `accent` to a **text** colour (gold), so rewrite a vendored
+  component's `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite any more:
+  the app's dim text is `--color-dim` and `--color-muted` is the surface shadcn means by it
+  (it used to be the dim text, which gave a stock `TabsList` invisible labels).
+  `text-muted-foreground` and `text-accent-foreground` already resolve correctly.
+- **Dim text is `text-dim`, never `text-muted`** — the latter still compiles and now paints
+  text in the surface colour, i.e. very nearly invisible. `src/lib/tokens.test.ts` guards it.
 - Card images are served over `mtgimg://` — `<origin>/<variant>/<card_id>/<face>`, where
   the origin is `http://mtgimg.localhost` on Windows and `mtgimg://localhost` elsewhere.
   Variants are **WEBP only** (`thumb`/`grid`/`display`/`art`); the JPG/PNG family is never

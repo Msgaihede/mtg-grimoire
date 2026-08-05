@@ -13,7 +13,9 @@ Magic's color pie IS the interface's color system. The app chrome is a quiet, da
 - `--color-bg` oklch(0.16 0.01 270) — table felt
 - `--color-surface` oklch(0.21 0.012 270) — cards/panels
 - `--color-border` oklch(0.3 0.01 270)
-- `--color-text` oklch(0.93 0.005 90) / `--color-muted` oklch(0.65 0.01 90) (dim TEXT, never a bg)
+- `--color-text` oklch(0.93 0.005 90) / `--color-dim` oklch(0.65 0.01 90) (dim TEXT, never a bg —
+  named `dim` because `--color-muted` is shadcn's *surface*, and Tailwind builds `text-*` and
+  `bg-*` from one literal, so one token cannot be both)
 - `--color-accent` oklch(0.75 0.12 85) gold — interactive emphasis, focus, active nav
 
 ### The five colors (authentic WUBRG symbol fills — used for mana UI ONLY)

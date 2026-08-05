@@ -65,7 +65,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 // screen that is about to be full of card art.
                 active
                   ? "bg-bg text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
-                  : "text-muted hover:bg-bg/60 hover:text-text",
+                  : "text-dim hover:bg-bg/60 hover:text-text",
               )}
             >
               <Icon className="size-4 shrink-0" aria-hidden="true" />

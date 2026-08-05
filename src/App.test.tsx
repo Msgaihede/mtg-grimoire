@@ -39,6 +39,8 @@ const BOLT: CardSummary = {
   manaCost: "{R}",
   priceUsd: 400.5,
   layout: "normal",
+  ownedQuantity: 0,
+  wishlisted: false,
 };
 
 const BOLT_DETAIL: CardDetail = {

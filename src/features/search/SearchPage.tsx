@@ -1,8 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ManaText } from "@/components/ManaText";
+import { RarityGem } from "@/components/RarityGem";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
-import { rarityColor } from "@/lib/rarity";
+import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
@@ -27,22 +28,6 @@ const GRID = "grid grid-cols-[minmax(0,1fr)_8rem_minmax(0,16rem)_6rem_6rem] item
 const ROW_FOCUS =
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-
-/**
- * How old a price is, in the detail pane's own words.
- *
- * The same sentence in both places on purpose: prices come from one place — whatever the
- * last sync wrote — so two phrasings would imply two freshnesses. Static text, because it
- * is a statement about where prices come from rather than a timestamp to render.
- */
-const PRICES_AS_OF = "Prices as of the last card-data sync.";
-
-/** Prices are the one column worth aligning on the decimal point; absent is an em dash. */
-function price(value: number | null): string {
-  return value === null ? "—" : usd.format(value);
-}
-
 function Row({ card }: { card: CardSummary }) {
   return (
     <>
@@ -55,37 +40,19 @@ function Row({ card }: { card: CardSummary }) {
       {/* `setName` is nullable and the code is not, so the code is what is shown; the
           full name rides along as the tooltip when there is one. Mono because a collector
           number is data — the same rule as the grid caption and the pane. */}
-      <span
-        role="cell"
-        className="truncate font-mono text-muted"
-        title={card.setName ?? undefined}
-      >
+      <span role="cell" className="truncate font-mono text-dim" title={card.setName ?? undefined}>
         {card.setCode.toUpperCase()} · {card.collectorNumber}
       </span>
-      <span role="cell" className="truncate text-muted">
+      <span role="cell" className="truncate text-dim">
         {card.typeLine ?? "—"}
       </span>
       {/* Gem dot plus tinted word, exactly as the grid tiles caption a rarity — the two
-          views show the same fact and there is no reason for it to look like two facts.
-          The dot is `aria-hidden`: the word beside it already says which rarity it is. */}
-      <span role="cell" className="flex min-w-0 items-center gap-1.5">
-        <span
-          aria-hidden="true"
-          className="size-1.5 shrink-0 rounded-full"
-          style={{ backgroundColor: rarityColor(card.rarity) }}
-        />
-        <span
-          className="truncate capitalize text-muted"
-          // Tinted only when there is a rarity to tint — the inline colour wins over the
-          // muted class where there is one. The fallback token is the border colour, and
-          // an em dash drawn in it would be a character nobody can read.
-          style={card.rarity ? { color: rarityColor(card.rarity) } : undefined}
-        >
-          {card.rarity ?? "—"}
-        </span>
+          views show the same fact and there is no reason for it to look like two facts. */}
+      <span role="cell" className="min-w-0">
+        <RarityGem rarity={card.rarity} withLabel className="max-w-full" />
       </span>
       <span role="cell" className="text-right font-mono tabular-nums">
-        {price(card.priceUsd)}
+        {usdPrice(card.priceUsd)}
       </span>
     </>
   );
@@ -278,7 +245,7 @@ function Results({
         role="status"
         className={cn(
           empty ? "py-16 text-center text-sm" : "text-xs",
-          empty && failure ? "text-destructive" : "text-muted",
+          empty && failure ? "text-destructive" : "text-dim",
         )}
       >
         {summaryOf(search, failure)}
@@ -342,7 +309,7 @@ function Results({
               style={{ height: HEADER_HEIGHT }}
               className={cn(
                 GRID,
-                "sticky top-0 z-10 border-b border-border bg-surface px-3 text-xs text-muted",
+                "sticky top-0 z-10 border-b border-border bg-surface px-3 text-xs text-dim",
               )}
             >
               <span role="columnheader">Name</span>

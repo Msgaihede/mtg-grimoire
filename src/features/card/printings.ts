@@ -1,23 +1,17 @@
 /**
- * The card-detail domain logic: which printings share artwork, what a finish costs, and
- * which formats are worth a chip.
+ * The card-detail domain logic: which printings share artwork, which formats are worth a
+ * chip, and how many sides a card really has.
  *
  * Here rather than in Rust because CLAUDE.md puts domain logic in TypeScript — and
  * because every rule below is a judgement call about meaning (is a null illustration a
- * group? does a missing foil price fall back?) that wants fast tests around it.
+ * group? is a split card two-sided?) that wants fast tests around it.
+ *
+ * The finish vocabulary used to live here too. It left for `@/lib/finish` when the
+ * collection and the quick-add popup needed it: a card-detail module is the wrong place to
+ * keep something three features read, and the second copy of it had already appeared in
+ * `CardDetailPane`.
  */
 import type { Printing } from "@/lib/ipc";
-
-/** Scryfall's finish enum. Never a boolean — `etched` is a third thing. */
-export type Finish = "nonfoil" | "foil" | "etched";
-const FINISHES: readonly Finish[] = ["nonfoil", "foil", "etched"];
-
-/** The `prices` key each finish is worth. */
-const PRICE_KEY: Record<Finish, string> = {
-  nonfoil: "usd",
-  foil: "usd_foil",
-  etched: "usd_etched",
-};
 
 /**
  * The 23 legality keys in Scryfall's emission order.
@@ -89,30 +83,6 @@ export function groupByIllustration(printings: Printing[]): ArtGroup[] {
     groups.push(group);
   }
   return groups;
-}
-
-/** The finishes a printing exists in. Unknown values are dropped, not guessed at. */
-export function parseFinishes(json: string | null): Finish[] {
-  const parsed = safeParse(json);
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((f): f is Finish => FINISHES.includes(f as Finish));
-}
-
-/**
- * What one finish of this printing costs in USD, or `null`.
- *
- * A lookup by finish, with **no fallback of any kind**. `price_usd` — the derived column
- * — is a nonfoil→foil→etched chain built for sorting, and using it here would price a
- * plain copy at foil rates. Values arrive as decimal strings because money is not a
- * float on the wire; `Number` is the last possible moment to make one.
- */
-export function finishPrice(pricesJson: string | null, finish: Finish): number | null {
-  const prices = safeParse(pricesJson);
-  if (typeof prices !== "object" || prices === null) return null;
-  const raw = (prices as Record<string, unknown>)[PRICE_KEY[finish]];
-  if (typeof raw !== "string") return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
 }
 
 /**

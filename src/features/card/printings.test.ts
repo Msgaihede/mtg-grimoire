@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Printing } from "@/lib/ipc";
-import {
-  faceCount,
-  finishPrice,
-  groupByIllustration,
-  legalityChips,
-  parseFinishes,
-} from "./printings";
+import { faceCount, groupByIllustration, legalityChips } from "./printings";
 
 const printing = (over: Partial<Printing>): Printing => ({
   id: "p",
@@ -53,48 +47,6 @@ describe("groupByIllustration", () => {
     ]);
 
     expect(groups).toHaveLength(2);
-  });
-});
-
-describe("finishPrice", () => {
-  /**
-   * The carryover's sharpest warning: `price_usd` is a display fallback chain
-   * (nonfoil→foil→etched) and would price a nonfoil at foil rates. A finish price is a
-   * lookup by finish in the blob, and nothing else.
-   */
-  it("reads the key that belongs to the finish", () => {
-    const prices =
-      '{"usd":"5.00","usd_foil":"40.00","usd_etched":"71.50","eur":"4.20","eur_foil":null,"tix":"0.03"}';
-
-    expect(finishPrice(prices, "nonfoil")).toBe(5);
-    expect(finishPrice(prices, "foil")).toBe(40);
-    expect(finishPrice(prices, "etched")).toBe(71.5);
-  });
-
-  it("is null when that finish has no price, and never falls back to another one", () => {
-    const prices =
-      '{"usd":null,"usd_foil":null,"usd_etched":"0.71","eur":null,"eur_foil":null,"tix":null}';
-
-    expect(finishPrice(prices, "nonfoil")).toBeNull();
-    expect(finishPrice(prices, "foil")).toBeNull();
-    expect(finishPrice(prices, "etched")).toBe(0.71);
-  });
-
-  it("survives an absent or unparseable blob", () => {
-    expect(finishPrice(null, "foil")).toBeNull();
-    expect(finishPrice("not json", "foil")).toBeNull();
-  });
-});
-
-describe("parseFinishes", () => {
-  it("reads the enum, and etched is one of its values", () => {
-    expect(parseFinishes('["nonfoil","foil","etched"]')).toEqual(["nonfoil", "foil", "etched"]);
-  });
-
-  it("drops anything that is not a finish, and tolerates nothing at all", () => {
-    expect(parseFinishes('["nonfoil","glossy"]')).toEqual(["nonfoil"]);
-    expect(parseFinishes(null)).toEqual([]);
-    expect(parseFinishes("{}")).toEqual([]);
   });
 });
 

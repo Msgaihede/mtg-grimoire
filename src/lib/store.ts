@@ -11,6 +11,10 @@ interface AppState {
   setActiveView: (view: ViewId) => void;
   searchView: SearchView;
   setSearchView: (view: SearchView) => void;
+  /** How the collection is laid out. Separate from `searchView` on purpose — the search is
+   *  for looking at cards, the collection is usually for counting them. */
+  collectionView: SearchView;
+  setCollectionView: (view: SearchView) => void;
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
@@ -33,6 +37,10 @@ export const useAppStore = create<AppState>((set) => ({
   // are comparing prices rather than looking at cards.
   searchView: "grid",
   setSearchView: (searchView) => set({ searchView }),
+  // The table by default, where the search takes the art: a collection is read for what is
+  // in it — counts, conditions, what it is worth — and forty tiles answer none of that.
+  collectionView: "table",
+  setCollectionView: (collectionView) => set({ collectionView }),
   selectedCardId: null,
   setSelectedCardId: (selectedCardId) => set({ selectedCardId }),
 }));

@@ -35,3 +35,27 @@ describe("the open card", () => {
     expect(useAppStore.getState().selectedCardId).toBe("p1");
   });
 });
+
+/**
+ * Two layouts, two settings. The search is for looking at cards and opens on the art; the
+ * collection is usually for counting them and opens on the table. A reader who switches one
+ * to compare prices has said nothing about the other, and one shared toggle would make that
+ * choice for them in a view they were not looking at.
+ */
+describe("the two result layouts", () => {
+  it("opens the search on art and the collection on the table", () => {
+    expect(useAppStore.getState().searchView).toBe("grid");
+    expect(useAppStore.getState().collectionView).toBe("table");
+  });
+
+  it("keeps them apart", () => {
+    useAppStore.getState().setCollectionView("grid");
+
+    expect(useAppStore.getState().collectionView).toBe("grid");
+    expect(useAppStore.getState().searchView).toBe("grid");
+
+    useAppStore.getState().setSearchView("table");
+
+    expect(useAppStore.getState().collectionView).toBe("grid");
+  });
+});

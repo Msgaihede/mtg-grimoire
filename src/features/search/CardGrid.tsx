@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { RarityGem } from "@/components/RarityGem";
 import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
 import type { CardSummary } from "@/lib/ipc";
-import { rarityColor } from "@/lib/rarity";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
 
@@ -279,20 +279,18 @@ function Tile({
           // cards rather than a wall of broken-image icons.
           <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
             <span className="line-clamp-3 text-xs">{card.name}</span>
-            <span className="text-[0.7rem] text-muted">
+            <span className="text-[0.7rem] text-dim">
               {state === "waiting" ? "Retrying…" : "No image"}
             </span>
           </span>
         )}
       </span>
 
-      <span className="flex items-center gap-1.5 truncate font-mono text-xs text-muted">
-        <span
-          aria-hidden="true"
-          title={card.rarity ?? undefined}
-          className="size-1.5 shrink-0 rounded-full"
-          style={{ backgroundColor: rarityColor(card.rarity) }}
-        />
+      {/* The gem carries no word here — a tile has room for a set and a number and nothing
+          else. `RarityGem` keeps the rarity in the accessible name anyway, which is what
+          the tile's own `title` attribute used to be standing in for badly. */}
+      <span className="flex items-center gap-1.5 truncate font-mono text-xs text-dim">
+        <RarityGem rarity={card.rarity} />
         <span className="truncate">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>

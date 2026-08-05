@@ -125,7 +125,7 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
         <h2 id="first-run-title" className="font-heading text-2xl text-text">
           Setting up your card database
         </h2>
-        <p className="text-sm text-muted">
+        <p className="text-sm text-dim">
           Downloading every Magic card from Scryfall. This happens once and takes a few minutes —
           after that the app works offline.
         </p>
@@ -138,7 +138,7 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
             label={progress ? PHASE_LABEL[progress.phase] : "Starting"}
             className="h-1.5"
           />
-          <div className="flex justify-between text-xs text-muted">
+          <div className="flex justify-between text-xs text-dim">
             <span>{progress ? PHASE_LABEL[progress.phase] : "Starting…"}</span>
             {/* Geist Mono: the direction's third type role is data, and a byte count that
                 reflows its own width every 200 ms is exactly what it is for. */}
