@@ -88,17 +88,31 @@ const MAX_LIMIT: u32 = 500;
 
 /// How many copies the collection holds against a wish, as a scalar subquery.
 ///
-/// A pinned wish counts that printing; an unpinned one counts every printing of the oracle
-/// card, which is what "any printing" means on the way back as well as on the way out.
+/// **Every term of the wish narrows it**, which is the same statement
+/// [`WISHLIST_GRAIN`] makes about what separates one wish from another:
+///
+/// * the printing — a pinned wish counts that printing, an unpinned one counts every
+///   printing of the oracle card, which is what "any printing" means on the way back as
+///   well as on the way out;
+/// * the finish — a wish *for the foil* is not satisfied by the nonfoil sitting in a
+///   binder. That is why the finish is in the grain in the first place: a foil wish and a
+///   nonfoil wish are two wishes, and counting either against the other would make the
+///   third term of the grain a distinction the list itself does not believe in. A wish that
+///   names no finish takes any of them, which is what "no preference" means.
+///
+/// Condition is deliberately *not* a term: a wishlist has nowhere to say "and in NM", so
+/// there is nothing to match against, and a played copy is still a copy of the card.
 ///
 /// `sum(quantity)`, so a collection row emptied to zero (which the collection keeps — see
 /// [`crate::collection::set_quantity`]) contributes nothing: this figure is copies held,
 /// not entries recorded, and a wish is satisfied by copies.
 const OWNED_SQL: &str = "coalesce((
         SELECT sum(ce.quantity) FROM collection_entries ce
-         WHERE (w.card_id IS NOT NULL AND ce.card_id = w.card_id)
+         WHERE (w.card_id IS NOT NULL AND ce.card_id = w.card_id
+                AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))
             OR (w.card_id IS NULL AND ce.card_id IN
-                    (SELECT id FROM cards WHERE oracle_id = w.oracle_id))), 0)";
+                    (SELECT id FROM cards WHERE oracle_id = w.oracle_id)
+                AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))), 0)";
 
 pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
     if let Some(f) = input.preferred_finish.as_deref() {
@@ -114,16 +128,27 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
     } else {
         input.quantity
     };
+    // Trimmed, and blank read as absent — **before** anything below asks whether an id is
+    // there. `nonblank` is the same rule the filters apply, and it is load-bearing here in
+    // a way it is not there: the table's `CHECK (oracle_id IS NOT NULL OR card_id IS NOT
+    // NULL)` is satisfied by an empty string, and [`WISHLIST_GRAIN`] coalesces NULL to `''`
+    // — so a wish arriving with `oracleId: ""` would pass every guard and then land on the
+    // grain `('', '', '')`, which every *other* blank-id wish would fold into. One row,
+    // silently accumulating unrelated cards' quantities. A form's cleared field is the
+    // ordinary way to send one.
+    let card_id = crate::filters::nonblank(&input.card_id).map(str::to_owned);
+    let sent_oracle_id = crate::filters::nonblank(&input.oracle_id).map(str::to_owned);
+    let sent_name = crate::filters::nonblank(&input.name).map(str::to_owned);
     // Asked before anything is looked up, because it is the question that decides whether
     // there is anything to look up: a wish naming neither an oracle card nor a printing is
     // a wish for nothing, and would collide with every other such row on the grain (the
     // table's own CHECK says the same thing, in the database's voice rather than the app's).
-    if input.card_id.is_none() && input.oracle_id.is_none() {
+    if card_id.is_none() && sent_oracle_id.is_none() {
         return Err("a wish needs either a card or an oracle id".into());
     }
 
     // Whatever the caller did not send, taken from the printing it named.
-    let printing: Option<(Option<String>, String, String, String, String)> = match &input.card_id {
+    let printing: Option<(Option<String>, String, String, String, String)> = match &card_id {
         Some(id) => conn
             .query_row(
                 "SELECT oracle_id, name, set_code, collector_number, lang FROM cards WHERE id = ?1",
@@ -134,18 +159,20 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
             .map_err(|e| e.to_string())?,
         None => None,
     };
-    if input.card_id.is_some() && printing.is_none() {
+    if card_id.is_some() && printing.is_none() {
         return Err("no card with that id is in the card database".into());
     }
-    let oracle_id = input
-        .oracle_id
-        .clone()
-        .or_else(|| printing.as_ref().and_then(|p| p.0.clone()));
-    let name = match input
-        .name
-        .clone()
-        .or_else(|| printing.as_ref().map(|p| p.1.clone()))
-    {
+    // The printing's own oracle id can be blank too — `cards.oracle_id` is nullable and an
+    // ingest is not a form, but a row carrying `''` would fold on the grain just the same.
+    let oracle_id = sent_oracle_id.or_else(|| {
+        printing
+            .as_ref()
+            .and_then(|p| p.0.as_deref())
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+            .map(str::to_owned)
+    });
+    let name = match sent_name.or_else(|| printing.as_ref().map(|p| p.1.clone())) {
         Some(name) => name,
         // An any-printing wish made from a card the reader is looking at sends the oracle
         // id and nothing else, so the name is read from *a* printing of that oracle card —
@@ -173,7 +200,7 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
             &sql,
             params![
                 oracle_id,
-                input.card_id,
+                card_id,
                 printing.as_ref().map(|p| p.2.clone()),
                 printing.as_ref().map(|p| p.3.clone()),
                 printing.as_ref().map(|p| p.4.clone()),
@@ -211,15 +238,28 @@ fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, Str
     .ok_or_else(|| "a wish needs a card name".to_owned())
 }
 
-/// Set an absolute quantity. **Zero removes the row**, unlike the collection's.
+/// Set an absolute quantity. **Zero removes the row**, unlike the collection's — and a
+/// negative number is refused, exactly like the collection's.
 ///
-/// The asymmetry is the table's: `wishlist_entries.quantity` carries a `CHECK (quantity >
-/// 0)`, because a wish holds nothing worth keeping once it is emptied — no condition, no
-/// purchase price, no acquisition story, just the fact that somebody once wanted a card and
-/// now wants none of it. The collection keeps its zeros for exactly the reasons this does
-/// not have.
+/// Two different asymmetries, and they pull in opposite directions on purpose.
+///
+/// *Zero deletes* because `wishlist_entries.quantity` carries a `CHECK (quantity > 0)`: a
+/// wish holds nothing worth keeping once it is emptied — no condition, no purchase price,
+/// no acquisition story, just the fact that somebody once wanted a card and now wants none
+/// of it. The collection keeps its zeros because it has all of those things to keep.
+///
+/// *Negative is refused* for the reason [`crate::collection::set_quantity`] refuses it, and
+/// the reason matters more here, not less: below zero is not a quantity at all, it can only
+/// come from a bug or a hand-made payload, and in a module where zero legitimately deletes,
+/// treating `-1` as "close enough to zero" would make arithmetic that went wrong somewhere
+/// upstream silently destroy a row. Zero is a thing a stepper can mean; minus one is not.
 pub fn set_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
-    if quantity <= 0 {
+    if quantity < 0 {
+        return Err(format!(
+            "{quantity} is not a quantity. A wishlist quantity cannot be less than zero."
+        ));
+    }
+    if quantity == 0 {
         return remove_wish(conn, id);
     }
     let changed = conn
@@ -248,6 +288,24 @@ pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
         quantity: 0,
         removed: true,
     })
+}
+
+/// The `ESCAPE` character for the name filter's `LIKE`.
+///
+/// A backslash, and interpolated into the SQL as a literal — which is safe because it is
+/// this constant and never anything a caller sends. Every character it protects is escaped
+/// by [`escape_like`], itself included.
+const LIKE_ESCAPE: char = '\\';
+
+/// A user's text as a `LIKE` pattern that means exactly what it says.
+///
+/// The escape character goes first: doing it last would escape the backslashes the other
+/// two arms had just introduced, and `%` would come back out as a literal `\` followed by a
+/// wildcard.
+fn escape_like(text: &str) -> String {
+    text.replace(LIKE_ESCAPE, &format!("{LIKE_ESCAPE}{LIKE_ESCAPE}"))
+        .replace('%', &format!("{LIKE_ESCAPE}%"))
+        .replace('_', &format!("{LIKE_ESCAPE}_"))
 }
 
 pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
@@ -280,9 +338,15 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         // Matched against the stored name rather than through FTS: a wish carries its own
         // name (it may have no card row at all), and a list of a few hundred rows does not
         // need an index to filter by one.
+        //
+        // `ESCAPE`, because `LIKE`'s own wildcards are ordinary characters in a search box:
+        // a reader who types `%` means the per-cent sign, not "everything", and `_` is one
+        // keystroke away from `-` on a name like `God-Pharaoh`. Unescaped, either turns a
+        // filter into a filter that does not filter — which is the failure nobody reports,
+        // because a list that shows too much still looks like a list.
         p.push(
-            "w.name LIKE '%' || ? || '%'".to_owned(),
-            Box::new(text.to_owned()),
+            format!("w.name LIKE '%' || ? || '%' ESCAPE '{LIKE_ESCAPE}'"),
+            Box::new(escape_like(text)),
         );
     }
     match q.fulfilled {
@@ -713,6 +777,104 @@ mod tests {
         assert_eq!(only(false).len(), 2);
     }
 
+    /// The finish is the third term of the grain, so it has to be the third term of
+    /// "already owned" as well. A wish *for the foil* is not satisfied by the nonfoil in a
+    /// binder — and if it were, the wish would silently leave the "still missing" list the
+    /// day its cheap sibling arrived, which is the one moment a shopping list must not
+    /// lose an entry.
+    #[test]
+    fn a_wish_for_one_finish_is_not_filled_by_another() {
+        let conn = seeded();
+        crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".into(),
+                finish: "nonfoil".into(),
+                quantity: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let wish = |card: Option<&str>, oracle: Option<&str>, finish: Option<&str>| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    card_id: card.map(str::to_owned),
+                    oracle_id: oracle.map(str::to_owned),
+                    preferred_finish: finish.map(str::to_owned),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .id
+        };
+        let foil = wish(Some("bolt-lea"), None, Some("foil"));
+        let any_finish = wish(Some("bolt-lea"), None, None);
+        // The same distinction through the oracle card rather than the printing.
+        let foil_any_printing = wish(None, Some("o1"), Some("foil"));
+
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let owned_of = |id: i64| {
+            rows.items
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .owned_quantity
+        };
+        assert_eq!(owned_of(foil), 0, "three nonfoils fill no foil wish");
+        assert_eq!(owned_of(foil_any_printing), 0, "nor at any printing");
+        assert_eq!(
+            owned_of(any_finish),
+            3,
+            "a wish with no preference takes it"
+        );
+
+        // And the "still missing" list has to agree, in both directions.
+        let missing: Vec<i64> = list_wishes(
+            &conn,
+            &WishlistQuery {
+                fulfilled: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items
+        .iter()
+        .map(|r| r.id)
+        .collect();
+        assert!(missing.contains(&foil), "the foil wish is still missing");
+        assert!(missing.contains(&foil_any_printing));
+        assert!(!missing.contains(&any_finish));
+
+        // A foil actually arriving is what fills it — and fills only it.
+        crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".into(),
+                finish: "foil".into(),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let owned_of = |id: i64| {
+            rows.items
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .owned_quantity
+        };
+        assert_eq!(owned_of(foil), 1);
+        assert_eq!(owned_of(foil_any_printing), 1);
+        assert_eq!(
+            owned_of(any_finish),
+            4,
+            "no preference counts both finishes"
+        );
+    }
+
     /// A wish is removed, never emptied: `quantity > 0` is the table's own CHECK, which is
     /// the asymmetry with the collection's zero-keeps-the-row rule.
     #[test]
@@ -743,6 +905,103 @@ mod tests {
         let err = set_wish_quantity(&conn, wish.id, 2).unwrap_err();
         assert!(err.contains("not there any more"), "{err}");
         assert!(remove_wish(&conn, wish.id).unwrap().removed);
+    }
+
+    /// Zero is a thing a stepper can mean; minus one is not. In a module where zero
+    /// legitimately deletes, letting a negative through would make arithmetic that went
+    /// wrong upstream destroy a row — so the wishlist refuses below zero in the same words
+    /// the collection does, and the row is still there afterwards to prove it.
+    #[test]
+    fn a_negative_quantity_is_refused_and_never_deletes_a_wish() {
+        let conn = seeded();
+        let wish = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let err = set_wish_quantity(&conn, wish.id, -1).unwrap_err();
+        assert!(err.contains("not a quantity"), "{err}");
+        assert!(!err.contains("CHECK"), "{err}");
+
+        let (rows, qty): (i64, i64) = conn
+            .query_row("SELECT count(*), quantity FROM wishlist_entries", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((rows, qty), (1, 2), "a refused write changes nothing");
+    }
+
+    /// A blank id is not an id. `CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)` is
+    /// satisfied by `''`, and [`WISHLIST_GRAIN`] coalesces NULL to `''` — so an empty
+    /// `oracleId` from a cleared form field would land on the grain `('','','')` and fold
+    /// every other such wish into one row, silently adding up unrelated cards' quantities.
+    #[test]
+    fn a_blank_id_is_no_id_at_all_and_never_folds_two_cards_into_one_row() {
+        let conn = seeded();
+        let blank = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("   ".into()),
+                card_id: Some("".into()),
+                name: Some("Lightning Bolt".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(blank.contains("either a card or an oracle id"), "{blank}");
+
+        // The near miss the guard is really for: one blank id and one real name each, twice
+        // over. Refused, so they cannot become one row.
+        for name in ["Black Lotus", "Ancestral Recall"] {
+            let err = add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some("".into()),
+                    name: Some(name.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(err.contains("either a card or an oracle id"), "{err}");
+        }
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        // Whitespace around a real id is trimmed rather than stored, so the padded form of
+        // a wish is the same wish and not a second row beside it.
+        let padded = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("  bolt-lea  ".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let plain = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(padded.id, plain.id);
+        assert_eq!(plain.quantity, 2);
+        let stored: String = conn
+            .query_row("SELECT card_id FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, "bolt-lea");
     }
 
     #[test]
@@ -873,6 +1132,62 @@ mod tests {
         .unwrap();
         assert_eq!(hit.total, 1);
         assert_eq!(hit.items[0].name, "Ancestral Recall");
+    }
+
+    /// `LIKE`'s wildcards are ordinary characters in a search box, and unescaped they turn
+    /// a filter into one that does not filter — the failure nobody reports, because a list
+    /// showing too much still looks like a list. `_` is the dangerous one: it is a
+    /// keystroke away from the `-` in half the card names in Magic.
+    #[test]
+    fn the_text_filter_treats_like_wildcards_as_the_characters_they_are() {
+        let conn = seeded();
+        for name in ["Lightning Bolt", "God-Pharaoh's Gift", "100% Sure Thing"] {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some(format!("o-{name}")),
+                    name: Some(name.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let found = |text: &str| {
+            list_wishes(
+                &conn,
+                &WishlistQuery {
+                    cards: crate::filters::CardFilters {
+                        text: Some(text.to_owned()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .iter()
+            .map(|r| r.name.clone())
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            found("%"),
+            ["100% Sure Thing"],
+            "a per-cent sign is a character"
+        );
+        assert_eq!(found("God_Pharaoh"), Vec::<String>::new(), "`_` is not `-`");
+        assert_eq!(found("God-Pharaoh"), ["God-Pharaoh's Gift"]);
+        // The escape character itself, which the escaping has to escape first of all — and
+        // which must reach SQLite as a pattern rather than as a dangling escape (that is a
+        // *prepare* error, so an unescaped backslash would fail the whole list).
+        assert_eq!(found("\\"), Vec::<String>::new());
+        assert_eq!(found("\\%"), Vec::<String>::new());
+        assert_eq!(
+            found("bolt"),
+            ["Lightning Bolt"],
+            "and ordinary text still works"
+        );
     }
 
     /// Every sort key, exercised — because `price` orders by a *select alias* over a

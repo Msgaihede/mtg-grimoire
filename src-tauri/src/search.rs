@@ -187,13 +187,27 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     //
     // The probe itself is indexed (`idx_collection_card`), but the *driver* is still
     // `cards`, so `owned: true` over a browse walks the whole table looking for matches it
-    // mostly does not find. Measured on the 116 k-row database: the capped count takes
-    // 149 ms against a 12 000-printing collection and 381 ms against a 200-printing one,
-    // where the cap is unreachable and the scan therefore runs to the end. Narrowed by any
-    // text (0.1 ms) or combined with `owned: false` (17 ms) it is nowhere near that. If the
-    // browse case needs to be faster, the shape that fixes it is driving from the small
-    // side — `JOIN (SELECT DISTINCT card_id FROM collection_entries)` — at the cost of a
-    // sort that the name index currently supplies for free.
+    // mostly does not find — and the fewer it can find, the further it walks, because the
+    // count's cap is then unreachable and nothing stops it early. Kept anyway, and the
+    // measurements say why the obvious fix is not one. Medians on the real 116 k-row
+    // database, `EXISTS` as written against
+    // `JOIN (SELECT DISTINCT card_id FROM collection_entries)`:
+    //
+    //   printings owned │ count EXISTS   count JOIN │ page 50 EXISTS   page 50 JOIN
+    //   ────────────────┼───────────────────────────┼──────────────────────────────
+    //            12 000 │     149 ms        26 ms   │      5.7 ms         54 ms
+    //             2 000 │     336 ms        15 ms   │       28 ms         17 ms
+    //               200 │     373 ms       2.1 ms   │      259 ms        2.2 ms
+    //
+    // The join wins every count and *loses* the page for the collector who has most —
+    // driving from the collection means sorting its rows by name, which is exactly the work
+    // `idx_cards_name` does for free when `cards` drives. The two statements therefore want
+    // opposite shapes, and one predicate shared by both (which is what makes the count agree
+    // with the page) cannot be both. Any future fix has to split them, not swap them.
+    //
+    // None of it touches the default browse: this filter is opt-in, and narrowed by any text
+    // at all it is 0.1 ms. `owned: false` is 17 ms at every collection size, because a
+    // predicate most rows satisfy reaches the cap immediately.
     match req.owned {
         Some(true) => p
             .wheres
@@ -928,10 +942,15 @@ mod tests {
     /// from the front end. Also pins the camelCase spelling Task 10 has to mirror.
     #[test]
     fn a_partial_camel_case_payload_deserializes_and_takes_the_default_page_size() {
-        let req: SearchRequest =
-            serde_json::from_str(r#"{"text":"bolt","setCode":"lea","paperOnly":true}"#).unwrap();
+        let req: SearchRequest = serde_json::from_str(
+            r#"{"text":"bolt","setCode":"lea","paperOnly":true,"owned":false}"#,
+        )
+        .unwrap();
         assert_eq!(req.set_code.as_deref(), Some("lea"));
         assert_eq!(req.paper_only, Some(true));
+        // `Some(false)` and `None` are different filters — "the ones I do not have" against
+        // "no opinion" — so this pins the value, not merely that the key parsed.
+        assert_eq!(req.owned, Some(false));
         assert_eq!(req.limit, 0, "omitted limit means unset, not a parse error");
         assert_eq!(req.offset, 0);
 
