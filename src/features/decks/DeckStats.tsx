@@ -336,7 +336,8 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**
-   * The shortfall the last press was made against, or `null` if there has not been one.
+   * The shortfall the last press was made against, or `null` once that press has stopped being
+   * news.
    *
    * `missing_to_wishlist` counts what the deck is short of and hands each card to `add_wish`,
    * whose fold **raises** an existing wish's quantity — so a second press on the same shortfall
@@ -344,9 +345,25 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
    * cheerful number both times. The button is therefore spent until the deck says something
    * new: `stats.missing` is exactly the number the press was about, so a changed one is a
    * changed question. Not the mutation's own `isSuccess`, which stays true forever.
+   *
+   * **Released for good, and that is the whole reason this is state rather than a comparison.**
+   * Re-deriving "spent" from `sentFor === stats.missing` on every render meant the flag could
+   * come *back*: step a 3-copy shortfall to 4 and back to 3, and the last answer reappeared in
+   * the live region — "Added 3 wishes" for a write that did not just happen, over three cards
+   * that may not be the ones it was about — with the button claiming they were already wished
+   * for. Cleared during render, which is React's own answer to state that has to follow a prop
+   * (`Cover`'s art, the add target's zone).
+   *
+   * **What this deliberately does not close:** press at 3, add a copy, press again at 4, and the
+   * original three are folded on top of themselves — 7 wished for a 4-copy shortfall. Knowing
+   * better needs knowing what is *already* wished, which is a wishlist read this strip does not
+   * make: {@link MissingWrite} is narrowed to the one command on purpose, and a second query
+   * here would be a second answer to "what does this deck need" that could disagree with the
+   * first. The floor is "one press per shortfall", and it is a floor rather than a fix.
    */
   const [sentFor, setSentFor] = useState<number | null>(null);
-  const spent = sentFor !== null && sentFor === stats.missing && !send.isError;
+  if (sentFor !== null && sentFor !== stats.missing) setSentFor(null);
+  const spent = sentFor !== null && !send.isError;
 
   // The disabled-on-press hazard, in the shape it takes outside a dismissible layer: a browser
   // blurs a control that disables itself, with no `relatedTarget` at all, so the caret lands on

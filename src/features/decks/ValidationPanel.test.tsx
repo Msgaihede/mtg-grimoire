@@ -5,6 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { card, commander, gameChanger, islands, LEGAL, spec } from "./validation/fixtures";
 import { messageParts, ValidationPanel } from "./ValidationPanel";
+import { estimateBracket } from "./validation/bracket";
+
+/** The real estimate, watched: the only thing worth asserting about it here is *when* it is
+ *  asked, so it delegates rather than pretending. */
+vi.mock("./validation/bracket", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./validation/bracket")>();
+  return { ...actual, estimateBracket: vi.fn(actual.estimateBracket) };
+});
 
 /** The editor's own wiring, in the smallest thing that can hold it: one piece of state, a
  *  ref for the hand-back, and the two ways out kept apart (Escape hands the caret back, a
@@ -237,6 +245,22 @@ describe("ValidationPanel", () => {
     const panel = await open(<Harness cards={threeIssues()} format={spec("modern")} />);
 
     expect(within(panel).queryByText(/bracket/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The issues are computed on every render because the chip prints their count; the bracket is
+   * not, because nothing outside the open panel draws it and it greps every face of every card
+   * for four phrases.
+   */
+  it("does not read a bracket until the panel is opened", async () => {
+    vi.mocked(estimateBracket).mockClear();
+    render(<Harness cards={[commander(), islands(99)]} format={spec("commander")} />);
+
+    expect(estimateBracket).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /No issues/ }));
+
+    expect(estimateBracket).toHaveBeenCalled();
   });
 
   /** The one card fact that decides the number is a column a sync fills, so a deck with

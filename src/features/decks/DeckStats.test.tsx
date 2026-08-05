@@ -499,6 +499,32 @@ describe("DeckStats", () => {
     expect(screen.getByRole("status")).toHaveTextContent("");
   });
 
+  /**
+   * And it does not come back when the number does. A shortfall stepped to 4 and back to 3 is
+   * three *different* copies as far as anything here knows — so an answer re-derived from the
+   * count alone would put "Added 1 wish" back in the live region for a write that did not just
+   * happen, under a button claiming those cards were already wished for.
+   */
+  it("does not put the old answer back when the shortfall comes round again", async () => {
+    const deck = short();
+    const { rerender } = await press(deck, sender({ isSuccess: true, data: 1 }));
+    expect(screen.getByRole("status")).not.toHaveTextContent("");
+
+    const settled = sender({ isSuccess: true, data: 1 });
+    // Away…
+    rerender(
+      <DeckStats cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]} send={settled} />,
+    );
+    // …and back to exactly the number that was sent.
+    rerender(<DeckStats cards={deck} send={settled} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+    expect(button).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(button);
+    expect(settled.mutate).toHaveBeenCalledTimes(1);
+  });
+
   it("says so when the wishlist write is refused, and lets it be tried again", async () => {
     await press(
       short(),
