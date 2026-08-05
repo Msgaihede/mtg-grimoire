@@ -16,6 +16,7 @@
 //     node scripts/cdp.mjs text "Wishlist"            # click the first element with this text
 //     node scripts/cdp.mjs key Escape
 //     node scripts/cdp.mjs size 1024 768             # or `size reset`
+//     node scripts/cdp.mjs media prefers-reduced-motion reduce "expr"  # measured in-session
 //     node scripts/cdp.mjs shot out.png
 //     node scripts/cdp.mjs console out.jsonl          # stays attached; Ctrl-C to stop
 //
@@ -204,12 +205,35 @@ async function main() {
 
       // `prefers-reduced-motion`, `prefers-color-scheme` and friends, for the pass the
       // direction doc asks every UI task to make.
-      case "media":
+      //
+      // Two things here are load-bearing, both measured 2026-08-05 and both silent when they
+      // are missing — which is how this command spent two plans reporting on a page that was
+      // never asked for less motion:
+      //
+      // * `media` has to be sent *with* the feature. WebView2 accepts a features-only
+      //   override and ignores it, leaving `matchMedia("(prefers-reduced-motion: reduce)")
+      //   .matches` at `false`. `"screen"` is what the page already is, so forcing it changes
+      //   nothing else.
+      // * an emulation override belongs to the **session** and is reverted the moment the
+      //   socket closes — and every invocation of this script is its own socket. So a `media`
+      //   command followed by a separate `eval` measures a page with no override on it at
+      //   all. Hence the third argument: an expression evaluated *inside* the same session,
+      //   which is the only place the override is real.
+      //
+      //     node scripts/cdp.mjs media prefers-reduced-motion reduce \
+      //       "getComputedStyle(document.querySelector('img')).transitionProperty"
+      case "media": {
+        const reset = args[0] === "reset";
         await cdp.send("Emulation.setEmulatedMedia", {
-          features: args[0] === "reset" ? [] : [{ name: args[0], value: args[1] }],
+          media: reset ? "" : "screen",
+          features: reset ? [] : [{ name: args[0], value: args[1] }],
         });
-        console.log("emulated");
+        const expression = args.slice(2).join(" ");
+        console.log(
+          expression ? JSON.stringify(await evaluate(cdp, expression), null, 2) : "emulated",
+        );
         break;
+      }
 
       case "shot": {
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });

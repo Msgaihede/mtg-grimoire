@@ -21,6 +21,18 @@ export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
 export const CARD_ASPECT = "5 / 7";
 
 /**
+ * The proportions of the `art` variant — the illustration alone, with the frame, the type
+ * line and the text box cut away.
+ *
+ * `626 / 457`, which is `Variant::dimensions` in `images.rs` and therefore also the size of
+ * the placeholder served for a printing with no art: a frame at this ratio is the same
+ * rectangle whether the bytes arrive or not. Scryfall's own crops vary by a hair around it,
+ * so the art is drawn with `object-cover` — cropped by a pixel rather than stretched, which
+ * is the one thing the usage rules forbid outright.
+ */
+export const ART_ASPECT = "626 / 457";
+
+/**
  * Where a Tauri custom protocol lives, which is not the same string on every platform:
  * `http://<scheme>.localhost` on Windows and Android, `<scheme>://localhost` elsewhere.
  */

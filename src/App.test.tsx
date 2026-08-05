@@ -9,6 +9,7 @@ const cardPrintings = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
 const wishlistList = vi.hoisted(() => vi.fn());
+const deckList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -39,6 +40,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     prewarmCollection: vi.fn().mockResolvedValue(0),
     // And so is the wishlist, which asks one question on the way up.
     wishlistList,
+    // The deck gallery is the fourth live view. It reads its wall, and the create form
+    // behind it reads the seeded format table — mocked here too, because a `vi.fn()` that
+    // is not there is a synchronous `TypeError` inside a query rather than a rejection.
+    deckList,
+    formatSpecs: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -106,6 +112,7 @@ beforeEach(() => {
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  deckList.mockReset().mockResolvedValue([]);
   collectionSummary.mockReset().mockResolvedValue({
     totalCards: 3,
     uniqueCards: 2,
@@ -136,13 +143,24 @@ it("opens on the search view", async () => {
 it("swaps the main pane when a sidebar entry is picked", async () => {
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(screen.getByRole("button", { name: "Settings" }));
 
   // The ribbon's `h1` is the only place the view is named — the placeholder used to
   // repeat it as an `h2`, which was a second heading saying the same word.
-  expect(screen.getByRole("heading", { name: "Decks", level: 1 })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeInTheDocument();
   expect(screen.getByText(/coming in a later plan/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
+});
+
+/** The fourth live view, and the first of the deckbuilder. */
+it("opens the deck gallery on the decks entry", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+
+  expect(await screen.findByRole("button", { name: "New deck" })).toBeInTheDocument();
+  expect(screen.getByText(/a deck is a list you build for a format/i)).toBeInTheDocument();
+  expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
 });
 
 /** The second live view. The sidebar entry has to reach the real thing, not the blurb that

@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CollectionPage } from "@/features/collection/CollectionPage";
+import { DecksPage } from "@/features/decks/DecksPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
@@ -15,8 +16,7 @@ import { useAppStore, type ViewId } from "@/lib/store";
  * second copy of the same word in the content was both a repetition and, at 20px against
  * the ribbon's 18px, a subheading louder than the heading above it.
  */
-const BLURB: Record<Exclude<ViewId, "search" | "collection" | "wishlist">, string> = {
-  decks: "Deckbuilder, format validation and deck stats. Coming in a later plan.",
+const BLURB: Record<Exclude<ViewId, "search" | "collection" | "wishlist" | "decks">, string> = {
   settings: "Data folder, sync behaviour, import and export. Coming in a later plan.",
 };
 
@@ -25,6 +25,10 @@ function ActiveView() {
   if (activeView === "search") return <SearchPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
+  // The gallery is the Decks view in its first state; the editor is the same view with a deck
+  // open (`openDeckId`), and it arrives in the next task. Until then the store's id is written
+  // by the gallery and read by nothing.
+  if (activeView === "decks") return <DecksPage />;
 
   return (
     <section className="mx-auto max-w-prose py-16 text-center">
