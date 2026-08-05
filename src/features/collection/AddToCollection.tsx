@@ -211,11 +211,17 @@ function AddPopup({
       // and `wishlisted` are the badge on every row and every tile, so a wall the reader
       // added a third copy from would go on saying "×2" until they searched again.
       //
-      // This used to carry `refetchType: "none"` for cost — an infinite search holds every
-      // page the reader scrolled through, ~53 ms each against the real database, refetched
-      // in sequence. The cost is real and is bounded by what is *active*: only the search
-      // currently on screen refetches, and this popup is only ever open over one of them.
-      // A badge that is wrong on screen is worse than a second of background work.
+      // This used to carry `refetchType: "none"` for cost, and the cost is not small: an
+      // infinite search holds every page the reader scrolled through — up to 100 of them,
+      // ~53 ms each against the real database — and query-core refetches them in sequence,
+      // so a deep scroll is a multi-second worst case behind an open popup. What bounds it
+      // is that only *active* queries refetch: the search currently on screen, and this
+      // popup is only ever open over one of them. A badge that is visibly wrong is worse
+      // than background work nobody is waiting on.
+      //
+      // The upgrade is to stop asking rather than to ask more cheaply: patch
+      // `ownedQuantity`/`wishlisted` into the cached search pages in place, the way
+      // `WishlistPage`'s `patchWish` rewrites a wish, and refetch nothing at all.
       void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },
   });

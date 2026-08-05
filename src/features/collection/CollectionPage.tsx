@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { OwnedBadge } from "@/components/OwnedBadge";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
 import { ipc, ipcError, type CollectionPage as Page, type CollectionRow } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -272,7 +273,12 @@ export function CollectionPage() {
               selectedId={selectedCardId}
               onSelect={selectCard}
               onNeedNextPage={onNeedNextPage}
-              badge={(tile) => <QuantityBadge copies={tile.copies} />}
+              // The same mark search draws, and only the mark: the corner and the felt
+              // behind it are the wall's, so the two views cannot drift into two shades.
+              // No `wishlisted` — this wall shows what is owned and has no opinion about
+              // what is wanted. A tile at zero copies draws nothing, which is the badge's
+              // own guard and the reason this view no longer has a badge of its own.
+              badge={(tile) => <OwnedBadge owned={tile.copies} />}
             />
           ) : (
             <>
@@ -296,22 +302,6 @@ export function CollectionPage() {
           ))}
       </div>
     </section>
-  );
-}
-
-/**
- * How many copies, over the corner of the art.
- *
- * Mono and unfilled-but-legible: the badge sits on a photograph, so it needs a backing to be
- * readable at all — and that backing is the app's own table felt at 85%, which is the
- * quietest thing that can sit on a card without becoming a sticker.
- */
-function QuantityBadge({ copies }: { copies: number }) {
-  return (
-    <span className="rounded bg-bg/85 px-1.5 py-0.5 font-mono text-xs tabular-nums text-text">
-      <span aria-hidden="true">×{copies}</span>
-      <span className="sr-only">{copies} in your collection</span>
-    </span>
   );
 }
 

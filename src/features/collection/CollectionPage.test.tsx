@@ -406,10 +406,33 @@ describe("CollectionPage", () => {
     collectionList.mockResolvedValue(
       page([BOLT, { ...BOLT, id: 8, finish: "nonfoil", condition: "LP", quantity: 1 }]),
     );
-    wrap(<CollectionPage />);
+    const { container } = wrap(<CollectionPage />);
 
     const art = await screen.findAllByAltText("Lightning Bolt");
     expect(art).toHaveLength(1);
     expect(screen.getByText("3 in your collection")).toBeInTheDocument();
+    // One backing, not two. The wall owns the corner and the table felt behind a mark, and
+    // the mark it is handed is plain — a pill inside a pill painted the felt over itself and
+    // doubled the horizontal padding on a 170px tile.
+    expect(container.querySelectorAll('[class*="bg-bg/85"]')).toHaveLength(1);
+  });
+
+  /**
+   * A row at zero copies is a real row — the table offers removal *only* there — so the wall
+   * has to answer for one, and "×0" over the art is a sticker that says nothing. The guard
+   * is `OwnedBadge`'s, which is the whole reason this view shares it instead of keeping a
+   * second badge that never asked the question.
+   */
+  it("draws no mark on a tile the reader owns none of", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 0 }]));
+    const { container } = wrap(<CollectionPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+    expect(screen.queryByText("×0")).not.toBeInTheDocument();
+    expect(screen.queryByText(/in your collection/)).not.toBeInTheDocument();
+    // And no corner either: the backing collapses on a mark that rendered nothing, so a wall
+    // of unowned tiles is not a wall of empty chips. (`CardGrid`'s own test pins the rule.)
+    expect(container.querySelector('[class*="bg-bg/85"]')).toBeEmptyDOMElement();
   });
 });

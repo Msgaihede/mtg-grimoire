@@ -16,6 +16,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
+import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { parseFinishes } from "@/lib/finish";
 import { cn } from "@/lib/utils";
@@ -278,6 +279,42 @@ describe("CardGrid", () => {
       "bottom-1",
       "left-1",
     );
+  });
+
+  /**
+   * The corner exists for a mark, so a mark with nothing to say takes the corner with it —
+   * on a search of 116 k cards almost every tile owns none and wishes for none, and a wall of
+   * empty backings is forty stickers saying nothing.
+   *
+   * Both shapes of "nothing", because they reach here differently: a callback that returns
+   * `null` never builds an element, while `OwnedBadge` (which every real caller hands over
+   * unconditionally) *is* a truthy element that renders nothing — React cannot be asked which
+   * before it runs, so `empty:hidden` on the backing is what answers for the second case.
+   */
+  it("draws no corner for a mark with nothing to say", () => {
+    const { container, rerender } = render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        badge={() => null}
+      />,
+    );
+    expect(container.querySelector('[class*="bg-bg/85"]')).toBeNull();
+
+    rerender(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        badge={() => <OwnedBadge owned={0} />}
+      />,
+    );
+    const corner = container.querySelector('[class*="bg-bg/85"]');
+    expect(corner).toBeEmptyDOMElement();
+    expect(corner).toHaveClass("empty:hidden");
   });
 
   /** The wall says what it is a wall of — the search's results, or somebody's collection. */

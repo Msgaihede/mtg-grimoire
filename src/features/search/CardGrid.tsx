@@ -110,8 +110,9 @@ export function CardGrid<T extends GridCard>({
    * wish covers the card. Over the art rather than in the caption because it is a fact about
    * the *card*, and the caption line is already a set, a number and a control at 12px.
    *
-   * Returning `null` draws nothing at all, corner and backing included: on a search of the
-   * whole database almost every tile has nothing to say.
+   * Nothing to say draws nothing at all, corner and backing included — whether the callback
+   * returns `null` or hands over a badge that guards itself and renders nothing. On a search
+   * of the whole database almost every tile has nothing to say.
    */
   badge?: (card: T) => ReactNode;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
@@ -358,7 +359,13 @@ function Tile<T extends GridCard>({
           //
           // `pointer-events-none`: the whole tile opens the card, and a mark that swallowed
           // the click over its own two square centimetres would be a dead spot in the wall.
-          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
+          //
+          // `empty:hidden` is what makes "a mark with nothing to say draws nothing" true. A
+          // badge that guards *itself* still hands this slot a truthy element — React has no
+          // way to ask an element what it will render — so a wall of unowned tiles was a wall
+          // of empty 12×4px chips. The guard belongs here, where the corner is decided, and
+          // then it holds for every caller instead of for the ones that remembered.
+          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden">
             {mark}
           </span>
         )}
