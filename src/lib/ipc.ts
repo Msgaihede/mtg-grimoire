@@ -353,7 +353,10 @@ export interface CollectionQuery extends CardFilters {
   paperOnly?: boolean;
   finishes?: Finish[];
   conditions?: Condition[];
-  /** `true` narrows to the rows a Scryfall migration or a vanished printing flagged. */
+  /** `true` narrows to the rows a Scryfall migration or a vanished printing flagged, `false`
+   *  to those it did not touch — the complement is where a reader goes once the flagged ones
+   *  are dealt with, so it is a real filter and reaches the wire as `false` rather than being
+   *  dropped the way a blank string is. Absent asks nothing. */
   needsReview?: boolean;
   sort?: "name" | "set" | "added" | "quantity" | "price";
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
@@ -729,7 +732,8 @@ export interface FormatSpec {
   deckMax: number | null;
   /** `null` means unlimited — the two pseudo-formats (`casual`, `limited`) only. */
   maxCopies: number | null;
-  /** `0` means *no sideboard*; `null` means *uncapped* (Limited plays the rest of its pool). */
+  /** `0` means *no sideboard*; `null` means *uncapped* — the two pseudo-formats, `casual` and
+   *  `limited`, where Limited plays the rest of its pool and Casual caps nothing at all. */
   sideboardMax: number | null;
   singleton: boolean;
   requiresCommander: boolean;

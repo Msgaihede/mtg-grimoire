@@ -109,12 +109,21 @@ export function useDeck(id: number | null) {
    *
    * The one write here that reaches outside decks, so it is the one that takes `["wishlist"]`
    * with it — and it takes `["decks"]` too, because it reallocates before it counts.
+   *
+   * And the **search**, which draws what this just changed. `missing_to_wishlist` writes
+   * through `add_wish` with an `oracleId` and no printing — "any printing", because a
+   * shopping list is not a printing preference — and `CardSummary.wishlisted` is an `EXISTS`
+   * that matches an unpinned wish against `c.oracle_id`. So one press turns the heart on for
+   * *every* printing of every card the deck was short of, and a search left on screen behind
+   * it is visibly wrong rather than stale in a field nothing draws. The same key the quick-add
+   * and the wishlist's own writes take, for the same reason.
    */
   const missingToWishlist = useMutation({
     mutationFn: () => ipc.deckMissingToWishlist(opened(id)),
     onSuccess: () => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },
   });
 

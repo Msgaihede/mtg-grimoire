@@ -173,6 +173,7 @@ describe("useDeck", () => {
     await result.current.setQuantity.mutateAsync({ cardId: "p1", zone: "main", quantity: 3 });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
 
     invalidate.mockClear();
     const wishes = await result.current.missingToWishlist.mutateAsync();
@@ -183,5 +184,11 @@ describe("useDeck", () => {
     // And the deck too: the push reallocates before it counts, so what the deck is short of
     // is exactly what may have changed.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    // And the search wall. `missing_to_wishlist` writes **any-printing** wishes — `add_wish`
+    // with an `oracleId` and no `cardId` — and `CardSummary.wishlisted` is an `EXISTS` that
+    // matches an unpinned wish on `c.oracle_id`. One press therefore flips the heart on every
+    // printing of every card the deck was short of, and a search behind this is visibly wrong
+    // rather than stale in a field nothing draws.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
   });
 });
