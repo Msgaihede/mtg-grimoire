@@ -37,6 +37,23 @@ export function toggleIn<T>(list: readonly T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }
 
+/**
+ * Move a three-state filter on one press: off → the caller's question → its opposite → off.
+ *
+ * One chip and not two, because the two questions are opposites of each other rather than
+ * two independent switches — "owned" and "missing" cannot both be on, and a pair of chips
+ * that can be would offer a combination meaning nothing. `first` is which of them the press
+ * lands on, because it is not the same question in both views that use this: a search asks
+ * "what have I already got", a shopping list asks "what am I still missing".
+ *
+ * The chip's *label* is what says which state is on — an unpressed chip cannot mean "not
+ * owned" and also be the same chip that means it when pressed.
+ */
+export function cycleTriState(current: boolean | undefined, first: boolean): boolean | undefined {
+  if (current === undefined) return first;
+  return current === first ? !first : undefined;
+}
+
 /** Everything {@link activeFilterCount} counts — every filter the search view offers. */
 export interface FilterState {
   text: string;
@@ -44,6 +61,9 @@ export interface FilterState {
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
+  /** `false` is a filter too — "the cards I do *not* have" — so this is compared against
+   *  `undefined` rather than tested for truthiness. */
+  owned: boolean | undefined;
 }
 
 /**
@@ -60,6 +80,7 @@ export function activeFilterCount(f: FilterState): number {
     f.colors.length > 0,
     f.sets.length > 0,
     f.manaValues.length > 0,
+    f.owned !== undefined,
   ].filter(Boolean).length;
 }
 
@@ -139,6 +160,7 @@ export function useCardSearch() {
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  const [owned, setOwned] = useState<boolean | undefined>(undefined);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -162,6 +184,10 @@ export function useCardSearch() {
     colorsParam ?? "",
     setsParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
+    // Three states in one segment, spelled rather than stringified: `String(undefined)` and
+    // `String(false)` are both truthy strings, and a key that cannot tell "off" from "the
+    // ones I do not own" answers one with the other's cached pages.
+    owned === undefined ? "" : owned ? "owned" : "missing",
   ];
 
   const query = useInfiniteQuery({
@@ -175,6 +201,9 @@ export function useCardSearch() {
         colors: colorsParam,
         sets: setsParam,
         manaValues: manaParam,
+        // Sent only when it is set, so an untouched filter row produces exactly the payload
+        // it always did. `false` is meaningful here and `undefined` is not sent at all.
+        owned,
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong.
@@ -201,8 +230,16 @@ export function useCardSearch() {
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    /**
+     * `true` narrows to printings the collection has an entry for, `false` to those it does
+     * not, `undefined` asks nothing. **An entry, not a copy**: a row emptied to zero passes
+     * `true` while its badge reads `×0` (see `SearchRequest.owned`).
+     */
+    owned,
+    /** Off → owned → missing → off. The search asks "what have I already got" first. */
+    toggleOwned: () => setOwned((current) => cycleTriState(current, true)),
     /** How many kinds of filter are on — the number on the Reset all badge. */
-    activeCount: activeFilterCount({ text, format, colors, sets, manaValues }),
+    activeCount: activeFilterCount({ text, format, colors, sets, manaValues, owned }),
     /** Clear every filter at once, including the search box. */
     resetAll: () => {
       setText("");
@@ -210,6 +247,7 @@ export function useCardSearch() {
       setColors([]);
       setSets([]);
       setManaValues([]);
+      setOwned(undefined);
     },
     query,
     rows,
@@ -230,7 +268,8 @@ export function useCardSearch() {
      * database, not a search that missed — the difference between "wait for the sync"
      * and "try another word".
      */
-    unfiltered: !debouncedText && !format && !colorsParam && !setsParam && !manaParam,
+    unfiltered:
+      !debouncedText && !format && !colorsParam && !setsParam && !manaParam && owned === undefined,
   };
 }
 

@@ -8,6 +8,7 @@ const cardDetail = vi.hoisted(() => vi.fn());
 const cardPrintings = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
+const wishlistList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -27,6 +28,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // what they add up to.
     collectionList,
     collectionSummary,
+    // And so is the wishlist, which asks one question on the way up.
+    wishlistList,
   },
 }));
 
@@ -93,6 +96,7 @@ beforeEach(() => {
   cardDetail.mockReset().mockResolvedValue(BOLT_DETAIL);
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionSummary.mockReset().mockResolvedValue({
     totalCards: 3,
     uniqueCards: 2,
@@ -123,11 +127,11 @@ it("opens on the search view", async () => {
 it("swaps the main pane when a sidebar entry is picked", async () => {
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
 
   // The ribbon's `h1` is the only place the view is named — the placeholder used to
   // repeat it as an `h2`, which was a second heading saying the same word.
-  expect(screen.getByRole("heading", { name: "Wishlist", level: 1 })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Decks", level: 1 })).toBeInTheDocument();
   expect(screen.getByText(/coming in a later plan/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
@@ -141,6 +145,16 @@ it("opens the collection on the collection entry", async () => {
 
   expect(await screen.findByText("$801.00")).toBeInTheDocument();
   expect(screen.getByText(/nothing here yet/i)).toBeInTheDocument();
+  expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
+});
+
+/** The third live view, and the last one Plan 3 lights up. */
+it("opens the wishlist on the wishlist entry", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+
+  expect(await screen.findByText(/nothing on your wishlist yet/i)).toBeInTheDocument();
   expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
 });
 

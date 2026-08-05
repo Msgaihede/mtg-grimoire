@@ -218,13 +218,10 @@ describe("CollectionPage", () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "summary"] }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // Marked stale and deliberately *not* refetched: an infinite search holds up to 100
-    // pages, and the only thing this write changes on one of them is a badge no view renders
-    // yet. Drop `refetchType` when the badges land.
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: ["cards", "search"],
-      refetchType: "none",
-    });
+    // And refetched, not merely marked: Task 12's badges put `ownedQuantity` on every result
+    // row, so a search left on screen behind this write is now visibly wrong rather than
+    // stale in a field nothing draws.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
     // And the header really is re-read — not just marked.
     await waitFor(() => expect(collectionSummary).toHaveBeenCalledTimes(2));
     // The list is not: the row's own number came back from the write, and re-reading a
@@ -265,6 +262,35 @@ describe("CollectionPage", () => {
 
     expect(collectionRemove).toHaveBeenCalledWith(7);
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+  });
+
+  /**
+   * The other write, whose failure path was missing entirely: a removal the backend refuses
+   * is the same story as a stepper press it refuses — a row something else already changed —
+   * and it has to reach the same three lists. Without it the row stayed on screen with no
+   * word about why, and the header went on counting it.
+   */
+  it("re-reads every list that counts these copies when a removal is refused", async () => {
+    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: false });
+    collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 0 }]));
+    collectionRemove.mockRejectedValue("That collection entry is not there any more.");
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /^Remove Lightning Bolt \(Foil, NM\) from your collection/,
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not there any more/i);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    // And the row is still there — the removal did not happen, so the list must not pretend
+    // it did.
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
   });
 
   /** A row something else already deleted answers GONE, and the reader has to hear it — a

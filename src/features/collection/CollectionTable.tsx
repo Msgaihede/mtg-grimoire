@@ -7,7 +7,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
-import { FINISH_LABEL, isFinish } from "@/lib/finish";
+import { finishLabel } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -46,12 +46,7 @@ const GRID = "grid grid-cols-[minmax(0,1fr)_6.5rem_5.5rem_7rem_5.5rem_2rem] item
 const ROW_FOCUS =
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
-/** The finish as a word, for a column that stores whatever was written into it. */
-function finishLabel(raw: string): string {
-  return isFinish(raw) ? FINISH_LABEL[raw] : raw;
-}
-
-/** The grade spelled out, for the same reason. */
+/** The grade spelled out, for the same reason `finishLabel` exists. */
 function conditionLabel(raw: string): string {
   return CONDITION_LABEL[raw as Condition] ?? raw;
 }

@@ -264,13 +264,11 @@ describe("AddToCollectionButton", () => {
     // is now one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // Marked stale and *not* refetched: an infinite search holds up to 100 pages, and
-    // query-core refetches every one of them in sequence — 5 s of database work behind a
-    // popup, for a badge no view renders yet.
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: ["cards", "search"],
-      refetchType: "none",
-    });
+    // Refetched, not merely marked. It used to carry `refetchType: "none"` because the only
+    // thing this write changed on a result row was a field no view drew; Task 12's badges
+    // draw it, and a wall of art that goes on saying "×2" after a third copy was added from
+    // it is wrong on screen rather than stale in the cache.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
   });
 
   /**

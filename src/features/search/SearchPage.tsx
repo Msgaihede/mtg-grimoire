@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ManaText } from "@/components/ManaText";
+import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { parseFinishes } from "@/lib/finish";
@@ -50,6 +51,10 @@ function Row({ card }: { card: CardSummary }) {
         {/* The printed symbols, from the bundled font — the same rule as the detail pane:
             a cost is read as symbols, and `{1}{W}{U}` is a wire format. */}
         <ManaText source={card.manaCost} className="shrink-0 text-xs" />
+        {/* The two facts the tile carries over its art, in the cell that identifies the row —
+            because they are facts about the *card*, and the table's other five columns are
+            about the printing. One truth, stated the same way in both layouts. */}
+        <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
       </span>
       {/* `setName` is nullable and the code is not, so the code is what is shown; the
           full name rides along as the tooltip when there is one. Mono because a collector
@@ -317,6 +322,10 @@ function Results({
             listKey={searchKey}
             selectedId={selectedCardId}
             onSelect={selectCard}
+            // Spec §7: "'owned' badges appear in search once a wish is fulfilled." Drawn
+            // unconditionally because the badge is its own guard — on a browse of the whole
+            // database almost every tile has nothing to say, and says nothing.
+            badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
             // The tile's one control, built from the row it is about: the popup offers the
             // finishes this printing exists in — a foil-only card must not take a nonfoil
             // entry — and a wish made here can be for the card rather than for this piece of

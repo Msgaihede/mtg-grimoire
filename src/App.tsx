@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CollectionPage } from "@/features/collection/CollectionPage";
 import { SearchPage } from "@/features/search/SearchPage";
+import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore, type ViewId } from "@/lib/store";
 
@@ -14,8 +15,7 @@ import { useAppStore, type ViewId } from "@/lib/store";
  * second copy of the same word in the content was both a repetition and, at 20px against
  * the ribbon's 18px, a subheading louder than the heading above it.
  */
-const BLURB: Record<Exclude<ViewId, "search" | "collection">, string> = {
-  wishlist: "Cards you are hunting for, with owned badges in search. Coming in a later plan.",
+const BLURB: Record<Exclude<ViewId, "search" | "collection" | "wishlist">, string> = {
   decks: "Deckbuilder, format validation and deck stats. Coming in a later plan.",
   settings: "Data folder, sync behaviour, import and export. Coming in a later plan.",
 };
@@ -24,6 +24,7 @@ function ActiveView() {
   const activeView = useAppStore((s) => s.activeView);
   if (activeView === "search") return <SearchPage />;
   if (activeView === "collection") return <CollectionPage />;
+  if (activeView === "wishlist") return <WishlistPage />;
 
   return (
     <section className="mx-auto max-w-prose py-16 text-center">

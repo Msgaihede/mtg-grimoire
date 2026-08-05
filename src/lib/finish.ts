@@ -35,6 +35,18 @@ export function isFinish(value: string): value is Finish {
   return (FINISHES as readonly string[]).includes(value);
 }
 
+/**
+ * The finish as a word, for the columns that store whatever was written into them.
+ *
+ * `collection_entries.finish` and `wishlist_entries.preferred_finish` are TEXT with a
+ * `CHECK`, not an enum the type system knows about, so a row can arrive spelling something
+ * this app has never heard of. It is printed as it was stored rather than dropped: an
+ * unrecognised value is still what the reader's own data says.
+ */
+export function finishLabel(raw: string): string {
+  return isFinish(raw) ? FINISH_LABEL[raw] : raw;
+}
+
 /** The finishes a printing exists in. Unknown values are dropped, not guessed at. */
 export function parseFinishes(json: string | null): Finish[] {
   const parsed = safeParse(json);

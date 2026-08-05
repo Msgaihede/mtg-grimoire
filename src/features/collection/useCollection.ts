@@ -9,7 +9,7 @@ import {
 } from "@/features/search/useCardSearch";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
-import { ipc, type CollectionPage, type CollectionQuery } from "@/lib/ipc";
+import { ipc, type CollectionQuery } from "@/lib/ipc";
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this; a collection is
@@ -67,6 +67,12 @@ export function activeFilterCount(f: CollectionFilterState): number {
   ].filter(Boolean).length;
 }
 
+/** A page of a list whose total was counted in full — a collection, or a wishlist. */
+interface CountedPage {
+  items: readonly unknown[];
+  total: number;
+}
+
 /**
  * The offset for the page after these, or `undefined` when there is nothing left.
  *
@@ -74,8 +80,12 @@ export function activeFilterCount(f: CollectionFilterState): number {
  * is the one thing that makes this shorter than the search's twin. A short page still ends
  * the list whatever the count says: a write landing between two requests moves what the
  * offsets address, and believing `total` alone would refetch the same empty page forever.
+ *
+ * Structural in its argument because the wishlist's pager is the same pager over the same
+ * guarantee: `wishlist_list` counts in full too, and a second copy of this reasoning is a
+ * second place for the short-page rule to be forgotten.
  */
-export function nextOffset(pages: readonly CollectionPage[]): number | undefined {
+export function nextOffset(pages: readonly CountedPage[]): number | undefined {
   const last = pages[pages.length - 1];
   if (!last || last.items.length === 0) return undefined;
   const seen = pages.reduce((n, p) => n + p.items.length, 0);

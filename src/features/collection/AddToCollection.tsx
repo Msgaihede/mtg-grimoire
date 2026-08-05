@@ -207,14 +207,16 @@ function AddPopup({
       // The two lists this write belongs to, and their summaries.
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      // The search results are marked stale and deliberately *not* refetched. An infinite
-      // search holds every page the reader scrolled through — up to 100 of them, ~53 ms
-      // each against the real database — and query-core refetches active ones in sequence,
-      // so a plain invalidation is seconds of work behind an open popup. The only thing on
-      // a result row that this write changes is `ownedQuantity`/`wishlisted`, which no view
-      // renders yet (ledgered with the badges); the next search the reader runs refetches
-      // anyway. Drop `refetchType` when the badges land.
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"], refetchType: "none" });
+      // And the search results, which now *draw* what this write changed: `ownedQuantity`
+      // and `wishlisted` are the badge on every row and every tile, so a wall the reader
+      // added a third copy from would go on saying "×2" until they searched again.
+      //
+      // This used to carry `refetchType: "none"` for cost — an infinite search holds every
+      // page the reader scrolled through, ~53 ms each against the real database, refetched
+      // in sequence. The cost is real and is bounded by what is *active*: only the search
+      // currently on screen refetches, and this popup is only ever open over one of them.
+      // A badge that is wrong on screen is worse than a second of background work.
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },
   });
 

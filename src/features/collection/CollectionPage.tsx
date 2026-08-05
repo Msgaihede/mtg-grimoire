@@ -87,10 +87,26 @@ export function CollectionPage() {
     // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
     // is the same write it makes.
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    // Marked stale and deliberately not refetched: the only thing on a search result this
-    // changes is `ownedQuantity`/`wishlisted`, which no view renders yet (the badges are
-    // Task 12's). Drop `refetchType` when they land.
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"], refetchType: "none" });
+    // And the search results, which draw `ownedQuantity` on every row now. Refetched rather
+    // than merely marked — only *active* queries refetch, and while this view is on screen
+    // the search is unmounted, so from here the cost is a stale mark and nothing else.
+    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+  }, [queryClient]);
+
+  /**
+   * What a refused write leaves behind, on either path.
+   *
+   * The whole view, not just the list: a refused write is usually a row something else
+   * already removed (`GONE`), and a collection that has lost a row has also lost the copies,
+   * the value and the unique count that row was part of — measured live, the header went on
+   * counting a deleted entry until this reached past the table. The wishlist and the search
+   * go with it for the same reason a success takes them: the copies that deletion took are
+   * copies some wish counted as owned and some result row is badged with.
+   */
+  const settleFailure = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["collection"] });
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
   }, [queryClient]);
 
   const setQuantity = useMutation({
@@ -106,14 +122,7 @@ export function CollectionPage() {
     },
     onError: (_error, _variables, saved) => {
       if (saved) restore(saved);
-      // The whole view, not just the list. A refused write is usually a row something else
-      // already removed (`GONE`), and a collection that has lost a row has also lost the
-      // copies, the value and the unique count that row was part of — measured live: the
-      // header went on counting a deleted entry until this reached past the table.
-      void queryClient.invalidateQueries({ queryKey: ["collection"] });
-      // And the wishlist with it, for the same reason a success invalidates it: the copies
-      // an out-of-band deletion took are copies some wish was counting as owned.
-      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      settleFailure();
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
@@ -125,6 +134,11 @@ export function CollectionPage() {
 
   const remove = useMutation({
     mutationFn: (row: CollectionRow) => ipc.collectionRemove(row.id),
+    // No optimistic half, so nothing to roll back: the row is dropped from the answer rather
+    // than from the press, because a removal is one click and does not have to survive being
+    // held down. The failure path is the stepper's, though — a refusal here means the same
+    // thing it means there, and used to mean nothing at all.
+    onError: settleFailure,
     onSuccess: (change) => {
       patchEntry(change.id, null);
       settle();

@@ -55,9 +55,10 @@ describe("CollectionFilterBar", () => {
    * calling `toggleManaValue`, or the sort `<select>` calling `setFormat`, renders green and
    * filters by the wrong thing. Every control, once, against the field it is named for.
    *
-   * Batched deliberately — this is one fact about one component, and eleven `it`s repeating
-   * the same render would be ceremony. The three filters not here (finish, condition, needs
-   * review) are pinned end-to-end in `CollectionPage.test.tsx`, where they reach the query.
+   * Batched deliberately — this is one fact about one component, and thirteen `it`s
+   * repeating the same render would be ceremony. Finish and condition also reach the query
+   * end-to-end in `CollectionPage.test.tsx`; the Needs-review chip does not, which is
+   * exactly why it is here.
    */
   it("wires every control to the filter it is named for", async () => {
     const c = collection({ activeCount: 2 });
@@ -70,6 +71,9 @@ describe("CollectionFilterBar", () => {
     await userEvent.click(screen.getByRole("button", { name: "Red" }));
     await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
     await userEvent.click(screen.getByRole("button", { name: "Sets" }));
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+    await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
     await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
     await userEvent.click(screen.getByRole("button", { name: /reset all/i }));
 
@@ -78,6 +82,11 @@ describe("CollectionFilterBar", () => {
     expect(c.toggleColor).toHaveBeenCalledWith("R");
     expect(c.toggleManaValue).toHaveBeenCalledWith(3);
     expect(c.toggleSet).toHaveBeenCalledWith("lea");
+    expect(c.toggleFinish).toHaveBeenCalledWith("foil");
+    expect(c.toggleCondition).toHaveBeenCalledWith("LP");
+    // The one chip in this row whose state is a plain boolean, so its handler is the one
+    // that can be wired to the wrong `set*` and still render green.
+    expect(c.setNeedsReview).toHaveBeenCalledWith(true);
     expect(c.setSort).toHaveBeenCalledWith("price");
     expect(c.resetAll).toHaveBeenCalled();
     // Reset all clears the filters and not the layout: how the reader reads is not what they

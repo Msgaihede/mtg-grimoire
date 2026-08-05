@@ -267,6 +267,17 @@ describe("CardGrid", () => {
     expect(badge).toBeInTheDocument();
     expect(art.contains(badge)).toBe(false);
     expect(art).toHaveAccessibleName("Lightning Bolt");
+
+    // The corner is the wall's, not the badge's: every caller hands over a plain inline mark
+    // and this is the one place that decides where a mark goes, so two views cannot drift
+    // into two corners. `pointer-events-none` because the whole tile opens the card, and a
+    // mark that swallowed the click over its own two square centimetres would be a dead spot.
+    expect(badge.parentElement).toHaveClass(
+      "pointer-events-none",
+      "absolute",
+      "bottom-1",
+      "left-1",
+    );
   });
 
   /** The wall says what it is a wall of — the search's results, or somebody's collection. */

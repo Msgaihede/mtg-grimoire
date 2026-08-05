@@ -564,6 +564,72 @@ describe("SearchPage", () => {
     expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
   });
 
+  /**
+   * Spec §7: "'owned' badges appear in search once a wish is fulfilled." Both facts, on the
+   * row the reader is looking at — a quantity in the data face, and the wishlist's own mark
+   * from the sidebar — and both spelled out, because a badge that exists only as a shape is
+   * not a badge for everyone.
+   */
+  it("badges a row the reader owns, and one they have wished for", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 3, wishlisted: true }]));
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByText("×3")).toBeInTheDocument();
+    expect(screen.getByText("3 in your collection")).toBeInTheDocument();
+    expect(screen.getByText("On your wishlist")).toBeInTheDocument();
+  });
+
+  /** Nothing owned and nothing wished is not a fact worth a badge — it is every other row
+   *  in a 116 k-card database. */
+  it("says nothing about a card the reader neither owns nor wants", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.queryByText(/in your collection/)).not.toBeInTheDocument();
+    expect(screen.queryByText("On your wishlist")).not.toBeInTheDocument();
+  });
+
+  /**
+   * Three states in one chip, because the useful questions are opposites: what have I
+   * already got, and what am I still missing. The label says which one is on — an unpressed
+   * chip cannot mean "not owned" and be the same chip that means it when pressed.
+   */
+  it("filters by what the collection holds, in three states", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: "Owned" }));
+    await waitFor(() => expect(lastRequest().owned).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Owned" }));
+    await waitFor(() => expect(lastRequest().owned).toBe(false));
+    expect(screen.getByRole("button", { name: "Missing" })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "Missing" }));
+    // Absent, not `false`: an untouched filter row produces the same payload it always did.
+    await waitFor(() => expect(lastRequest().owned).toBeUndefined());
+    expect(screen.getByRole("button", { name: "Owned" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("counts the owned filter among what Reset all would clear", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: "Owned" }));
+
+    const reset = await screen.findByRole("button", { name: /reset all/i });
+    expect(reset).toHaveTextContent("1");
+
+    await userEvent.click(reset);
+
+    await waitFor(() => expect(lastRequest().owned).toBeUndefined());
+    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
+  });
+
   it("keeps the loaded rows when a later page fails, and offers a retry", async () => {
     viewportHeight = 2400;
     searchCards
@@ -641,6 +707,24 @@ describe("the result layout toggle", () => {
       "button",
     );
     expect(chips.map((c) => c.textContent)).toEqual(["Foil"]);
+  });
+
+  /**
+   * The same two facts, over the art. One truth stated the same way in both layouts — and
+   * *outside* the tile's button, or a wall of forty cards would be forty buttons called
+   * "Lightning Bolt 3 in your collection".
+   */
+  it("badges a tile with what the reader owns and wants, without renaming it", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 3, wishlisted: true }]));
+    wrap(<SearchPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+
+    expect(screen.getByText("3 in your collection")).toBeInTheDocument();
+    expect(screen.getByText("On your wishlist")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAccessibleName(
+      "Lightning Bolt",
+    );
   });
 
   it("says which layout is showing", async () => {

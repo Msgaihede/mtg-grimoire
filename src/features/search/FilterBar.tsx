@@ -5,6 +5,7 @@ import {
   ManaChip,
   ManaValueChips,
   ResetAll,
+  ToggleChip,
 } from "@/components/FilterChips";
 import { MANA_KEYS } from "@/lib/mana";
 import { useAppStore } from "@/lib/store";
@@ -82,6 +83,17 @@ export function FilterBar({ search }: { search: CardSearch }) {
           </option>
         ))}
       </select>
+
+      {/* Last of the filters, because it is the only one that is not a statement about the
+          card: everything left of it describes cardboard, and this describes the reader's
+          relationship to it. One chip and three states — the word on it is what says which
+          of the two questions is being asked, so an unpressed "Owned" cannot be mistaken
+          for a pressed "Missing". */}
+      <ToggleChip
+        label={search.owned === false ? "Missing" : "Owned"}
+        pressed={search.owned !== undefined}
+        onClick={search.toggleOwned}
+      />
 
       {/* Nothing is drawn until there is something to clear — the rule lives in the
           control, so every view that offers a reset offers the same one. */}

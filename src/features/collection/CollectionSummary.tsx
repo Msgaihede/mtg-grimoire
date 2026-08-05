@@ -1,3 +1,4 @@
+import { Figure, FigureRow } from "@/components/Figure";
 import type { CollectionSummary as Summary } from "@/lib/ipc";
 import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
 
@@ -17,7 +18,7 @@ import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
 export function CollectionSummaryHeader({ summary }: { summary: Summary | undefined }) {
   const n = (value: number) => value.toLocaleString("en-US");
   return (
-    <dl className="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-b border-border pb-3">
+    <FigureRow>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}
       <Figure label="Cards" value={summary ? n(summary.totalCards) : "—"} />
       <Figure label="Unique" value={summary ? n(summary.uniqueCards) : "—"} />
@@ -41,28 +42,6 @@ export function CollectionSummaryHeader({ summary }: { summary: Summary | undefi
       {summary && summary.tradelistCards > 0 && (
         <Figure label="For trade" value={n(summary.tradelistCards)} />
       )}
-    </dl>
-  );
-}
-
-function Figure({
-  label,
-  value,
-  note,
-  title,
-}: {
-  label: string;
-  value: string;
-  note?: string;
-  title?: string;
-}) {
-  return (
-    <div className="min-w-0" title={title}>
-      <dt className="text-xs text-dim">{label}</dt>
-      <dd className="font-mono text-lg tabular-nums">
-        {value}
-        {note && <span className="ml-2 text-xs text-dim">{note}</span>}
-      </dd>
-    </div>
+    </FigureRow>
   );
 }

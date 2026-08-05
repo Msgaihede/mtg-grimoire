@@ -106,9 +106,12 @@ export function CardGrid<T extends GridCard>({
   /** What the wall is, for anyone who cannot see that it is a wall of cards. */
   label?: string;
   /**
-   * A mark over the art's bottom-left corner — how many copies are owned, in the collection.
-   * Over the art rather than in the caption because it is a fact about the *card*, and the
-   * caption line is already a set, a number and a control at 12px.
+   * A mark over the art's bottom-left corner — how many copies are owned, and whether a
+   * wish covers the card. Over the art rather than in the caption because it is a fact about
+   * the *card*, and the caption line is already a set, a number and a control at 12px.
+   *
+   * Returning `null` draws nothing at all, corner and backing included: on a search of the
+   * whole database almost every tile has nothing to say.
    */
   badge?: (card: T) => ReactNode;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
@@ -254,6 +257,7 @@ function Tile<T extends GridCard>({
   const [state, setState] = useState<TileState>("showing");
   const [attempt, setAttempt] = useState(0);
   const [shown, setShown] = useState(card.id);
+  const mark = badge?.(card);
 
   // This component belongs to a *slot* in the grid, not to a card, so a new search hands
   // it a different card without remounting it. Resetting during render is React's own
@@ -345,10 +349,18 @@ function Tile<T extends GridCard>({
             )}
           </span>
         </button>
-        {badge && (
+        {mark && (
+          // The corner *and* the backing are the wall's, not the mark's: a mark sits on a
+          // photograph, so it needs something behind it to be readable at all — and that
+          // something is the app's own table felt at 85%, which is the quietest thing that
+          // can sit on a card without becoming a sticker. Deciding it here is what keeps two
+          // views from drifting into two corners and two shades.
+          //
           // `pointer-events-none`: the whole tile opens the card, and a mark that swallowed
           // the click over its own two square centimetres would be a dead spot in the wall.
-          <span className="pointer-events-none absolute bottom-1 left-1">{badge(card)}</span>
+          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
+            {mark}
+          </span>
         )}
       </div>
 
