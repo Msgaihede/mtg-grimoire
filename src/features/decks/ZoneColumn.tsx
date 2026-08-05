@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type Ref, type RefObject } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
@@ -65,6 +65,40 @@ const TYPE_BUCKETS = [
 
 /** Where a token, a scheme, or a row whose printing has left the card database goes. */
 const OTHER = "Other";
+
+/** How a row menu finds the box that would clip it. An attribute rather than a ref chain
+ *  because the menu is three components away from the scroller and owns none of them. */
+const SCROLLER_ATTR = "data-zone-scroller";
+
+/**
+ * Which way a row's menu opens — down from the row's top edge, or up from its bottom.
+ *
+ * Pure, because the thing it decides cannot be seen in jsdom: every rectangle there is zero,
+ * so a component test of the flip would pass over any arithmetic at all. The column's
+ * scroller clips (`overflow-y-auto` inside `overflow-hidden`) and there is nothing below it
+ * to scroll to, so a menu opened on a row near the foot of a column is simply cut in half.
+ *
+ * Down wins ties: it is where the reader is looking, and flipping a menu that fits would move
+ * it for nothing.
+ */
+export function shouldFlipUp({
+  rowTop,
+  rowBottom,
+  menuHeight,
+  viewTop,
+  viewBottom,
+}: {
+  rowTop: number;
+  rowBottom: number;
+  menuHeight: number;
+  viewTop: number;
+  viewBottom: number;
+}): boolean {
+  const fitsBelow = rowTop + menuHeight <= viewBottom;
+  const fitsAbove = rowBottom - menuHeight >= viewTop;
+  // Neither fits — a menu taller than the column it is in — so it opens the way it reads.
+  return !fitsBelow && fitsAbove;
+}
 
 /**
  * The bucket one card belongs to.
@@ -155,7 +189,11 @@ export interface ZoneColumnProps {
    * structural instead of remembered — `DecksPage`'s `Panel`, for its reason.
    */
   openMenuCardId: string | null;
-  /** True while any deck write is in flight. The menu's blur-away guard reads it. */
+  /**
+   * True while a write **the open menu started** is in flight — never while some other row's
+   * stepper or a rename is, or one row's edit would grey out another's menu. Only the open
+   * menu reads it: it disables its own controls and guards its own blur-away.
+   */
   busy: boolean;
   onOpenMenu: (card: DeckCard, trigger: HTMLButtonElement) => void;
   /** Focus left the menu on its own: it closes, and the caret stays where the reader put it. */
@@ -220,8 +258,9 @@ export function ZoneColumn({
       </h3>
 
       {/* The zone's own scroller. Every column scrolls on its own so a 60-card main deck does
-          not push the sideboard off the bottom of the window. */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-1">
+          not push the sideboard off the bottom of the window — and it is what a row menu
+          measures itself against, since it is what would clip one. */}
+      <div {...{ [SCROLLER_ATTR]: "" }} className="min-h-0 flex-1 overflow-y-auto p-1">
         {cards.length === 0 ? (
           <p className="px-2 py-3 text-xs text-dim">Nothing here yet.</p>
         ) : (
@@ -434,6 +473,7 @@ function CardRow({
           zone={zone}
           moveTargets={moveTargets}
           busy={busy}
+          triggerRef={triggerRef}
           onClose={onCloseMenu}
           onMove={onMove}
           onSetCover={onSetCover}
@@ -455,6 +495,7 @@ function RowMenu({
   zone,
   moveTargets,
   busy,
+  triggerRef,
   onClose,
   onMove,
   onSetCover,
@@ -463,16 +504,55 @@ function RowMenu({
   zone: DeckZone;
   moveTargets: readonly DeckZone[];
   busy: boolean;
+  /** The control that opened this. Pressing it again is a *toggle*, not a click away. */
+  triggerRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onMove: (card: DeckCard, to: DeckZone) => void;
   onSetCover: (card: DeckCard) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [flip, setFlip] = useState(false);
+  const measured = useRef(false);
+
+  // Which way it opens, decided against the column's own scroller — the one that clips it.
+  // `useLayoutEffect`, so a menu on the last row is never painted hanging out of the column
+  // before it flips, and **before** the focus below: focusing an element inside a scroller
+  // makes the browser scroll it into view, which is the very measurement being taken.
+  //
+  // Measured once and once only, and the ref is what makes that true in development: React's
+  // StrictMode mounts, runs the effects, unmounts and runs them *again* on the same instance —
+  // so the second pass re-measured a menu the first pass's focus had already scrolled into
+  // view, found it fitting, and unflipped it. Two hours of the running window said so; the
+  // guard is one line and the note is the rest of it.
+  useLayoutEffect(() => {
+    if (measured.current) return;
+    const panel = panelRef.current;
+    const row = panel?.parentElement;
+    const view = panel?.closest(`[${SCROLLER_ATTR}]`);
+    if (!panel || !row || !view) return;
+    measured.current = true;
+    const r = row.getBoundingClientRect();
+    const v = view.getBoundingClientRect();
+    setFlip(
+      shouldFlipUp({
+        rowTop: r.top,
+        rowBottom: r.bottom,
+        menuHeight: panel.offsetHeight,
+        viewTop: v.top,
+        viewBottom: v.bottom,
+      }),
+    );
+  }, []);
 
   // The caret moves into the layer, as it does for every other one in the app: the panel's
   // own controls are then the next thing Tab reaches, and Escape has something to hand back.
+  //
+  // `preventScroll`, because the flip above has already made the menu visible and the browser
+  // would otherwise do it a second way: focusing an element inside a scroller scrolls it into
+  // view, which — measured in the running window — dragged the list 75px under the reader's
+  // eyes to reveal a menu that was about to be flipped out of the way anyway.
   useEffect(() => {
-    panelRef.current?.focus();
+    panelRef.current?.focus({ preventScroll: true });
   }, []);
 
   return (
@@ -482,8 +562,12 @@ function RowMenu({
       role="dialog"
       aria-label={`Actions for ${card.name}`}
       className={cn(
-        "absolute right-1 top-1 z-20 w-44 rounded-lg border border-border bg-bg/95 p-1",
+        "absolute right-1 z-20 w-44 rounded-lg border border-border bg-bg/95 p-1",
         "text-xs shadow-lg",
+        // Anchored to the row's top edge normally, and to its bottom edge on the rows near
+        // the foot of the column — where opening downwards would put half the menu past the
+        // scroller's edge, with nothing to scroll it back into view.
+        flip ? "bottom-1" : "top-1",
         FOCUS,
       )}
       // Anchored to the row, so a press in here is a press on the row unless it is stopped —
@@ -500,8 +584,15 @@ function RowMenu({
       // would read that as the reader leaving — taking the menu down *as if the write had
       // worked*, before the answer arrives. Task 11's binding pattern; pinned by the
       // `focusOut(…, { relatedTarget: null })` tests in both suites.
+      //
+      // And **not to the trigger**, which is how the trigger stays a toggle: a press on it
+      // blurs this panel first, so closing here would take the menu down and the press would
+      // then open it again — a control that can only ever open. `NewDeck`'s boundary is the
+      // whole control for the same reason; this one names the exception instead, because the
+      // panel is positioned against the row rather than against the button.
       onBlur={(e) => {
         if (busy) return;
+        if (e.relatedTarget === triggerRef.current) return;
         if (!panelRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >

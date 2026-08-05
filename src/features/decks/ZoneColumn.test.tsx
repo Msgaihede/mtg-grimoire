@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckCard } from "@/lib/ipc";
 import { card, resetRowIds } from "./validation/fixtures";
-import { groupCards, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
+import { groupCards, shouldFlipUp, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
 
 /** Every callback the column reports through, so a test only names the one it is about. */
 function handlers() {
@@ -138,6 +138,44 @@ describe("groupCards", () => {
   });
 });
 
+/**
+ * The flip is arithmetic on purpose: jsdom lays nothing out, so every rectangle a component
+ * test could read is zero and a test of the rendered menu would pass over any decision at all.
+ * The column's scroller clips, and there is nothing under it to scroll to.
+ */
+describe("shouldFlipUp", () => {
+  /** A row at the top of a column: the menu fits below it, so it opens where the reader is
+   *  looking. */
+  it("opens downwards while there is room", () => {
+    expect(
+      shouldFlipUp({ rowTop: 100, rowBottom: 140, menuHeight: 140, viewTop: 90, viewBottom: 600 }),
+    ).toBe(false);
+  });
+
+  /** A row near the foot of the column: opening down would put half the menu past the
+   *  scroller's edge. */
+  it("opens upwards when the menu would run out of the bottom", () => {
+    expect(
+      shouldFlipUp({ rowTop: 520, rowBottom: 560, menuHeight: 140, viewTop: 90, viewBottom: 600 }),
+    ).toBe(true);
+  });
+
+  /** A menu taller than the column it is in fits neither way, so it opens the way it reads —
+   *  flipping would move it without gaining anything. */
+  it("stays downwards when neither direction fits", () => {
+    expect(
+      shouldFlipUp({ rowTop: 150, rowBottom: 190, menuHeight: 300, viewTop: 100, viewBottom: 260 }),
+    ).toBe(false);
+  });
+
+  /** Exactly enough room is room. */
+  it("does not flip on a menu that fits to the pixel", () => {
+    expect(
+      shouldFlipUp({ rowTop: 460, rowBottom: 500, menuHeight: 140, viewTop: 90, viewBottom: 600 }),
+    ).toBe(false);
+  });
+});
+
 describe("ZoneColumn", () => {
   /** The row is what the reader edits: a count they can change, a name they can open, and
    *  the printing's own data underneath in the data face. */
@@ -208,9 +246,14 @@ describe("ZoneColumn", () => {
   it("reports a step down to zero like any other quantity", async () => {
     const { onSetQuantity } = draw([card({ name: "Lightning Bolt", quantity: 1 })]);
 
-    await userEvent.click(screen.getByRole("button", { name: /decrease copies of lightning bolt/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /decrease copies of lightning bolt/i }),
+    );
 
-    expect(onSetQuantity).toHaveBeenCalledWith(expect.objectContaining({ name: "Lightning Bolt" }), 0);
+    expect(onSetQuantity).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Lightning Bolt" }),
+      0,
+    );
   });
 
   /**
@@ -269,7 +312,10 @@ describe("ZoneColumn", () => {
     rerender(<ZoneColumn {...props} openMenuCardId="c-Lightning Bolt" />);
     await userEvent.click(screen.getByRole("button", { name: "Move to Sideboard" }));
 
-    expect(onMove).toHaveBeenCalledWith(expect.objectContaining({ name: "Lightning Bolt" }), "side");
+    expect(onMove).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Lightning Bolt" }),
+      "side",
+    );
   });
 
   /** The menu is anchored inside the row, and a press in it is a press on the row unless it is

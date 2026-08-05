@@ -68,7 +68,11 @@ async function open() {
 beforeEach(() => {
   resetRowIds();
   useAppStore.setState({ openDeckId: 4, selectedCardId: null });
-  deckGet.mockReset().mockResolvedValue(detail({}, [bolt(), card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 })]));
+  deckGet
+    .mockReset()
+    .mockResolvedValue(
+      detail({}, [bolt(), card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 })]),
+    );
   deckUpdate.mockReset().mockResolvedValue(DECK);
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
@@ -129,22 +133,18 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Escape puts the name back and writes nothing — and it consumes the press, so the card
-   * pane docked beside the editor does not close on the same key. The pane is an `"outer"`
-   * layer listening in the bubble phase; a field that handles Escape at its own target runs
-   * first and `preventDefault()` is the whole handshake.
+   * Enter commits and then blurs, and the blur handler commits too — in the same tick, off a
+   * draft the first call had already decided to send. Two identical `deck_update`s for one
+   * press, which the assertion above cannot see because it matches arguments rather than
+   * counting calls.
    */
-  it("reverts a half-typed name on Escape, without writing and without letting the press through", async () => {
+  it("writes one rename for one press of Enter", async () => {
     await open();
 
-    const name = screen.getByLabelText("Deck name");
-    await userEvent.clear(name);
-    await userEvent.type(name, "Sunday");
-    const press = fireEvent.keyDown(name, { key: "Escape" });
+    await userEvent.clear(screen.getByLabelText("Deck name"));
+    await userEvent.type(screen.getByLabelText("Deck name"), "Sunday burn{Enter}");
 
-    expect(press).toBe(false); // preventDefault() was called
-    expect(name).toHaveValue("Burn");
-    expect(deckUpdate).not.toHaveBeenCalled();
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledTimes(1));
   });
 
   /** A blank name is not a rename — the backend refuses it in words, and the field should not
@@ -245,6 +245,62 @@ describe("DeckEditor", () => {
     );
   });
 
+  /**
+   * The stepper is controlled by the cache, so a press before the last answer would be
+   * computed from the number the last press was computed from: hold `+` on a 4-of and three
+   * presses all read 4, all send 5, and the deck lands on 5 instead of 7. The optimistic patch
+   * is what makes the second press know about the first — `CollectionPage`'s fix and
+   * `WishlistPage`'s, in the third place that needed it.
+   */
+  it("computes a held-down stepper from the press before it, not from the cache", async () => {
+    // Never answers: the only thing that can move the second press's number is the guess.
+    deckSetCardQuantity.mockReturnValue(new Promise(() => {}));
+    await open();
+
+    const up = screen.getByRole("button", { name: /increase copies of lightning bolt/i });
+    await userEvent.click(up);
+    await userEvent.click(up);
+    await userEvent.click(up);
+
+    expect(deckSetCardQuantity.mock.calls.map((c) => c[3])).toEqual([5, 6, 7]);
+  });
+
+  /**
+   * And the guess is rolled back when the write is refused — zero *removes* here, so a
+   * refusal that stayed on screen would be a card silently gone from the deck.
+   *
+   * The re-read that a refusal also triggers is left hanging on purpose: it would put the row
+   * back by itself, and a test that cannot tell the rollback from the refetch is a test that
+   * passes with no rollback at all.
+   */
+  it("puts a refused removal back before the re-read answers", async () => {
+    deckSetCardQuantity.mockRejectedValue("The database is busy with a sync — try again.");
+    deckGet
+      .mockResolvedValueOnce(detail({}, [bolt({ quantity: 1 })]))
+      .mockReturnValue(new Promise(() => {}));
+
+    await open();
+    await userEvent.click(
+      screen.getByRole("button", { name: /decrease copies of lightning bolt/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+  });
+
+  /** The row the caret was on leaves with the last copy. The zone it left is where the reader
+   *  is looking, and it announces its own new count — the hand-off a move makes. */
+  it("hands the caret to the zone when a row is stepped away", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt({ quantity: 1 })]));
+
+    await open();
+    await userEvent.click(
+      screen.getByRole("button", { name: /decrease copies of lightning bolt/i }),
+    );
+
+    expect(screen.getByRole("region", { name: /^Main deck/ })).toHaveFocus();
+  });
+
   /** A row opens the card in the pane the app already docks; the stepper on it does not. */
   it("opens the card from a row, and not from its stepper", async () => {
     await open();
@@ -253,7 +309,9 @@ describe("DeckEditor", () => {
     expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
 
     useAppStore.setState({ selectedCardId: null });
-    await userEvent.click(screen.getByRole("button", { name: /increase copies of lightning bolt/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /increase copies of lightning bolt/i }),
+    );
     expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 
@@ -319,11 +377,38 @@ describe("DeckEditor", () => {
     await userEvent.keyboard("{Escape}");
     screen.getByRole("button", { name: "More actions for Lightning Bolt" }).focus();
     await userEvent.keyboard("{Escape}");
+    // The name field is the third way in, and the one that *does* consume a press — but only
+    // while it is holding something to revert.
+    screen.getByLabelText("Deck name").focus();
+    await userEvent.keyboard("{Escape}");
 
     window.removeEventListener("keydown", listen);
-    // Heard both times, and consumed by nothing: the pane's bubble-phase listener acts on
+    // Heard every time, and consumed by nothing: the pane's bubble-phase listener acts on
     // exactly this.
-    expect(heard).toEqual([false, false]);
+    expect(heard).toEqual([false, false, false]);
+  });
+
+  /**
+   * The other side of it: a field that has been typed in owns one press, and one only. The
+   * second is the pane's again — otherwise a reader who half-typed a name and pressed Escape
+   * twice would find the second press had gone nowhere, with the pane still open beside them
+   * and nothing on screen to say why.
+   */
+  it("spends exactly one Escape on reverting the name", async () => {
+    await open();
+
+    const name = screen.getByLabelText("Deck name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Sunday");
+    // Back to back in one tick, which is what a held key sends: `fireEvent` answers `false`
+    // when the press was consumed. Read off the state rather than the ref, the second press
+    // sees a draft React has not cleared yet and eats a press it has nothing to spend.
+    const first = fireEvent.keyDown(name, { key: "Escape" });
+    const second = fireEvent.keyDown(name, { key: "Escape" });
+
+    expect([first, second]).toEqual([false, true]);
+    expect(name).toHaveValue("Burn");
+    expect(deckUpdate).not.toHaveBeenCalled();
   });
 
   /**
@@ -352,6 +437,51 @@ describe("DeckEditor", () => {
     refuse("The database is busy with a sync — try again in a moment.");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
+  });
+
+  /**
+   * A trigger with `aria-expanded` has to be able to close what it opened. It nearly cannot:
+   * pressing it blurs the panel *first*, and a blur-away handler that does not know the
+   * trigger closes the menu — after which the press opens it again, forever.
+   */
+  it("closes the row menu from the control that opened it", async () => {
+    await open();
+    const trigger = screen.getByRole("button", { name: "More actions for Lightning Bolt" });
+
+    await userEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /**
+   * A deck deleted under an open menu takes the menu's row with it. The state that says one is
+   * open does not go on its own — and an `"inner"` layer nothing draws is a layer that eats
+   * the first Escape of whatever the reader does next.
+   */
+  it("closes an open row menu when the deck turns out to be gone", async () => {
+    deckSetCardQuantity.mockRejectedValue("That deck is not there any more.");
+    deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /decrease copies of lightning bolt/i }),
+    );
+
+    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+    await userEvent.keyboard("{Escape}");
+    window.removeEventListener("keydown", listen);
+    expect(heard).toEqual([false]);
   });
 
   /** The scratchpad: kept, counted by nothing, and out of the way until it is wanted. */

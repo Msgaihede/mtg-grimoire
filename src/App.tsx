@@ -32,7 +32,11 @@ function ActiveView() {
   // a route. Keyed by the deck: opening a second one from anywhere is a fresh editor rather
   // than one that inherits the last deck's grouping and open menu.
   if (activeView === "decks") {
-    return openDeckId === null ? <DecksPage /> : <DeckEditor key={openDeckId} deckId={openDeckId} />;
+    return openDeckId === null ? (
+      <DecksPage />
+    ) : (
+      <DeckEditor key={openDeckId} deckId={openDeckId} />
+    );
   }
 
   return (

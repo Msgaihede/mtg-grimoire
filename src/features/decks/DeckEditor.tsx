@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { FILTER_CONTROL, FILTER_FOCUS, filterChipState, ToggleChip } from "@/components/FilterChips";
+import {
+  FILTER_CONTROL,
+  FILTER_FOCUS,
+  filterChipState,
+  ToggleChip,
+} from "@/components/FilterChips";
 import { ipcError, type DeckCard, type DeckZone } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -68,6 +73,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** What is in the name field while it is being typed in, or `null` when the field is simply
    *  the deck's name (`QuantityStepper`'s draft, for its reason). */
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  /**
+   * The same draft, readable *now*.
+   *
+   * Enter commits and then blurs, and the blur handler commits again — in the same tick, with
+   * `nameDraft` still holding the closure's value, which is one rename written twice. A ref is
+   * cleared where it is read, so the second call has nothing to send.
+   */
+  const draftRef = useRef<string | null>(null);
+  const typeName = useCallback((value: string) => {
+    draftRef.current = value;
+    setNameDraft(value);
+  }, []);
+  const dropDraft = useCallback(() => {
+    draftRef.current = null;
+    setNameDraft(null);
+  }, []);
 
   const editorRef = useRef<HTMLElement>(null);
   /** Whatever opened the menu that is up, so Escape can hand the caret back to it. */
@@ -89,7 +110,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writes = [deck.setQuantity, deck.moveCard, deck.update];
   const lastWrite = writes.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
   const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
-  const busy = writes.some((w) => w.isPending);
+
+  /**
+   * Whether the write in flight is one the **open menu** started — the only thing that should
+   * grey that menu out or hold it open through a blur.
+   *
+   * Scoped rather than "any write is running": a rename in the header, or a stepper on a row
+   * three lines up, has nothing to do with this menu, and disabling its controls for the
+   * duration would make one edit block another for no reason. Read off the mutations' own
+   * `variables`, which are the slot each write named.
+   */
+  const menuBusy =
+    menu !== null &&
+    ((deck.moveCard.isPending && deck.moveCard.variables?.cardId === menu.cardId) ||
+      (deck.update.isPending && deck.update.variables?.coverCardId === menu.cardId));
 
   const byZone = useMemo(() => {
     const map: Record<DeckZone, DeckCard[]> = {
@@ -152,6 +186,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const closeMenu = useCallback(() => setMenu(null), []);
   useDismissOnEscape({ layer: "inner", onDismiss: dismissMenu, enabled: menu !== null });
 
+  // A deck deleted under an open menu takes the menu's row with it — but not the state that
+  // says one is open, and an `"inner"` layer nothing draws is a layer that eats the first
+  // Escape of whatever the reader does next. Reset during render, which is React's own answer
+  // to state that has to follow a prop (`CardDetailPane`'s face, `Cover`'s art).
+  if (gone && menu !== null) setMenu(null);
+
   const openMenu = useCallback((card: DeckCard, trigger: HTMLButtonElement) => {
     openerRef.current = trigger;
     setMenu((open) =>
@@ -162,8 +202,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
 
   const setQuantity = useCallback(
-    (card: DeckCard, quantity: number) =>
-      deck.setQuantity.mutate({ cardId: card.cardId, zone: card.zone, quantity }),
+    (card: DeckCard, quantity: number) => {
+      // Zero takes the row out from under the caret — optimistically, so it happens on the
+      // press — and the control the caret was on goes with it. The zone it left is where the
+      // reader is looking and it announces its new count, which is the same hand-off a move
+      // makes. Before the write, because the row is gone by the time an answer arrives.
+      if (quantity === 0) (zoneRefs.current[card.zone] ?? editorRef.current)?.focus();
+      deck.setQuantity.mutate({ cardId: card.cardId, zone: card.zone, quantity });
+    },
     [deck.setQuantity],
   );
 
@@ -208,18 +254,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *  not a rename: the backend refuses it in words, and a name is not something a deck can
    *  lose by tabbing through it. */
   const commitName = useCallback(() => {
-    const draft = nameDraft;
-    setNameDraft(null);
+    const draft = draftRef.current;
+    dropDraft();
     if (draft === null || row === null) return;
     const trimmed = draft.trim();
     if (!trimmed || trimmed === row.name) return;
     deck.update.mutate({ name: trimmed });
-  }, [deck.update, nameDraft, row]);
+  }, [deck.update, dropDraft, row]);
 
   /** The picker, plus the deck's own format when the seed no longer offers it — a select that
    *  cannot show its own value would silently re-format the deck on the first other change. */
   const formats = useMemo(() => {
-    const picker = specs.filter((s) => s.enabledInPicker).map((s) => ({ key: s.key, name: s.displayName }));
+    const picker = specs
+      .filter((s) => s.enabledInPicker)
+      .map((s) => ({ key: s.key, name: s.displayName }));
     if (!row || picker.some((f) => f.key === row.formatKey)) return picker;
     return [{ key: row.formatKey, name: row.formatName ?? row.formatKey }, ...picker];
   }, [specs, row]);
@@ -254,30 +302,40 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <input
               aria-label="Deck name"
               value={nameDraft ?? row.name}
-              onChange={(e) => setNameDraft(e.target.value)}
+              onChange={(e) => typeName(e.target.value)}
               onBlur={commitName}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   commitName();
                   e.currentTarget.blur();
                 }
-                if (e.key === "Escape") {
-                  // Consumed here, so the card pane docked beside the editor does not close on
-                  // the same press: the pane is an `"outer"` layer listening in the bubble
-                  // phase, and a handler at the event's own target has already run by then.
+                // **Only when there is something to revert.** Escape consumed here is Escape
+                // the card pane never sees — the pane is an `"outer"` layer listening on
+                // `window` in the bubble phase, and a handler at the event's own target has
+                // already run by then. A field nobody has typed in has nothing to undo, so the
+                // press belongs to whatever is open behind it; a field that has been typed in
+                // owns exactly one press, and the next one is the pane's again.
+                // The ref rather than the state, for the reason it exists: two presses inside
+                // one tick — a key held down, an autorepeat — both read a `nameDraft` that
+                // React has not re-rendered yet, and the second would consume a press it has
+                // nothing to spend it on. The ref is cleared where it is read.
+                if (e.key === "Escape" && draftRef.current !== null) {
                   e.preventDefault();
-                  setNameDraft(null);
+                  dropDraft();
                 }
               }}
               // Geist, not the display face, for the reason the card pane gives about a card's
               // name: this is *content*, and Cinzel is for view titles and hero copy. Cinzel is
               // also drawn in caps — which in a field you type into means the letters never
               // match the ones being typed.
+              // The shared focus recipe, like every other control in the app: an outline says
+              // focus, a border or a ring says state. The border here is the hover affordance
+              // that says the title is a field at all.
               className={cn(
                 "min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1",
                 "text-xl font-medium leading-tight",
                 "transition-colors duration-150 hover:border-border motion-reduce:transition-none",
-                "focus:border-accent focus:outline-none",
+                FOCUS,
               )}
             />
           </>
@@ -316,7 +374,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 type="button"
                 onClick={() => setGroupBy(id)}
                 aria-pressed={groupBy === id}
-                className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(groupBy === id))}
+                className={cn(
+                  FILTER_CONTROL,
+                  FILTER_FOCUS,
+                  "px-3",
+                  filterChipState(groupBy === id),
+                )}
               >
                 {label}
               </button>
@@ -353,8 +416,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
       {gone && (
         <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
-          This deck is not there any more. It may have been deleted from the gallery — go back
-          and pick another one.
+          This deck is not there any more. It may have been deleted from the gallery — go back and
+          pick another one.
         </p>
       )}
 
@@ -375,7 +438,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 groupBy={zone === "main" || zone === "side" ? groupBy : null}
                 moveTargets={moveTargets}
                 openMenuCardId={menu?.zone === zone ? menu.cardId : null}
-                busy={busy}
+                busy={menuBusy}
                 onOpenMenu={openMenu}
                 onCloseMenu={closeMenu}
                 onSetQuantity={setQuantity}
@@ -427,7 +490,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 groupBy={groupBy}
                 moveTargets={moveTargets}
                 openMenuCardId={menu?.zone === "maybe" ? menu.cardId : null}
-                busy={busy}
+                busy={menuBusy}
                 onOpenMenu={openMenu}
                 onCloseMenu={closeMenu}
                 onSetQuantity={setQuantity}

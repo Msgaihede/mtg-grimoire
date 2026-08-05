@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, type DeckCard, type DeckPatch, type DeckZone } from "@/lib/ipc";
+import { ipc, type DeckCard, type DeckDetail, type DeckPatch, type DeckZone } from "@/lib/ipc";
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
  *  and the editor's `useMemo`s key off it. */
@@ -42,11 +42,36 @@ function opened(id: number | null): number {
 export function useDeck(id: number | null) {
   const queryClient = useQueryClient();
 
+  const detailKey = ["decks", "detail", id];
+
   const query = useQuery({
-    queryKey: ["decks", "detail", id],
+    queryKey: detailKey,
     queryFn: () => ipc.deckGet(opened(id)),
     enabled: id !== null,
   });
+
+  /**
+   * Rewrite one zone slot in the cached answer, or drop it — addressed by the slot rather
+   * than by `deck_cards.id`, like every write here.
+   *
+   * A slot the cache does not hold is left alone rather than added: this patches what is on
+   * screen, and inventing a row the read never answered is how an optimistic update starts
+   * telling the reader about cards that are not in the deck.
+   */
+  const patchSlot = (slot: Slot, next: ((card: DeckCard) => DeckCard) | null) => {
+    queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
+      if (!data) return data;
+      const at = (c: DeckCard) => c.cardId === slot.cardId && c.zone === slot.zone;
+      if (!data.cards.some(at)) return data;
+      return {
+        ...data,
+        cards:
+          next === null
+            ? data.cards.filter((c) => !at(c))
+            : data.cards.map((c) => (at(c) ? next(c) : c)),
+      };
+    });
+  };
 
   /**
    * Every zone write reallocates — `allocate_deck` runs inside the same transaction — so the
@@ -106,11 +131,38 @@ export function useDeck(id: number | null) {
    * holds an intention and nothing else). A negative number is refused by the backend rather
    * than clamped, which matters more here rather than less — in a module where zero deletes,
    * treating `-1` as close enough would let arithmetic that went wrong upstream destroy a row.
+   *
+   * **Optimistic on the slot's own number and nothing else** — the third copy of a fix this
+   * codebase has now made three times (`CollectionPage`, `WishlistPage`, here), because the
+   * stepper is controlled by the cache: hold `+` on a 4-of and every press before the first
+   * answer reads 4 and sends 5, so three presses land on 5. Cancel first, or an in-flight
+   * read of the old deck lands on top of the guess; roll back on a refusal, because zero
+   * *removes* here and a refused removal that stayed removed would be a card silently gone.
    */
   const setQuantity = useMutation({
     mutationFn: ({ cardId, zone, quantity }: Slot & { quantity: number }) =>
       ipc.deckSetCardQuantity(opened(id), cardId, zone, quantity),
-    onSuccess: invalidate,
+    onMutate: async ({ cardId, zone, quantity }) => {
+      await queryClient.cancelQueries({ queryKey: detailKey });
+      const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
+      // Zero takes the row out at the press rather than at the answer: it is what the write
+      // means, and a row sitting at `0` for a round trip is a state this table never has.
+      patchSlot({ cardId, zone }, quantity === 0 ? null : (card) => ({ ...card, quantity }));
+      return saved;
+    },
+    onError: (_error, _slot, saved) => {
+      if (saved !== undefined) queryClient.setQueryData(detailKey, saved);
+      invalidate();
+    },
+    onSuccess: (change, { cardId, zone }) => {
+      // The answer, not the guess: the backend clamps and canonicalises, and this is the
+      // number it actually stored.
+      patchSlot(
+        { cardId, zone },
+        change.removed ? null : (card) => ({ ...card, quantity: change.quantity }),
+      );
+      invalidate();
+    },
   });
 
   /** Move every copy from one zone to another. A claim released or made even though nothing
