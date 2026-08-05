@@ -35,19 +35,24 @@ export interface WishlistFilterState {
   /** `false` is a filter too — "the wishes nothing covers" — so this is compared against
    *  `undefined` rather than tested for truthiness. */
   fulfilled: boolean | undefined;
+  /** `true` is the wishes a sync flagged, `false` everything it did not touch. Three-way for
+   *  the same reason `fulfilled` is: the complement is a real question. */
+  needsReview: boolean | undefined;
 }
 
 /**
  * How many *kinds* of filter are on — the number on the Reset all badge.
  *
- * Two, where the search offers six and the collection eight. That is the point of this view:
- * a wishlist is a shopping list rather than an inventory, it is read by name, and a colour
- * chip row over forty rows is chrome that will never be pressed. The backend takes every
- * card filter the other two send (`WishlistQuery extends CardFilters`), so this is a
+ * Three, where the search offers six and the collection eight. That is the point of this
+ * view: a wishlist is a shopping list rather than an inventory, it is read by name, and a
+ * colour chip row over forty rows is chrome that will never be pressed. The backend takes
+ * every card filter the other two send (`WishlistQuery extends CardFilters`), so this is a
  * decision about the screen and not a limit of the plumbing.
  */
 export function activeFilterCount(f: WishlistFilterState): number {
-  return [f.text.trim().length > 0, f.fulfilled !== undefined].filter(Boolean).length;
+  return [f.text.trim().length > 0, f.fulfilled !== undefined, f.needsReview !== undefined].filter(
+    Boolean,
+  ).length;
 }
 
 /**
@@ -61,6 +66,7 @@ export function activeFilterCount(f: WishlistFilterState): number {
 export function useWishlist() {
   const [text, setText] = useState("");
   const [fulfilled, setFulfilled] = useState<boolean | undefined>(undefined);
+  const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
   const [sort, setSort] = useState<WishlistSort>("name");
   const [debouncedText, setDebouncedText] = useState("");
 
@@ -76,6 +82,9 @@ export function useWishlist() {
     // Sent only when it is set. `false` — "what is still missing" — is the list's usual
     // question and is meaningful on the wire; `undefined` is not sent at all.
     fulfilled,
+    // Same rule: `false` — "everything the sync did not touch" — is meaningful on the wire,
+    // and `undefined` is not sent at all.
+    needsReview,
     // `paperOnly` is deliberately absent: the wishlist forces it off, exactly as the
     // collection does. A paper test over a printing that has left `cards` would throw away
     // the rows this list exists to keep showing.
@@ -90,6 +99,7 @@ export function useWishlist() {
     "list",
     debouncedText,
     fulfilled === undefined ? "" : fulfilled ? "fulfilled" : "missing",
+    needsReview === undefined ? "" : needsReview ? "review" : "clear",
     sort,
   ];
 
@@ -115,14 +125,23 @@ export function useWishlist() {
     fulfilled,
     /** Off → still missing → fulfilled → off. A shopping list asks what is left first. */
     toggleFulfilled: () => setFulfilled((current) => cycleTriState(current, false)),
+    /**
+     * `true` shows only the wishes a Scryfall migration or a vanished printing flagged,
+     * `false` only those it did not, `undefined` asks nothing.
+     */
+    needsReview,
+    /** Off → flagged → not flagged → off. The flagged ones first: that is the only reason
+     *  anybody presses this, and the complement is where you go once they are dealt with. */
+    toggleNeedsReview: () => setNeedsReview((current) => cycleTriState(current, true)),
     sort,
     setSort,
-    activeCount: activeFilterCount({ text, fulfilled }),
-    /** Clear both filters at once. The sort is not a filter and stays: it is how the reader
+    activeCount: activeFilterCount({ text, fulfilled, needsReview }),
+    /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
      *  reads, not what they are looking at. */
     resetAll: () => {
       setText("");
       setFulfilled(undefined);
+      setNeedsReview(undefined);
     },
     query,
     rows,

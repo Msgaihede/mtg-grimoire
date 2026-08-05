@@ -459,6 +459,10 @@ export interface WishlistQuery extends CardFilters {
    *  — "what is still missing" being the list's usual question. Counted in **copies**, and
    *  finish-aware. */
   fulfilled?: boolean;
+  /** `true` narrows to the wishes a Scryfall migration or a vanished printing flagged — the
+   *  reconciler walks this table too, so this is {@link CollectionQuery.needsReview}'s
+   *  question asked of the other list. */
+  needsReview?: boolean;
   sort?: "name" | "added" | "quantity" | "price";
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
@@ -483,6 +487,9 @@ export interface WishRow {
   /** The cheapest way to satisfy this wish, per copy: the preferred finish's price if one is
    *  named, else the nonfoil price of the printing (or of any printing of the oracle card). */
   unitPriceUsd: number | null;
+  /** The same in EUR, with the hole the data has: `eur_etched` does not exist, so a wish for
+   *  the etched printing is `null` here rather than quoted at the nonfoil rate. */
+  unitPriceEur: number | null;
   /**
    * Copies the collection holds **against this wish** — narrowed by everything the wish
    * says: its printing if it names one, and its finish if it names one.

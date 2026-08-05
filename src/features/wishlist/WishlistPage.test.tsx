@@ -31,6 +31,7 @@ const BOLT: WishRow = {
   quantity: 4,
   preferredFinish: "foil",
   unitPriceUsd: 400.5,
+  unitPriceEur: 320,
   ownedQuantity: 1,
   notes: null,
   needsReview: null,
@@ -52,6 +53,7 @@ const ANY: WishRow = {
   quantity: 1,
   ownedQuantity: 0,
   unitPriceUsd: 12,
+  unitPriceEur: 10,
 };
 
 const page = (items: WishRow[], total = items.length) => ({ items, total });
@@ -69,10 +71,15 @@ const lastQuery = () =>
   wishlistList.mock.calls[wishlistList.mock.calls.length - 1][0] as WishlistQuery;
 
 /**
- * The header's money figure, scoped — a two-row wishlist prints the same dollar amount in the
- * total and in the row it came from, and an unscoped query cannot tell the sum from a term.
+ * The header's money figures, scoped — a two-row wishlist prints the same dollar amount in
+ * the total and in the row it came from, and an unscoped query cannot tell the sum from a
+ * term. Two of them since the header started mirroring the collection's, which prices in both
+ * currencies; each one carries its own unpriced count, so each has to be read on its own.
  */
-const total = async () => (await screen.findByText("Still to buy")).closest("div") as HTMLElement;
+const total = async () =>
+  (await screen.findByText("Still to buy (USD)")).closest("div") as HTMLElement;
+const totalEur = async () =>
+  (await screen.findByText("Still to buy (EUR)")).closest("div") as HTMLElement;
 
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -253,6 +260,75 @@ describe("WishlistPage", () => {
     // The note is its own node beside the figure, so the sum reads off the pair.
     expect(await within(figure).findByText("1 unpriced")).toBeInTheDocument();
     expect(figure).toHaveTextContent("$12.00");
+  });
+
+  /**
+   * Spec §7: this header mirrors the collection's, and that one prices in both currencies.
+   *
+   * The euro column has a hole the dollar one does not — `eur_etched` is documented and
+   * absent from Scryfall's data — so an etched wish is priced in dollars and unpriced in
+   * euros at the same time. Two figures, therefore two unpriced counters: one shared note
+   * would have to describe whichever of them it was wrong about.
+   */
+  it("prices what is still to buy in euros too, and counts the etched hole on its own", async () => {
+    const ETCHED: WishRow = {
+      ...ANY,
+      id: 9,
+      name: "Sol Ring",
+      preferredFinish: "etched",
+      unitPriceUsd: 30,
+      unitPriceEur: null,
+    };
+    wishlistList.mockResolvedValue(page([BOLT, ETCHED]));
+    wrap(<WishlistPage />);
+
+    // Three of the four Bolts at €320, and nothing at all for the etched wish.
+    const eur = await totalEur();
+    expect(await within(eur).findByText("€960.00")).toBeInTheDocument();
+    expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
+    expect(eur).toHaveAttribute("title", PRICES_AS_OF);
+
+    // The same rows in dollars, where every one of them has a price.
+    const usd = await total();
+    expect(within(usd).getByText("$1,231.50")).toBeInTheDocument();
+    expect(within(usd).queryByText(/unpriced/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The chip is not permanent. A filter for a state a healthy wishlist never reaches is a
+   * control that spends its whole life saying nothing — the same reasoning that keeps the
+   * collection's banner off the screen until the reconciler has left something behind.
+   */
+  it("keeps the needs-review chip off a wishlist with nothing flagged", async () => {
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.queryByRole("button", { name: /needs review/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The half plan 3 could not build: the flagged band renders on a wish, and there was no way
+   * to ask for only the wishes that carry one. Three-way, like every other filter in this app
+   * that has a meaningful complement — "everything the sync did not touch" is a real question
+   * once a reader has worked through the flagged ones.
+   */
+  it("narrows to the wishes a sync flagged, once there are any", async () => {
+    wishlistList.mockResolvedValue(page([{ ...BOLT, needsReview: REVIEW_NOTE }, ANY]));
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Needs review" }));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+
+    // And round the other way, then off — the tri-state the backend takes.
+    await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
+    expect(await screen.findByRole("button", { name: "Not flagged" })).toBeInTheDocument();
+    await waitFor(() => expect(lastQuery().needsReview).toBe(false));
+
+    await userEvent.click(screen.getByRole("button", { name: "Not flagged" }));
+    await waitFor(() => expect(lastQuery().needsReview).toBeUndefined());
   });
 
   /**

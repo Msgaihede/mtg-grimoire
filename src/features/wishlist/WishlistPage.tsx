@@ -11,7 +11,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { finishLabel } from "@/lib/finish";
 import { ipc, ipcError, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { useWishlist, WISHLIST_SORTS, type Wishlist, type WishlistSort } from "./useWishlist";
@@ -212,23 +212,33 @@ export function WishlistPage() {
   }, [query]);
 
   /**
-   * What is left to buy, and how much of the list that figure could not price.
+   * What is left to buy, in both currencies, and how much of the list each figure could not
+   * price.
    *
    * Counted over what is *missing* rather than over what is wanted: a total that charged the
    * reader for cards already in the binder is a number nobody can act on. Computed here
    * rather than asked of the backend because a wishlist fits in one page — this is arithmetic
    * over the rows already on screen, not a second round trip.
+   *
+   * Two unpriced counters and not one, because the two currencies do not have the same holes:
+   * `eur_etched` does not exist in Scryfall's data at all, so a wish for the etched printing
+   * is priced in dollars and unpriced in euros at the same time. One shared count would have
+   * to be wrong about whichever figure it was not describing.
    */
   const cost = useMemo(() => {
     let usd = 0;
-    let unpriced = 0;
+    let eur = 0;
+    let unpricedUsd = 0;
+    let unpricedEur = 0;
     for (const row of rows) {
       const missing = missingOf(row);
       if (missing === 0) continue;
-      if (row.unitPriceUsd === null) unpriced += 1;
+      if (row.unitPriceUsd === null) unpricedUsd += 1;
       else usd += row.unitPriceUsd * missing;
+      if (row.unitPriceEur === null) unpricedEur += 1;
+      else eur += row.unitPriceEur * missing;
     }
-    return { usd, unpriced };
+    return { usd, eur, unpricedUsd, unpricedEur };
   }, [rows]);
 
   const failure = query.isError ? ipcError(query.error) : null;
@@ -241,13 +251,14 @@ export function WishlistPage() {
   const status = statusOf(wishlist, failure);
 
   // The notes a total needs to stay honest, in one string because they are one qualification
-  // of one figure. The second is the rare one: the backend pages at 100 and a shopping list
-  // is tens of rows, so a sum taken over part of the list is a case that has to be *said*
-  // rather than a case that has to be common.
-  const notes = [
-    cost.unpriced > 0 ? `${cost.unpriced} unpriced` : null,
-    rows.length < total ? `${rows.length} of ${total} counted` : null,
-  ].filter(Boolean);
+  // of one figure. The second is the rare one, and it is the same sentence about both
+  // figures: the backend pages at 100 and a shopping list is tens of rows, so a sum taken
+  // over part of the list is a case that has to be *said* rather than a case that has to be
+  // common. The first is per currency, because the unpriced rows are not the same rows.
+  const counted = rows.length < total ? `${rows.length} of ${total} counted` : null;
+  const noteFor = (unpriced: number) =>
+    [unpriced > 0 ? `${unpriced} unpriced` : null, counted].filter(Boolean).join(" · ") ||
+    undefined;
 
   return (
     <section className="flex h-full flex-col gap-4">
@@ -257,11 +268,22 @@ export function WishlistPage() {
 
       <FigureRow>
         <Figure label="Wishes" value={query.isPending ? "—" : total.toLocaleString("en-US")} />
-        {/* The one number this view exists for. Spec §5: it says how old the prices are. */}
+        {/* The one number this view exists for, in both currencies — spec §7 says this header
+            mirrors the collection's, and that one prices in both. Spec §5: each says how old
+            the prices are. */}
         <Figure
-          label="Still to buy"
+          label="Still to buy (USD)"
           value={query.isPending || empty ? "—" : usdPrice(cost.usd)}
-          note={notes.length > 0 ? notes.join(" · ") : undefined}
+          note={noteFor(cost.unpricedUsd)}
+          title={PRICES_AS_OF}
+        />
+        <Figure
+          label="Still to buy (EUR)"
+          value={query.isPending || empty ? "—" : eurPrice(cost.eur)}
+          // Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
+          // documented and absent — so a wish for one is unpriced here rather than quoted at
+          // the nonfoil rate, and this is where that shows.
+          note={noteFor(cost.unpricedEur)}
           title={PRICES_AS_OF}
         />
       </FigureRow>
@@ -313,12 +335,19 @@ export function WishlistPage() {
 /**
  * Every filter the wishlist offers, in one row that never wraps.
  *
- * Three controls where the collection has fourteen. The colour chips, the mana values and the
- * set picker are all absent on purpose: they filter a list of thousands, and this one is a
- * list of tens read by name. What is left is the box you type a name into, the one question
- * a shopping list is for, and how to order it.
+ * Three controls where the collection has fourteen — four on the rare day a sync has left
+ * something behind. The colour chips, the mana values and the set picker are all absent on
+ * purpose: they filter a list of thousands, and this one is a list of tens read by name. What
+ * is left is the box you type a name into, the one question a shopping list is for, and how
+ * to order it.
  */
 function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
+  // Drawn only where it has something to filter. A wishlist is flagged by the reconciler and
+  // most never are, so a permanent chip here would be a control that spends its whole life
+  // saying nothing — the rule the collection's banner follows, applied to a filter. It stays
+  // while the filter is on, including on the complement, where by definition no row on screen
+  // carries a flag and the chip is the only way back off.
+  const offered = wishlist.needsReview !== undefined || wishlist.rows.some((r) => r.needsReview);
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <label htmlFor="wishlist-text" className="sr-only">
@@ -349,6 +378,18 @@ function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
         pressed={wishlist.fulfilled !== undefined}
         onClick={wishlist.toggleFulfilled}
       />
+
+      {/* The other half of what the flagged band under a row says: the band tells you a wish
+          needs looking at, and this is how you ask for only those. Same three states and the
+          same rule about the word on it — "Not flagged" is the complement, which is where the
+          reader goes once the flagged ones are dealt with. */}
+      {offered && (
+        <ToggleChip
+          label={wishlist.needsReview === false ? "Not flagged" : "Needs review"}
+          pressed={wishlist.needsReview !== undefined}
+          onClick={wishlist.toggleNeedsReview}
+        />
+      )}
 
       {/* Nothing is drawn until there is something to clear — the rule lives in the control,
           so every view that offers a reset offers the same one. */}

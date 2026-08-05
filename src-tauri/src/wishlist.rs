@@ -46,6 +46,10 @@ pub struct WishlistQuery {
     /// `Some(true)` shows only wishes the collection already covers, `Some(false)` only
     /// those it does not — "what is still missing" being the list's usual question.
     pub fulfilled: Option<bool>,
+    /// `Some(true)` narrows to the wishes a Scryfall migration or a vanished printing
+    /// flagged. [`crate::collection::CollectionQuery`]'s field, verbatim: the reconciler
+    /// walks both tables, so both lists answer the same question the same way.
+    pub needs_review: Option<bool>,
     pub sort: Option<String>,
     pub limit: u32,
     pub offset: u32,
@@ -70,6 +74,11 @@ pub struct WishRow {
     /// is named, else the nonfoil price of the printing (or of any printing of the oracle
     /// card, for an unpinned wish).
     pub unit_price_usd: Option<f64>,
+    /// The same in EUR, with the hole the data actually has: **`eur_etched` does not
+    /// exist**, so a wish for the etched printing is unpriced in euros rather than quoted
+    /// at the nonfoil rate. [`crate::collection::FINISH_PRICE_EUR`]'s rule, re-expressed
+    /// over the wish's preferred finish rather than over an entry's own.
+    pub unit_price_eur: Option<f64>,
     /// How many copies the collection already has against this wish.
     pub owned_quantity: i64,
     pub notes: Option<String>,
@@ -335,6 +344,13 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         Some(false) => p.wheres.push(format!("{OWNED_SQL} < w.quantity")),
         None => {}
     }
+    // [`crate::collection::scope`]'s three-way match, over this table's column. Pushed
+    // before the count is taken, so the header cannot count rows the list will not show.
+    match q.needs_review {
+        Some(true) => p.wheres.push("w.needs_review IS NOT NULL".to_owned()),
+        Some(false) => p.wheres.push("w.needs_review IS NULL".to_owned()),
+        None => {}
+    }
     let where_sql = p.where_sql();
     let mut params = p.params;
 
@@ -360,6 +376,11 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                         WHEN 'foil' THEN '$.usd_foil'
                         WHEN 'etched' THEN '$.usd_etched'
                         ELSE '$.usd' END) AS REAL) AS unit_price_usd,
+                CASE coalesce(w.preferred_finish, 'nonfoil') WHEN 'etched' THEN NULL ELSE
+                    CAST(json_extract(c.prices,
+                        CASE coalesce(w.preferred_finish, 'nonfoil')
+                            WHEN 'foil' THEN '$.eur_foil'
+                            ELSE '$.eur' END) AS REAL) END AS unit_price_eur,
                 {OWNED_SQL} AS owned_quantity,
                 w.notes, w.needs_review, w.updated_at
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
@@ -385,10 +406,11 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
                     unit_price_usd: r.get(11)?,
-                    owned_quantity: r.get(12)?,
-                    notes: r.get(13)?,
-                    needs_review: r.get(14)?,
-                    updated_at: r.get(15)?,
+                    unit_price_eur: r.get(12)?,
+                    owned_quantity: r.get(13)?,
+                    notes: r.get(14)?,
+                    needs_review: r.get(15)?,
+                    updated_at: r.get(16)?,
                 })
             },
         )
@@ -474,7 +496,8 @@ mod tests {
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     prices,raw)
                  VALUES (?1,'o1','Lightning Bolt',?2,?3,'en','normal',
-                    '{\"usd\":\"5.00\",\"usd_foil\":\"40.00\"}','{}')",
+                    '{\"usd\":\"5.00\",\"usd_foil\":\"40.00\",\"eur\":\"4.00\",\"eur_foil\":\"32.00\"}',
+                    '{}')",
                 rusqlite::params![id, set, cn],
             )
             .unwrap();
@@ -1000,6 +1023,7 @@ mod tests {
             quantity: 4,
             preferred_finish: Some("foil".into()),
             unit_price_usd: Some(40.0),
+            unit_price_eur: Some(32.0),
             owned_quantity: 2,
             notes: None,
             needs_review: None,
@@ -1012,8 +1036,8 @@ mod tests {
                 "id": 3, "oracleId": "o1", "cardId": null, "name": "Lightning Bolt",
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
                 "manaCost": "{R}", "quantity": 4, "preferredFinish": "foil",
-                "unitPriceUsd": 40.0, "ownedQuantity": 2, "notes": null, "needsReview": null,
-                "updatedAt": 1800000000
+                "unitPriceUsd": 40.0, "unitPriceEur": 32.0, "ownedQuantity": 2, "notes": null,
+                "needsReview": null, "updatedAt": 1800000000
             })
         );
     }
@@ -1030,11 +1054,14 @@ mod tests {
         .unwrap();
         assert_eq!(value, serde_json::json!({ "items": [], "total": 0 }));
 
-        let q: WishlistQuery =
-            serde_json::from_str(r#"{"text":"bolt","sets":["lea"],"fulfilled":false}"#).unwrap();
+        let q: WishlistQuery = serde_json::from_str(
+            r#"{"text":"bolt","sets":["lea"],"fulfilled":false,"needsReview":true}"#,
+        )
+        .unwrap();
         assert_eq!(q.cards.text.as_deref(), Some("bolt"));
         assert_eq!(q.cards.sets.unwrap(), vec!["lea".to_owned()]);
         assert_eq!(q.fulfilled, Some(false));
+        assert_eq!(q.needs_review, Some(true), "camelCase on the way in, too");
         assert_eq!(q.limit, 0, "omitted limit means unset, not a parse error");
     }
 
@@ -1276,5 +1303,118 @@ mod tests {
             None,
             "no etched price is not the nonfoil price"
         );
+    }
+
+    /// The backend half plan-3 deferred: `Some(true)` narrows to flagged wishes,
+    /// `Some(false)` to clean ones, `None` asks nothing — CollectionQuery's exact contract.
+    #[test]
+    fn the_needs_review_filter_narrows_the_list_and_the_count() {
+        let conn = seeded();
+        let wish = |card: &str| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    card_id: Some(card.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .id
+        };
+        let flagged = wish("bolt-lea");
+        let clean = wish("bolt-2ed");
+        // What the reconciler leaves behind, written straight onto the row: `sweep_orphans`
+        // walks `wishlist_entries` as well as `collection_entries`, and this filter is the
+        // only way to reach what it wrote.
+        conn.execute(
+            "UPDATE wishlist_entries SET needs_review = ?2 WHERE id = ?1",
+            params![flagged, "Scryfall removed this printing from its database."],
+        )
+        .unwrap();
+
+        let ids = |needs_review: Option<bool>| {
+            let page = list_wishes(
+                &conn,
+                &WishlistQuery {
+                    needs_review,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            // The count is filtered by the same predicate as the page, or the header counts
+            // rows the list is not showing.
+            assert_eq!(
+                page.total,
+                page.items.len() as i64,
+                "count agrees with page"
+            );
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>()
+        };
+        assert_eq!(ids(Some(true)), vec![flagged]);
+        assert_eq!(ids(Some(false)), vec![clean]);
+        assert_eq!(ids(None), vec![flagged, clean], "None asks nothing");
+
+        // And the sentence itself still rides on the row, which is what the band renders.
+        let page = list_wishes(
+            &conn,
+            &WishlistQuery {
+                needs_review: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(page.items[0]
+            .needs_review
+            .as_deref()
+            .is_some_and(|s| s.contains("removed this printing")));
+    }
+
+    /// EUR per copy follows the wish's own finish, with the hole the data has: a foil wish
+    /// prices at eur_foil, an etched wish is NULL — unpriced, never the nonfoil rate.
+    #[test]
+    fn unit_price_eur_reads_the_blob_by_preferred_finish_and_etched_is_unpriced() {
+        let conn = seeded();
+        for finish in [None, Some("foil"), Some("etched")] {
+            add_wish(
+                &conn,
+                &WishInput {
+                    card_id: Some("bolt-lea".into()),
+                    preferred_finish: finish.map(str::to_owned),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let eur_of = |finish: Option<&str>| {
+            rows.items
+                .iter()
+                .find(|r| r.preferred_finish.as_deref() == finish)
+                .unwrap()
+                .unit_price_eur
+        };
+        assert_eq!(eur_of(None), Some(4.00));
+        assert_eq!(eur_of(Some("foil")), Some(32.00));
+        // `$.eur` is *there* — 4.00 — which is exactly what a naive fallback would charge
+        // for the etched copy. `eur_etched` is documented and does not exist in the data, so
+        // the honest answer is no price at all.
+        assert_eq!(
+            eur_of(Some("etched")),
+            None,
+            "there is no eur_etched key, and the nonfoil rate is not a stand-in"
+        );
+
+        // A wish whose printing has left `cards` is unpriced in both currencies: there is no
+        // blob to read, in either.
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
+            .unwrap();
+        let orphaned = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        assert!(orphaned
+            .items
+            .iter()
+            .all(|r| r.unit_price_eur.is_none() && r.unit_price_usd.is_none()));
     }
 }
