@@ -18,6 +18,16 @@ interface AppState {
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
+  /**
+   * The deck the editor is open on, or `null` when Decks is showing its gallery.
+   *
+   * The one navigation fact decks need, and it is here for the same reason the whole store
+   * is: the editor is the Decks view in its second state rather than a screen of its own,
+   * and with no router there is nowhere else for "which one" to live. Everything *about*
+   * that deck is TanStack Query's — this is an id and nothing more.
+   */
+  openDeckId: number | null;
+  setOpenDeckId: (id: number | null) => void;
 }
 
 /**
@@ -32,7 +42,10 @@ export const useAppStore = create<AppState>((set) => ({
   activeView: "search",
   // Leaving the view closes the card: the detail pane belongs to the list that opened it,
   // and a card sitting beside the Decks placeholder is a pane with nothing to be next to.
-  setActiveView: (activeView) => set({ activeView, selectedCardId: null }),
+  // The open deck goes with it, for the same reason read the other way round: an editor is
+  // the Decks view, so a deck left open through a trip to Settings would be waiting behind
+  // the sidebar with the gallery it was opened from nowhere in sight.
+  setActiveView: (activeView) => set({ activeView, selectedCardId: null, openDeckId: null }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   searchView: "grid",
@@ -43,4 +56,8 @@ export const useAppStore = create<AppState>((set) => ({
   setCollectionView: (collectionView) => set({ collectionView }),
   selectedCardId: null,
   setSelectedCardId: (selectedCardId) => set({ selectedCardId }),
+  // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
+  // one would be a decision made for them by the previous session.
+  openDeckId: null,
+  setOpenDeckId: (openDeckId) => set({ openDeckId }),
 }));

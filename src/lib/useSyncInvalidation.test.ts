@@ -111,9 +111,24 @@ it("stops listening when it unmounts", async () => {
  * key be deleted with the suite still green — every other test in this file spreads the
  * constant into its own expectation. One literal list makes the contract real; updating it
  * is a *decision*, not a rename that rides along.
+ *
+ * `["decks"]` is the sixth and was added deliberately, by exactly that mechanism: every
+ * fact a deck card shows except its denormalized identity is read from `cards` through a
+ * LEFT JOIN, and the reconciler now walks `deck_cards` too — so a sync that repoints a
+ * printing has changed what an open deck says about it.
+ *
+ * `["formatSpecs"]` is **not** here and must not be: the table is seeded by a migration and
+ * a sync cannot touch it.
  */
-it("invalidates exactly the five known roots", () => {
-  expect(SYNC_INVALIDATED).toEqual([["cards"], ["collection"], ["wishlist"], ["card"], ["sets"]]);
+it("invalidates exactly the six known roots", () => {
+  expect(SYNC_INVALIDATED).toEqual([
+    ["cards"],
+    ["collection"],
+    ["wishlist"],
+    ["card"],
+    ["sets"],
+    ["decks"],
+  ]);
 });
 
 /**

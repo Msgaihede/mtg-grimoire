@@ -15,6 +15,8 @@
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
+ * `DeckInput`/`DeckPatch`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
+ * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -98,9 +100,11 @@ export interface CardSummary {
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
    *
-   * Not the same number as {@link WishRow.ownedQuantity}, which shares its name and answers
-   * a different question: that one is counted against one wish and *is* finish-aware, so a
-   * foil wish is not satisfied by the nonfoil in the binder. Read each against its own row.
+   * One of **three** fields in this file with this name, and no two answer the same question.
+   * {@link WishRow.ownedQuantity} is counted against one wish and *is* finish-aware, so a
+   * foil wish is not satisfied by the nonfoil in the binder; {@link DeckCard.ownedQuantity}
+   * is neither — it is the copies one deck's allocator *secured*, oracle-grained and clamped
+   * to what the entries still hold. Read each against its own row.
    *
    * `0` rather than `null`: "you own none of these" is a fact, not an absence, and a badge
    * that has to tell `null` from `0` is a badge with a bug waiting in it.
@@ -494,10 +498,11 @@ export interface WishRow {
    * Copies the collection holds **against this wish** — narrowed by everything the wish
    * says: its printing if it names one, and its finish if it names one.
    *
-   * Not the same number as {@link CardSummary.ownedQuantity}, which shares its name and
-   * answers a different question: that one is every copy of one printing, finish-blind.
-   * This one is finish-*aware*, so a foil wish reads `0` while the nonfoil sits in a binder
-   * — which is the whole reason finish is part of what makes two wishes two wishes.
+   * Not the same number as {@link CardSummary.ownedQuantity}, which is every copy of one
+   * printing, finish-blind; nor as {@link DeckCard.ownedQuantity}, which is what one deck
+   * *claimed*. This one is finish-*aware*, so a foil wish reads `0` while the nonfoil sits
+   * in a binder — which is the whole reason finish is part of what makes two wishes two
+   * wishes.
    */
   ownedQuantity: number;
   notes: string | null;
@@ -509,6 +514,245 @@ export interface WishRow {
 export interface WishlistPage {
   items: WishRow[];
   total: number;
+}
+
+/**
+ * The five zones a deck card can sit in — `schema::DECK_ZONES`, which the table's own CHECK
+ * is built from.
+ *
+ * `maybe` is the scratchpad and is unlike the other four in two ways worth knowing before
+ * anything renders it: it counts toward no deck size, and the allocator never claims a copy
+ * for it — so a maybe row always reads {@link DeckCard.ownedQuantity} `0`, by design and not
+ * because the user is short of it.
+ */
+export type DeckZone = "main" | "side" | "commander" | "companion" | "maybe";
+
+/**
+ * One new deck, as the "New deck" dialog sends it.
+ *
+ * Rust carries `#[serde(default)]` so both strings are optional on the wire, but they stay
+ * required here: a deck with no name is refused in words (`"A deck needs a name."`), and a
+ * blank `formatKey` is not an error but a *decision* — it means `casual`, which is
+ * `decks.format_key`'s own DDL default. A call site that wants casual should say so.
+ */
+export interface DeckInput {
+  name: string;
+  /** A `format_specs.key`. Validated against the table, not by a foreign key — see
+   *  {@link FormatSpec}. Blank means `"casual"`. */
+  formatKey: string;
+  description?: string;
+}
+
+/**
+ * An edit to one deck. Every field is optional: absent means "leave it"
+ * (`coalesce(?n, column)`, {@link EntryPatch}'s rule).
+ *
+ * There is no field here that clears one — `description: ""` writes an empty string rather
+ * than a NULL, and `coverCardId` cannot be unset. A deck editor that offers to remove a
+ * cover has nothing here to do it with.
+ */
+export interface DeckPatch {
+  name?: string;
+  formatKey?: string;
+  description?: string;
+  coverCardId?: string;
+  /**
+   * Sleeved up on a table, or a plan on paper. The **only** thing this means: a built deck's
+   * claims are subtracted from what every *other* deck can reach, while drafts all plan with
+   * the same shared copies. Sending it reallocates this deck in the same transaction.
+   */
+  isBuilt?: boolean;
+  /** Filed away: sorted last in the gallery, never deleted. This is what a gallery's
+   *  "remove" should reach for — `deckDelete` really deletes. */
+  archived?: boolean;
+}
+
+/** One deck as the gallery shows it. */
+export interface DeckRow {
+  id: number;
+  name: string;
+  formatKey: string;
+  /** From `format_specs`, so the gallery never re-derives a display name. `null` when the
+   *  key is one the seeded table no longer carries — a LEFT JOIN, so the deck still lists. */
+  formatName: string | null;
+  description: string | null;
+  coverCardId: string | null;
+  /**
+   * The cover printing's illustrator, `null` when `cards` has no row for it.
+   *
+   * Read here so a tile can obey Scryfall's image policy: an `art` crop has no printed
+   * frame, so wherever one is shown the artist must be credited. Task 11's ruling is that a
+   * cover with no artist is **not drawn** — an orphaned cover heals on the next sync.
+   */
+  coverArtist: string | null;
+  isBuilt: boolean;
+  archived: boolean;
+  /** main + commander + companion copies — what "a 60-card deck" means in a caption. The
+   *  sideboard and the maybe pile are deliberately not in it. */
+  cardCount: number;
+  /** Unix seconds. The gallery's sort key, and every zone write moves it — including a
+   *  removal that found nothing to remove. */
+  updatedAt: number;
+}
+
+/**
+ * One card in one zone of one deck: what it is, what the validation engine needs to judge
+ * it, and how much of it the user actually has.
+ *
+ * Three groups of fields, and the split is the design:
+ *
+ * * **The row's own identity** (`name`, `setCode`, `collectorNumber`, `lang`) — copied from
+ *   `cards` at write time and never null since. A deck whose printing left the card database
+ *   still says what it is holding.
+ * * **The card facts**, every one nullable: `deck_cards LEFT JOIN cards`, so an orphaned row
+ *   is listed with nulls rather than dropped — {@link CollectionRow}'s discipline, for its
+ *   reason.
+ * * **The availability numbers**, computed at read time and stored on no row.
+ */
+export interface DeckCard {
+  /** `deck_cards.id`. Answered by the writes, but **never** what addresses one: every zone
+   *  command takes `(deckId, cardId, zone)`, the grain the unique index is on. */
+  id: number;
+  cardId: string;
+  zone: DeckZone;
+  quantity: number;
+  /** Denormalized at write time, and the one name an orphaned row still has. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  lang: string;
+  /** A sentence when a sync could not keep this row's printing, `null` otherwise — the
+   *  reconciler walks `deck_cards` too. */
+  needsReview: string | null;
+  oracleId: string | null;
+  manaCost: string | null;
+  cmc: number | null;
+  typeLine: string | null;
+  oracleText: string | null;
+  /**
+   * The card's colours as **concatenated letters** — `"WU"`, not `["W","U"]`. This is not
+   * JSON and `JSON.parse` will throw on it: `card_row` stores the letters, so the letters
+   * are what comes back. Read it a character at a time.
+   */
+  colors: string | null;
+  /**
+   * Scryfall's precomputed `color_identity`, in the same letter form — `"WU"`, again not
+   * JSON. Precomputed is the point: it already folds in DFC backs, adventures, colour
+   * indicators and basic land types, so one subset check answers CR 903.5c and 903.5d
+   * together.
+   */
+  colorIdentity: string | null;
+  /**
+   * JSON: **this printing's** legality blob, not the oracle card's. That is what makes Old
+   * School come out right with no special case — `oldschool` is the one printing-sensitive
+   * key (Serra Angel is legal from `lea` and not from `8ed`), and a deck card names a
+   * printing.
+   */
+  legalities: string | null;
+  /**
+   * The printed power, **as text**, because that is what it is: `"*"`, `"1+*"` and a printed
+   * `"0"` all ship in real data.
+   *
+   * `power` and `toughness` both `null` means *unknown*, never "no P/T box" — and CR 903.3
+   * turns on exactly that difference. The backend repairs what it can before answering (it
+   * gunzips `raw` for the rows that are missing a P/T *and* could have one), so a null pair
+   * here is a card nothing could recover it for.
+   */
+  power: string | null;
+  toughness: string | null;
+  layout: string | null;
+  rarity: string | null;
+  /** JSON: the `card_faces` array verbatim. Per-face mana cost, MV and P/T live only here —
+   *  Tiny Leaders' per-face MV cap and DFC commander fronts both read them. */
+  faces: string | null;
+  gameChanger: boolean | null;
+  /** Printed at uncommon on **any** printing of this oracle card, which is what makes a
+   *  Pauper Commander commander eligible. Computed, not read: the `paupercommander` legality
+   *  key answers a different question (the 99). `false` for an orphan — nothing is known
+   *  about a card that is not there. */
+  everUncommon: boolean;
+  /** Nonfoil `usd` from the prices blob, per copy — {@link WishRow.unitPriceUsd}'s rule.
+   *  Never `cards.price_usd`, which is a display fallback chain and must not be summed. */
+  unitPriceUsd: number | null;
+  /**
+   * Copies of this oracle card the allocator **secured for this deck**, attributed to this
+   * row in zone-priority order and clamped to what each collection entry still holds.
+   *
+   * The third of this file's three `ownedQuantity` fields and the only one that is not a
+   * count of what the user has: {@link CardSummary.ownedQuantity} is every copy of one
+   * printing, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this one
+   * is a *claim* — oracle-grained (a Bolt is a Bolt), finish-blind, condition-blind.
+   *
+   * Two things it will not do, both by design:
+   *
+   * * a `maybe` row always reads `0`, because the allocator never claims for the scratchpad
+   *   — so no "owned" badge belongs on that pile at all;
+   * * across **several built decks** these numbers are not guaranteed to add up to what the
+   *   collection holds. A deck's claims are recomputed when *that deck* is written to, so
+   *   two built decks sharing a card can each carry a claim made when the other's was
+   *   different. Read as "what this deck reserved", never as an inventory.
+   */
+  ownedQuantity: number;
+}
+
+/**
+ * One deck and everything in it.
+ *
+ * One command rather than three, because the editor and the validation engine ask the same
+ * question — *what is in this deck* — and a screen that draws a curve from one query, a
+ * legality panel from another and an owned badge from a third is a screen whose three
+ * answers can disagree.
+ */
+export interface DeckDetail {
+  deck: DeckRow;
+  /** Zone-priority order (`commander`, `main`, `side`, `companion`, `maybe`), then name,
+   *  then row id. The read's own order, not the caller's: `ownedQuantity` is attributed
+   *  along it, so the number a row shows must not depend on how a list was displayed. */
+  cards: DeckCard[];
+}
+
+/**
+ * One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
+ *
+ * A new format is a seeded row rather than a code branch, and that is only true if nothing
+ * decides here which cells matter. Seeded by the migration and by nothing else: a sync
+ * cannot change this table, which is why it is not in `SYNC_INVALIDATED`.
+ */
+export interface FormatSpec {
+  key: string;
+  displayName: string;
+  /** Whether the "New deck" picker offers it. `future` is the one row that is off — a
+   *  format you can test against but not build for. */
+  enabledInPicker: boolean;
+  deckMin: number;
+  /** `null` is CR 100.5: a 60-card format has a minimum and no maximum. */
+  deckMax: number | null;
+  /** `null` means unlimited — the two pseudo-formats (`casual`, `limited`) only. */
+  maxCopies: number | null;
+  /** `0` means *no sideboard*; `null` means *uncapped* (Limited plays the rest of its pool). */
+  sideboardMax: number | null;
+  singleton: boolean;
+  requiresCommander: boolean;
+  /** Which eligibility rule the commander zone is judged by, `null` for the formats that
+   *  have no such zone. Two formats may share one rule (`predh` carries `edh`) — this is a
+   *  rule name, not a format name. */
+  commanderRule: "edh" | "brawl" | "oathbreaker" | "pdh" | "duel" | "tlr" | null;
+  life: number;
+  /**
+   * What Scryfall's `"restricted"` legality means **in this format**, and it is never
+   * inferred from the key: max one copy in vintage/timeless/oldschool, and *banned as
+   * commander* in the two singleton formats that use it (duel, tlr), where "max one" would
+   * be no restriction at all.
+   */
+  restrictedSemantic: "max_one" | "banned_as_commander";
+  /** Whether `cards.legalities` carries a key for this format. `false` for `casual` and
+   *  `limited`, which are not judged against a card pool at all. */
+  hasLegalityData: boolean;
+  /** A per-card mana-value ceiling. Only Tiny Leaders: Reborn has one (`3`). */
+  maxManaValue: number | null;
+  allowsCompanion: boolean;
+  /** The order a picker shows them in — `format_specs` is read `ORDER BY sort_order`. */
+  sortOrder: number;
 }
 
 /**
@@ -651,6 +895,63 @@ export const ipc = {
     invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
+  /** The gallery: every deck, archived last, most recently touched first. */
+  deckList: () => invoke<DeckRow[]>("deck_list"),
+  /** One deck and everything in it, or `null` when no deck has that id — a gallery that has
+   *  not refreshed since another view deleted it asks for a deck that is not there. */
+  deckGet: (id: number) => invoke<DeckDetail | null>("deck_get", { id }),
+  deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
+  /** Rename, re-format, cover, build and archive all arrive here. Sending `isBuilt`
+   *  reallocates the deck in the same transaction. */
+  deckUpdate: (id: number, patch: DeckPatch) => invoke<DeckRow>("deck_update", { id, patch }),
+  /** **This one really deletes** — the deck, its cards and its claims, by cascade. Archiving
+   *  is `deckUpdate(id, { archived: true })`, and it is what a gallery's "remove" wants.
+   *  An id that resolves to nothing is a success: the caller wanted that deck gone. */
+  deckDelete: (id: number) => invoke<void>("deck_delete", { id }),
+  /** Copy the deck and its cards — never its claims, never `isBuilt`, never `archived`. A
+   *  copy is a draft. */
+  deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
+  /**
+   * Put copies into a zone, folding on `(deck, card, zone)` — the drag-in and the
+   * click-to-add write, and **not** the stepper's.
+   *
+   * It reads `cards` to denormalize the printing onto the new row, so it refuses a card the
+   * database does not have: an orphaned deck row can be stepped and moved but never
+   * re-added. `quantity` must be positive; zero is refused rather than treated as a removal.
+   */
+  deckAddCard: (deckId: number, cardId: string, zone: DeckZone, quantity: number) =>
+    invoke<EntryChange>("deck_add_card", { deckId, cardId, zone, quantity }),
+  /**
+   * An absolute quantity — **the stepper's write**, and the one that works on a row whose
+   * printing has left the card database.
+   *
+   * `0` *removes* the row, the wishlist's asymmetry rather than the collection's: a zone slot
+   * holds an intention and nothing else, and an intention stepped down to none of is
+   * withdrawn. The answer then reads `removed: true` with `id: 0` when there was no row to
+   * remove in the first place.
+   *
+   * Adjusts what is there; it does not create. Putting a card into a zone is `deckAddCard`.
+   */
+  deckSetCardQuantity: (deckId: number, cardId: string, zone: DeckZone, quantity: number) =>
+    invoke<EntryChange>("deck_set_card_quantity", { deckId, cardId, zone, quantity }),
+  /** Move every copy from one zone to another, folding into whatever the target zone already
+   *  holds. The identity travels from the moved row, so an orphan can be tidied out of the
+   *  maybe pile like anything else. */
+  deckMoveCard: (deckId: number, cardId: string, from: DeckZone, to: DeckZone) =>
+    invoke<void>("deck_move_card", { deckId, cardId, from, to }),
+  /**
+   * Everything this deck is short of, onto the wishlist. Answers how many **wishes were
+   * touched** — one per oracle card, so the same card short in two zones is one wish for the
+   * sum, and pressing twice raises a line rather than making a second one.
+   *
+   * `deckId`, where the four commands above take `id`: the odd one out, and Tauri matches by
+   * name. It reallocates before counting — a button that shopped for cards already bought
+   * would be worse than no button.
+   */
+  deckMissingToWishlist: (deckId: number) => invoke<number>("deck_missing_to_wishlist", { deckId }),
+  /** The format rules as data, in picker order. Seeded by the migration, so this changes at
+   *  most once per app version — cached for the session by `useFormatSpecs`. */
+  formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),
   /** `force` skips the 24 h throttle. Rejects if a sync is already running. */
   syncRun: (force: boolean) => invoke<SyncOutcome>("sync_run", { force }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),

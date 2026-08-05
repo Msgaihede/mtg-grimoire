@@ -118,10 +118,13 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
           ))}
         </div>
 
+        {/* Three-way, like the wishlist's twin and the search's Owned: the chip's *label* is
+            what says which state is on, because an unpressed chip cannot mean "not flagged"
+            and also be the same chip that means it when pressed. */}
         <ToggleChip
-          label="Needs review"
-          pressed={collection.needsReview}
-          onClick={() => collection.setNeedsReview(!collection.needsReview)}
+          label={collection.needsReview === false ? "Not flagged" : "Needs review"}
+          pressed={collection.needsReview !== undefined}
+          onClick={collection.toggleNeedsReview}
         />
 
         <label htmlFor="collection-sort" className="sr-only">

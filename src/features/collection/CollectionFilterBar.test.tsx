@@ -35,8 +35,9 @@ const collection = (over: Record<string, unknown> = {}) =>
     toggleFinish: vi.fn(),
     conditions: [] as string[],
     toggleCondition: vi.fn(),
-    needsReview: false,
+    needsReview: undefined,
     setNeedsReview: vi.fn(),
+    toggleNeedsReview: vi.fn(),
     sort: "name",
     setSort: vi.fn(),
     activeCount: 0,
@@ -84,9 +85,7 @@ describe("CollectionFilterBar", () => {
     expect(c.toggleSet).toHaveBeenCalledWith("lea");
     expect(c.toggleFinish).toHaveBeenCalledWith("foil");
     expect(c.toggleCondition).toHaveBeenCalledWith("LP");
-    // The one chip in this row whose state is a plain boolean, so its handler is the one
-    // that can be wired to the wrong `set*` and still render green.
-    expect(c.setNeedsReview).toHaveBeenCalledWith(true);
+    expect(c.toggleNeedsReview).toHaveBeenCalled();
     expect(c.setSort).toHaveBeenCalledWith("price");
     expect(c.resetAll).toHaveBeenCalled();
     // Reset all clears the filters and not the layout: how the reader reads is not what they
@@ -99,6 +98,29 @@ describe("CollectionFilterBar", () => {
 
     expect(useAppStore.getState().collectionView).toBe("grid");
     expect(useAppStore.getState().searchView).toBe("table");
+  });
+
+  /**
+   * The chip's *label* is what says which state is on — the wishlist's rule, and it is what
+   * makes one three-state chip readable at all: an unpressed chip cannot mean "not flagged"
+   * and also be the same chip that means it when pressed.
+   */
+  it("says which of the three needs-review states is on", () => {
+    const { rerender } = render(<CollectionFilterBar collection={collection()} />);
+    expect(screen.getByRole("button", { name: "Needs review" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    rerender(<CollectionFilterBar collection={collection({ needsReview: true })} />);
+    expect(screen.getByRole("button", { name: "Needs review" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    rerender(<CollectionFilterBar collection={collection({ needsReview: false })} />);
+    const complement = screen.getByRole("button", { name: "Not flagged" });
+    expect(complement).toHaveAttribute("aria-pressed", "true");
   });
 
   /** Nothing to reset, nothing to say — an always-visible Reset is a control that is

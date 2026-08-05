@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   colorParam,
+  cycleTriState,
   DEBOUNCE_MS,
   toggleColor,
   toggleIn,
@@ -43,7 +44,9 @@ export interface CollectionFilterState {
   manaValues: readonly number[];
   finishes: readonly Finish[];
   conditions: readonly Condition[];
-  needsReview: boolean;
+  /** `true` is the rows a sync flagged, `false` everything it did not touch. Three-way like
+   *  the wishlist's twin, because the complement is a real question. */
+  needsReview: boolean | undefined;
 }
 
 /**
@@ -63,7 +66,10 @@ export function activeFilterCount(f: CollectionFilterState): number {
     f.manaValues.length > 0,
     f.finishes.length > 0,
     f.conditions.length > 0,
-    f.needsReview,
+    // Compared against `undefined`, never tested for truthiness: `false` — "the rows nothing
+    // flagged" — is a filter that is on, and is where the reader lands once the flagged ones
+    // are dealt with.
+    f.needsReview !== undefined,
   ].filter(Boolean).length;
 }
 
@@ -110,7 +116,7 @@ export function useCollection() {
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
-  const [needsReview, setNeedsReview] = useState(false);
+  const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
   const [sort, setSort] = useState<CollectionSort>("name");
   const [debouncedText, setDebouncedText] = useState("");
 
@@ -141,9 +147,11 @@ export function useCollection() {
     manaValues: manaParam,
     finishes: finishParam,
     conditions: conditionParam,
-    // `false` is a filter too — "the rows nothing flagged" — and this view does not offer
-    // it, so off means absent rather than `false`.
-    needsReview: needsReview || undefined,
+    // Sent only when it is set — and `false`, "everything the sync did not touch", is
+    // meaningful on the wire and is sent as `false`. `collection::scope` has always matched
+    // three ways over this; dropping the complement the way a blank string is dropped would
+    // silently turn it back into "ask nothing".
+    needsReview,
     // `paperOnly` is deliberately absent: the collection forces it off. A paper test over a
     // printing that has left `cards` would throw away exactly the rows this list exists to
     // keep showing.
@@ -164,7 +172,9 @@ export function useCollection() {
     manaParam?.join(",") ?? "",
     finishParam?.join(",") ?? "",
     conditionParam?.join(",") ?? "",
-    needsReview ? "review" : "",
+    // Three terms, not two: the flagged rows and the rows nothing flagged are two different
+    // sets, so a key that spelled both `""` would serve the complement from the other's cache.
+    needsReview === undefined ? "" : needsReview ? "review" : "clear",
   ];
 
   // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
@@ -204,7 +214,16 @@ export function useCollection() {
     conditions,
     toggleCondition: (condition: Condition) =>
       setConditions((picked) => toggleIn(picked, condition)),
+    /**
+     * `true` narrows to the rows a Scryfall migration or a vanished printing flagged,
+     * `false` to those it did not, `undefined` asks nothing.
+     */
     needsReview,
+    /** Off → flagged → not flagged → off. The flagged ones first: that is the only reason
+     *  anybody presses this, and the complement is where you go once they are dealt with. */
+    toggleNeedsReview: () => setNeedsReview((current) => cycleTriState(current, true)),
+    /** The banner's "Show them", which has a destination rather than a next state — it is
+     *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
     sort,
     setSort,
@@ -229,7 +248,7 @@ export function useCollection() {
       setManaValues([]);
       setFinishes([]);
       setConditions([]);
-      setNeedsReview(false);
+      setNeedsReview(undefined);
     },
     query,
     summary,

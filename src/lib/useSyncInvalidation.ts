@@ -8,10 +8,27 @@ import { queryClient } from "@/lib/query";
  *
  * `["cards"]` covers the searches, `["collection"]`/`["wishlist"]` the two user lists and
  * their summaries (a repointed row changes both), `["card"]` the detail pane and its
- * printings list, and `["sets"]` the set picker — whose `staleTime` is `Infinity` once it
- * has rows, so nothing else in the app can ever refresh it.
+ * printings list, `["sets"]` the set picker — whose `staleTime` is `Infinity` once it has
+ * rows, so nothing else in the app can ever refresh it — and `["decks"]` the gallery and
+ * every open deck.
+ *
+ * `["decks"]` for both halves of what a sync does. Every fact a deck card shows except its
+ * denormalized identity is a LEFT JOIN into `cards`, so a rebuilt corpus can change the
+ * type line, the legalities and the price of every line in an open deck; and the reconciler
+ * walks `deck_cards` too, so `collection:reconciled` now means deck rows repointed, folded
+ * or flagged as well.
+ *
+ * `["formatSpecs"]` is deliberately **not** here: that table is seeded by a migration, and a
+ * sync cannot touch it. It is the one query in the app with a flat `staleTime: Infinity`.
  */
-export const SYNC_INVALIDATED = [["cards"], ["collection"], ["wishlist"], ["card"], ["sets"]];
+export const SYNC_INVALIDATED = [
+  ["cards"],
+  ["collection"],
+  ["wishlist"],
+  ["card"],
+  ["sets"],
+  ["decks"],
+];
 
 /** Mark all of it stale; only the queries actually on screen pay for a refetch. */
 function invalidateAll(): void {

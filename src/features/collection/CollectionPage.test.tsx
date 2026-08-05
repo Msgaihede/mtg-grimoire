@@ -269,6 +269,10 @@ describe("CollectionPage", () => {
     // row, so a search left on screen behind this write is now visibly wrong rather than
     // stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    // And every deck: a deck's claims are `min(claim, entry.quantity)` at read time, so a
+    // copy stepped away from under a built deck has just changed what that deck reads as
+    // owning — and the shortfall its "missing to wishlist" button would push.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // And the header really is re-read — not just marked.
     await waitFor(() => expect(collectionSummary).toHaveBeenCalledTimes(2));
     // The list is not: the row's own number came back from the write, and re-reading a
@@ -388,6 +392,37 @@ describe("CollectionPage", () => {
     await screen.findByText("Lightning Bolt");
 
     expect(screen.getByRole("status", { name: /needs review/i })).toBeEmptyDOMElement();
+  });
+
+  /**
+   * The third state the chip gained, and the one place the banner's guard has to be exact.
+   *
+   * It is hidden for `true` and only for `true` — `!== true`, not a falsy test. The reason it
+   * hides is that the list *is* the answer, and that is true of exactly one of the three
+   * states: under `false` the reader is looking at the healthy rows, which is the opposite of
+   * the answer, so three entries still needing attention is news and Show them is one click
+   * from them. A guard of `=== undefined` would have swallowed the offer precisely where it
+   * is most worth making.
+   */
+  it("hides the banner only while the reader is looking at the flagged rows", async () => {
+    collectionSummary.mockResolvedValue(summary({ totalCards: 2, needsReview: 3 }));
+    wrap(<CollectionPage />);
+    const banner = screen.getByRole("status", { name: /needs review/i });
+    await waitFor(() => expect(banner).toHaveTextContent("3"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    expect(banner).toBeEmptyDOMElement();
+
+    await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBe(false));
+    expect(screen.getByRole("button", { name: "Not flagged" })).toBeInTheDocument();
+    expect(banner).toHaveTextContent("3");
+    // And it still goes where it says: pressing it from the complement lands on the flagged
+    // rows rather than cycling the chip to the next state.
+    await userEvent.click(within(banner).getByRole("button", { name: /show them/i }));
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
   });
 
   /**

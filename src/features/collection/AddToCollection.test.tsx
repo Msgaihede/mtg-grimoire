@@ -222,6 +222,9 @@ describe("AddToCollectionButton", () => {
     // The badge on every result row: a wished card is drawn as wished.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
+    // Nor the decks: a deck's `ownedQuantity` is attributed from copies the user *has*, and
+    // a wish is a copy they do not.
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 
   /** With no oracle id there is nothing an "any printing" wish could be keyed on, and a
@@ -286,6 +289,9 @@ describe("AddToCollectionButton", () => {
     // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // And every deck: a claim is clamped to what the entry still holds at read time, so a
+    // copy added under a built deck is a copy that deck may now read as owning.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // Refetched, not merely marked. It used to carry `refetchType: "none"` because the only
     // thing this write changed on a result row was a field no view drew; Task 12's badges
     // draw it, and a wall of art that goes on saying "×2" after a third copy was added from

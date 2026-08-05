@@ -171,6 +171,97 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
   });
 
+  /**
+   * The three deck **reads**.
+   *
+   * `format_specs_list` is the odd one out and is pinned for it: it takes only the managed
+   * state, so an argument object here would be a deserialization error rather than a type
+   * error — `prewarm_collection`'s trap, in the module that added ten commands beside it.
+   */
+  it("sends every deck read under the name its command declares", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.deckList();
+    expect(invoke).toHaveBeenCalledWith("deck_list");
+
+    invoke.mockResolvedValue(null);
+    await ipc.deckGet(3);
+    expect(invoke).toHaveBeenCalledWith("deck_get", { id: 3 });
+
+    invoke.mockResolvedValue([]);
+    await ipc.formatSpecs();
+    expect(invoke).toHaveBeenCalledWith("format_specs_list");
+  });
+
+  /**
+   * The four writes over a whole deck. `deck`, not `input` or `entry`: three modules now
+   * name their one-object payload differently (`entry`, `wish`, `deck`) and Tauri matches
+   * by name, so the one copied from another is the one that fails at runtime.
+   */
+  it("sends every deck write under the name its command declares", async () => {
+    invoke.mockResolvedValue({ id: 4 });
+
+    await ipc.deckCreate({ name: "Burn", formatKey: "modern" });
+    expect(invoke).toHaveBeenCalledWith("deck_create", {
+      deck: { name: "Burn", formatKey: "modern" },
+    });
+
+    await ipc.deckUpdate(4, { isBuilt: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { isBuilt: true } });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckDelete(4);
+    expect(invoke).toHaveBeenCalledWith("deck_delete", { id: 4 });
+
+    invoke.mockResolvedValue({ id: 5 });
+    await ipc.deckDuplicate(4);
+    expect(invoke).toHaveBeenCalledWith("deck_duplicate", { id: 4 });
+  });
+
+  /**
+   * The zone writes, and the one command in this module that does not take `id`.
+   *
+   * Every zone write addresses a slot by **deck and card**, never by the `deck_cards.id` it
+   * answers with: a stale row id is the difference between emptying the slot the reader
+   * pressed and emptying somebody else's. And `deck_missing_to_wishlist` takes `deckId`
+   * where its four siblings take `id` — the one break in the pattern is the one a
+   * copy-paste gets wrong, and it is a runtime rejection with no type error anywhere.
+   */
+  it("addresses every zone write by deck and card, and the wishlist push by `deckId`", async () => {
+    invoke.mockResolvedValue({ id: 9, quantity: 4, removed: false });
+
+    await ipc.deckAddCard(4, "p1", "main", 4);
+    expect(invoke).toHaveBeenCalledWith("deck_add_card", {
+      deckId: 4,
+      cardId: "p1",
+      zone: "main",
+      quantity: 4,
+    });
+
+    await ipc.deckSetCardQuantity(4, "p1", "main", 0);
+    expect(invoke).toHaveBeenCalledWith("deck_set_card_quantity", {
+      deckId: 4,
+      cardId: "p1",
+      zone: "main",
+      quantity: 0,
+    });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckMoveCard(4, "p1", "maybe", "side");
+    expect(invoke).toHaveBeenCalledWith("deck_move_card", {
+      deckId: 4,
+      cardId: "p1",
+      from: "maybe",
+      to: "side",
+    });
+
+    invoke.mockResolvedValue(2);
+    const wishes = await ipc.deckMissingToWishlist(4);
+    expect(invoke).toHaveBeenCalledWith("deck_missing_to_wishlist", { deckId: 4 });
+    // How many wishes were *touched*, not how many copies were added — clicking twice raises
+    // one line rather than making two, which is `add_wish`'s fold.
+    expect(wishes).toBe(2);
+  });
+
   it("asks for a collection pre-warm with no arguments and reads back the queue size", async () => {
     invoke.mockResolvedValue(412);
 

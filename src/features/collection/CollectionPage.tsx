@@ -92,6 +92,12 @@ export function CollectionPage() {
     // than merely marked — only *active* queries refetch, and while this view is on screen
     // the search is unmounted, so from here the cost is a stale mark and nothing else.
     void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    // And every deck. A deck's claims are read back as `min(claim, entry.quantity)`, so a
+    // copy stepped away from under a built deck changes what that deck says it owns — and
+    // what its "missing to wishlist" button would buy — without the deck being touched at
+    // all. The claims themselves are left stale on purpose: they are recomputed by the next
+    // zone write, and a read is not the place to discover that the world moved.
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 
   /**
@@ -108,6 +114,7 @@ export function CollectionPage() {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
     void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 
   const setQuantity = useMutation({
@@ -221,8 +228,12 @@ export function CollectionPage() {
       <div role="status" aria-label="Needs review" className="empty:-mt-4">
         {/* Only while there are flagged rows *and* the reader is not already looking at them —
             with the filter on, the list is the answer and the banner would be a second copy of
-            the question. */}
-        {!collection.needsReview && (summary.data?.needsReview ?? 0) > 0 && (
+            the question.
+
+            `!== true`, not `!`: the chip has three states, and `false` is "the rows nothing
+            flagged". Under a falsy test that state would put the banner back on screen above
+            a list showing precisely the rows nothing is wrong with, offering to show them. */}
+        {collection.needsReview !== true && (summary.data?.needsReview ?? 0) > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs">
             <span className="min-w-0">
               <span className="mr-1 font-medium text-destructive">Needs review:</span>

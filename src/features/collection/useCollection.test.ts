@@ -21,7 +21,7 @@ const NONE = {
   manaValues: [],
   finishes: [],
   conditions: [],
-  needsReview: false,
+  needsReview: undefined,
 };
 
 describe("activeFilterCount", () => {
@@ -37,6 +37,10 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...NONE, finishes: ["foil", "etched"] })).toBe(1);
     expect(activeFilterCount({ ...NONE, conditions: ["NM", "LP"] })).toBe(1);
     expect(activeFilterCount({ ...NONE, needsReview: true })).toBe(1);
+    // `false` — "the rows nothing flagged" — is a filter too, and is where the reader lands
+    // once the flagged ones are dealt with. Compared against `undefined`, never tested for
+    // truthiness, which is the whole difference between a tri-state and a checkbox.
+    expect(activeFilterCount({ ...NONE, needsReview: false })).toBe(1);
   });
 
   /** Whitespace is not a search. */
@@ -124,7 +128,7 @@ describe("useCollection", () => {
       result.current.toggleManaValue(1);
       result.current.toggleFinish("foil");
       result.current.toggleCondition("NM");
-      result.current.setNeedsReview(true);
+      result.current.toggleNeedsReview();
     });
 
     expect(result.current.activeCount).toBe(8);
@@ -134,7 +138,7 @@ describe("useCollection", () => {
     expect(result.current.activeCount).toBe(0);
     expect(result.current.finishes).toEqual([]);
     expect(result.current.conditions).toEqual([]);
-    expect(result.current.needsReview).toBe(false);
+    expect(result.current.needsReview).toBeUndefined();
     await waitFor(() => {
       const q = lastQuery();
       expect(q.text).toBeUndefined();
@@ -142,6 +146,48 @@ describe("useCollection", () => {
       expect(q.conditions).toBeUndefined();
       expect(q.needsReview).toBeUndefined();
     });
+  });
+
+  /**
+   * The chip the wishlist's twin already was. The backend has always taken three states
+   * here — `collection::scope`'s `match` over `Option<bool>` — and the collection was the
+   * one view that could only ask two of them, so "everything the sync did not touch" was a
+   * question the reader could not put to the list they were looking at.
+   *
+   * `false` reaches the wire as `false`, which is the load-bearing half: dropping it the way
+   * a blank string is dropped would silently turn the complement back into "ask nothing".
+   */
+  it("walks the needs-review filter through all three states", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(result.current.needsReview).toBeUndefined();
+
+    act(() => result.current.toggleNeedsReview());
+    expect(result.current.needsReview).toBe(true);
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+
+    act(() => result.current.toggleNeedsReview());
+    expect(result.current.needsReview).toBe(false);
+    await waitFor(() => expect(lastQuery().needsReview).toBe(false));
+
+    act(() => result.current.toggleNeedsReview());
+    expect(result.current.needsReview).toBeUndefined();
+    await waitFor(() => expect(lastQuery().needsReview).toBeUndefined());
+  });
+
+  /** The two answered states are two different sets of rows, so they are two different
+   *  requests — a key that spelled both `""` would serve the complement from the cache of
+   *  the flagged rows. */
+  it("keys the three needs-review states apart", () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    const off = result.current.queryKeyString;
+
+    act(() => result.current.toggleNeedsReview());
+    const flagged = result.current.queryKeyString;
+    act(() => result.current.toggleNeedsReview());
+    const clear = result.current.queryKeyString;
+
+    expect(new Set([off, flagged, clear]).size).toBe(3);
   });
 
   /**

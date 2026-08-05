@@ -211,7 +211,14 @@ function AddPopup({
       // shows. So a wishlist add leaves `["collection"]` alone rather than refetching a
       // list and a summary that cannot have moved.
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      if (mode === "collection") void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      if (mode === "collection") {
+        void queryClient.invalidateQueries({ queryKey: ["collection"] });
+        // And every deck, for the collection add only: a deck's claim is clamped to what the
+        // entry still holds when the deck is read, so a copy added under a built deck is a
+        // copy that deck may now read as owning. A *wish* is a copy the user does not have,
+        // and changes no deck's arithmetic at all.
+        void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      }
       // And the search results, which now *draw* what this write changed: `ownedQuantity`
       // and `wishlisted` are the badge on every row and every tile, so a wall the reader
       // added a third copy from would go on saying "×2" until they searched again.
