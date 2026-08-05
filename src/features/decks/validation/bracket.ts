@@ -1,0 +1,180 @@
+/**
+ * The Commander bracket, estimated — **an advisory and never a verdict**.
+ *
+ * Brackets are Wizards' beta power-level scale for Commander (1 Exhibition … 5 cEDH), and the
+ * research doc is precise about what they are: *"5 brackets; B3 ≤ 3 game changers; advisory
+ * only, not hard validation."* So this module returns an {@link BracketEstimate} rather than
+ * {@link ValidationIssue}s, and nothing it computes can make a deck illegal. A bracket is a
+ * conversation opener between four players at a table, and an app that turned one into a red
+ * error would be answering a question nobody asked it.
+ *
+ * Three signals, in decreasing order of how well this app can see them:
+ *
+ * * **Game Changers** are a *column* (`cards.game_changer`), maintained by the Commander
+ *   Format Panel and delivered by a sync — 53 cards on 2026-08-04 and growing. Nothing here
+ *   hardcodes the list, which is the whole reason the count is trustworthy.
+ * * **Mass land denial** and **extra turns** are read out of oracle text, so they are
+ *   heuristics with names attached. The estimate discloses the cards behind each number for
+ *   exactly that reason: a reader who disagrees can see which card caused it.
+ * * **Tutors** are the weakest of the three and are used only to keep a deck off bracket 1.
+ *
+ * What this module deliberately does **not** try to see: infinite combos, two-card win
+ * conditions, and the "early game" timing that separates brackets 3 and 4 in the real
+ * document. They need a card-interaction model this app does not have, and guessing at them
+ * would make the number worse rather than more precise.
+ */
+import type { CardFacts } from "./types";
+
+/** A reading of a deck's power level: the number, and everything it was read from. */
+export interface BracketEstimate {
+  /** 1–5, a heuristic reading, never enforced. */
+  bracket: number;
+  gameChangers: number;
+  /** The cards behind the number, for the panel's disclosure. */
+  gameChangerNames: string[];
+  massLandDenial: string[];
+  extraTurns: string[];
+}
+
+/**
+ * A card's whole printed text, every face included, lowercased once for the greps below.
+ *
+ * `faces` is JSON — unlike `colors`/`colorIdentity` — and a blob this module cannot read is no
+ * faces at all rather than a thrown error, because a bracket estimate must not be the thing
+ * that breaks a deck screen.
+ */
+function textOf(card: CardFacts): string {
+  const parts = [card.oracleText ?? ""];
+  if (card.faces !== null) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(card.faces);
+    } catch {
+      parsed = null;
+    }
+    if (Array.isArray(parsed)) {
+      for (const face of parsed as Record<string, unknown>[]) {
+        if (face !== null && typeof face === "object" && typeof face.oracle_text === "string") {
+          parts.push(face.oracle_text);
+        }
+      }
+    }
+  }
+  return parts.join("\n").toLowerCase();
+}
+
+/** Sentences, roughly — enough to keep "destroy all creatures" and a later mention of lands
+ *  from being read as one clause. */
+function sentencesOf(text: string): string[] {
+  return text.split(/[.\n]/);
+}
+
+/**
+ * Mass land denial, read a sentence at a time.
+ *
+ * The printed shapes, all four of them live: `"Destroy all lands."` (Armageddon),
+ * `"Destroy all nonbasic lands."` (Ruination), `"Destroy all artifacts, creatures, and
+ * lands."` (Jokulhaups) and `"Each player sacrifices four lands of their choice."` (Wildfire).
+ * One phrase cannot cover them, so the test is a sentence holding **`lands`** plus either
+ * `destroy all` or a sacrifice.
+ *
+ * The plural is doing the work: Zuran Orb's `"Sacrifice a land: You gain 2 life."` is a cost
+ * one player pays, not denial aimed at the table, and it says `land`.
+ */
+function isMassLandDenial(text: string): boolean {
+  return sentencesOf(text).some(
+    (sentence) =>
+      sentence.includes("lands") &&
+      (sentence.includes("destroy all") || sentence.includes("sacrific")),
+  );
+}
+
+/** `"Take an extra turn after this one."` and every variant of it, plurals included. */
+function isExtraTurn(text: string): boolean {
+  return text.includes("extra turn");
+}
+
+/**
+ * A tutor is a card that finds **a card**, not a card that finds a land.
+ *
+ * `"Search your library for a basic land card"` is ramp, and a deck full of ramp is still an
+ * exhibition deck; a fetchland's `"Sacrifice this land: Search your library for a Plains or
+ * Island card"` is the same sentence with the same word in it. So the sentence that searches
+ * must not also be about lands. Used for one thing only — telling bracket 1 from bracket 2 —
+ * because that is as much weight as a grep this rough can carry.
+ */
+function isTutor(text: string): boolean {
+  return sentencesOf(text).some(
+    (sentence) => sentence.includes("search your library") && !sentence.includes("land"),
+  );
+}
+
+/**
+ * A reading of this deck's bracket.
+ *
+ * The scratchpad is dropped for the same reason every rule in `engine.ts` drops it — a maybe
+ * pile is not the deck. Everything else counts, the companion included: it is a card the deck
+ * plays.
+ *
+ * Cards are counted **by name**, once each. In Commander that is also the number of copies,
+ * and in a format where it is not, "this deck runs Rhystic Study" is still one fact about it.
+ */
+export function estimateBracket(cards: CardFacts[]): BracketEstimate {
+  const deck = cards.filter((card) => card.zone !== "maybe");
+
+  const gameChangerNames: string[] = [];
+  const massLandDenial: string[] = [];
+  const extraTurns: string[] = [];
+  let tutors = 0;
+
+  const seen = new Set<string>();
+  for (const card of deck) {
+    if (seen.has(card.name)) continue;
+    seen.add(card.name);
+    // `gameChanger` is `boolean | null`: an orphaned row knows nothing about itself, and a
+    // `null` must not be counted in either direction.
+    if (card.gameChanger === true) gameChangerNames.push(card.name);
+    const text = textOf(card);
+    if (isMassLandDenial(text)) massLandDenial.push(card.name);
+    if (isExtraTurn(text)) extraTurns.push(card.name);
+    if (isTutor(text)) tutors += 1;
+  }
+
+  return {
+    bracket: bracketFor(gameChangerNames.length, massLandDenial.length, extraTurns.length, tutors),
+    gameChangers: gameChangerNames.length,
+    gameChangerNames,
+    massLandDenial,
+    extraTurns,
+  };
+}
+
+/**
+ * The mapping, in one table, paraphrasing the Commander Format Panel's brackets beta (the
+ * `magic.wizards.com/en/formats/commander` document the research doc points at; the numbered
+ * cell it pins is B3's "≤ 3 game changers").
+ *
+ *     mass land denial, or more than 6 Game Changers  →  5   nothing above this is restricted
+ *     4–6 Game Changers                               →  4   optimized
+ *     1–3 Game Changers                               →  3   upgraded — B3's own ceiling
+ *     extra turns and nothing else                    →  3   the same shelf, softer reason
+ *     a tutor for any card                            →  2   core
+ *     none of the above                               →  1   exhibition
+ *
+ * Every row is a **judgement**, and two of them are this app's rather than the document's:
+ * mass land denial is a bracket-4-and-up signal in the real text and is treated as a 5 here
+ * because a deck that plays it has decided something about the table, and extra turns are read
+ * as a 3 rather than a 4 because one Time Warp is not a turn chain. The number moving is the
+ * point; the digit is not evidence of anything.
+ */
+function bracketFor(
+  gameChangers: number,
+  massLandDenial: number,
+  extraTurns: number,
+  tutors: number,
+): number {
+  if (massLandDenial > 0 || gameChangers > 6) return 5;
+  if (gameChangers >= 4) return 4;
+  if (gameChangers >= 1 || extraTurns > 0) return 3;
+  return tutors > 0 ? 2 : 1;
+}

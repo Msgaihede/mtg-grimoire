@@ -15,40 +15,48 @@
  *
  * * **`maybe` counts toward nothing at all** — not size, not copies, not legality. It is a
  *   scratchpad, and the allocator does not even claim copies for it.
- * * **`companion` counts toward no deck size** (EDH's is "effectively a 101st card"). Where
- *   the format has a real sideboard it occupies one of its slots; where `sideboardMax` is 0
- *   it is simply an extra card — which is read from that cell rather than from a key, so
- *   Commander, the three Brawls, Oathbreaker, PDH, Duel, PreDH and Gladiator all come out
- *   right together. (Gladiator is the one of those that also has `allowsCompanion` false —
- *   no sideboard, so no companion at all — and refusing the card is Task 10's, not this
- *   file's sideboard arithmetic.) Whether the card may be a companion is Task 10's too.
+ * * **`companion` counts toward no deck size** (EDH's is "effectively a 101st card") but
+ *   toward every copy limit. Where the format has a real sideboard it occupies one of its
+ *   slots; where `sideboardMax` is 0 it is simply an extra card — which is read from that
+ *   cell rather than from a key, so Commander, the three Brawls, Oathbreaker, PDH, Duel,
+ *   PreDH and Gladiator all come out right together. (Gladiator is the one of those that also
+ *   has `allowsCompanion` false — no sideboard, so no companion at all — and refusing the
+ *   card is `companions.ts`'s job, not this file's sideboard arithmetic.)
  *
- * Commander eligibility, partners and colour identity live in `commanders.ts` and are called
- * from {@link commanderIssues} at the bottom of this file; companion conditions and the
- * bracket advisory are Task 10's, and this file still knows nothing about those.
+ * Commander eligibility, partners and colour identity live in `commanders.ts`; the ten
+ * companion conditions live in `companions.ts`. Both are called from the bottom of this file.
+ * The bracket advisory is in `bracket.ts` and is not called from here at all — it is an
+ * estimate rather than a finding, and nothing about it belongs in a list of what is wrong.
  */
 import type { DeckZone, FormatSpec } from "@/lib/ipc";
 import type { CardFacts, ValidationIssue } from "./types";
 import { copyException, isBasicLand, unreadableCopyCount } from "./singleton";
 import { colorIdentityIssues, commanderIdentity, validateCommanderZone } from "./commanders";
+import { companionIssues } from "./companions";
 
 /** The zones `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**", "exactly 60
  *  incl Oathbreaker + signature spell" (both of those live in the `commander` zone). */
 const SIZE_ZONES: readonly DeckZone[] = ["main", "commander"];
 
 /**
- * The zones a copy limit counts together.
+ * The zones a copy limit counts together — **every zone but the scratchpad**.
  *
- * `main` + `side` is CR 100.4a — a sideboard's copies count toward the same four. The
+ * `main` + `side` is CR 100.4a: a sideboard's copies count toward the same four. The
  * commander zone is in because CR 903.5b's rule ("with the exception of basic lands, each
  * card in a Commander deck must have a different English name") is about the *deck*, and
  * the commander is one of its cards — 903.5a is what puts it there ("exactly 100 cards,
  * including its commander"). So a card in the commander zone *and* in the main deck is two
- * copies of it, which a singleton format has to hear about. The companion is left out
- * because it is judged with the deck rather than inside it (Task 10 runs the singleton rule
- * over `[...deck, companion]` for exactly that reason).
+ * copies of it, which a singleton format has to hear about.
+ *
+ * The companion is in for the same reason under either shape the formats give it. Where the
+ * format has a real sideboard the companion occupies one of its slots, and 100.4a counts
+ * those; where it has none, the research doc calls the companion "effectively a 101st card"
+ * and 903.5b counts that. So a deck holding Lurrus as its companion **and** in the 99 is
+ * holding two Lurruses, and the one place in this file that counts cards is the place that
+ * says so. It is deliberately *not* in {@link SIZE_ZONES}: a companion is not a card of the
+ * starting deck, and counting it there would make every companion deck one card too big.
  */
-const COPY_ZONES: readonly DeckZone[] = ["main", "side", "commander"];
+const COPY_ZONES: readonly DeckZone[] = ["main", "side", "commander", "companion"];
 
 /**
  * Everything wrong with this deck under this format, worst-first by rule rather than by
@@ -69,6 +77,11 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
     ...copyIssues(deck, spec, legalities),
     ...cardIssues(deck, spec, legalities),
     ...commanderIssues(deck, spec),
+    ...companionIssues(
+      deck.filter((card) => card.zone === "companion"),
+      deck,
+      spec,
+    ),
   ]);
 }
 
@@ -417,8 +430,12 @@ function cardIssues(
  * Four columns rather than one: `layout` and `rarity` are non-null on every Scryfall
  * object, `legalities` is a blob every card has, and `oracleId` is null on no live row
  * (0 of 116,590). One of them null is a card; all four null is no card at all.
+ *
+ * Exported so `companions.ts` skips the same rows this file does — a second answer to "is
+ * there a card here" would eventually disagree, and the disagreement would show up as a
+ * companion condition accusing a row the reconciler has already explained.
  */
-function isOrphan(card: CardFacts): boolean {
+export function isOrphan(card: CardFacts): boolean {
   return (
     card.layout === null &&
     card.rarity === null &&
@@ -500,9 +517,9 @@ function outsidePoolIssues(card: CardFacts, spec: FormatSpec): ValidationIssue[]
  *
  * Two zones are deliberately left out of the identity pass. The commander zone judges itself
  * (Oathbreaker's signature spell is measured against its oathbreaker, and partners are inside
- * their own union by construction), and the `companion` zone is Task 10's — it runs the
- * identity and singleton rules over `[...deck, companion]`, and checking it here would report
- * the same card twice.
+ * their own union by construction), and the `companion` zone is `companions.ts`'s — it holds
+ * the companion to the same identity there, and checking it here would report the same card
+ * twice.
  */
 function commanderIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
   const zone = deck.filter((card) => card.zone === "commander");

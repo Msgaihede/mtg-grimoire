@@ -49,12 +49,16 @@ describe("deck size", () => {
    * and the maybe pile counts toward nothing at all: not size, not copies, not legality.
    * The maybe row here is four copies of a card that is *banned* in the format, and the
    * deck is clean.
+   *
+   * Umori rather than Lurrus, and the choice is what keeps this test about deck size:
+   * `companions.ts` reads each companion's own condition, Umori's is satisfied by a deck
+   * whose one nonland card is a creature, and Lurrus's is not (Kenrith is mana value 5).
    */
   it("ignores the companion for size and the maybe pile for everything", () => {
     const deck = [
       commander(),
       islands(99),
-      card({ name: "Lurrus of the Dream-Den", zone: "companion", typeLine: "Legendary Creature" }),
+      card({ name: "Umori, the Collector", zone: "companion", typeLine: "Legendary Creature" }),
       card({ name: "Sol Ring", zone: "maybe", quantity: 4, legalities: '{"commander":"banned"}' }),
     ];
 
@@ -576,7 +580,7 @@ describe("sideboard and mana value", () => {
     const withCompanion = [
       commander(),
       islands(99),
-      card({ name: "Lurrus of the Dream-Den", zone: "companion" }),
+      card({ name: "Umori, the Collector", zone: "companion" }),
     ];
     expect(validateDeck(withCompanion, spec("commander"))).toEqual([]);
   });

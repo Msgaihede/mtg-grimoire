@@ -55,6 +55,26 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 10,
   },
+  // The one seeded format that forbids companions outright, and the reason is the cell next
+  // to it: no sideboard, so no sideboard slot for one to sit in (research doc).
+  gladiator: {
+    key: "gladiator",
+    displayName: "Gladiator",
+    enabledInPicker: true,
+    deckMin: 100,
+    deckMax: null,
+    maxCopies: 1,
+    sideboardMax: 0,
+    singleton: true,
+    requiresCommander: false,
+    commanderRule: null,
+    life: 20,
+    restrictedSemantic: "max_one",
+    hasLegalityData: true,
+    maxManaValue: null,
+    allowsCompanion: false,
+    sortOrder: 5,
+  },
   commander: {
     key: "commander",
     displayName: "Commander",
@@ -285,19 +305,119 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
   };
 }
 
-/** Filler that no rule objects to: basics are exempt from every copy limit (CR 100.2a),
- *  and blue sits inside both commander fixtures' colour identities. */
+/**
+ * Filler that no rule objects to: basics are exempt from every copy limit (CR 100.2a),
+ * and blue sits inside both commander fixtures' colour identities.
+ *
+ * The oracle text is the printed one — a basic land's whole text is the reminder for its
+ * intrinsic mana ability, `"({T}: Add {U}.)"`, and Task 10's Zirda condition ("each
+ * permanent card has an activated ability") is decided by exactly that string. A blank
+ * fixture there would have made the most common card in Magic fail the rule.
+ */
 export function islands(quantity: number, zone: DeckZone = "main"): CardFacts {
   return card({
     name: "Island",
     typeLine: "Basic Land — Island",
     manaCost: null,
     cmc: 0,
+    oracleText: "({T}: Add {U}.)",
     colors: null,
     colorIdentity: "U",
     quantity,
     zone,
   });
+}
+
+/**
+ * A card on the Game Changers list, which is a **column** and not a list this app keeps
+ * (`cards.game_changer`, 53 cards on 2026-08-04 and growing with every panel update).
+ *
+ * Real printings, and the flag is the point: the bracket estimate hangs entirely on it, and
+ * before Task 10 no fixture anywhere in the app — TypeScript or Rust — carried a `true`.
+ * Verified against the local card database on 2026-08-05.
+ */
+export const GAME_CHANGERS: Record<string, Partial<CardFacts>> = {
+  "Rhystic Study": {
+    manaCost: "{2}{U}",
+    cmc: 3,
+    typeLine: "Enchantment",
+    oracleText:
+      "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+    colors: "U",
+    colorIdentity: "U",
+    rarity: "common",
+  },
+  "Cyclonic Rift": {
+    manaCost: "{1}{U}",
+    cmc: 2,
+    typeLine: "Instant",
+    oracleText:
+      "Return target nonland permanent you don't control to its owner's hand.\n" +
+      'Overload {6}{U} (You may cast this spell for its overload cost. If you do, change "target" in its text to "each.")',
+    colors: "U",
+    colorIdentity: "U",
+    rarity: "rare",
+  },
+  "The One Ring": {
+    manaCost: "{4}",
+    cmc: 4,
+    typeLine: "Legendary Artifact",
+    oracleText:
+      "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from " +
+      "everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for " +
+      "each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then " +
+      "draw a card for each burden counter on The One Ring.",
+    colors: null,
+    colorIdentity: "",
+    rarity: "mythic",
+  },
+  "Ancient Tomb": {
+    manaCost: null,
+    cmc: 0,
+    typeLine: "Land",
+    oracleText: "{T}: Add {C}{C}. This land deals 2 damage to you.",
+    colors: null,
+    colorIdentity: "",
+    rarity: "mythic",
+  },
+  "Demonic Tutor": {
+    manaCost: "{1}{B}",
+    cmc: 2,
+    typeLine: "Sorcery",
+    oracleText: "Search your library for a card, put that card into your hand, then shuffle.",
+    colors: "B",
+    colorIdentity: "B",
+    rarity: "uncommon",
+  },
+  "Smothering Tithe": {
+    manaCost: "{3}{W}",
+    cmc: 4,
+    typeLine: "Enchantment",
+    oracleText:
+      "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you " +
+      "create a Treasure token. (It's an artifact with \"{T}, Sacrifice this token: Add one " +
+      'mana of any color.")',
+    colors: "W",
+    colorIdentity: "W",
+    rarity: "mythic",
+  },
+  "Mox Diamond": {
+    manaCost: "{0}",
+    cmc: 0,
+    typeLine: "Artifact",
+    oracleText:
+      "If this artifact would enter, you may discard a land card instead. If you do, put this " +
+      "artifact onto the battlefield. If you don't, put it into its owner's graveyard.\n" +
+      "{T}: Add one mana of any color.",
+    colors: null,
+    colorIdentity: "",
+    rarity: "rare",
+  },
+};
+
+/** One of {@link GAME_CHANGERS} as a deck row, flag set. */
+export function gameChanger(name: keyof typeof GAME_CHANGERS, zone: DeckZone = "main"): CardFacts {
+  return card({ ...GAME_CHANGERS[name], name, gameChanger: true, zone });
 }
 
 /**

@@ -30,7 +30,12 @@ export interface ValidationIssue {
    * * `commanders.ts` — `"commander-zone"` (a commander in a format that has none) |
    *   `"commander-missing"` | `"commander-count"` | `"commander-eligibility"` |
    *   `"commander-partner"` | `"commander-banned"` | `"color-identity"`
-   * * `companions.ts` — `"companion-*"`, from Task 10.
+   * * `companions.ts` — `"companion-zone"` (a companion in a format that has none) |
+   *   `"companion-count"` | `"companion-eligibility"` | `"companion-unknown"` |
+   *   `"companion-condition"` | `"color-identity"`
+   *
+   * `bracket.ts` emits none of these: a bracket is an estimate rather than a finding, and it
+   * is returned as a `BracketEstimate` instead.
    *
    * One `(code, message)` pair is one issue: the engine collapses rows that produce the
    * same sentence into a single finding whose `cardIds` names all of them.
