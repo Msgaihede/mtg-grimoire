@@ -1,9 +1,16 @@
-//! Database schema: `cards`, `sets`, `sync_meta`, and the `cards_fts` search index.
+//! Database schema: `cards`, `sets`, `sync_meta`, the `cards_fts` search index, and the
+//! user's own tables — `collection_entries`, `wishlist_entries`, `card_migrations`.
 //!
 //! Nullability here is load-bearing. Scryfall omits `oracle_id`, `cmc` and `type_line`
 //! on some printings (reversible cards, art series), `collector_number` is TEXT (values
 //! like `"161★"` exist), and `legalities` is stored as a JSON blob because the format
 //! list grows over time.
+//!
+//! The line that runs through the whole file: the first four tables are *sync data* and
+//! `cards` is dropped and recreated wholesale on every sync (see [`swap_staging`]); the
+//! last three are the user's, are never dropped, and therefore reference `cards.id`
+//! **softly** — no `REFERENCES` clause anywhere, with the printing denormalised beside
+//! the id so a row stays identifiable after the id it points at stops resolving.
 
 use rusqlite::Connection;
 
@@ -122,7 +129,27 @@ fn json_raw(col: &str) -> String {
 /// The head schema version — what [`migrate`] walks a database up to, and what
 /// `migrate_is_idempotent_and_creates_tables` pins. Named because three tests and the
 /// final `PRAGMA user_version` write all have to mean the same number.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
+
+/// What makes two collection rows the *same* row, as one SQL fragment.
+///
+/// Written once because it is used twice and the two uses must agree exactly: the UNIQUE
+/// index that enforces the grain, and the `ON CONFLICT(…)` target of every quick-add. A
+/// conflict target that does not match an index verbatim is not a compile error, it is a
+/// runtime "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".
+///
+/// The `coalesce`s are the reason this is not just a column list. SQLite treats NULLs in a
+/// UNIQUE index as *distinct*, so a nullable column in the grain is a column that stops
+/// enforcing anything the moment it is empty — which for `serial_number` (NULL on every
+/// card that is not serialized, i.e. nearly all of them) would mean no grain at all.
+pub const COLLECTION_GRAIN: &str = "card_id, finish, condition, lang, altered, signed, proxy, \
+     misprint, coalesce(serial_number, ''), coalesce(grading, '')";
+
+/// The wishlist's grain: an oracle card, optionally pinned to one printing and one finish.
+/// `card_id IS NULL` means "any printing" (spec §6), which is a different wish from a
+/// specific one rather than a looser version of it.
+pub const WISHLIST_GRAIN: &str =
+    "coalesce(oracle_id, ''), coalesce(card_id, ''), coalesce(preferred_finish, '')";
 
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
 /// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
@@ -229,6 +256,127 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             raw = json_raw("raw")
         ))?;
 
+        // Literal `3`, not `SCHEMA_VERSION`: this step is what makes a database version 3,
+        // and head is 4. Writing head here would commit "migrated" before the v4 step had
+        // run, so a v4 that then failed would leave a database claiming a schema it does
+        // not have — with no way back, because `migrate` only ever walks upwards.
+        tx.execute_batch("PRAGMA user_version = 3;")?;
+        tx.commit()?;
+    }
+    if v < 4 {
+        let tx = conn.unchecked_transaction()?;
+        // Spec §6, and every column here answers to the same invariant: `cards` is
+        // dropped and recreated on every sync, so `card_id` carries **no** `REFERENCES`
+        // clause and the printing is denormalised beside it. A declared foreign key would
+        // abort every sync; `ON DELETE CASCADE` would delete the user's collection on the
+        // next refresh. Orphans are flagged (`needs_review`), never deleted.
+        //
+        // None of these tables is `cards`, so `CARDS_INDEXES` is not involved: their
+        // indexes are created here and nothing drops them. Nothing here reads `raw`
+        // either, so [`json_raw`] has no part to play — these tables are not sync data.
+        tx.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS collection_entries (
+                id INTEGER PRIMARY KEY,
+                -- Soft reference. No REFERENCES clause, deliberately and permanently.
+                card_id TEXT NOT NULL,
+                -- Migration insurance: what the user actually owns, in the terms printed
+                -- on the card, still readable when the id stops resolving.
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                -- Enum, never a boolean: `etched` is a third thing, and collapsing it is
+                -- the most common importer data-loss bug there is.
+                finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                condition TEXT NOT NULL DEFAULT 'NM'
+                    CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+                -- What the import said before it was normalised. Kept because the
+                -- normalisation is lossy (EU 'GD' and NA 'MP' arrive as one grade) and the
+                -- user's own file is the only place the difference still exists.
+                condition_original TEXT,
+                quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                tradelist_quantity INTEGER NOT NULL DEFAULT 0
+                    CHECK (tradelist_quantity >= 0),
+                purchase_price REAL,
+                purchase_currency TEXT,
+                acquired_at TEXT,
+                -- No competitor stores this. It is one TEXT column and it is the answer to
+                -- 'where did I get this?', which is the question a collection is actually
+                -- asked years later.
+                acquisition_source TEXT,
+                -- 042/500. Not in Scryfall's data at all — user-supplied, and part of the
+                -- grain, because two serialized copies are two different objects.
+                serial_number TEXT,
+                altered INTEGER NOT NULL DEFAULT 0,
+                signed INTEGER NOT NULL DEFAULT 0,
+                proxy INTEGER NOT NULL DEFAULT 0,
+                misprint INTEGER NOT NULL DEFAULT 0,
+                -- {{company, grade, cert}}. JSON because the shape differs per grader
+                -- (CGC has two grades numbered 10; PSA has no 9.5) and a column per
+                -- grader is a migration per grader.
+                grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
+                tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+                notes TEXT,
+                -- NULL is the normal state. A sentence here means the row needs the user's
+                -- attention — the printing vanished from Scryfall, or a merge landed it
+                -- somewhere this database cannot see. Never a reason to delete the row.
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_grain
+                ON collection_entries ({grain});
+             CREATE INDEX IF NOT EXISTS idx_collection_card
+                ON collection_entries (card_id);
+             CREATE INDEX IF NOT EXISTS idx_collection_review
+                ON collection_entries (needs_review) WHERE needs_review IS NOT NULL;
+
+             CREATE TABLE IF NOT EXISTS wishlist_entries (
+                id INTEGER PRIMARY KEY,
+                -- The oracle card. NULLABLE, because reversible cards genuinely have no
+                -- oracle_id and a wish for one can only be a wish for its printing.
+                oracle_id TEXT,
+                -- NULL = any printing (spec §6). Set = that printing and no other.
+                card_id TEXT,
+                set_code TEXT,
+                collector_number TEXT,
+                lang TEXT,
+                -- Denormalised here but not in the collection, on purpose: an any-printing
+                -- wish has no card row to join for a name, and a shopping list that cannot
+                -- say what it is shopping for is not a list.
+                name TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+                preferred_finish TEXT
+                    CHECK (preferred_finish IS NULL
+                           OR preferred_finish IN ('nonfoil','foil','etched')),
+                notes TEXT,
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                -- A wish that names neither an oracle card nor a printing is a wish for
+                -- nothing, and would collide with every other such row on the grain.
+                CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_wishlist_grain
+                ON wishlist_entries ({wish});
+             CREATE INDEX IF NOT EXISTS idx_wishlist_card ON wishlist_entries (card_id);
+             CREATE INDEX IF NOT EXISTS idx_wishlist_oracle ON wishlist_entries (oracle_id);
+
+             -- Every Scryfall id migration this database has already applied, so a re-poll
+             -- is a no-op instead of a second repoint. Scryfall's own id is the key.
+             CREATE TABLE IF NOT EXISTS card_migrations (
+                id TEXT PRIMARY KEY,
+                performed_at TEXT,
+                strategy TEXT NOT NULL CHECK (strategy IN ('merge','delete')),
+                old_card_id TEXT NOT NULL,
+                new_card_id TEXT,
+                note TEXT,
+                applied_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_card_migrations_old
+                ON card_migrations (old_card_id);",
+            grain = COLLECTION_GRAIN,
+            wish = WISHLIST_GRAIN
+        ))?;
         tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         tx.commit()?;
     }
@@ -414,12 +562,14 @@ mod tests {
         migrate(&conn).unwrap(); // no error on rerun
         let n: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name IN ('cards','sets','sync_meta','cards_fts')",
+                "SELECT count(*) FROM sqlite_master WHERE name IN
+                 ('cards','sets','sync_meta','cards_fts',
+                  'collection_entries','wishlist_entries','card_migrations')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 4);
+        assert_eq!(n, 7);
 
         // Without this the test would still pass while `migrate` re-ran its whole batch
         // every call (the CREATEs are all `IF NOT EXISTS`), silently rebuilding FTS each
@@ -429,6 +579,65 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// The grain constants exist to be pasted into an `ON CONFLICT(…)` target verbatim,
+    /// and SQLite matches a conflict target against an index by *parsed expression*, not
+    /// by string — but a target that matches nothing is not a compile error, it is a
+    /// runtime "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+    /// raised at the first quick-add. Proven here, once, so the upsert Task 5 builds on
+    /// cannot fail for a reason that had nothing to do with Task 5.
+    #[test]
+    fn each_grain_constant_works_as_an_upsert_conflict_target() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let add = |qty: i64| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO collection_entries
+                        (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                         created_at,updated_at)
+                     VALUES ('bolt','lea','161','en','foil','NM',?1,unixepoch(),unixepoch())
+                     ON CONFLICT ({COLLECTION_GRAIN}) DO UPDATE
+                        SET quantity = quantity + excluded.quantity"
+                ),
+                [qty],
+            )
+        };
+        add(2).unwrap();
+        add(3).expect("the second add must fold into the first, not raise");
+        let (rows, qty): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), sum(quantity) FROM collection_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, qty), (1, 5), "one row, quantities folded");
+
+        let wish = |qty: i64| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO wishlist_entries
+                        (oracle_id,card_id,name,quantity,created_at,updated_at)
+                     VALUES ('o1',NULL,'Lightning Bolt',?1,unixepoch(),unixepoch())
+                     ON CONFLICT ({WISHLIST_GRAIN}) DO UPDATE
+                        SET quantity = quantity + excluded.quantity"
+                ),
+                [qty],
+            )
+        };
+        wish(1).unwrap();
+        wish(1).expect("an any-printing wish folds into the one already there");
+        let (rows, qty): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), sum(quantity) FROM wishlist_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, qty), (1, 2));
     }
 
     /// A killed sync leaves a *committed* staging table now that the ingest chunks its
@@ -527,49 +736,173 @@ mod tests {
         assert_eq!(staging, 0, "staging table is consumed by the rename");
     }
 
-    /// The one invariant `swap_staging` imposes on every table Plan 3 will add: a user
-    /// table may reference `cards.id` only *softly*. The swap drops `cards` outright, so
-    /// a declared `REFERENCES cards(id)` would abort every sync under
-    /// `foreign_keys = ON`, and an `ON DELETE CASCADE` one would quietly delete the
-    /// user's collection on the next refresh. `foreign_keys` is switched on here (it is
-    /// off by default on a bare connection, on in `db::open`) so the failure this guards
-    /// against could actually happen.
+    /// The invariant this whole plan is shaped by, now with the real tables: a sync drops
+    /// `cards` outright, and the user's collection has to be sitting there afterwards.
+    /// `foreign_keys` is ON here (as it is in `db::open`) so the failure this guards
+    /// against — a `REFERENCES cards(id)` that aborts every sync — could actually happen.
+    ///
+    /// This is `a_soft_card_reference_survives_the_swap_that_drops_cards` grown up: that
+    /// test built a stand-in `collection_entries` by hand because the real one did not
+    /// exist yet. It does now, so the guard runs against the table the app actually uses
+    /// — and a hand-built stand-in would no longer even create (the name is taken).
     #[test]
-    fn a_soft_card_reference_survives_the_swap_that_drops_cards() {
+    fn user_rows_survive_the_swap_that_drops_cards() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrate(&conn).unwrap();
-        conn.execute("INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw) VALUES ('bolt','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
-
-        // Shaped as spec §6 requires: `card_id` with no `REFERENCES` clause, and the
-        // printing denormalised beside it so the row is still identifiable if the id
-        // ever stops resolving.
-        conn.execute_batch(
-            "CREATE TABLE collection_entries (
-                id INTEGER PRIMARY KEY, card_id TEXT NOT NULL,
-                set_code TEXT NOT NULL, collector_number TEXT NOT NULL, lang TEXT NOT NULL,
-                quantity INTEGER NOT NULL);
-             INSERT INTO collection_entries (card_id, set_code, collector_number, lang, quantity)
-                VALUES ('bolt','lea','161','en',4);",
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('bolt','Lightning Bolt','lea','161','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('bolt','lea','161','en','foil','LP',4,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES ('o1',NULL,'Lightning Bolt',2,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO card_migrations (id,performed_at,strategy,old_card_id,new_card_id,applied_at)
+             VALUES ('m1','2026-01-01T00:00:00Z','merge','old','bolt',unixepoch())",
+            [],
         )
         .unwrap();
 
         create_staging(&conn).unwrap();
-        conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('bolt','Lightning Bolt','2ed','162','en','normal','{}')", []).unwrap();
-        swap_staging(&conn).expect("a sync must not be blocked by a user table");
+        conn.execute(
+            "INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('bolt','Lightning Bolt','2ed','162','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        swap_staging(&conn).expect("a sync must not be blocked by the user's own tables");
 
-        let (card_id, qty): (String, i64) = conn
+        for table in ["collection_entries", "wishlist_entries", "card_migrations"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "`{table}` is not sync data");
+        }
+        // And the denormalised printing is still the printing the user recorded, not
+        // whatever the new `cards` row says. That is the point of storing it.
+        let (set, cn): (String, String) = conn
             .query_row(
-                "SELECT card_id, quantity FROM collection_entries",
+                "SELECT set_code, collector_number FROM collection_entries",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(
-            (card_id.as_str(), qty),
-            ("bolt", 4),
-            "user rows are not sync data"
-        );
+        assert_eq!((set.as_str(), cn.as_str()), ("lea", "161"));
+    }
+
+    /// Two copies are one row when they agree on the grain, and two rows when they do not.
+    /// The `coalesce`s are load-bearing: SQLite treats NULLs in a UNIQUE index as distinct,
+    /// so without them a second unserialised copy would insert instead of conflicting, and
+    /// the upsert every quick-add depends on would silently create duplicates.
+    #[test]
+    fn the_collection_grain_is_unique_including_the_nullable_parts() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let add = |finish: &str, condition: &str, serial: Option<&str>| {
+            conn.execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     serial_number,created_at,updated_at)
+                 VALUES ('bolt','lea','161','en',?1,?2,1,?3,unixepoch(),unixepoch())",
+                rusqlite::params![finish, condition, serial],
+            )
+        };
+        add("foil", "NM", None).unwrap();
+        assert!(add("foil", "NM", None).is_err(), "same grain, same row");
+        add("nonfoil", "NM", None).unwrap();
+        add("foil", "LP", None).unwrap();
+        add("foil", "NM", Some("042/500")).unwrap();
+        add("foil", "NM", Some("043/500")).unwrap();
+
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 5);
+    }
+
+    /// The enums, enforced where they cannot be argued with. `finishes` is a strict enum
+    /// upstream and the research doc names a boolean `foil` column as the single most
+    /// common importer data-loss bug; a CHECK is what stops "Foil" or `1` ever landing.
+    #[test]
+    fn the_finish_and_condition_enums_are_enforced_by_the_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        // A different card every time, so that the *only* thing that can reject a row is
+        // the value under test. Held on one `card_id` the accepted values would collide
+        // with each other on the grain — `nonfoil`/`NM` is both the third finish and the
+        // first condition — and a UNIQUE failure would read exactly like a CHECK failure.
+        let nth = std::cell::Cell::new(0);
+        let add = |finish: &str, condition: &str, qty: i64| {
+            nth.set(nth.get() + 1);
+            conn.execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+                 VALUES (?1,'lea','161','en',?2,?3,?4,unixepoch(),unixepoch())",
+                rusqlite::params![format!("card{}", nth.get()), finish, condition, qty],
+            )
+        };
+        for (finish, condition, qty) in [
+            ("Foil", "NM", 1),
+            ("foil", "Near Mint", 1),
+            ("foil", "NM", -1),
+            ("", "NM", 1),
+        ] {
+            let err = add(finish, condition, qty).expect_err(&format!(
+                "({finish}, {condition}, {qty}) must not be storable"
+            ));
+            // And rejected by the CHECK that is the subject here, not by some other
+            // constraint that happens to fire first.
+            assert!(
+                matches!(&err, rusqlite::Error::SqliteFailure(e, _)
+                         if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
+                "({finish}, {condition}, {qty}) was rejected, but not by a CHECK: {err}"
+            );
+        }
+        for finish in ["nonfoil", "foil", "etched"] {
+            add(finish, "NM", 1).unwrap();
+        }
+        for condition in ["NM", "LP", "MP", "HP", "DMG"] {
+            add("nonfoil", condition, 1).unwrap();
+        }
+    }
+
+    /// A wish is for an *oracle card*, optionally pinned to a printing — and "any
+    /// printing" (`card_id IS NULL`) is a different wish from "this printing", not a
+    /// duplicate of it.
+    #[test]
+    fn a_wish_for_any_printing_and_one_for_a_printing_are_two_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let wish = |card_id: Option<&str>, finish: Option<&str>| {
+            conn.execute(
+                "INSERT INTO wishlist_entries
+                    (oracle_id,card_id,name,quantity,preferred_finish,created_at,updated_at)
+                 VALUES ('o1',?1,'Lightning Bolt',1,?2,unixepoch(),unixepoch())",
+                rusqlite::params![card_id, finish],
+            )
+        };
+        wish(None, None).unwrap();
+        assert!(wish(None, None).is_err(), "the same wish twice is one wish");
+        wish(Some("bolt-lea"), None).unwrap();
+        wish(None, Some("foil")).unwrap();
+
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 3);
     }
 
     /// Staging is renamed *over* `cards`, so its layout has to be whatever `cards` is
