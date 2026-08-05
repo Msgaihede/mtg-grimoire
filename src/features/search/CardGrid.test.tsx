@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS } from "@/lib/images";
 import type { CardSummary } from "@/lib/ipc";
 import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
@@ -37,6 +39,12 @@ afterEach(() => {
 /** Long enough to cover the first dithered wait whatever `Math.random` returned. */
 const PAST_THE_RETRY = IMAGE_RETRY_FLOOR_MS + IMAGE_RETRY_SPREAD_MS;
 
+/** For the tests that open a quick-add popup, which is a mutation and wants a client. */
+function wrap(ui: ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
 describe("CardGrid", () => {
   it("renders a card image per row, named for the card", () => {
     render(
@@ -68,9 +76,58 @@ describe("CardGrid", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /Lightning Bolt/ }));
+    // Named exactly, because the tile now holds two buttons: the art, whose name is the
+    // card, and the quick-add, whose name is the card plus what it does to it.
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
 
     expect(onSelect).toHaveBeenCalledWith("aaa");
+  });
+
+  /**
+   * A button inside a button is invalid HTML that React warns about and browsers render
+   * unpredictably — so the tile is a wrapper, the art is one button and the quick-add is
+   * another beside it in the caption.
+   */
+  it("puts a quick-add beside the art rather than inside it", async () => {
+    const onSelect = vi.fn();
+    wrap(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={onSelect}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const add = screen.getByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ });
+    expect(art.contains(add)).toBe(false);
+
+    await userEvent.click(add);
+
+    // Adding a card is not opening it: the reader stays on the wall they were scanning.
+    expect(await screen.findByRole("dialog", { name: "Add Lightning Bolt" })).toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Hidden until the tile is hovered or holds the caret — 40 plus signs over a wall of art
+   * is the wall competing with itself — but never removed from the tab order, because
+   * "visible on hover" is not a state a keyboard has.
+   */
+  it("keeps the quick-add out of sight and in the tab order", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    const add = screen.getByRole("button", { name: /^Add Lightning Bolt/ });
+    expect(add.closest("span")).toHaveClass("opacity-0", "group-hover:opacity-100");
+    expect(add).not.toHaveAttribute("tabindex", "-1");
   });
 
   /**

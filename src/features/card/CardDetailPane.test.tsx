@@ -375,6 +375,57 @@ describe("CardDetailPane", () => {
   });
 
   /**
+   * The carryover fold: the printings list is the fastest way to record "I have the Alpha
+   * one", and it can only be that if each row adds *its own* printing. The button is built
+   * from the row rather than from the card the pane is about — those are different cards to
+   * own, at different collector numbers, in different sets.
+   */
+  it("offers to add each printing from its own row", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(
+      page([printing(), printing({ id: "p2", setCode: "2ed", collectorNumber: "162" })]),
+    );
+
+    wrap("p1");
+
+    expect(
+      await screen.findByRole("button", {
+        name: /^Add Delver of Secrets.*\(ISD 51\) to collection/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Add Delver of Secrets.*\(2ED 162\) to collection/ }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The Escape handshake where it actually lives: a popup standing inside the pane. Without
+   * the capture-phase consumption one press closes both, and the reader loses the card they
+   * were adding from.
+   */
+  it("keeps the pane open when Escape closes a quick-add popup inside it", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(printings));
+
+    const opener = await openFromAButton();
+    const add = await screen.findByRole("button", { name: /^Add Delver of Secrets/ });
+    await userEvent.click(add);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+    expect(add).toHaveFocus();
+
+    // And the second press is the pane's, exactly as it is for the set filter.
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  /**
    * The printings list is a second request, and it can fail on its own — a lock, an ingest
    * mid-swap. The card in front of the reader must stay on screen when it does.
    */

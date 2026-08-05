@@ -457,6 +457,36 @@ describe("SearchPage", () => {
     expect(useAppStore.getState().selectedCardId).toBe("2");
   });
 
+  /**
+   * The table's own entry point. The row opens the card on any click it hears, so the cell
+   * holding the quick-add has to stop the one that lands on it — otherwise recording a copy
+   * also opens the card, and the popup ends up behind a pane that just took the focus.
+   */
+  it("adds a card from its row without opening the card", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ }));
+
+    expect(await screen.findByRole("dialog", { name: "Add Lightning Bolt" })).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+
+    // The quantity box lives in a row that answers Space by opening the card and scrolling
+    // the list a screenful. Typing in it must do neither.
+    await userEvent.click(screen.getByRole("button", { name: /^Increase Quantity/ }));
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  it("gives the actions column a header, for the readers who cannot see it is empty", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+  });
+
   it("keeps the loaded rows when a later page fails, and offers a retry", async () => {
     viewportHeight = 2400;
     searchCards
@@ -508,7 +538,9 @@ describe("the result layout toggle", () => {
   it("opens the clicked tile's card", async () => {
     wrap(<SearchPage />);
 
-    await userEvent.click(await screen.findByRole("button", { name: /Lightning Bolt/ }));
+    // The tile's art is named for the card exactly; the quick-add beside it is named for
+    // what it does to the card.
+    await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
 
     expect(useAppStore.getState().selectedCardId).toBe("1");
   });

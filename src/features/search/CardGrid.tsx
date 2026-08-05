@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RarityGem } from "@/components/RarityGem";
+import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
 import type { CardSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -17,8 +18,14 @@ const TILE_MIN_WIDTH = 170;
 /** Gap between tiles, matching the `gap-3` used elsewhere. */
 const GAP = 12;
 
-/** The caption line under each tile: one line of `text-xs` plus its `gap-1`. */
-const CAPTION_HEIGHT = 22;
+/**
+ * The caption line under each tile, plus its `gap-1`.
+ *
+ * Set by the quick-add button in it (24px) rather than by the text beside it (16px): the
+ * virtualiser positions rows from this number, and a caption taller than it is a wall whose
+ * rows overlap by the difference.
+ */
+const CAPTION_HEIGHT = 28;
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
@@ -153,7 +160,12 @@ export function CardGrid({
         {virtualRows.map((v) => (
           <div
             key={v.key}
-            className="absolute inset-x-0 top-0 flex gap-3"
+            // The row a quick-add is open in comes to the front. Its `transform` makes it a
+            // stacking context, so the popup's own `z-20` cannot lift it above the *next*
+            // row — which paints later simply for being later in the DOM, and would cover
+            // the popup with the tiles below it. `:has` keeps that fact where the stacking
+            // context is, rather than threading "is a popup open in me" up through a tile.
+            className="absolute inset-x-0 top-0 flex gap-3 has-[[aria-expanded=true]]:z-10"
             style={{ height: tileHeight, transform: `translateY(${v.start}px)` }}
           >
             {rows.slice(v.index * columns, v.index * columns + columns).map((card, i) => (
@@ -241,60 +253,86 @@ function Tile({
   const url = cardImageUrl(card.id, 0, "grid");
 
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(card.id)}
-      style={{ width }}
-      className={cn("group flex shrink-0 flex-col gap-1 rounded-lg text-left", FOCUS)}
-    >
-      <span
-        className={cn(
-          "block w-full overflow-hidden rounded-lg bg-surface",
-          // Which card the open pane is about. A ring, because gold says "focus" as an
-          // outline and "state" as a ring everywhere else in the app — and it hugs the
-          // art rather than standing off it, so the wall keeps its rhythm.
-          selected && "ring-2 ring-accent",
-        )}
-        style={{ aspectRatio: CARD_ASPECT }}
+    // A wrapper rather than one big button: the caption now carries a control of its own,
+    // and a button inside a button is invalid HTML that React warns about and browsers
+    // render as they please. The art is the button; the quick-add is its neighbour.
+    <div style={{ width }} className="group flex shrink-0 flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => onSelect(card.id)}
+        // The name is the card and nothing else — the quick-add beside it says what it
+        // does to the card, and two buttons whose names both start with it would be two
+        // buttons a screen reader cannot tell apart in a wall of forty.
+        className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
-        {state === "showing" ? (
-          <img
-            // The name, not "card image": this string is what a screen reader announces
-            // and what shows when a fetch fails, and both readers want the card.
-            alt={card.name}
-            // The retry is a different URL so nothing between here and the handler can
-            // answer it from whatever it made of the failure. The query string is not
-            // part of the path the protocol parses, so it changes nothing else.
-            src={attempt === 0 ? url : `${url}?retry=${attempt}`}
-            // 117 k results is 117 k requests if every mounted tile fetches eagerly. The
-            // virtualizer bounds the DOM; this bounds what the DOM asks for.
-            loading="lazy"
-            decoding="async"
-            onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
-            className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-          />
-        ) : (
-          // A tile with no art is still a card. The name is what the reader came for and
-          // it is known without the image, so a rate-limited screen reads as a list of
-          // cards rather than a wall of broken-image icons.
-          <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
-            <span className="line-clamp-3 text-xs">{card.name}</span>
-            <span className="text-[0.7rem] text-dim">
-              {state === "waiting" ? "Retrying…" : "No image"}
+        <span
+          className={cn(
+            "block w-full overflow-hidden rounded-lg bg-surface",
+            // Which card the open pane is about. A ring, because gold says "focus" as an
+            // outline and "state" as a ring everywhere else in the app — and it hugs the
+            // art rather than standing off it, so the wall keeps its rhythm.
+            selected && "ring-2 ring-accent",
+          )}
+          style={{ aspectRatio: CARD_ASPECT }}
+        >
+          {state === "showing" ? (
+            <img
+              // The name, not "card image": this string is what a screen reader announces
+              // and what shows when a fetch fails, and both readers want the card.
+              alt={card.name}
+              // The retry is a different URL so nothing between here and the handler can
+              // answer it from whatever it made of the failure. The query string is not
+              // part of the path the protocol parses, so it changes nothing else.
+              src={attempt === 0 ? url : `${url}?retry=${attempt}`}
+              // 117 k results is 117 k requests if every mounted tile fetches eagerly. The
+              // virtualizer bounds the DOM; this bounds what the DOM asks for.
+              loading="lazy"
+              decoding="async"
+              onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
+              className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+            />
+          ) : (
+            // A tile with no art is still a card. The name is what the reader came for and
+            // it is known without the image, so a rate-limited screen reads as a list of
+            // cards rather than a wall of broken-image icons.
+            <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
+              <span className="line-clamp-3 text-xs">{card.name}</span>
+              <span className="text-[0.7rem] text-dim">
+                {state === "waiting" ? "Retrying…" : "No image"}
+              </span>
             </span>
-          </span>
-        )}
-      </span>
+          )}
+        </span>
+      </button>
 
       {/* The gem carries no word here — a tile has room for a set and a number and nothing
           else. `RarityGem` keeps the rarity in the accessible name anyway, which is what
           the tile's own `title` attribute used to be standing in for badly. */}
-      <span className="flex items-center gap-1.5 truncate font-mono text-xs text-dim">
+      {/* `relative` is what the popup below hangs from: 256px of controls anchored to a
+          170px tile has to open from the tile's *left* edge, or the first column's popup
+          starts left of the scroller — and left overflow, unlike right, cannot be scrolled
+          back into view. */}
+      <span className="relative flex items-center gap-1.5 font-mono text-xs text-dim">
         <RarityGem rarity={card.rarity} />
-        <span className="truncate">
+        <span className="min-w-0 flex-1 truncate">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
+        {/* `finishes` is not on the search DTO, so the popup offers nonfoil and says so —
+            putting a JSON blob on every row of a 116 k-row browse to save one chip is not
+            a trade this view makes. `static` hands the anchoring to the caption above. */}
+        <AddToCollectionButton
+          align="start"
+          className={cn(REVEAL_ON_HOVER, "static")}
+          target={{
+            cardId: card.id,
+            name: card.name,
+            setCode: card.setCode,
+            collectorNumber: card.collectorNumber,
+            oracleId: null,
+            finishes: [],
+          }}
+        />
       </span>
-    </button>
+    </div>
   );
 }

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { FlipHorizontal2, X } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
+import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
@@ -154,9 +155,9 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
           <Facts card={card.data} face={face} />
           <Legalities card={card.data} />
           <Printings
+            card={card.data}
             items={printings.data?.items ?? []}
             total={printings.data?.total ?? 0}
-            currentId={card.data.id}
             loading={printings.isPending && oracleId !== null}
             error={printings.isError ? ipcError(printings.error) : null}
           />
@@ -368,17 +369,21 @@ function Legalities({ card }: { card: CardDetail }) {
  * question a printings list is asked — and the group's heading is its *illustrator*,
  * which is a name the reader can check against the card, rather than "Artwork 2", which
  * is a number invented here.
+ *
+ * It is also the fastest way in the app to record "I have the Alpha one": every row adds
+ * its own printing, which is why the whole card is passed rather than only its id — a wish
+ * and an entry both need the name and the oracle id, and neither is on a `Printing`.
  */
 function Printings({
+  card,
   items,
   total,
-  currentId,
   loading,
   error,
 }: {
+  card: CardDetail;
   items: Printing[];
   total: number;
-  currentId: string;
   loading: boolean;
   error: string | null;
 }) {
@@ -425,7 +430,7 @@ function Printings({
           </p>
           <ul className="space-y-0.5">
             {group.printings.map((p) => (
-              <PrintingRow key={p.id} printing={p} current={p.id === currentId} />
+              <PrintingRow key={p.id} printing={p} card={card} current={p.id === card.id} />
             ))}
           </ul>
         </div>
@@ -434,18 +439,29 @@ function Printings({
   );
 }
 
-function PrintingRow({ printing, current }: { printing: Printing; current: boolean }) {
+function PrintingRow({
+  printing,
+  card,
+  current,
+}: {
+  printing: Printing;
+  card: CardDetail;
+  current: boolean;
+}) {
   return (
     <li
       className={cn(
-        "flex items-baseline gap-2 rounded-md px-2 py-1 text-xs",
+        // `items-center` rather than baseline now that the row ends in a control: a 24px
+        // button hung off a baseline sits a third of its height below the prices it lines
+        // up with. `group` is what reveals that button on hover.
+        "group flex items-center gap-2 rounded-md px-2 py-1 text-xs",
         // The one printing this pane is about. A gold hairline down its edge rather than a
         // fill: gold means "here" everywhere else in the app, and a filled row in a list of
         // forty would be the brightest thing under the art.
         current ? "border-l-2 border-accent bg-bg pl-1.5 text-text" : "text-dim",
       )}
     >
-      <RarityGem rarity={printing.rarity} className="shrink-0 translate-y-px" />
+      <RarityGem rarity={printing.rarity} className="shrink-0" />
       <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
         {printing.setCode.toUpperCase()} · {printing.collectorNumber}
         {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
@@ -462,6 +478,19 @@ function PrintingRow({ printing, current }: { printing: Printing; current: boole
           {usdPrice(finishPrice(printing.prices, f))}
         </span>
       ))}
+      {/* This row's printing, not the pane's card: the set and the collector number are the
+          row's own, and so are the finishes it may be owned in. */}
+      <AddToCollectionButton
+        className={REVEAL_ON_HOVER}
+        target={{
+          cardId: printing.id,
+          name: card.name,
+          setCode: printing.setCode,
+          collectorNumber: printing.collectorNumber,
+          oracleId: card.oracleId,
+          finishes: parseFinishes(printing.finishes),
+        }}
+      />
     </li>
   );
 }

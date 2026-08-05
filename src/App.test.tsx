@@ -120,7 +120,7 @@ it("swaps the main pane when a sidebar entry is picked", async () => {
 it("opens the detail pane for the card that was clicked, and closes it again", async () => {
   render(<App />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /Lightning Bolt/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
 
   const pane = await screen.findByRole("complementary", { name: /card details/i });
   expect(cardDetail).toHaveBeenCalledWith("c1");
@@ -143,7 +143,7 @@ it("opens the detail pane for the card that was clicked, and closes it again", a
 it("closes the set filter on the first Escape and the card on the second", async () => {
   render(<App />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /Lightning Bolt/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
   await screen.findByRole("complementary", { name: /card details/i });
   const setFilter = screen.getByRole("button", { name: "Set" });
   await userEvent.click(setFilter);
@@ -165,7 +165,7 @@ it("closes the set filter on the first Escape and the card on the second", async
 it("closes the card when the reader leaves the view", async () => {
   render(<App />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /Lightning Bolt/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
   await screen.findByRole("complementary", { name: /card details/i });
 
   await userEvent.click(screen.getByRole("button", { name: "Decks" }));

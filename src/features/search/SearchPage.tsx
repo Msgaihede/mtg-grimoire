@@ -2,6 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
+import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -16,8 +17,20 @@ const ROW_HEIGHT = 44;
 /** Height of the sticky header row, which the virtualiser has to account for. */
 const HEADER_HEIGHT = 36;
 
-/** The five columns, shared by the header row and every body row so they stay aligned. */
-const GRID = "grid grid-cols-[minmax(0,1fr)_8rem_minmax(0,16rem)_6rem_6rem] items-center gap-3";
+/**
+ * The six columns, shared by the header row and every body row so they stay aligned. The
+ * last is 2.5rem of quick-add: a 24px button and the room to reach it.
+ *
+ * Name and type are `2fr`/`1fr` rather than `1fr` and a 16rem cap. A capped track is
+ * *inflexible*: grid grows it to its cap out of the free space **before** any `fr` track is
+ * fed, so on a narrow window with the card pane open the type column took its 16rem and the
+ * name column was left with nothing — a row of mana symbols overflowing a zero-width track
+ * across the set beside it. Two flexible tracks share the squeeze instead: at 1280px with
+ * the pane open every column keeps a readable share, and closed they measure 381/190 where
+ * the cap gave 315/256 — the name, which is what identifies a row, now truncates last.
+ */
+const GRID =
+  "grid grid-cols-[minmax(0,2fr)_8rem_minmax(0,1fr)_6rem_6rem_2.5rem] items-center gap-3";
 
 /**
  * Keyboard focus on a row, in the shape the rest of the app uses — an outline, never a
@@ -53,6 +66,24 @@ function Row({ card }: { card: CardSummary }) {
       </span>
       <span role="cell" className="text-right font-mono tabular-nums">
         {usdPrice(card.priceUsd)}
+      </span>
+      {/* The row opens the card on any click and on Enter or Space, and every one of those
+          lands here too: without stopping them, recording a copy would also open the card,
+          and typing `12` into the quantity box would scroll the list a screenful. */}
+      <span role="cell" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <AddToCollectionButton
+          className={REVEAL_ON_HOVER}
+          target={{
+            cardId: card.id,
+            name: card.name,
+            setCode: card.setCode,
+            collectorNumber: card.collectorNumber,
+            // Neither is on `CardSummary`: no oracle id, and no `finishes` blob to offer.
+            // The popup answers with nonfoil and a way to the card, which is where both live.
+            oracleId: null,
+            finishes: [],
+          }}
+        />
       </span>
     </>
   );
@@ -312,10 +343,22 @@ function Results({
                 "sticky top-0 z-10 border-b border-border bg-surface px-3 text-xs text-dim",
               )}
             >
-              <span role="columnheader">Name</span>
-              <span role="columnheader">Set</span>
-              <span role="columnheader">Type</span>
-              <span role="columnheader">Rarity</span>
+              {/* `truncate` on every label, because two of these tracks are `minmax(0,…)`
+                  and collapse to nothing in a narrow window with the card pane open — and a
+                  header that overflows a zero-width track is drawn *over* the next column's,
+                  which reads as a rendering fault rather than as a squeeze. */}
+              <span role="columnheader" className="truncate">
+                Name
+              </span>
+              <span role="columnheader" className="truncate">
+                Set
+              </span>
+              <span role="columnheader" className="truncate">
+                Type
+              </span>
+              <span role="columnheader" className="truncate">
+                Rarity
+              </span>
               {/* Spec §5: a price is never shown without saying how old it is. The detail
                   pane has room to say it in the open; a 36px header row does not, so the
                   same sentence rides as the column's tooltip and inside its accessible
@@ -324,11 +367,16 @@ function Results({
                   "Price" still selects this column for anyone driving it by voice. */}
               <span
                 role="columnheader"
-                className="cursor-help text-right"
+                className="cursor-help truncate text-right"
                 title={PRICES_AS_OF}
                 aria-label={`Price. ${PRICES_AS_OF}`}
               >
                 Price
+              </span>
+              {/* The quick-add column. Nothing to show, and a header a screen reader still
+                  needs: an unnamed column is announced as "column 6" for every row. */}
+              <span role="columnheader" className="sr-only">
+                Actions
               </span>
             </div>
 
@@ -362,7 +410,16 @@ function Results({
                     }}
                     className={cn(
                       GRID,
-                      "absolute inset-x-0 top-0 cursor-pointer border-b border-border/50 px-3",
+                      // `group`: the quick-add in the last cell shows itself on hover, and
+                      // on the row taking focus — which is the keyboard's version of hover.
+                      //
+                      // The `:has` rule below: a row is positioned *and* transformed, which
+                      // makes it a stacking context — so an open popup's `z-20` cannot lift
+                      // it over the next row, which paints later simply for being later in
+                      // the DOM. The row it is open in has to come forward instead. The
+                      // popup opens downwards, so this never has to beat the sticky header.
+                      "group absolute inset-x-0 top-0 cursor-pointer border-b border-border/50 px-3",
+                      "has-[[aria-expanded=true]]:z-10",
                       "text-sm transition-colors duration-150 motion-reduce:transition-none",
                       ROW_FOCUS,
                       // Which row the open pane is about. A quiet surface rather than gold:
