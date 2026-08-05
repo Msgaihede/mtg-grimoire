@@ -70,11 +70,26 @@ export function DecksPage() {
   const decks = useDecks();
   const { query } = decks;
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
+  const returnToDeckId = useAppStore((s) => s.returnToDeckId);
+  const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
   const [panel, setPanel] = useState<Panel>(null);
   const [showArchived, setShowArchived] = useState(false);
   const newDeckRef = useRef<HTMLButtonElement>(null);
+  const wallRef = useRef<HTMLElement>(null);
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
+
+  // Coming back from an editor: the caret goes to the tile of the deck that was open. The
+  // tile is not there to be focused until the wall has loaded, which is why this waits for the
+  // query rather than running on mount — and why it clears the note either way once the answer
+  // is in, so a deck deleted from inside its own editor does not leave one pending forever.
+  useEffect(() => {
+    if (returnToDeckId === null || query.isPending) return;
+    wallRef.current
+      ?.querySelector<HTMLButtonElement>(`[data-deck-id="${returnToDeckId}"]`)
+      ?.focus();
+    clearReturnToDeck();
+  }, [returnToDeckId, query.isPending, decks.decks, clearReturnToDeck]);
 
   // Focus first, then close: the opener is still mounted at this point, and an element that
   // unmounts with the caret on it drops focus to `<body>` — after which the next Tab
@@ -145,7 +160,7 @@ export function DecksPage() {
   const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
 
   return (
-    <section className="flex h-full flex-col gap-4">
+    <section ref={wallRef} className="flex h-full flex-col gap-4">
       {/* Not drawn: the ribbon's `h1` already names the view, and a second "Decks" under it
           would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Decks</h2>
@@ -307,6 +322,10 @@ function DeckTile({
       <button
         type="button"
         onClick={() => onOpen(deck.id)}
+        // How the caret finds its way back here from an editor: the tile the reader left
+        // through is the tile they should return to, and this is the only handle that
+        // survives the gallery unmounting while the editor is up.
+        data-deck-id={deck.id}
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
         <Cover cardId={deck.coverCardId} />

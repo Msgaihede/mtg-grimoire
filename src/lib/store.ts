@@ -28,6 +28,18 @@ interface AppState {
    */
   openDeckId: number | null;
   setOpenDeckId: (id: number | null) => void;
+  /**
+   * The deck an editor has just closed, waiting for the gallery to hand the caret back to its
+   * tile — written by `setOpenDeckId(null)`, read and cleared once by `DecksPage`.
+   *
+   * Focus is not usually state, let alone global state, and this is the one case where it has
+   * nowhere else to live: the tile that opened the editor **unmounts** while the editor is up,
+   * so nothing on either side of the swap can hold a reference across it. Leaving it out drops
+   * the caret onto `<body>` every time a reader comes back from a deck, and the next Tab
+   * restarts from the top of the app.
+   */
+  returnToDeckId: number | null;
+  clearReturnToDeck: () => void;
 }
 
 /**
@@ -45,7 +57,8 @@ export const useAppStore = create<AppState>((set) => ({
   // The open deck goes with it, for the same reason read the other way round: an editor is
   // the Decks view, so a deck left open through a trip to Settings would be waiting behind
   // the sidebar with the gallery it was opened from nowhere in sight.
-  setActiveView: (activeView) => set({ activeView, selectedCardId: null, openDeckId: null }),
+  setActiveView: (activeView) =>
+    set({ activeView, selectedCardId: null, openDeckId: null, returnToDeckId: null }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   searchView: "grid",
@@ -59,5 +72,13 @@ export const useAppStore = create<AppState>((set) => ({
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.
   openDeckId: null,
-  setOpenDeckId: (openDeckId) => set({ openDeckId }),
+  // Closing an editor remembers which deck it was, so the gallery it returns to can put the
+  // caret back on that tile. Opening one leaves the note alone: it is consumed on arrival.
+  setOpenDeckId: (openDeckId) =>
+    set((s) => ({
+      openDeckId,
+      returnToDeckId: openDeckId === null ? s.openDeckId : s.returnToDeckId,
+    })),
+  returnToDeckId: null,
+  clearReturnToDeck: () => set({ returnToDeckId: null }),
 }));

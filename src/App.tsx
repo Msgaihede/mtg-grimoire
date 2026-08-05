@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CollectionPage } from "@/features/collection/CollectionPage";
+import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
@@ -22,13 +23,17 @@ const BLURB: Record<Exclude<ViewId, "search" | "collection" | "wishlist" | "deck
 
 function ActiveView() {
   const activeView = useAppStore((s) => s.activeView);
+  const openDeckId = useAppStore((s) => s.openDeckId);
   if (activeView === "search") return <SearchPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
-  // The gallery is the Decks view in its first state; the editor is the same view with a deck
-  // open (`openDeckId`), and it arrives in the next task. Until then the store's id is written
-  // by the gallery and read by nothing.
-  if (activeView === "decks") return <DecksPage />;
+  // The gallery is the Decks view in its first state and the editor is the same view with a
+  // deck open — one destination, two states, which is why the id lives in the store and not in
+  // a route. Keyed by the deck: opening a second one from anywhere is a fresh editor rather
+  // than one that inherits the last deck's grouping and open menu.
+  if (activeView === "decks") {
+    return openDeckId === null ? <DecksPage /> : <DeckEditor key={openDeckId} deckId={openDeckId} />;
+  }
 
   return (
     <section className="mx-auto max-w-prose py-16 text-center">

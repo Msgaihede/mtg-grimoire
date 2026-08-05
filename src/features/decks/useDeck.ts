@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, type DeckCard, type DeckZone } from "@/lib/ipc";
+import { ipc, type DeckCard, type DeckPatch, type DeckZone } from "@/lib/ipc";
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
  *  and the editor's `useMemo`s key off it. */
@@ -59,6 +59,24 @@ export function useDeck(id: number | null) {
    * command that actually writes wishes — takes `["wishlist"]` with it.
    */
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["decks"] });
+
+  /**
+   * The deck itself: its name, its format, its cover, whether it is built.
+   *
+   * `useDecks.update`, narrowed to the deck that is open — it takes a patch and no id,
+   * because an editor has exactly one deck and cannot be given the wrong one. Both write the
+   * same command and both invalidate the same `["decks"]` root, so the gallery's tile and
+   * this header can never disagree about a name; what this one buys is an editor that does
+   * not have to mount the gallery's list query to rename the deck it is showing.
+   *
+   * `isBuilt` is the field with a consequence outside this deck: sending it reallocates in
+   * the same transaction, and every *other* deck's `ownedQuantity` may move with it — which
+   * the shared root already covers.
+   */
+  const update = useMutation({
+    mutationFn: (patch: DeckPatch) => ipc.deckUpdate(opened(id), patch),
+    onSuccess: invalidate,
+  });
 
   /**
    * Put copies into a zone: the drag-in and the click-to-add write.
@@ -135,6 +153,7 @@ export function useDeck(id: number | null) {
     /** Every card, in zone-priority order (`commander`, `main`, `side`, `companion`,
      *  `maybe`), then by the name the row carries, then by row id. */
     cards: query.data?.cards ?? NONE,
+    update,
     addCard,
     setQuantity,
     moveCard,

@@ -67,6 +67,32 @@ describe("the open deck", () => {
   it("starts closed", () => {
     expect(useAppStore.getState().openDeckId).toBeNull();
   });
+
+  /**
+   * Closing an editor leaves a note for the gallery about where the caret belongs. It has
+   * nowhere else to live: the tile that opened the editor unmounts while the editor is up, so
+   * neither side of the swap can hold a reference across it.
+   */
+  it("remembers which deck was closed, until the gallery has used it", () => {
+    useAppStore.getState().setOpenDeckId(4);
+    expect(useAppStore.getState().returnToDeckId).toBeNull();
+
+    useAppStore.getState().setOpenDeckId(null);
+    expect(useAppStore.getState().returnToDeckId).toBe(4);
+
+    useAppStore.getState().clearReturnToDeck();
+    expect(useAppStore.getState().returnToDeckId).toBeNull();
+  });
+
+  /** A note about a tile in a view the reader has left is a caret jump nobody asked for. */
+  it("drops the note when the reader leaves Decks", () => {
+    useAppStore.getState().setOpenDeckId(4);
+    useAppStore.getState().setOpenDeckId(null);
+
+    useAppStore.getState().setActiveView("search");
+
+    expect(useAppStore.getState().returnToDeckId).toBeNull();
+  });
 });
 
 /**

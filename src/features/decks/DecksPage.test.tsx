@@ -90,7 +90,7 @@ beforeEach(() => {
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 10, name: "Burn (copy)" });
   formatSpecs.mockReset().mockResolvedValue(PICKER);
-  useAppStore.setState({ openDeckId: null });
+  useAppStore.setState({ openDeckId: null, returnToDeckId: null });
 });
 
 describe("DecksPage", () => {
@@ -194,6 +194,32 @@ describe("DecksPage", () => {
     await userEvent.click(await tileFor("Burn"));
 
     expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
+   * Coming back from an editor. The tile that opened it unmounted while the editor was up, so
+   * the store carries the note and the wall hands the caret back once the tiles exist —
+   * without it the caret is on `<body>` and the next Tab restarts from the top of the app.
+   */
+  it("hands the caret back to the tile of the deck an editor just closed", async () => {
+    useAppStore.setState({ returnToDeckId: 4 });
+
+    wrap(<DecksPage />);
+
+    await waitFor(async () => expect(await tileFor("Burn")).toHaveFocus());
+    // Used once: a note left standing would yank the caret again on the next render.
+    expect(useAppStore.getState().returnToDeckId).toBeNull();
+  });
+
+  /** A deck deleted from inside its own editor has no tile to come back to, and the note is
+   *  still spent — otherwise it waits forever for a row that is never coming. */
+  it("clears the note when the deck it names is gone", async () => {
+    useAppStore.setState({ returnToDeckId: 99 });
+
+    wrap(<DecksPage />);
+
+    await tileFor("Burn");
+    await waitFor(() => expect(useAppStore.getState().returnToDeckId).toBeNull());
   });
 
   /**

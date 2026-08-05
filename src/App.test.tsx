@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 
@@ -10,6 +10,7 @@ const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
 const wishlistList = vi.hoisted(() => vi.fn());
 const deckList = vi.hoisted(() => vi.fn());
+const deckGet = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -44,13 +45,33 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // behind it reads the seeded format table — mocked here too, because a `vi.fn()` that
     // is not there is a synchronous `TypeError` inside a query rather than a rejection.
     deckList,
+    // And the editor the gallery opens onto, which is the same view with a deck picked.
+    deckGet,
     formatSpecs: vi.fn().mockResolvedValue([]),
   },
 }));
 
 import App from "./App";
-import type { CardDetail, CardSummary } from "@/lib/ipc";
+import type { CardDetail, CardSummary, DeckRow } from "@/lib/ipc";
+import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
+
+/** One deck on the wall, for the trip into its editor and back. */
+const BURN: DeckRow = {
+  id: 4,
+  name: "Burn",
+  formatKey: "modern",
+  formatName: "Modern",
+  description: null,
+  // With a cover, so the tile's accessible name starts with the deck's name: the empty frame
+  // says "No cover" *inside* the button, and that would be the first thing read on it.
+  coverCardId: "0000419b-0bba-4488-8f7a-6194544ce91d",
+  coverArtist: "Rebecca Guay",
+  isBuilt: false,
+  archived: false,
+  cardCount: 0,
+  updatedAt: 1_800_000_000,
+};
 
 const BOLT: CardSummary = {
   id: "c1",
@@ -106,6 +127,10 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // `App` renders the app's own module-level client, whose `staleTime` is 30 s — so without
+  // this, one test's answer is served to the next from cache and a fixture changed inside a
+  // test is never asked for. Order-independence, at the price of one line.
+  queryClient.clear();
   useAppStore.setState(useAppStore.getInitialState());
   searchCards.mockReset().mockResolvedValue({ items: [BOLT], total: 1, totalIsCapped: false });
   cardDetail.mockReset().mockResolvedValue(BOLT_DETAIL);
@@ -113,6 +138,7 @@ beforeEach(() => {
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
   deckList.mockReset().mockResolvedValue([]);
+  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [] });
   collectionSummary.mockReset().mockResolvedValue({
     totalCards: 3,
     uniqueCards: 2,
@@ -161,6 +187,29 @@ it("opens the deck gallery on the decks entry", async () => {
   expect(await screen.findByRole("button", { name: "New deck" })).toBeInTheDocument();
   expect(screen.getByText(/a deck is a list you build for a format/i)).toBeInTheDocument();
   expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
+});
+
+/**
+ * The other half of the Decks view, and the whole wire between them: a tile writes an id to
+ * the store, the app swaps the gallery for the editor on it, and the editor asks the backend
+ * for that deck. The way back is the one thing neither component's own tests can see — the
+ * tile that opened the editor **unmounts** while it is up, so without the store's note the
+ * caret would land on `<body>` and the next Tab would restart from the top of the app.
+ */
+it("opens the editor on the deck a tile was picked from, and comes back to that tile", async () => {
+  deckList.mockResolvedValue([BURN]);
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+
+  expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
+  expect(deckGet).toHaveBeenCalledWith(4);
+
+  await userEvent.click(screen.getByRole("button", { name: /back to decks/i }));
+
+  const tile = await screen.findByRole("button", { name: /^Burn/ });
+  await waitFor(() => expect(tile).toHaveFocus());
 });
 
 /** The second live view. The sidebar entry has to reach the real thing, not the blurb that
