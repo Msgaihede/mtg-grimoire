@@ -42,8 +42,9 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
 /// A second, **read-only** connection to the same database file.
 ///
 /// Reads and writes share one `Mutex<Connection>` otherwise, which makes every search
-/// queue behind whatever the writer is doing — and the writer's longest job is a 44 s
-/// ingest. Under WAL a reader does not block behind a writer at the SQLite level at all;
+/// queue behind whatever the writer is doing — and the writer's longest job is the ingest,
+/// ~80 s of a 92–99 s sync, taken in 2 000-row batches.
+/// Under WAL a reader does not block behind a writer at the SQLite level at all;
 /// the only thing that was serialising them was the mutex. A separate connection with its
 /// own lock removes it, so search keeps answering during a sync.
 ///

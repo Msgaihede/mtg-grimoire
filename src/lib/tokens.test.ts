@@ -61,3 +61,50 @@ describe("colour tokens", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * How far after a `transition-*` class the sweep below will look for its opt-out.
+ *
+ * The two live in one `cn(…)` call, but not always on one line — the widest real gap in
+ * this codebase is 216 characters (`CollectionTable`'s remove button, whose class list runs
+ * to five lines). 400 is that with room, and still far narrower than the distance to the
+ * *next element's* className, which is what makes a missing token a failure rather than a
+ * near-miss: run against the commit before this guard, it named all four sites that had
+ * lost it and nothing else.
+ */
+const MOTION_WINDOW = 400;
+
+/**
+ * A transition class, ignoring `transition-none` — which is what the opt-out itself is
+ * spelled with, and is by definition already still.
+ */
+const TRANSITION = /\btransition-(?!none)/g;
+
+describe("reduced motion", () => {
+  /**
+   * The direction's rule, and WCAG 2.3.3: every animation this app runs has an opt-out for
+   * a reader who asked the OS for less motion. It is a class, not a stylesheet rule, so
+   * forgetting it is invisible — the control looks and behaves correctly to anyone who did
+   * not ask, which is everyone writing the code. Four of them had been missed by the end of
+   * Plan 3.
+   *
+   * Not a check that the *right* opt-out was chosen: `motion-reduce:animate-none` and
+   * `motion-reduce:hidden` are both correct answers elsewhere, and only transitions are
+   * swept here because only transitions are common enough to forget.
+   */
+  it("gives every transition a motion-reduce opt-out", () => {
+    const offenders: string[] = [];
+    for (const [path, source] of Object.entries(SOURCES)) {
+      // Tests name classes to assert on them, and asserting on one is not shipping it.
+      if (path.includes(".test.")) continue;
+      for (const match of source.matchAll(TRANSITION)) {
+        const window = source.slice(match.index, match.index + MOTION_WINDOW);
+        if (!window.includes("motion-reduce:transition-none")) {
+          offenders.push(`${path}: ${source.slice(match.index, match.index + 40)}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});

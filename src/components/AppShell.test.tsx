@@ -6,9 +6,13 @@ import type { SyncOutcome, SyncStatus } from "@/lib/ipc";
 const syncStatus = vi.hoisted(() => vi.fn());
 const syncRun = vi.hoisted(() => vi.fn());
 const onSyncProgress = vi.hoisted(() => vi.fn());
+// The shell invalidates the query cache when a sync finishes, and registers a listener for
+// the reconcile event on the way up. Mocked because a `.catch` cannot catch the
+// synchronous `TypeError` of calling `undefined`.
+const onCollectionReconciled = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { syncStatus, syncRun, onSyncProgress, searchCards: vi.fn() },
+  ipc: { syncStatus, syncRun, onSyncProgress, onCollectionReconciled, searchCards: vi.fn() },
 }));
 
 import { AppShell } from "./AppShell";
@@ -44,6 +48,7 @@ beforeEach(() => {
   syncStatus.mockReset().mockResolvedValue(status());
   syncRun.mockReset().mockResolvedValue({ updated: false, cardCount: 116_568, updatedAt: null });
   onSyncProgress.mockReset().mockResolvedValue(() => {});
+  onCollectionReconciled.mockReset().mockResolvedValue(() => {});
 });
 
 it("renders nav and refresh button", async () => {

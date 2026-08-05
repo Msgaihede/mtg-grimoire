@@ -204,9 +204,14 @@ function AddPopup({
         text: `Added ${quantity} × ${target.name} to your ${mode}.`,
         seq: (prev?.seq ?? 0) + 1,
       }));
-      // The two lists this write belongs to, and their summaries.
-      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      // The list this write belongs to, and its summary. Which one that is depends on the
+      // destination, and only one direction crosses over: a collection add changes what
+      // every *wish* for that card counts as owned (`WishRow.ownedQuantity` is summed from
+      // `collection_entries`, finish-aware), while a wish changes nothing the collection
+      // shows. So a wishlist add leaves `["collection"]` alone rather than refetching a
+      // list and a summary that cannot have moved.
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      if (mode === "collection") void queryClient.invalidateQueries({ queryKey: ["collection"] });
       // And the search results, which now *draw* what this write changed: `ownedQuantity`
       // and `wishlisted` are the badge on every row and every tile, so a wall the reader
       // added a third copy from would go on saying "×2" until they searched again.

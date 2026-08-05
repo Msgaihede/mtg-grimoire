@@ -205,6 +205,25 @@ describe("AddToCollectionButton", () => {
     expect(wish.cardId).toBeUndefined();
   });
 
+  /**
+   * Only one direction crosses over. A collection add changes what every wish for that card
+   * counts as owned, so it takes the wishlist with it (the test above this one); a wish
+   * changes nothing the collection shows, and refetching a list and a summary that cannot
+   * have moved is a round trip nobody is waiting for.
+   */
+  it("leaves the collection alone when the add was a wish", async () => {
+    const { client } = await open();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    // The badge on every result row: a wished card is drawn as wished.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
+  });
+
   /** With no oracle id there is nothing an "any printing" wish could be keyed on, and a
    *  choice that cannot be kept is not offered. No live row is in this state (the
    *  reversible-card explanation this test used to carry is false), so this fence exists
@@ -262,8 +281,9 @@ describe("AddToCollectionButton", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to collection" })).toBeEnabled();
 
-    // Everything that counts cards: the two lists and the search results, whose owned badge
-    // is now one copy out of date.
+    // Everything that counts cards: this list, the wishlist — whose `ownedQuantity` is
+    // summed from `collection_entries` — and the search results, whose owned badge is now
+    // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     // Refetched, not merely marked. It used to carry `refetchType: "none"` because the only

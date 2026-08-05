@@ -157,7 +157,7 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
         disabled={running}
         className={cn(
           "inline-flex items-center rounded-md border border-border px-4 py-2 text-sm",
-          "transition-colors duration-150 hover:bg-surface",
+          "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
           // The only control on screen while a first run is stuck, so its focus ring is
           // the one that matters most — same gold as the ribbon's.
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",

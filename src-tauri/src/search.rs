@@ -104,7 +104,15 @@ pub struct CardSummary {
     pub mana_cost: Option<String>,
     pub price_usd: Option<f64>,
     pub layout: String,
-    /// The oracle card this printing is of. Nullable, because a reversible card has none.
+    /// The oracle card this printing is of.
+    ///
+    /// `Option` mirrors `cards.oracle_id`'s nullability and nothing else — **not** the
+    /// belief that a reversible card has none, which is false and travelled through this
+    /// codebase (see [`crate::card::list_printings`]). Scryfall omits only the *top-level*
+    /// id, and [`crate::card_row`] falls back to `card_faces[0]`, so the column is filled:
+    /// 0 of 116 590 live rows are NULL, all 81 reversible printings included. The
+    /// nullability is a contract with a JSON shape, not a population, and every `None` arm
+    /// downstream is a fence around the type rather than around a card you can find.
     ///
     /// Here so a result row can be wished for as *any* printing without opening the card
     /// first — a wishlist usually means the card rather than the cardboard.
@@ -331,9 +339,12 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 /// Search the card database.
 ///
 /// Runs on the **read-only** connection, which is the whole reason there is one: the
-/// writer's longest job is a 44 s ingest, and a search sharing its mutex would queue
-/// behind that — the app would stop answering searches once a day for the length of a
-/// sync. Under WAL a reader sees the last committed snapshot without blocking, so it
+/// writer's longest job is the ingest, ~80 s of a 92–99 s sync, and a search sharing its
+/// mutex would queue behind it — the app would stop answering searches once a day for the
+/// length of a sync. Chunking the ingest bounded that wait to one 2 000-row batch, but a
+/// search must not wait for a batch either: 20 timed searches across a live sync, every
+/// one correct, none stalled. Under WAL a reader sees the last committed snapshot
+/// without blocking, so it
 /// answers immediately with the pre-swap card data, which is exactly right.
 ///
 /// `async` + `spawn_blocking`, not a plain sync command: a sync command body runs inline
@@ -1105,8 +1116,14 @@ mod tests {
         }
     }
 
-    /// Four printings across three sets with known mana values, including a NULL one —
-    /// `cmc` is nullable and reversible cards genuinely have none.
+    /// Four printings across three sets with known mana values, including a NULL one.
+    ///
+    /// The NULL is here for the *column*, not for a kind of card: `cmc` is nullable in the
+    /// JSON contract, so the mana-value chips and the `NULLS LAST` sorts have to place a
+    /// row that has none — but no live row does. [`crate::card_row`] falls back to
+    /// `card_faces[0].cmc` exactly as it does for `oracle_id`, and 0 of 116 590 rows are
+    /// NULL, reversible printings included. A fixture is where that case can be exercised
+    /// at all.
     #[rustfmt::skip]
     fn seeded_costs() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

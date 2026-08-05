@@ -307,7 +307,7 @@ function Results({
             <button
               type="button"
               onClick={() => void query.fetchNextPage()}
-              className="ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-1 transition-colors hover:bg-destructive/20"
+              className="ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-1 transition-colors hover:bg-destructive/20 motion-reduce:transition-none"
             >
               Try again
             </button>

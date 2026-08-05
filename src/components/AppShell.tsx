@@ -13,6 +13,7 @@ import { SyncProgress } from "@/components/SyncProgress";
 import { manaLineSync } from "@/lib/mana";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { statusLine, useSync } from "@/lib/useSync";
+import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const setActiveView = useAppStore((s) => s.setActiveView);
   const { status, error, refresh, refreshing, upToDate } = useSync();
   const progress = useSyncProgress();
+  // Here rather than in a view, because it is about the whole cache and this is the one
+  // component that is always mounted — and it takes the progress event as a prop so the
+  // app still registers exactly one `sync:progress` listener.
+  useSyncInvalidation(progress);
 
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.
@@ -58,7 +63,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               aria-current={active ? "page" : undefined}
               className={cn(
                 "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
-                "transition-colors duration-150",
+                "transition-colors duration-150 motion-reduce:transition-none",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                 // The gold indicator: a hairline against the item, not a filled pill. The
                 // sidebar is chrome, and chrome does not get to be the loudest thing on a

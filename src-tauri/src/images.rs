@@ -248,8 +248,8 @@ fn is_loopback(uri: &str) -> bool {
 /// `card_faces[i].image_uris`.
 ///
 /// **Read-only by contract.** Every caller passes the `db_read` connection: a card
-/// picture must not queue behind a 44 s ingest, and it must never be the handle that
-/// takes a write lock.
+/// picture must not queue behind an ingest — ~80 s of writing, in 2 000-row batches —
+/// and it must never be the handle that takes a write lock.
 pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> {
     let row: Option<(Option<String>, Option<String>)> = conn
         .query_row(

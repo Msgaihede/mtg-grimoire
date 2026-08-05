@@ -192,7 +192,7 @@ the user's, and it is never committed.
   counted, and asking to be looked at", never "hidden".
 - Writes take `AppState.db` through `db::lock_for(…, WRITE_LOCK_WAIT)` and answer
   `collection::BUSY` if they cannot — reads go through `db_read` like everything else.
-- `cards.oracle_id` is NULLABLE and **no live row is null** — 0 of 116,568, all 81
+- `cards.oracle_id` is NULLABLE and **no live row is null** — 0 of 116,590, all 81
   reversible printings included, because `card_row` falls back to `card_faces[0]`. Every
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
 

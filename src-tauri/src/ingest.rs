@@ -72,8 +72,11 @@ pub enum IngestError {
 ///
 /// `db` is the shared write connection, and this takes it once per [`BATCH`] rows
 /// and gives it straight back. That is not an optimisation: the ingest is the
-/// app's longest write (~44 s measured), and holding the mutex throughout meant a
-/// user edit during the daily sync was a frozen button. It also bounds the WAL —
+/// app's longest write by an order of magnitude (**~80 s measured** of a 92–99 s
+/// sync — it was 44 s before schema v3 gzipped `raw` on the way in), and holding
+/// the mutex throughout meant a user edit during the daily sync was a frozen
+/// button. Measured mid-ingest since: 10 `collection_add` calls, 4–7 ms each, no
+/// `BUSY` refusals. It also bounds the WAL —
 /// autocheckpoint can finally run mid-ingest, where a single 116 k-row transaction
 /// grew a ~1.9 GB transient one.
 ///

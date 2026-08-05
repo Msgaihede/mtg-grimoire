@@ -581,6 +581,23 @@ export interface SyncProgressEvent {
   message: string | null;
 }
 
+/**
+ * Payload of `collection:reconciled` — what one pass of Scryfall's id-migration log did to
+ * the user's own rows (`sync::reconcile_ids`, from `reconcile::ReconcileStats`).
+ *
+ * Emitted **only when something moved**: a pass that skipped every already-applied
+ * migration, which is every pass after the first, is silent. So the event's arrival is the
+ * fact worth acting on, and the three numbers are for a message about it.
+ */
+export interface ReconciledEvent {
+  /** Rows whose `card_id` was moved to the id Scryfall merged the old one into. */
+  repointed: number;
+  /** Rows that collided with an existing one at the new id and became one row. */
+  folded: number;
+  /** Rows that could be neither repointed nor folded, and now carry a sentence. */
+  flagged: number;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
@@ -632,6 +649,9 @@ export const ipc = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   onSyncProgress: (cb: (e: SyncProgressEvent) => void): Promise<UnlistenFn> =>
     listen<SyncProgressEvent>("sync:progress", (evt) => cb(evt.payload)),
+  /** A reconcile pass that moved user rows. See {@link ReconciledEvent}. */
+  onCollectionReconciled: (cb: (e: ReconciledEvent) => void): Promise<UnlistenFn> =>
+    listen<ReconciledEvent>("collection:reconciled", (evt) => cb(evt.payload)),
 };
 
 /**

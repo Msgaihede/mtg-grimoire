@@ -15,6 +15,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncStatus,
     syncRun: vi.fn(),
     onSyncProgress: vi.fn().mockResolvedValue(() => {}),
+    // The shell listens for the reconcile event too, and a `.catch` cannot catch the
+    // synchronous `TypeError` of calling `undefined`.
+    onCollectionReconciled: vi.fn().mockResolvedValue(() => {}),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,

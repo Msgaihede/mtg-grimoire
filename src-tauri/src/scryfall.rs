@@ -70,9 +70,20 @@ pub const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
 /// would otherwise run until the process is killed.
 pub const MAX_SET_PAGES: usize = 20;
 
-/// Pages `fetch_migrations` will follow. ~350 migrations exist in total and the endpoint
-/// pages like every other Scryfall list; the cap is the same guard `fetch_sets` carries
-/// against a `next_page` chain that cycles.
+/// Pages `fetch_migrations` will follow. The cap is the same guard [`MAX_SET_PAGES`]
+/// carries against a `next_page` chain that cycles — but unlike the set list, this one has
+/// headroom worth watching.
+///
+/// **350 is the page size, not the log.** The figure this comment used to carry ("~350
+/// migrations exist in total") was one page mistaken for the whole endpoint. Measured
+/// 2026-08-05: `GET /migrations` answers 350 entries with `has_more: true`, and the live
+/// `card_migrations` table holds **2 569** — eight pages of the ten this cap allows.
+///
+/// The log only grows (415 entries in 2022, 1 270 in 2023, 761 in 2024, and 123 across
+/// 2025–26 to date), so the ceiling here is ~3 500 entries and roughly two spare pages.
+/// Reaching it truncates the *oldest* migrations, because Scryfall serves the log newest
+/// first — which is silent by construction, hence the `eprintln!` in `fetch_migrations`
+/// when the loop ends on this rather than on `has_more`.
 pub const MAX_MIGRATION_PAGES: usize = 10;
 
 #[derive(Debug, thiserror::Error)]
@@ -359,6 +370,9 @@ impl Client {
     pub async fn fetch_sets(&self) -> Result<Vec<SetRow>, ScryfallError> {
         let mut url = format!("{}/sets", self.base_url);
         let mut out = Vec::new();
+        // Set by every way out of the loop *except* running out of pages, so that stopping
+        // at the cap — the one exit that silently returns a partial answer — can say so.
+        let mut followed_the_chain = false;
         for _ in 0..MAX_SET_PAGES {
             let resp = self.api_get(&url).send().await?;
             match resp.status().as_u16() {
@@ -383,15 +397,24 @@ impl Client {
                 });
             }
             if v["has_more"].as_bool() != Some(true) {
+                followed_the_chain = true;
                 break;
             }
             let next = v["next_page"].as_str().unwrap_or_default().to_owned();
             // A missing or self-referential `next_page` would otherwise spin forever
             // against the same URL.
             if next.is_empty() || next == url {
+                followed_the_chain = true;
                 break;
             }
             url = next;
+        }
+        if !followed_the_chain {
+            eprintln!(
+                "Scryfall's set list did not end within {MAX_SET_PAGES} pages; \
+                 kept the first {} sets and stopped",
+                out.len()
+            );
         }
         Ok(out)
     }
@@ -400,6 +423,10 @@ impl Client {
     pub async fn fetch_migrations(&self) -> Result<Vec<Migration>, ScryfallError> {
         let mut url = format!("{}/migrations", self.base_url);
         let mut out = Vec::new();
+        // See `fetch_sets`. It matters more here: the log is served newest first, so a
+        // truncation drops the *oldest* migrations — the rows most likely to be the ones a
+        // long-standing collection is still parked on.
+        let mut followed_the_chain = false;
         for _ in 0..MAX_MIGRATION_PAGES {
             let resp = self.api_get(&url).send().await?;
             match resp.status().as_u16() {
@@ -433,6 +460,7 @@ impl Client {
                 });
             }
             if v["has_more"].as_bool() != Some(true) {
+                followed_the_chain = true;
                 break;
             }
             let next = v["next_page"].as_str().unwrap_or_default().to_owned();
@@ -440,9 +468,18 @@ impl Client {
             // self-referential `next_page` would spin forever against one URL, and the
             // page cap above is what catches the cycles this cannot see.
             if next.is_empty() || next == url {
+                followed_the_chain = true;
                 break;
             }
             url = next;
+        }
+        if !followed_the_chain {
+            eprintln!(
+                "Scryfall's id-migration log did not end within {MAX_MIGRATION_PAGES} pages; \
+                 applied the newest {} entries and did not read the older ones. \
+                 Raise MAX_MIGRATION_PAGES.",
+                out.len()
+            );
         }
         Ok(out)
     }

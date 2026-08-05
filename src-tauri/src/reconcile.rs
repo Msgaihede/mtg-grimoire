@@ -194,6 +194,15 @@ fn merge(
         .query_map(params![m.old_card_id], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     for id in ids {
+        // `needs_review` is written **unconditionally** here, and that is not an exception
+        // to first-message-wins: the rule governs the *flag writers* ([`flag_deleted`],
+        // [`flag_unfoldable`]), which add a sentence to a row that stayed where it was. A
+        // successful repoint has changed what the row points at, so whatever was said about
+        // the old id is stale by construction — and `note` is not a vaguer complaint but
+        // the answer to the same question, freshly computed: `None` when the new printing
+        // is in `cards` (there is nothing left to review), the "not here yet" sentence when
+        // it is not. Leaving an old flag standing would park a repointed row behind a
+        // complaint about an id it no longer holds.
         let repointed = tx.execute(
             "UPDATE OR IGNORE collection_entries
                 SET card_id = ?2,
@@ -400,7 +409,9 @@ fn fold_wish_into_existing(
 /// already carrying a sentence is carrying the *earlier* thing that went wrong with it, and
 /// that is the one the user needs — overwriting it would let a later, vaguer complaint bury
 /// the reason the row is in trouble. Both flag writers agree on this so the field has one
-/// rule rather than one per caller.
+/// rule rather than one per caller. The successful repoint in [`merge`] writes the field
+/// unconditionally, and is not a third flag writer breaking the rule: see the comment
+/// there.
 fn flag_unfoldable(
     tx: &rusqlite::Transaction<'_>,
     table: &str,

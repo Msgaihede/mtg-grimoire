@@ -874,7 +874,8 @@ async fn do_sync(
 ///
 /// Read through the **read-only** connection, which is what makes the header's numbers
 /// stay live during a sync: this used to share the write connection, and so answered
-/// `None` for every database-derived field for the whole of a 44 s ingest. Under WAL a
+/// `None` for every database-derived field for the whole of an ingest — 44 s when that
+/// was written, ~80 s of a 92–99 s sync since schema v3 gzipped `raw`. Under WAL a
 /// reader sees the last committed snapshot without blocking, so mid-sync this reports the
 /// pre-swap figures — which are true, and are what the user is still looking at in the
 /// results list. (The ingest now releases the write lock between batches too, but that is
@@ -1107,10 +1108,14 @@ mod tests {
         assert!(!sets_are_empty(&conn));
     }
 
-    /// The status a UI polls *during* a sync. The ingest holds the write connection for
-    /// its whole run, and the header used to go blank for 44 s a day because of it — the
-    /// read-only connection exists for exactly this, and under WAL it answers from the
-    /// last committed snapshot without waiting for anyone.
+    /// The status a UI polls *during* a sync. The header used to go blank for the whole of
+    /// an ingest — a 44 s one then, ~80 s of a 92–99 s sync now — because the poll shared
+    /// the write connection with it. The read-only connection exists for exactly this, and
+    /// under WAL it answers from the last committed snapshot without waiting for anyone.
+    ///
+    /// The ingest also releases that write connection between batches now, so this test
+    /// holds it by hand: what is being pinned is that a poll answers while the connection
+    /// is held, not that it catches a gap between two batches.
     #[test]
     fn status_answers_real_numbers_while_the_write_connection_is_held() {
         let (state, dir) = file_state("status", true);

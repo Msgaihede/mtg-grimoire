@@ -96,7 +96,7 @@ export function Ribbon({
             aria-busy={busy || undefined}
             className={cn(
               "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm",
-              "transition-colors duration-150 hover:bg-bg",
+              "transition-colors duration-150 hover:bg-bg motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
             )}
