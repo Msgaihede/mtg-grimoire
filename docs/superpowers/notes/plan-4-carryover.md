@@ -13,10 +13,24 @@ whole session (`Log.entryAdded` **and** `Runtime.consoleAPICalled`), and every f
 through `node:sqlite` into `src-tauri/target/debug/data/mtg.db` while the app held it — **user
 tables only**. The database was a genuine Plan-3 artefact converted to **schema v5** at the
 first Task-11 launch: 547 MB, `auto_vacuum = INCREMENTAL`, `raw` a gzip BLOB, 0 decks, 0
-collection rows, 0 wishes. Every seeded row was deleted afterwards; the user's tables are back
+collection rows, 0 wishes. Every seeded row was deleted afterwards; the user's tables were back
 to `decks 0 / deck_cards 0 / deck_allocations 0 / collection_entries 0 / wishlist_entries 0`,
-with `card_migrations` at the 2 569 rows the app itself wrote. The window was left at its
-natural 1280×800.
+with `card_migrations` at the 2 569 rows the app itself wrote.
+
+The two pieces of throwaway harness this smoke needed are **checked in** rather than left in a
+scratchpad for the next session to rebuild — which is what happened to this tooling four times
+before `cdp.mjs` existed at all. `cdp.mjs press Enter|Space [css]` sends the keypress that
+actually *activates* a focused control (`key`'s `rawKeyDown` carries no `text`, so Chromium
+hears the key and clicks nothing — measured both ways), and `cdp.mjs drag <source> <target>`
+is Task 14's real-drag recipe with `--press`, `--from x,y`, `--cancel`, `--probe` and cleanup
+of both pieces of state a dead drag leaves behind.
+
+> **That count is of the moment the cleanup ran, and it predates the user's own work.** They
+> were in the window while this was being written: they maximized it and started a Commander
+> deck of their own. Anything in `decks`/`deck_cards` from there on is theirs and was left
+> alone, and the window is the size *they* chose rather than the 1280×800 it launched at —
+> which is what "leave it at its natural size" is actually about: **no emulation override is
+> left in force**.
 
 ### Deck lifecycle — the gallery stayed truthful throughout
 
@@ -70,10 +84,11 @@ the issue count 4 → 3 and the Cards figure 14 → 13.
 ### Allocations — owned, built, and the honest zero
 
 1. Deck wants Sol Ring × 4, collection holds 3 → the row read **`3/4` · "You own 3 of 4"**.
-2. **Adding to the collection did not move the number** until the deck's next zone write. This
-   is the documented asymmetry, seen exactly as documented: the allocator runs *inside a zone
-   write*, so a collection that grows leaves the deck stale until one happens. One stepper
-   press produced `deck_allocations(deck 1, entry 1, 3)` and the row read `3/4`.
+2. **Adding to the collection did not move the number** until the deck's next **allocator run**
+   — a zone write, the Built toggle, or `missing_to_wishlist`, which are its only three
+   callers. This is the documented asymmetry, seen exactly as documented: the allocator runs
+   inside those writes, so a collection that grows leaves the deck stale until one happens. One
+   stepper press produced `deck_allocations(deck 1, entry 1, 3)` and the row read `3/4`.
 3. Deck marked **Built**; a second deck wanting the same card read **`0/1` · "You own 0 of 1"**
    — the built claim is subtracted from what everyone else can see.
 4. Stepping the collection row to **0** made the first deck read **`0/4`** immediately, with the
@@ -216,7 +231,7 @@ virtualized or not.
 | "Add to open deck" from the *global* Search view | **Plan 6** | The editor's docked panel covers deck-building search; a global hover action needs an "open deck" affordance outside the Decks view. `DeckSearchPanel`'s add path is the reusable half. **The live smoke confirms the gap is real**: the card detail pane offers "Add … to collection" and has no deck path at all, from any view. |
 | Hover previews with full card image / DFC flip animation | **Plan 6** | The detail pane already answers "what does this card look like" from every deck surface. |
 | Allocation rebalancing UI (choosing *which* copies a deck reserves; over-subscription between built decks) | **Plan 6** | The greedy allocator is deterministic and honest about shortage. **It now has its numbers** (§1): ~2 ms marginal cost at 100 cards / 501 entries, so a rebalancer may re-run it as freely as it likes. |
-| Re-allocating on *collection* writes (the "grow stale until a zone write" asymmetry) | **Plan 6** | Shrinking is honest immediately through the clamp; growing waits for the deck's next zone write. Closing it means a collection write that walks every built deck — a cross-feature decision, not a patch. |
+| Re-allocating on *collection* writes (the "grow stale until the next allocator run" asymmetry) | **Plan 6** | Shrinking is honest immediately through the clamp; growing waits for the deck's next allocator run — a zone write, the Built toggle, or `missing_to_wishlist`. Closing it means a collection write that walks every built deck — a cross-feature decision, not a patch. |
 | Any-printing wish pricing (§2b.1) | **Plan 5** | Same number the exporters will quote. |
 | Panel grid height at 800 px (§2b.2) | **Plan 6** | Polish, with the collapsible-stats question. |
 | `thumb` pre-warm; set-picker ranking; `role=grid` + roving tabindex; overlay focus containment; Cinzel dead `.woff`; `--chart-*` tokens | **Plan 6** | Plan-2/3 ledger, untouched by this plan's files. |

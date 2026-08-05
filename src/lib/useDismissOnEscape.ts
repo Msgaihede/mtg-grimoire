@@ -78,16 +78,17 @@ export function useDismissOnEscape({
  * Stop the keys a *row* activates on, and nothing else — the other half of the protocol
  * above, for the controls that live inside a clickable row.
  *
- * A row in the collection table or the search table opens the card on click and on Enter or
- * Space. A control inside it — a stepper, a quick-add button — must not open the card as
- * well when it is used, so its cell stops the press. Stopping the *whole* `keydown` does
- * that and takes every other key with it: React attaches one listener at the root, so a
- * synthetic press that never reaches the root never reaches `window` either, and
- * [`useDismissOnEscape`] listens on `window`. The card pane's Escape therefore stopped
- * working for as long as the caret sat in a stepper — **measured live in the running app on
- * 2026-08-06, in the collection table and the search table both**, and invisible to every
- * suite here, because a test that fires Escape at the row rather than at the control inside
- * it never travels the path that is broken.
+ * Every row list in the app — the collection table, the search table, the wishlist — opens
+ * the card on click and on Enter or Space. A control inside a row — a stepper, a quick-add
+ * button, a remove button — must not open the card as well when it is used, so its cell
+ * stops the press. Stopping the *whole* `keydown` does that and takes every other key with
+ * it: React attaches one listener at the root, so a synthetic press that never reaches the
+ * root never reaches `window` either, and [`useDismissOnEscape`] listens on `window`. The
+ * card pane's Escape therefore stopped working for as long as the caret sat in one of those
+ * controls — **measured live in the running app on 2026-08-06** — and it was invisible to
+ * every suite here, because a test that fires Escape at the row rather than at the control
+ * inside it never travels the path that is broken. All three lists had it; the count is not
+ * in this sentence on purpose, because the next list will have it too unless it uses this.
  *
  * So: exactly the two keys the row acts on. Anything else is somebody else's press.
  */

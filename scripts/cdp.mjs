@@ -15,6 +15,8 @@
 //     node scripts/cdp.mjs click "button[aria-label='Add Lightning Bolt to collection']"
 //     node scripts/cdp.mjs text "Wishlist"            # click the first element with this text
 //     node scripts/cdp.mjs key Escape
+//     node scripts/cdp.mjs press Enter "[aria-label='Add Sol Ring to Main deck']"
+//     node scripts/cdp.mjs drag "<source css>" "<target css>"  # a real Chromium drag
 //     node scripts/cdp.mjs size 1024 768 "expr"      # or `size reset`; expr runs in-session
 //     node scripts/cdp.mjs media prefers-reduced-motion reduce "expr"  # measured in-session
 //     node scripts/cdp.mjs shot out.png 1024 768     # sized and captured in one session
@@ -135,6 +137,20 @@ const KEYS = {
   ArrowUp: { windowsVirtualKeyCode: 38, key: "ArrowUp", code: "ArrowUp" },
 };
 
+/** The two keys that *activate* a control, with the `text` that makes Chromium act on them. */
+const ACTIVATION_KEYS = {
+  Enter: { windowsVirtualKeyCode: 13, key: "Enter", code: "Enter", text: "\r" },
+  Space: { windowsVirtualKeyCode: 32, key: " ", code: "Space", text: " " },
+};
+
+/** An element's centre in viewport coordinates, or `null` when nothing matches. */
+const boxOf = (selector) => `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)});
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+})()`;
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   const cdp = await connect();
@@ -176,12 +192,147 @@ async function main() {
         break;
       }
 
+      // A key the page can *listen* for. `rawKeyDown` carries no text, which is right for
+      // Escape and the arrows and wrong for Enter and Space: see `press`.
       case "key": {
         const k = KEYS[args[0]];
         if (!k) throw new Error(`unknown key ${args[0]}; known: ${Object.keys(KEYS).join(", ")}`);
         await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k });
         await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
         console.log("pressed");
+        break;
+      }
+
+      // `press Enter|Space [selector]` — a key that *activates* the focused control.
+      //
+      // Chromium synthesises the click on a focused `<button>` from a keypress that carries
+      // `text`, and `key`'s `rawKeyDown` carries none — so `key Enter` on a button is a
+      // keydown the page hears and an activation that never happens. Whether that is what you
+      // want depends entirely on what you are testing, which is why these are two commands
+      // and not one. The optional selector focuses first, because "press Enter on this
+      // control" is what a keyboard pass actually wants to say.
+      case "press": {
+        const k = ACTIVATION_KEYS[args[0]];
+        if (!k) {
+          throw new Error(
+            `press takes ${Object.keys(ACTIVATION_KEYS).join(" or ")}; use \`key\` for the rest`,
+          );
+        }
+        if (args[1]) {
+          const focused = await evaluate(
+            cdp,
+            `(() => { const el = document.querySelector(${JSON.stringify(args[1])});
+               if (!el) return false; el.scrollIntoView({ block: "center" }); el.focus();
+               return document.activeElement === el; })()`,
+          );
+          if (!focused) throw new Error(`nothing focusable matches ${args[1]}`);
+        }
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...k });
+        await cdp.send("Input.dispatchKeyEvent", { type: "char", ...k });
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k, text: undefined });
+        console.log("pressed");
+        break;
+      }
+
+      // `drag <source> <target> [--press <css>] [--from x,y] [--cancel] [--probe <expr>]`
+      //
+      // A **real** drag: `Input.setInterceptDrags` puts Chromium's own drag pipeline in play
+      // (the page gets a real `dragstart`, the drag data store is the platform's) and
+      // `Input.dispatchDragEvent` delivers dragenter/dragover/drop in place of the OS drag
+      // loop. `Input.dragIntercepted` confirms it started and carries the payload —
+      // `application/vnd.pdnd` for this app's own draggables.
+      //
+      // Three things cost whole sessions before they were written down:
+      //
+      // * A run that dies mid-flight leaves **two** pieces of state behind, and both make
+      //   every later drag fail with "the browser never started a drag": the drag controller
+      //   (cleared here with `dragCancel` + `mouseReleased` + `setInterceptDrags:false`, in a
+      //   `finally`) and pdnd's **honey pot** (`[data-pdnd-honey-pot]`), left covering the
+      //   pointer so the next `mousePressed` lands on it. Both are cleaned at both ends.
+      // * The press must land on something **visible**. A row or tile inside a short scroller
+      //   can have its geometric centre off-screen, and a press there starts nothing —
+      //   `--from x,y` names a point instead, and `--press` names a different element.
+      // * The target is measured **after** the drag starts, because the most interesting drop
+      //   target in this app (the remove tray) does not exist until a card is in the air.
+      case "drag": {
+        const [source, target] = args;
+        const flag = (name) => {
+          const i = args.indexOf(name);
+          return i === -1 ? null : (args[i + 1] ?? "");
+        };
+        const cancel = args.includes("--cancel");
+        let data = null;
+        cdp.on((m) => {
+          if (m.method === "Input.dragIntercepted") data ??= m.params.data;
+        });
+        const honeyPot = `(document.querySelector('[data-pdnd-honey-pot]')?.remove(), "clean")`;
+        try {
+          await evaluate(cdp, honeyPot);
+          const at = flag("--from");
+          const from = at
+            ? { x: Number(at.split(",")[0]), y: Number(at.split(",")[1]) }
+            : await evaluate(cdp, boxOf(flag("--press") ?? source));
+          if (!from) throw new Error(`no source matches ${flag("--press") ?? source}`);
+
+          await cdp.send("Input.setInterceptDrags", { enabled: true });
+          const mouse = (type, x, y, buttons) =>
+            cdp.send("Input.dispatchMouseEvent", {
+              type,
+              x,
+              y,
+              button: "left",
+              buttons,
+              clickCount: 1,
+            });
+          await mouse("mousePressed", from.x, from.y, 1);
+          for (const step of [4, 12, 24, 48]) {
+            await mouse("mouseMoved", from.x + step, from.y + step, 1);
+            await new Promise((r) => setTimeout(r, 40));
+          }
+          await new Promise((r) => setTimeout(r, 250));
+          if (!data) throw new Error("the browser never started a drag");
+
+          const to = await evaluate(cdp, boxOf(target));
+          if (!to) throw new Error(`no target matches ${target}`);
+          for (const type of ["dragEnter", "dragOver", "dragOver"]) {
+            await cdp.send("Input.dispatchDragEvent", { type, x: to.x, y: to.y, data });
+            await new Promise((r) => setTimeout(r, 80));
+          }
+          const probe = flag("--probe");
+          const measured = probe ? await evaluate(cdp, probe) : undefined;
+          await cdp.send("Input.dispatchDragEvent", {
+            type: cancel ? "dragCancel" : "drop",
+            x: to.x,
+            y: to.y,
+            data,
+          });
+          await mouse("mouseReleased", to.x, to.y, 0);
+          const outcome = cancel ? "cancelled" : "dropped";
+          console.log(
+            JSON.stringify({ started: data.items, from, to, outcome, probe: measured }, null, 2),
+          );
+        } finally {
+          try {
+            await cdp.send("Input.dispatchDragEvent", {
+              type: "dragCancel",
+              x: 0,
+              y: 0,
+              data: data ?? { items: [] },
+            });
+            await cdp.send("Input.dispatchMouseEvent", {
+              type: "mouseReleased",
+              x: 0,
+              y: 0,
+              button: "left",
+              buttons: 0,
+              clickCount: 1,
+            });
+            await cdp.send("Input.setInterceptDrags", { enabled: false });
+            await evaluate(cdp, honeyPot);
+          } catch {
+            /* the socket is going away anyway */
+          }
+        }
         break;
       }
 
@@ -334,7 +485,7 @@ async function main() {
 
       default:
         console.error(
-          "usage: cdp.mjs <eval|click|text|key|type|size|media|shot|console> [args]\n" +
+          "usage: cdp.mjs <eval|click|text|key|press|type|drag|size|media|shot|console> [args]\n" +
             "  the app must be running with --remote-debugging-port=9222",
         );
         process.exitCode = 2;

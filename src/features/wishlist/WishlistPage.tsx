@@ -13,6 +13,7 @@ import { finishLabel } from "@/lib/finish";
 import { ipc, ipcError, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
 import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { useWishlist, WISHLIST_SORTS, type Wishlist, type WishlistSort } from "./useWishlist";
 
@@ -676,8 +677,9 @@ function WishlistTable({
                   The row opens the card on any click and on Enter or Space, and every one of
                   those lands here too: without stopping them, correcting a count would also
                   open the card, and typing `12` into the box would scroll the list a
-                  screenful. */}
-              <span role="cell" onClick={stop} onKeyDown={stop}>
+                  screenful. Those two keys and no others — a blanket `stopPropagation` also
+                  took Escape away from the card pane, which listens on `window`. */}
+              <span role="cell" onClick={stop} onKeyDown={stopRowActivationKeys}>
                 <QuantityStepper
                   size="sm"
                   value={row.quantity}
@@ -706,7 +708,7 @@ function WishlistTable({
                 )}
               </span>
 
-              <span role="cell" onClick={stop} onKeyDown={stop}>
+              <span role="cell" onClick={stop} onKeyDown={stopRowActivationKeys}>
                 {/* Always offered, where the collection's appears only on an emptied row. The
                     two lists mean opposite things by deletion: losing a collection entry loses
                     a record of something owned, and crossing a line off a shopping list is
@@ -735,7 +737,9 @@ function WishlistTable({
   );
 }
 
-/** Keeps a cell's own clicks and keystrokes off the row that opens the card. */
+/** Keeps a cell's own clicks off the row that opens the card. Clicks only: the keyboard's
+ *  half is `stopRowActivationKeys`, which stops the two keys a row acts on and hands the
+ *  rest — Escape above all — on to `window`. */
 function stop(e: { stopPropagation: () => void }) {
   e.stopPropagation();
 }

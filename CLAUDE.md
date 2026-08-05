@@ -19,12 +19,17 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
-`eval` · `click <css>` · `text <visible text>` · `key Escape` · `type` ·
-`size 1024 768 "<expr>"` · `media prefers-reduced-motion reduce "<expr>"` ·
-`shot out.png [w h]` · `console out.jsonl` (stays attached; records `Log.entryAdded` **and**
-`Runtime.consoleAPICalled` — a run that watches only one reports a clean console it never
-looked at).
+`eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
+`drag <source css> <target css>` · `size 1024 768 "<expr>"` ·
+`media prefers-reduced-motion reduce "<expr>"` · `shot out.png [w h]` · `console out.jsonl`
+(stays attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that
+watches only one reports a clean console it never looked at).
 
+- **`key` and `press` are two commands because Enter is two things.** `key` sends a
+  `rawKeyDown`, which carries no `text` — the page *hears* the key and Chromium activates
+  nothing, so `key Enter` on a focused button is a keydown and not a click (measured live
+  2026-08-06: the nav button stayed unpressed). `press Enter|Space [selector]` carries the
+  text, focuses the selector first if given, and is what a keyboard pass wants.
 - **`media` and `size` take a trailing expression and it is evaluated *in that session*.** A
   separate `eval` after them measures nothing: `setEmulatedMedia` is reverted the instant its
   socket closes, and every invocation of the script is its own socket. Worse, WebView2 ignores
@@ -34,13 +39,15 @@ looked at).
   detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
   window back, so read `innerWidth`/`innerHeight` before the first override and end the run
   with an explicit `size 1280 800`.
-- **Drags** (`Input.setInterceptDrags` + `Input.dragIntercepted` + `Input.dispatchDragEvent`)
-  leave two things behind when a run dies mid-flight, and both make *every later drag* fail
-  silently: the browser's own drag controller (clear it with a `dragCancel` + `mouseReleased`,
-  then `setInterceptDrags:false`) and pdnd's `[data-pdnd-honey-pot]` element, left covering the
-  pointer so the next `mousePressed` lands on it. Remove it. A scroller left scrolled hides
-  rows from `cdp.mjs click` the same way — and a row whose centre is off-screen cannot be
-  pressed at all, so press a visible child.
+- **`drag <source> <target>`** is a real Chromium drag (`Input.setInterceptDrags` +
+  `Input.dragIntercepted` + `Input.dispatchDragEvent`), with `--press <css>`, `--from x,y`,
+  `--cancel` and `--probe <expr>` for reading the page mid-flight. It cleans up after itself,
+  which matters because a drag run that dies leaves **two** things behind that make *every
+  later drag* fail silently: the browser's drag controller (`dragCancel` + `mouseReleased` +
+  `setInterceptDrags:false`) and pdnd's `[data-pdnd-honey-pot]`, left covering the pointer so
+  the next `mousePressed` lands on it. **The press must land somewhere visible** — a row whose
+  centre is below the fold starts nothing, which is what `--press`/`--from` are for, and a
+  scroller left scrolled hides rows from `click` the same way.
 - **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
   fault.** Reload with the recorder attached and read the entries that arrive after.
 
@@ -58,9 +65,10 @@ belong to the sync, and a hand-written row in either makes every later measureme
   2026-08-05 over three live forced syncs (debug build):** `checking` <1 s · `downloading`
   ~2.5 s · `ingesting` **~81 s** · `reclaiming` ~6 s · `sets` ~5 s — **92–99 s end to end**.
   Re-measured 2026-08-06 on the day's rotated bulk file: **93 s**, corpus **116,590**
-  unchanged. Scryfall rotates once a day (~21:10 UTC), so a forced Refresh gets a real ingest
-  at most once a day — after that the ETag answers 304 until tomorrow, and there is no
-  in-bounds way to ask for another.
+  unchanged. Scryfall regenerates "once every 12–24 hours" in a 21:00–21:45 UTC window
+  (`default_cards` at ~21:16), so a forced Refresh finds a genuinely new file about once a
+  day; after that the ETag answers 304 until the next rotation, and the only way to make it
+  ingest again is the `sync_meta` reset below.
   The old **44.8 s** figure predates schema v3: the ingest now gzips `raw` on the way in,
   and that is where the extra minute went. A run that finds nothing new is **1.8 s**.
 - `mtg.db` was **2.02 GB** and is **547 MB** after the two things Plan 3 added: the one-time
@@ -75,8 +83,12 @@ belong to the sync, and a hand-written row in either makes every later measureme
   before the ETag check and writes nothing, so `last_check_at` does not move.
 - A **forced** Refresh skips only the throttle, not the ETag/`updated_at` check: if the
   bulk file has not changed it answers "Already up to date" in well under a second and
-  emits nothing but a `checking` phase. To exercise a real ingest, clear `bulk_etag` *and*
-  `bulk_updated_at` from `sync_meta` — clearing the etag alone still short-circuits.
+  emits nothing but a `checking` phase. To exercise a real ingest out of turn, clear
+  `bulk_etag` *and* `bulk_updated_at` from `sync_meta` — clearing the etag alone still
+  short-circuits. That reset works, and it is the right tool for developing an ingest; it is
+  the wrong tool inside a **smoke**, because a hand-written `sync_meta` makes every timing
+  and every "what the app did on its own" claim afterwards a fiction. A smoke takes the
+  ingest the day offers it, or does without one and says so.
 - **The two halves of the reconciler run on different schedules, and that decides how a
   fixture is staged.** `reconcile::apply` — the `/migrations` poll — runs on *every* finished
   run, the "already up to date" path included (`finish_unchanged` calls it deliberately: 304
@@ -253,8 +265,10 @@ belong to the sync, and a hand-written row in either makes every later measureme
   zero removes the row.** A zone slot at zero holds no condition, no price and no story;
   only the collection's zero is worth keeping. The grain is
   `(deck_id, card_id, zone)` (`schema::DECK_CARD_GRAIN`) — the same printing in two zones is
-  two rows, added twice in one zone is one row with the sum. `maybe` is a scratchpad: the
-  allocator skips it, the stats skip it, the validator never sees it.
+  two rows, added twice in one zone is one row with the sum. `maybe` is a scratchpad and
+  **counts toward nothing at all** (`engine.ts`'s own words) — not size, not copies, not
+  legality; the allocator does not claim copies for it either. `DeckStats` still *reports*
+  `byZone.maybe`, which is a count of the pile and not a contribution to anything.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
   (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
@@ -273,12 +287,14 @@ belong to the sync, and a hand-written row in either makes every later measureme
   deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
   `cards.price_usd` is a fallback chain and is never summed, here least of all.
 - **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
-  deck's rows inside the caller's transaction on every zone write (and on the Built toggle),
-  greedily and deterministically: exact printing, then real copies, then oldest entry. A
-  **built** deck's claims are subtracted from what other decks can see. The read clamps with
-  `min(allocation, entry.quantity)`, so stepping a collection row down is honest immediately —
-  but **growing the collection does not re-run the allocator**, so a deck reads the new copies
-  only after its next zone write. Known, named, and Plan 6's to close.
+  deck's rows inside the caller's transaction, greedily and deterministically: exact printing,
+  then real copies, then oldest entry. It runs on **a zone write, the Built toggle, or
+  `missing_to_wishlist`** — those three and nothing else, which is worth knowing while
+  debugging, because pressing "Send missing to wishlist" rebuilds a deck's allocations as a
+  side effect. A **built** deck's claims are subtracted from what other decks can see. The
+  read clamps with `min(allocation, entry.quantity)`, so stepping a collection row down is
+  honest immediately — but **growing the collection does not re-run the allocator**, so a deck
+  reads the new copies only after its next allocator run. Known, named, and Plan 6's to close.
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).

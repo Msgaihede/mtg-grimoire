@@ -52,7 +52,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import App from "./App";
-import type { CardDetail, CardSummary, CollectionRow, DeckRow } from "@/lib/ipc";
+import type { CardDetail, CardSummary, CollectionRow, DeckRow, WishRow } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 
@@ -120,6 +120,28 @@ const BOLT_ENTRY: CollectionRow = {
   misprint: false,
   grading: null,
   tags: "[]",
+  notes: null,
+  needsReview: null,
+  updatedAt: 1_800_000_000,
+};
+
+/** And as a wish — **pinned to a printing**, because an any-printing wish opens no pane and
+ *  a row that cannot open the card cannot test what Escape does to one. */
+const BOLT_WISH: WishRow = {
+  id: 11,
+  oracleId: "o1",
+  cardId: "c1",
+  name: "Lightning Bolt",
+  setCode: "lea",
+  collectorNumber: "161",
+  lang: "en",
+  rarity: "common",
+  manaCost: "{R}",
+  quantity: 2,
+  preferredFinish: null,
+  unitPriceUsd: 400.5,
+  unitPriceEur: 350,
+  ownedQuantity: 0,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
@@ -358,7 +380,7 @@ it("closes the card on Escape from inside a collection row's stepper", async () 
 });
 
 /** The same key, the same cell shape, in the search table's quick-add — the second of the
- *  two sites the live pass found, and the one a reader meets first. */
+ *  three sites, and the one a reader meets first. */
 it("closes the card on Escape from inside the search table's add button", async () => {
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "Table view" }));
@@ -367,6 +389,23 @@ it("closes the card on Escape from inside the search table's add button", async 
   expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
 
   screen.getByRole("button", { name: /Add Lightning Bolt \(LEA 161\) to collection/ }).focus();
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
+/** And the third: the wishlist's stepper cell, which had its own copy of the blanket stop
+ *  and its own local helper to hide it in. Three lists, one bug, one fix — and this test
+ *  exists so a fourth list is caught by the suite rather than by a reader. */
+it("closes the card on Escape from inside a wishlist row's stepper", async () => {
+  wishlistList.mockResolvedValue({ items: [BOLT_WISH], total: 1 });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+
+  await userEvent.click(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+  expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+
+  screen.getByRole("spinbutton", { name: /Copies wanted of Lightning Bolt/ }).focus();
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();

@@ -24,6 +24,10 @@ export default tseslint.config(
         fetch: "readonly",
         WebSocket: "readonly",
         Buffer: "readonly",
+        // Asked and answered: a real drag is a *paced* gesture. Chromium starts one from a
+        // press and a few moves spread over time, and dispatched back to back they arrive as
+        // a click. `cdp.mjs drag` sleeps between moves for that reason and no other.
+        setTimeout: "readonly",
       },
     },
   },
