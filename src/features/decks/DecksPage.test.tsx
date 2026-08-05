@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -238,6 +238,63 @@ describe("DecksPage", () => {
       expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "modern" }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
+  });
+
+  /**
+   * The one place a refused create can be read is the form it was made in — `writeFailure`
+   * covers the three writes a *tile* makes, not this one, and reopening the form resets the
+   * mutation. So the form has to outlive the press.
+   *
+   * The press is what puts it at risk: `Create deck` disables itself, and a browser blurs a
+   * disabled control **with no `relatedTarget` at all** — which the click-away handler reads as
+   * the reader leaving. That blur is the one event jsdom will not produce on its own (it does
+   * not blur a control that becomes disabled, and a `userEvent.click` elsewhere then finds
+   * nothing to move the caret *from*), so it is dispatched here directly. Delivered any other
+   * way this test passes over a missing guard — it was written that way first, and did.
+   */
+  it("keeps the create form open while the write is in flight, so a refusal has somewhere to land", async () => {
+    let refuse!: (reason: string) => void;
+    deckCreate.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        refuse = reject;
+      }),
+    );
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
+
+    fireEvent.focusOut(screen.getByLabelText("Name"), { relatedTarget: null });
+
+    expect(screen.getByLabelText("Name")).toBeInTheDocument();
+
+    refuse("The database is busy with a sync — try again in a moment.");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
+  });
+
+  /** The same guard on the other panel: the answer must not arrive over a closed question. */
+  it("keeps the delete question open while the delete is in flight", async () => {
+    let finish!: () => void;
+    deckDelete.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Burn" }));
+    const confirm = screen.getByRole("dialog", { name: /delete burn/i });
+    await userEvent.click(within(confirm).getByRole("button", { name: "Delete deck" }));
+
+    fireEvent.focusOut(confirm, { relatedTarget: null });
+
+    expect(screen.getByRole("dialog", { name: /delete burn/i })).toBeInTheDocument();
+
+    finish();
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("duplicates a deck", async () => {

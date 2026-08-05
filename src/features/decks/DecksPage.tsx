@@ -404,6 +404,20 @@ function DeckTile({
 function Cover({ cardId }: { cardId: string | null }) {
   const [state, setState] = useState<"showing" | "waiting" | "failed">("showing");
   const [attempt, setAttempt] = useState(0);
+  const [shown, setShown] = useState(cardId);
+
+  // The other half of `CardGrid`'s pattern, and the half that is easy to leave behind because
+  // nothing today needs it: this component belongs to a *tile*, not to a printing, so a deck
+  // that changes its cover hands it a different id without remounting it. Without the reset,
+  // the new art would inherit the old one's failure — a frame stuck on "No image" over a
+  // picture that is perfectly fetchable. Reset during render is React's own answer to it; an
+  // effect would paint one frame of the last cover's failure over the new cover's art. Latent
+  // until Task 12's "Set as cover", which is exactly when a divergence here would bite.
+  if (shown !== cardId) {
+    setShown(cardId);
+    setState("showing");
+    setAttempt(0);
+  }
 
   useEffect(() => {
     if (state !== "waiting") return;
@@ -587,7 +601,16 @@ function NewDeck({
       // rule for all of them is worth more than a rescued word — and the alternative, a
       // trigger that refuses to close while the field is dirty, is a control that stops
       // working for a reason the reader cannot see.
+      //
+      // Not while the deck is being written, though, and this is the same mechanism the delete
+      // question guards against: `Create deck` disables itself on the press, the browser blurs
+      // a disabled control with no `relatedTarget` at all, and this handler would read the
+      // press as the reader leaving — closing the form *as if it had worked*. It is worse here
+      // than there, because this form is the only place a refusal can be read: `writeFailure`
+      // above covers the three writes a tile makes, not this one, and reopening the form calls
+      // `create.reset()`. So a refused create would leave no deck and no sentence saying why.
       onBlur={(e) => {
+        if (create.isPending) return;
         if (open && !rootRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >

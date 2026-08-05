@@ -194,22 +194,25 @@ async function main() {
 
       // The responsive pass every UI task owes (the direction's floor is 1024).
       //
-      // Takes an optional trailing expression, and measuring through it is not optional
-      // discipline: an emulation override belongs to the session, and every invocation of
-      // this script is its own socket, so `size` followed by a separate `eval` is a claim
-      // about a viewport nobody proved was there.
+      // Takes an optional trailing expression, and measuring through it is the discipline
+      // rather than a convenience:
       //
       //     node scripts/cdp.mjs size 1024 768 "document.documentElement.scrollWidth"
       //
-      // **Two WebView2 behaviours, measured 2026-08-05, and they are opposites of each
-      // other's danger.** This override *outlives* its session — set 1024 from one
-      // invocation and the next one, and a page reload, still measure 1024 — where
-      // `setEmulatedMedia` is reverted on detach. And `clearDeviceMetricsOverride` is
-      // accepted and does **nothing**: neither it nor the protocol's `width: 0, height: 0`
-      // restores the window. So `size reset` cannot get you back, and the way back is to set
-      // the natural size explicitly — read it (`innerWidth`/`innerHeight`) *before* the
-      // first override, and put it back when you are done, or the app window stays that
-      // size for the rest of the session.
+      // Not because the override would be gone by the next invocation — for *this* command
+      // it would not (see below) — but because a separate `eval` cannot tell a viewport that
+      // was overridden from one that never was, so a number read that way is a number nobody
+      // proved anything about. The two overrides this script can set do not behave alike, and
+      // measuring in-session is the one habit that is correct for both.
+      //
+      // **Two WebView2 behaviours, measured 2026-08-05.** This override *outlives* its
+      // session — set 1024 from one invocation and the next one, and a page reload, still
+      // measure 1024, where `setEmulatedMedia` is reverted the moment its socket closes. And
+      // `clearDeviceMetricsOverride` is accepted and does **nothing**: neither it nor the
+      // protocol's `width: 0, height: 0` restores the window. So `size reset` cannot get you
+      // back, and the way back is to set the natural size explicitly — read it
+      // (`innerWidth`/`innerHeight`) *before* the first override, and put it back when you
+      // are done, or the app window stays that size for the rest of the session.
       case "size": {
         const reset = args[0] === "reset";
         if (reset) {
@@ -243,11 +246,13 @@ async function main() {
       //   override and ignores it, leaving `matchMedia("(prefers-reduced-motion: reduce)")
       //   .matches` at `false`. `"screen"` is what the page already is, so forcing it changes
       //   nothing else.
-      // * an emulation override belongs to the **session** and is reverted the moment the
-      //   socket closes — and every invocation of this script is its own socket. So a `media`
+      // * **this** override belongs to the session and is reverted the moment the socket
+      //   closes — and every invocation of this script is its own socket. So a `media`
       //   command followed by a separate `eval` measures a page with no override on it at
       //   all. Hence the third argument: an expression evaluated *inside* the same session,
-      //   which is the only place the override is real.
+      //   which is the only place the override is real. Not a general rule about emulation,
+      //   and do not carry it to `size`: `setDeviceMetricsOverride` outlives its session in
+      //   this WebView2 (and cannot be cleared at all). Per-command, measured, both ways.
       //
       //     node scripts/cdp.mjs media prefers-reduced-motion reduce \
       //       "getComputedStyle(document.querySelector('img')).transitionProperty"
