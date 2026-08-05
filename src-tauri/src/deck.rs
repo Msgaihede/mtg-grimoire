@@ -775,18 +775,27 @@ mod tests {
             .unwrap();
         assert_eq!((zone.as_str(), quantity), ("side", 5), "four into one");
 
-        // An empty target zone is a create, and it carries the identity the moved row
-        // recorded — never a fresh lookup, so a move works on an orphaned row too.
+        // An empty target zone is a create, and the identity comes from the moved row
+        // rather than from a fresh lookup — so the printing is dropped from `cards` first,
+        // which is what the next sync does to a card Scryfall stopped publishing. The row
+        // being tidied out of a deck is exactly the row most likely to be orphaned, and a
+        // move that needed the id to resolve would refuse it.
+        conn.execute("DELETE FROM cards", []).unwrap();
+
         move_card(&conn, deck.id, "bolt-lea", "side", "maybe").unwrap();
+
         assert_eq!(count(&conn, "deck_cards"), 1);
-        let (zone, quantity, name): (String, i64, String) = conn
-            .query_row("SELECT zone, quantity, name FROM deck_cards", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+        let (zone, quantity, name, set): (String, i64, String, String) = conn
+            .query_row(
+                "SELECT zone, quantity, name, set_code FROM deck_cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
             .unwrap();
         assert_eq!(
-            (zone.as_str(), quantity, name.as_str()),
-            ("maybe", 5, "Lightning Bolt")
+            (zone.as_str(), quantity, name.as_str(), set.as_str()),
+            ("maybe", 5, "Lightning Bolt", "lea"),
+            "an orphaned row still moves, still counted and still sayable"
         );
     }
 
