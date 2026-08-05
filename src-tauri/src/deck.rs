@@ -1924,6 +1924,25 @@ mod tests {
             1,
             "…so the read is what has to tell the truth about a shrunken binder"
         );
+
+        // The collection keeps a row it has been emptied to zero — the condition, the price
+        // and the acquisition story survive the day the copies are traded away — and an
+        // entry holding none of the card must reserve none of it. A claim of zero is not
+        // just wrong, it is `CHECK (quantity > 0)`: the allocator writes no row at all.
+        crate::collection::set_quantity(&conn, entry, 0).unwrap();
+        set_card_quantity(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![],
+            "a zero-keeps row claims nothing"
+        );
+        assert_eq!(owned_of(&conn, deck.id, "bolt-lea", "main"), 0);
+        assert_eq!(
+            count(&conn, "collection_entries"),
+            1,
+            "and the row itself is still there, as it always is"
+        );
     }
 
     /// TRAP B and TRAP C ride the read: two printings of one card with different `oldschool`
