@@ -795,7 +795,10 @@ describe("DeckEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
 
     await waitFor(() => expect(deckMissingToWishlist).toHaveBeenCalledWith(4));
-    expect(await screen.findByText("Added 3 wishes.")).toBeInTheDocument();
+    // Wishes are cards and the shortfall is copies, so the sentence says which it counts.
+    expect(
+      await screen.findByText("Added 3 wishes — one per card, for every copy you are short."),
+    ).toBeInTheDocument();
   });
 
   /** Spec §5: a price is never shown without saying how old it is. */

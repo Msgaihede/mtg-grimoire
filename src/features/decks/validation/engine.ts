@@ -34,9 +34,16 @@ import { copyException, isBasicLand, unreadableCopyCount } from "./singleton";
 import { colorIdentityIssues, commanderIdentity, validateCommanderZone } from "./commanders";
 import { companionIssues } from "./companions";
 
-/** The zones `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**", "exactly 60
- *  incl Oathbreaker + signature spell" (both of those live in the `commander` zone). */
-const SIZE_ZONES: readonly DeckZone[] = ["main", "commander"];
+/**
+ * The zones `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**", "exactly 60 incl
+ * Oathbreaker + signature spell" (both of those live in the `commander` zone).
+ *
+ * Exported because the deck editor's stats strip prints the same total beside this file's
+ * sentence about it: "Modern decks need at least 60 cards; you have 59" under a headline
+ * figure counting the sideboard too is two numbers for one question. Reading one query is not
+ * enough to make two surfaces agree — they have to read one definition.
+ */
+export const SIZE_ZONES: readonly DeckZone[] = ["main", "commander"];
 
 /**
  * The zones a copy limit counts together — **every zone but the scratchpad**.

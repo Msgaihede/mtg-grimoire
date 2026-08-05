@@ -1,11 +1,11 @@
-import { useEffect, useId, useMemo, useRef, type RefObject } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Figure, FigureRow } from "@/components/Figure";
-import { ipcError, type DeckCard } from "@/lib/ipc";
+import { ipcError, type DeckCard, type DeckZone } from "@/lib/ipc";
 import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { manaValueOf } from "./validation/engine";
-import { groupCards } from "./ZoneColumn";
+import { manaValueOf, SIZE_ZONES } from "./validation/engine";
+import { ZONE_LABEL, groupCards } from "./ZoneColumn";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
@@ -53,8 +53,22 @@ export interface TypeCount {
  * pay for.
  */
 export interface DeckStatsSummary {
-  /** Copies in every zone but `maybe`. */
+  /** Copies in every zone but `maybe`. What the deck *costs* and what it is short of are
+   *  counted over all of them: a sideboard is cards you own, sleeve and pay for. */
   copies: number;
+  /**
+   * Copies in the zones the format's size rule counts — `engine.SIZE_ZONES`, imported rather
+   * than restated.
+   *
+   * This is the headline figure, and it is a different number from {@link copies} on purpose:
+   * the validation chip beside it says "Modern decks need at least 60 cards; you have 59", and
+   * a "Cards 74" next to that sentence is two numbers for one question. Sharing the query was
+   * never enough — the two have to share the *definition*.
+   */
+  sized: number;
+  /** Copies per zone, so the headline figure can say where the rest of the deck is. `maybe`
+   *  is in here and in nothing else. */
+  byZone: Record<DeckZone, number>;
   lands: number;
   nonlands: number;
   /** Nonland copies with no mana value anywhere — an orphaned row has neither a `cmc` nor a
@@ -130,6 +144,28 @@ function front(typeLine: string | null): string {
 }
 
 /**
+ * Whether this row is a land — and it is the **type line** that decides, not the bucket the
+ * deck list files it under.
+ *
+ * The two readings genuinely differ, and the difference is Urza's Saga (a Legendary Enchantment
+ * Land), Tree of Tales (an Artifact Land) and Dryad Arbor (a Land Creature): `groupCards` files
+ * a card under the *first* type printed on it, so all three head up the Enchantment, Artifact
+ * and Creature bars — which is right for the bars, because those are the headings the reader
+ * already sees over the rows.
+ *
+ * It is wrong everywhere else. A deckbuilder counts Urza's Saga among their lands, so a "Lands
+ * 12" over a twenty-land Affinity deck is simply a false number; and all three cost nothing to
+ * put onto the battlefield, so the curve would file them under 0 — which is the flood the curve
+ * excludes lands to avoid in the first place. So the land/nonland split (the Lands figure, the
+ * land pie, the curve, the average) asks the type line, the type bars keep the deck list's own
+ * answer, and the one place they disagree is named here and pinned by
+ * `a land that is not filed under Land is still a land to every chart but the type bars`.
+ */
+function isLand(typeLine: string | null): boolean {
+  return front(typeLine).includes("Land");
+}
+
+/**
  * The buckets a pie can draw: the ones with something in them.
  *
  * Dropped here rather than in the chart so that every distribution this module answers has the
@@ -151,14 +187,23 @@ function drawable(slices: Slice[]): Slice[] {
 export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
   const counted = cards.filter((c) => c.zone !== "maybe");
 
-  // One bucketing for four charts: the type bars *are* the deck list's headings, and the
-  // land/nonland split every other chart turns on is the same grouping read once. Deriving it
-  // twice is how a column heading and a bar under it start disagreeing about a card.
+  // The type bars are the deck list's own headings, read from the deck list's own helper — a
+  // bar and the heading over the rows it counts must never be two derivations of one thing.
   const groups = groupCards(counted, "type");
-  const lands = groups.find((g) => g.key === "land")?.cards ?? [];
-  const nonlands = groups.filter((g) => g.key !== "land").flatMap((g) => g.cards);
+  // Every other chart asks the type line instead; `isLand` is where that costs and buys.
+  const lands = counted.filter((c) => isLand(c.typeLine));
+  const nonlands = counted.filter((c) => !isLand(c.typeLine));
 
   const copiesOf = (rows: readonly DeckCard[]) => rows.reduce((n, c) => n + c.quantity, 0);
+
+  const byZone: Record<DeckZone, number> = {
+    main: 0,
+    side: 0,
+    commander: 0,
+    companion: 0,
+    maybe: 0,
+  };
+  for (const card of cards) byZone[card.zone] += card.quantity;
 
   const curve = Array<number>(CURVE_BUCKETS).fill(0);
   let manaValued = 0;
@@ -238,6 +283,8 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
 
   return {
     copies: copiesOf(counted),
+    sized: SIZE_ZONES.reduce((n, zone) => n + byZone[zone], 0),
+    byZone,
     lands: copiesOf(lands),
     nonlands: copiesOf(nonlands),
     unknownManaValue,
@@ -288,6 +335,18 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
   const stats = useMemo(() => deckStats(cards), [cards]);
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
+  /**
+   * The shortfall the last press was made against, or `null` if there has not been one.
+   *
+   * `missing_to_wishlist` counts what the deck is short of and hands each card to `add_wish`,
+   * whose fold **raises** an existing wish's quantity — so a second press on the same shortfall
+   * wishes for the same copies twice (three short becomes six wished) and answers the same
+   * cheerful number both times. The button is therefore spent until the deck says something
+   * new: `stats.missing` is exactly the number the press was about, so a changed one is a
+   * changed question. Not the mutation's own `isSuccess`, which stays true forever.
+   */
+  const [sentFor, setSentFor] = useState<number | null>(null);
+  const spent = sentFor !== null && sentFor === stats.missing && !send.isError;
 
   // The disabled-on-press hazard, in the shape it takes outside a dismissible layer: a browser
   // blurs a control that disables itself, with no `relatedTarget` at all, so the caret lands on
@@ -303,13 +362,33 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
   }, [pending]);
 
   const n = (value: number) => value.toLocaleString("en-US");
-  const added = send.isSuccess ? (send.data ?? 0) : null;
+  // Only while the answer is still about the shortfall on screen: a sentence that outlives its
+  // own question is a sentence the reader reads as being about the deck they have now.
+  const added = spent && send.isSuccess ? (send.data ?? 0) : null;
   const failure = send.isError ? ipcError(send.error) : null;
+
+  // Where the rest of the deck is, for the headline figure's note. The zone words are the
+  // editor's own (`ZONE_LABEL`), so the note names the columns the reader is looking at — and
+  // a companion is named as a companion rather than folded into the sideboard, because in the
+  // singleton formats there is no sideboard for it to be part of.
+  const elsewhere = (["side", "companion"] as const)
+    .filter((zone) => stats.byZone[zone] > 0)
+    .map((zone) => `${n(stats.byZone[zone])} ${ZONE_LABEL[zone].toLowerCase()}`)
+    .join(" + ");
 
   return (
     <div className="flex shrink-0 flex-col gap-3">
       <FigureRow>
-        <Figure label="Cards" value={n(stats.copies)} />
+        {/* The number the format check is talking about — main deck plus commander, from the
+            engine's own `SIZE_ZONES`. The sideboard and the companion are real cards and are
+            counted by the price, the shortfall and every chart; they are just not what "a
+            60-card deck" means, and the chip beside this says so in a sentence. */}
+        <Figure
+          label="Cards"
+          value={n(stats.sized)}
+          note={elsewhere ? `+ ${elsewhere}` : undefined}
+          title="Main deck and commander — the cards a format's size rule counts."
+        />
         <Figure label="Lands" value={n(stats.lands)} />
         <Figure
           label="Avg. mana value"
@@ -328,7 +407,12 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
         <Pips pips={stats.pips} />
         <Missing
           stats={stats}
-          send={send}
+          pending={send.isPending}
+          spent={spent}
+          onSend={() => {
+            setSentFor(stats.missing);
+            send.mutate();
+          }}
           sendRef={sendRef}
           added={added}
           failure={failure}
@@ -398,14 +482,20 @@ function Pips({ pips }: { pips: Record<PipKey, number> }) {
  */
 function Missing({
   stats,
-  send,
+  pending,
+  spent,
+  onSend,
   sendRef,
   added,
   failure,
   n,
 }: {
   stats: DeckStatsSummary;
-  send: MissingWrite;
+  pending: boolean;
+  /** This shortfall has already been sent. Pressing again would wish for the same copies a
+   *  second time — the backend folds quantities rather than replacing them. */
+  spent: boolean;
+  onSend: () => void;
   sendRef: RefObject<HTMLButtonElement | null>;
   added: number | null;
   failure: string | null;
@@ -424,11 +514,23 @@ function Missing({
           <button
             ref={sendRef}
             type="button"
-            disabled={send.isPending}
-            onClick={() => send.mutate()}
+            // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
+            // half-second the write is in flight. **Spent is `aria-disabled`**, because it
+            // outlasts the press by as long as the deck stays the same: a real `disabled` there
+            // is a control the browser refuses to focus, so the caret this button lost when it
+            // disabled itself could never come back to it, and a keyboard reader would find the
+            // control simply gone from the tab order with no way to ask why. The rail in the
+            // docked search panel says no the same way, for the same reason.
+            disabled={pending}
+            aria-disabled={spent || undefined}
+            title={spent ? "This shortfall is already on your wishlist." : undefined}
+            onClick={() => {
+              if (!spent) onSend();
+            }}
             className={cn(
               "rounded-md border border-border px-2 py-1 text-dim",
               "transition-colors duration-150 hover:text-text disabled:opacity-50",
+              "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
               "motion-reduce:transition-none",
               FOCUS,
             )}
@@ -444,13 +546,24 @@ function Missing({
 
       {/* Mounted for the life of the strip and swapped into: a live region that appears
           together with its own text announces nothing, because there was no change for a
-          screen reader to notice (the decks gallery's lesson). */}
+          screen reader to notice (the decks gallery's lesson).
+
+          **A wish is a card, and the shortfall beside it is copies** — one wish for three
+          missing Bolts — so the sentence says which it is counting rather than leaving two
+          numbers on one line to be read as the same unit.
+
+          Zero is **not** "they were already wished for": `missing_to_wishlist` counts the
+          shortfall from a freshly reallocated deck, before it writes anything, and skips a row
+          with no `oracle_id`. So zero means the recount found nothing short (the strip's own
+          number was one edit stale) or that everything short is an orphaned printing, which
+          cannot be wished for at all — and saying "already on your wishlist" would be telling
+          the reader the one thing that is certainly not what happened. */}
       <p role="status" className="text-dim">
         {added === null
           ? ""
           : added === 0
-            ? "Those cards were already on your wishlist."
-            : `Added ${n(added)} ${added === 1 ? "wish" : "wishes"}.`}
+            ? "Nothing to add — a recount covered the shortfall, or what is short has left the card database."
+            : `Added ${n(added)} ${added === 1 ? "wish" : "wishes"} — one per card, for every copy you are short.`}
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner: that one speaks for

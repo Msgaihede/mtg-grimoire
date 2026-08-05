@@ -172,9 +172,12 @@ export function ValidationPanel({
   // few hundred rows, and one pass over them is cheaper than the render it rides along with. A
   // check that lagged the stepper beside it would be a check the reader stops trusting.
   const issues = useMemo(() => validateDeck([...cards], spec), [cards, spec]);
+  // Only while the panel is up, unlike the issues: nothing outside the panel draws a bracket,
+  // and this one greps every face of every card for four phrases. `validateDeck` earns its
+  // every-render pass because the chip prints its count; this earns nothing until it is read.
   const bracket = useMemo(
-    () => (spec.commanderRule === null ? null : estimateBracket([...cards])),
-    [cards, spec],
+    () => (open && spec.commanderRule !== null ? estimateBracket([...cards]) : null),
+    [cards, spec, open],
   );
 
   // The `"inner"` rung, owned here rather than by the editor so that this component is a whole
@@ -211,7 +214,13 @@ export function ValidationPanel({
         ) : (
           <>
             {/* The number is the only red on the chip: a coloured *surface* would make a deck
-                somebody is still building look broken, and this panel refuses nothing. */}
+                somebody is still building look broken, and this panel refuses nothing.
+
+                It counts warnings with errors, and colours the total either way — the brief's
+                wording, kept deliberately. A warning is "a fact worth a look" rather than a
+                broken rule, so a two-tone count would be more precise; it would also be a chip
+                with two numbers on it, and the panel behind it already tells the two apart per
+                sentence. One number, one press to see what it is made of. */}
             <span className="font-mono tabular-nums text-destructive">{count}</span>{" "}
             {count === 1 ? "issue" : "issues"}
           </>

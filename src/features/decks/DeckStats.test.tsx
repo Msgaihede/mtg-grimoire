@@ -148,6 +148,55 @@ describe("deckStats", () => {
     expect(stats.landDist.reduce((n, s) => n + s.count, 0)).toBe(stats.lands);
   });
 
+  /**
+   * The one card class where the two readings of "land" part company, and the reason each
+   * side is read the way it is.
+   *
+   * `groupCards` files a card under the **first** type printed on it, so Urza's Saga heads up
+   * the Enchantment bar — which is right for the bars, because that is the heading the reader
+   * already sees over the rows. Everywhere else the type line decides: a deckbuilder counts
+   * Urza's Saga among their lands, and it costs nothing to put onto the battlefield, so the
+   * curve would file it under 0 — the very flood the curve excludes lands to avoid.
+   */
+  it("keeps a land that is not filed under Land a land to every chart but the type bars", () => {
+    const stats = deckStats([
+      card({ name: "Urza's Saga", typeLine: "Legendary Enchantment Land", cmc: 0, manaCost: null }),
+      card({ name: "Tree of Tales", typeLine: "Artifact Land", cmc: 0, manaCost: null }),
+      card({ name: "Dryad Arbor", typeLine: "Land Creature — Dryad", cmc: 0, manaCost: null }),
+      spell("Bolt", 1),
+    ]);
+
+    expect(stats.lands).toBe(3);
+    expect(stats.nonlands).toBe(1);
+    expect(stats.curve[0]).toBe(0);
+    expect(Object.fromEntries(stats.landDist.map((s) => [s.label, s.count]))).toEqual({
+      "Other lands": 3,
+    });
+    // The bars keep the deck list's answer, and the disagreement is deliberate.
+    expect(stats.typeDist.map((t) => t.label)).toEqual([
+      "Creature",
+      "Sorcery",
+      "Artifact",
+      "Enchantment",
+    ]);
+  });
+
+  /** The headline figure is the engine's `SIZE_ZONES`, so the strip and the format check
+   *  count the same cards; everything else is counted over every zone but the scratchpad. */
+  it("sizes the deck by the zones the format's size rule counts", () => {
+    const stats = deckStats([
+      spell("Bolt", 1, { quantity: 4 }),
+      card({ name: "Kenrith", zone: "commander" }),
+      spell("Pyroblast", 1, { zone: "side", quantity: 3 }),
+      spell("Lurrus", 3, { zone: "companion" }),
+      spell("Ghost", 5, { zone: "maybe", quantity: 9 }),
+    ]);
+
+    expect(stats.sized).toBe(5);
+    expect(stats.copies).toBe(9);
+    expect(stats.byZone).toEqual({ main: 4, commander: 1, side: 3, companion: 1, maybe: 9 });
+  });
+
   /** The type bars come from the deck list's own grouping, so a heading in a column and a
    *  bar in the strip can never disagree. */
   it("counts types in the deck list's own buckets", () => {
@@ -192,6 +241,21 @@ describe("deckStats", () => {
 describe("DeckStats", () => {
   const strip = (cards: DeckCard[], send = sender()) =>
     render(<DeckStats cards={cards} send={send} />);
+
+  /** A deck short of three copies of one card. */
+  const short = (): DeckCard[] => [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })];
+
+  /**
+   * Press the button, then let the write settle — the flow the strip actually has, and the one
+   * the answer is scoped to: the sentence and the spent button both hang off the shortfall the
+   * *press* was made against, not off a mutation flag that stays true forever.
+   */
+  async function press(cards: DeckCard[], settled: MissingWrite) {
+    const view = render(<DeckStats cards={cards} send={sender()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+    view.rerender(<DeckStats cards={cards} send={settled} />);
+    return view;
+  }
 
   /** A 24-land Boros deck: every chart is checkable by hand, and every one of them shows
    *  its numbers as text rather than only as a shape. */
@@ -255,6 +319,33 @@ describe("DeckStats", () => {
     expect(within(types).getByText("Land").closest("li")).toHaveTextContent("24");
   });
 
+  /**
+   * A pie with one slice is a **circle**, not an arc: a wedge whose start and end meet sweeps
+   * nothing at all, so the mono-coloured deck — the commonest deck there is — would draw a
+   * legend beside an empty frame.
+   */
+  it("draws a whole circle for a distribution with one bucket in it", () => {
+    const { container } = strip([
+      card({ name: "Bolt", typeLine: "Instant", colors: "R", quantity: 4 }),
+      card({ name: "Mountain", typeLine: "Basic Land — Mountain", colors: null, quantity: 24 }),
+    ]);
+
+    const [colors, lands] = [...container.querySelectorAll("svg")];
+    expect(colors.querySelector("circle")).toBeInTheDocument();
+    expect(colors.querySelector("path")).not.toBeInTheDocument();
+    expect(lands.querySelector("circle")).toBeInTheDocument();
+  });
+
+  /** And two buckets are two wedges, so the branch above is a special case rather than the
+   *  only case. */
+  it("draws a wedge per bucket once there are two", () => {
+    const { container } = strip(boros());
+
+    const [colors] = [...container.querySelectorAll("svg")];
+    expect(colors.querySelectorAll("path")).toHaveLength(3);
+    expect(colors.querySelector("circle")).not.toBeInTheDocument();
+  });
+
   /** A pie of a mono-red deck is a red circle: five legend rows saying 0 would be four
    *  lines of nothing. */
   it("draws no legend row for a bucket nothing is in", () => {
@@ -300,6 +391,32 @@ describe("DeckStats", () => {
     expect(screen.getByText("$9.00")).toBeInTheDocument();
   });
 
+  /**
+   * The headline figure is the number the format check beside it is talking about — the
+   * engine's own `SIZE_ZONES`. The sideboard and the companion are counted by the price, the
+   * shortfall and every chart, and named here rather than folded in: "Cards 9" over a chip
+   * reading "you have 5" is two numbers for one question.
+   */
+  it("heads the strip with the cards a format's size rule counts", () => {
+    strip([
+      card({ name: "Bolt", quantity: 4 }),
+      card({ name: "Kenrith", zone: "commander", quantity: 1 }),
+      card({ name: "Pyroblast", zone: "side", quantity: 3 }),
+      card({ name: "Lurrus", zone: "companion", quantity: 1 }),
+      card({ name: "Ghost", zone: "maybe", quantity: 9 }),
+    ]);
+
+    const figure = screen.getByText("Cards").closest("div");
+    expect(figure?.querySelector("dd")?.textContent).toBe("5+ 3 sideboard + 1 companion");
+    expect(figure).toHaveAttribute("title", expect.stringMatching(/size rule counts/i));
+  });
+
+  it("says nothing about other zones when the deck is only a main deck", () => {
+    strip([card({ name: "Bolt", quantity: 4 })]);
+
+    expect(screen.getByText("Cards").closest("div")?.querySelector("dd")?.textContent).toBe("4");
+  });
+
   it("counts what the deck is short of, and offers to wish for it", async () => {
     const send = sender();
     strip(
@@ -316,42 +433,82 @@ describe("DeckStats", () => {
     expect(send.mutate).toHaveBeenCalled();
   });
 
-  /** In words, and in a region that was already on screen — a live region that appears
-   *  together with its own text announces nothing. */
-  it("reports what the wishlist write did", () => {
-    strip(
-      [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })],
-      sender({
-        isSuccess: true,
-        data: 3,
-      }),
-    );
+  /**
+   * In words, in a region that was already on screen — and in the unit it is counting. A wish
+   * is a card and the shortfall beside it is copies (one wish for three missing Bolts), so the
+   * sentence says which rather than leaving two numbers on one line to be read as one unit.
+   */
+  it("reports what the wishlist write did, in wishes rather than copies", async () => {
+    await press(short(), sender({ isSuccess: true, data: 2 }));
 
-    expect(screen.getByRole("status")).toHaveTextContent("Added 3 wishes.");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Added 2 wishes — one per card, for every copy you are short.",
+    );
   });
 
-  it("says so when the missing cards were already wished for", () => {
-    strip(
-      [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })],
-      sender({
-        isSuccess: true,
-        data: 0,
-      }),
-    );
+  /**
+   * Zero is **not** "they were already wished for", and the backend is why: it counts the
+   * shortfall from a freshly reallocated deck *before* it writes anything, and skips a row
+   * whose printing has no `oracle_id`. So zero means the recount found nothing short, or that
+   * what is short is an orphan nothing can wish for — and the reassuring sentence would be the
+   * one thing that certainly did not happen.
+   */
+  it("says what nothing-added actually means", async () => {
+    await press(short(), sender({ isSuccess: true, data: 0 }));
 
-    expect(screen.getByRole("status")).toHaveTextContent(/already on your wishlist/i);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Nothing to add — a recount covered the shortfall, or what is short has left the card database.",
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent(/already on your wishlist/i);
   });
 
-  it("says so when the wishlist write is refused", () => {
-    strip(
-      [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })],
-      sender({
-        isError: true,
-        error: "The database is busy with a sync — try again in a moment.",
-      }),
+  /**
+   * `add_wish` **folds** — a second press on the same shortfall raises the wished quantity
+   * rather than replacing it, so three missing Bolts become six wished ones and both presses
+   * answer the same cheerful number. The button is spent until the deck says something new.
+   */
+  it("spends the button on the shortfall it sent", async () => {
+    const settled = sender({ isSuccess: true, data: 1 });
+    await press(short(), settled);
+
+    const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+    // `aria-disabled`, not `disabled`: the caret has to be able to come back to it, and a
+    // keyboard reader has to be able to reach the control and hear why it will not act.
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(button);
+
+    expect(settled.mutate).not.toHaveBeenCalled();
+  });
+
+  it("offers it again once the shortfall is a different one", async () => {
+    const deck = short();
+    const { rerender } = await press(deck, sender({ isSuccess: true, data: 1 }));
+
+    rerender(
+      <DeckStats
+        cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })]}
+        send={sender({ isSuccess: true, data: 1 })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    // And the old answer goes with the old question: a sentence that outlives what it was
+    // about is a sentence the reader takes for news about the deck they have now.
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("says so when the wishlist write is refused, and lets it be tried again", async () => {
+    await press(
+      short(),
+      sender({ isError: true, error: "The database is busy with a sync — try again in a moment." }),
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("The database is busy with a sync");
+    const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-disabled");
   });
 
   /** A control that offers to do nothing is a control that teaches the reader to stop
@@ -368,14 +525,15 @@ describe("DeckStats", () => {
   /**
    * The disabled-on-press hazard, in the one shape it takes outside a dismissible layer: the
    * browser blurs a control that disables itself, so the caret lands on `<body>` and the next
-   * Tab restarts from the top of the app. The button is still there when the write settles,
-   * so it takes the caret back.
+   * Tab restarts from the top of the app. The button is still here — and still *focusable*,
+   * because spent is `aria-disabled` rather than `disabled` — when the write settles, so it
+   * takes the caret back.
    */
-  it("takes the caret back after the write it disabled itself for", () => {
-    const { rerender } = render(
-      <DeckStats cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })]} send={sender()} />,
-    );
+  it("takes the caret back after the write it disabled itself for", async () => {
+    const deck = short();
+    const { rerender } = render(<DeckStats cards={deck} send={sender()} />);
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+    await userEvent.click(button);
     button.focus();
 
     // What a browser does to a focused control that becomes disabled, and jsdom does not:
@@ -384,20 +542,10 @@ describe("DeckStats", () => {
     // (a disabled control is not focusable, so `blur()` returns early) — the state under test
     // is the same one either way.
     button.blur();
-    rerender(
-      <DeckStats
-        cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })]}
-        send={sender({ isPending: true })}
-      />,
-    );
+    rerender(<DeckStats cards={deck} send={sender({ isPending: true })} />);
     expect(document.body).toHaveFocus();
 
-    rerender(
-      <DeckStats
-        cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })]}
-        send={sender({ isSuccess: true, data: 3 })}
-      />,
-    );
+    rerender(<DeckStats cards={deck} send={sender({ isSuccess: true, data: 3 })} />);
 
     expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toHaveFocus();
   });
