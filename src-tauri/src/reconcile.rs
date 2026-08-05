@@ -15,9 +15,11 @@
 //!   resolve? — of every user row, after every ingest, for free.
 //!
 //! The one place a row *is* removed is a fold: two rows that upstream now says are one
-//! card become one row with both quantities, so nothing the user recorded is lost. That is
-//! the same resolution `collection::add` and `wishlist::add_wish` already apply when a
-//! quick-add lands on a grain that is taken.
+//! card become one row with both quantities **and the receipt** — what was paid, in what
+//! currency, when, where from, and the user's own note all move to the survivor where it
+//! has no answer of its own. That is `collection::add_entry`'s and `wishlist::add_wish`'s
+//! `ON CONFLICT` rule verbatim, and it is what makes "nothing the user recorded is lost"
+//! a claim this module can actually keep.
 
 use crate::scryfall::Migration;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -53,7 +55,7 @@ pub fn user_data_is_empty(conn: &Connection) -> bool {
 pub fn apply(conn: &mut Connection, migrations: &[Migration]) -> rusqlite::Result<ReconcileStats> {
     let mut stats = ReconcileStats::default();
     let tx = conn.transaction()?;
-    for m in migrations {
+    for m in oldest_first(migrations) {
         let already: bool = tx
             .query_row(
                 "SELECT 1 FROM card_migrations WHERE id = ?1",
@@ -98,12 +100,59 @@ pub fn apply(conn: &mut Connection, migrations: &[Migration]) -> rusqlite::Resul
                 },
                 m.old_card_id,
                 m.new_card_id,
-                m.note
+                // ...and the *raw* strategy goes in the note, so the row stays true. The
+                // column above is a coercion the CHECK demands; without this, a strategy
+                // Scryfall adds later is recorded as a merge that never happened, with
+                // nothing left to say it was ever anything else. Written down is written
+                // down: a version of this app that learns the strategy can find these rows.
+                recorded_note(m)
             ],
         )?;
     }
     tx.commit()?;
     Ok(stats)
+}
+
+/// The migrations of one pass, oldest first.
+///
+/// Scryfall serves the log newest first, and applying it in that order breaks **chains**:
+/// with A→B performed in 2021 and B→C in 2023, the newest-first pass repoints B's rows to C
+/// and only then moves A's rows to B — which is now a dead id. Both migrations are recorded
+/// as applied, so the next poll skips them, and the row is parked on B forever behind a
+/// flag promising a card that is never coming.
+///
+/// A migration with no `performed_at` cannot be placed in a chain at all, so it trails the
+/// ones that can, in the order the API gave it. The sort is stable, which is what makes
+/// that "in the order the API gave it" rather than "in some order".
+fn oldest_first(migrations: &[Migration]) -> Vec<&Migration> {
+    let mut ordered: Vec<&Migration> = migrations.iter().collect();
+    ordered.sort_by(|a, b| match (&a.performed_at, &b.performed_at) {
+        // ISO-8601 sorts lexically the way it sorts chronologically, which is the whole
+        // reason this needs no date parsing.
+        (Some(x), Some(y)) => x.cmp(y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    ordered
+}
+
+/// What goes in `card_migrations.note`: Scryfall's own note, and for a strategy this app
+/// does not know, the strategy itself in front of it.
+fn recorded_note(m: &Migration) -> Option<String> {
+    if m.strategy == "merge" || m.strategy == "delete" {
+        return m.note.clone();
+    }
+    Some(match &m.note {
+        Some(note) => format!(
+            "migration_strategy `{}`, which this app does not know; nothing was applied. {note}",
+            m.strategy
+        ),
+        None => format!(
+            "migration_strategy `{}`, which this app does not know; nothing was applied.",
+            m.strategy
+        ),
+    })
 }
 
 /// Repoint every row on `old_card_id`, folding any that collide with a row already at the
@@ -117,11 +166,12 @@ fn merge(
     // The printing as the *new* card describes it. `None` when that card has not arrived in
     // a bulk file yet, which is a real state: the migration log is published before the
     // next bulk rotation carries the card.
-    let printing: Option<(String, String, String)> = tx
+    #[allow(clippy::type_complexity)]
+    let printing: Option<(String, String, String, Option<String>)> = tx
         .query_row(
-            "SELECT set_code, collector_number, lang FROM cards WHERE id = ?1",
+            "SELECT set_code, collector_number, lang, oracle_id FROM cards WHERE id = ?1",
             params![new_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
     let note = match &printing {
@@ -132,9 +182,12 @@ fn merge(
         )),
     };
     let (set_code, collector_number, lang) = match &printing {
-        Some((s, c, l)) => (Some(s.as_str()), Some(c.as_str()), Some(l.as_str())),
+        Some((s, c, l, _)) => (Some(s.as_str()), Some(c.as_str()), Some(l.as_str())),
         None => (None, None, None),
     };
+    // `cards.oracle_id` is nullable, so this is `Option` twice over: no card row at all, or
+    // a card row that has none. Either way there is nothing to refresh from.
+    let oracle_id = printing.as_ref().and_then(|p| p.3.as_deref());
 
     let ids: Vec<i64> = tx
         .prepare("SELECT id FROM collection_entries WHERE card_id = ?1")?
@@ -172,19 +225,35 @@ fn merge(
         .collect::<rusqlite::Result<_>>()?;
     for id in wishes {
         let moved = tx.execute(
+            // `oracle_id` is refreshed too, and only here: it is the **first term of
+            // `WISHLIST_GRAIN`**, so a wish left on the old oracle card sits on a grain that
+            // no longer describes it — a later wish for the same card would not fold into
+            // it, and the any-printing arm of `wishlist::OWNED_SQL` (which resolves through
+            // `cards.oracle_id`) would count the wrong copies against it. The collection has
+            // no such column; the wishlist keeps one because an any-printing wish has no
+            // card row to join to.
             "UPDATE OR IGNORE wishlist_entries
                 SET card_id = ?2,
+                    oracle_id = coalesce(?7, oracle_id),
                     set_code = coalesce(?3, set_code),
                     collector_number = coalesce(?4, collector_number),
                     lang = coalesce(?5, lang),
                     needs_review = ?6,
                     updated_at = unixepoch()
               WHERE id = ?1",
-            params![id, new_id, set_code, collector_number, lang, note],
+            params![
+                id,
+                new_id,
+                set_code,
+                collector_number,
+                lang,
+                note,
+                oracle_id
+            ],
         )?;
         if moved == 1 {
             stats.repointed += 1;
-        } else if fold_wish_into_existing(tx, id, new_id)? {
+        } else if fold_wish_into_existing(tx, id, new_id, oracle_id)? {
             stats.folded += 1;
         } else {
             stats.flagged += flag_unfoldable(tx, "wishlist_entries", id, new_id)?;
@@ -225,12 +294,27 @@ fn collision_target(
     .optional()
 }
 
-/// Add a row's quantities to the row that blocked its repointing, then delete it. `false`
-/// when no such row could be found.
+/// Fold a row into the row that blocked its repointing, then delete it. `false` when no
+/// such row could be found.
 ///
 /// The delete is *conditional on the fold having happened*, and that is the load-bearing
 /// part: an unconditional delete here is a user row destroyed with its quantity, which is
 /// exactly what this module exists not to do. The caller flags instead.
+///
+/// # What moves
+///
+/// The quantities add, and the five columns the user typed themselves — what they paid,
+/// in what currency, when, where from, and their note — are taken by the survivor **only
+/// where it has none**. That is `collection::add_entry`'s `ON CONFLICT` rule verbatim, and
+/// for the same reason: the survivor's own answers are not up for revision, but a fold that
+/// dropped the other row's are a receipt destroyed to resolve a conflict upstream.
+///
+/// `tags` and `condition_original` are deliberately absent, exactly as they are from
+/// `add_entry`'s `DO UPDATE`. Tags are a set the user curates per row, and merging two sets
+/// is not something one statement should decide; `condition_original` is the provenance of
+/// *this* row's condition — the string one import used — and it cannot describe a condition
+/// it was never written beside. Both stay the survivor's, and the entry editor is where
+/// they change.
 fn fold_into_existing(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
@@ -241,12 +325,17 @@ fn fold_into_existing(
         return Ok(false);
     };
     tx.execute(
-        "UPDATE collection_entries SET
-            quantity = quantity + (SELECT quantity FROM collection_entries WHERE id = ?2),
-            tradelist_quantity = tradelist_quantity
-                + (SELECT tradelist_quantity FROM collection_entries WHERE id = ?2),
+        "UPDATE collection_entries AS t SET
+            quantity = t.quantity + s.quantity,
+            tradelist_quantity = t.tradelist_quantity + s.tradelist_quantity,
+            purchase_price = coalesce(t.purchase_price, s.purchase_price),
+            purchase_currency = coalesce(t.purchase_currency, s.purchase_currency),
+            acquired_at = coalesce(t.acquired_at, s.acquired_at),
+            acquisition_source = coalesce(t.acquisition_source, s.acquisition_source),
+            notes = coalesce(t.notes, s.notes),
             updated_at = unixepoch()
-          WHERE id = ?1",
+          FROM (SELECT * FROM collection_entries WHERE id = ?2) AS s
+          WHERE t.id = ?1",
         params![target, source],
     )?;
     tx.execute(
@@ -267,15 +356,20 @@ fn fold_wish_into_existing(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
     new_id: &str,
+    new_oracle_id: Option<&str>,
 ) -> rusqlite::Result<bool> {
     let target: Option<i64> = tx
         .query_row(
+            // The grain **after** the repoint, on both terms the repoint rewrites — the
+            // same rule [`collision_target`] follows for `lang`. `?3` is the oracle id the
+            // update would have set, falling back to the source's own when there is none to
+            // set, which is exactly what its `coalesce(?7, oracle_id)` does.
             "SELECT t.id FROM wishlist_entries t, wishlist_entries s
               WHERE s.id = ?1 AND t.id <> s.id
-                AND coalesce(t.oracle_id,'') = coalesce(s.oracle_id,'')
+                AND coalesce(t.oracle_id,'') = coalesce(?3, coalesce(s.oracle_id,''))
                 AND coalesce(t.card_id,'') = ?2
                 AND coalesce(t.preferred_finish,'') = coalesce(s.preferred_finish,'')",
-            params![source, new_id],
+            params![source, new_id, new_oracle_id],
             |r| r.get(0),
         )
         .optional()?;
@@ -301,6 +395,12 @@ fn fold_wish_into_existing(
 /// its wishlist twin describe the grains the repoint would violate exactly, so there should
 /// always be a row to fold into. If one is ever missed, the row stays where it is and says
 /// so — it is never the row that gets thrown away to resolve the disagreement.
+///
+/// `needs_review IS NULL`, as [`flag_deleted`] has it: **the first message wins.** A row
+/// already carrying a sentence is carrying the *earlier* thing that went wrong with it, and
+/// that is the one the user needs — overwriting it would let a later, vaguer complaint bury
+/// the reason the row is in trouble. Both flag writers agree on this so the field has one
+/// rule rather than one per caller.
 fn flag_unfoldable(
     tx: &rusqlite::Transaction<'_>,
     table: &str,
@@ -308,7 +408,10 @@ fn flag_unfoldable(
     new_id: &str,
 ) -> rusqlite::Result<usize> {
     tx.execute(
-        &format!("UPDATE {table} SET needs_review = ?2, updated_at = unixepoch() WHERE id = ?1"),
+        &format!(
+            "UPDATE {table} SET needs_review = ?2, updated_at = unixepoch()
+              WHERE id = ?1 AND needs_review IS NULL"
+        ),
         params![
             id,
             format!(
@@ -320,11 +423,19 @@ fn flag_unfoldable(
     )
 }
 
+/// How the sentence [`flag_deleted`] writes begins.
+///
+/// A prefix rather than the whole message because the date is interpolated into it, and
+/// [`sweep_orphans`] has to be able to recognise one of its own flags without re-deriving
+/// the date. Changing this text means changing the `LIKE` pattern in the sweep with it;
+/// `a_delete_flag_outlives_a_card_that_is_still_in_the_database` is what fails if they part.
+const DELETED_NOTE_PREFIX: &str = "Scryfall removed this printing from its database on ";
+
 /// Flag every row that referred to a discarded id. Returns how many were flagged.
 fn flag_deleted(tx: &rusqlite::Transaction<'_>, m: &Migration) -> rusqlite::Result<usize> {
     let when = m.performed_at.as_deref().unwrap_or("an earlier date");
     let note = format!(
-        "Scryfall removed this printing from its database on {when}. \
+        "{DELETED_NOTE_PREFIX}{when}. \
          Your copies are still recorded — check the printing and re-add it if you can \
          identify it, or remove this entry."
     );
@@ -368,13 +479,22 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
         // The other direction, and the reason a flag is a sentence rather than a boolean: a
         // printing that comes back — a bad bulk file, a re-added card — clears its own
         // flag, so a transient gap does not leave a permanent scar on the row.
+        //
+        // Except a *delete* flag, which this must not touch. `/migrations` is polled after
+        // the sweep and before the bulk file that drops the card has rotated, so the window
+        // where a row is flagged "Scryfall removed this printing" while the card is still in
+        // `cards` is the ordinary case, not a rare one — and clearing it there would erase
+        // the warning for good, because the migration is already recorded and never
+        // reapplied. A text guard, deliberately: the honest fix is a reason column, and that
+        // belongs with the `needs_review` UI task that will have to render these anyway.
         cleared += conn.execute(
             &format!(
                 "UPDATE {table} SET needs_review = NULL, updated_at = unixepoch()
                   WHERE needs_review IS NOT NULL AND card_id IS NOT NULL
+                    AND needs_review NOT LIKE ?1
                     AND EXISTS (SELECT 1 FROM cards WHERE cards.id = {table}.card_id)"
             ),
-            [],
+            params![format!("{DELETED_NOTE_PREFIX}%")],
         )?;
     }
     Ok((flagged, cleared))
@@ -804,29 +924,348 @@ mod tests {
         .unwrap();
 
         assert_eq!(stats.skipped, 2, "the unknown strategy and the blank id");
-        let recorded: Vec<(String, String)> = conn
-            .prepare("SELECT id, strategy FROM card_migrations ORDER BY id")
+        let recorded: Vec<(String, String, Option<String>)> = conn
+            .prepare("SELECT id, strategy, note FROM card_migrations ORDER BY id")
             .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(
-            recorded,
-            vec![
-                ("m1".to_owned(), "merge".to_owned()),
-                ("m2".to_owned(), "delete".to_owned()),
-                // Stored as `merge` because the table's CHECK knows two strategies, and an
-                // unknown one must not fail the pass.
-                ("m3".to_owned(), "merge".to_owned()),
-                ("m4".to_owned(), "merge".to_owned()),
-            ]
-        );
+        let ids: Vec<&str> = recorded.iter().map(|(id, _, _)| id.as_str()).collect();
+        assert_eq!(ids, ["m1", "m2", "m3", "m4"], "all four are written down");
+        assert_eq!(recorded[0].1, "merge");
+        assert_eq!(recorded[1].1, "delete");
+        // Stored as `merge` because the table's CHECK knows two strategies — but the row
+        // must not *read* as a merge that happened, so the strategy Scryfall actually sent
+        // goes in the note. A later version of this app that learns `sideways` can find
+        // these rows; without the note there would be nothing left to find them by.
+        assert_eq!(recorded[2].1, "merge");
+        let note = recorded[2].2.as_deref().expect("the raw strategy is kept");
+        assert!(note.contains("sideways"), "{note}");
+        assert!(note.contains("nothing was applied"), "{note}");
+        assert_eq!(recorded[3].1, "merge");
+        // A known strategy carries Scryfall's own note and nothing invented.
+        assert_eq!(recorded[0].2, None);
         // ...and the blank-id merge left the row where the real one had put it.
         let card: String = conn
             .query_row("SELECT card_id FROM collection_entries", [], |r| r.get(0))
             .unwrap();
         assert_eq!(card, "new-id");
+    }
+
+    /// A fold moves the copies *and the receipt*. What the user paid, in what currency,
+    /// when, where from, and what they wrote about it are not derivable from anything —
+    /// losing them because an upstream database tidied its ids is the same destruction as
+    /// losing the row, in a smaller box. Survivor wins where it has an answer of its own,
+    /// which is `collection::add_entry`'s `ON CONFLICT` rule verbatim.
+    #[test]
+    fn a_fold_carries_the_columns_the_user_typed_into_the_row_that_survives() {
+        let mut conn = seeded();
+        let detail =
+            |card_id: &str, price: Option<f64>, source: Option<&str>, notes: Option<&str>| -> i64 {
+                conn.query_row(
+                    "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     tradelist_quantity,purchase_price,purchase_currency,acquired_at,
+                     acquisition_source,notes,tags,condition_original,created_at,updated_at)
+                 VALUES (?1,'lea','161','en','foil','NM',3,1,?2,'DKK','2019-04-02',?3,?4,
+                         '[\"keep\"]','Near Mint',unixepoch(),unixepoch())
+                 RETURNING id",
+                    rusqlite::params![card_id, price, source, notes],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            };
+        // The survivor knows nothing about where it came from; the row folding into it does.
+        let target: i64 = conn
+            .query_row(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     tradelist_quantity,tags,created_at,updated_at)
+                 VALUES ('new-id','2ed','162','en','foil','NM',2,0,'[]',unixepoch(),unixepoch())
+                 RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        detail(
+            "old-id",
+            Some(42.5),
+            Some("Gamekeeper, Copenhagen"),
+            Some("signed by the artist"),
+        );
+
+        apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        #[allow(clippy::type_complexity)]
+        let (quantity, tradelist, price, currency, acquired, source, notes, tags, original): (
+            i64,
+            i64,
+            Option<f64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT quantity, tradelist_quantity, purchase_price, purchase_currency,
+                        acquired_at, acquisition_source, notes, tags, condition_original
+                   FROM collection_entries WHERE id = ?1",
+                [target],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!((quantity, tradelist), (5, 1));
+        assert_eq!(price, Some(42.5));
+        assert_eq!(currency.as_deref(), Some("DKK"));
+        assert_eq!(acquired.as_deref(), Some("2019-04-02"));
+        assert_eq!(source.as_deref(), Some("Gamekeeper, Copenhagen"));
+        assert_eq!(notes.as_deref(), Some("signed by the artist"));
+        // ...and the two `add_entry` leaves alone stay the survivor's, for its reasons: a
+        // curated tag set is not something one statement should merge, and
+        // `condition_original` is the provenance of a condition it was never written beside.
+        assert_eq!(tags, "[]");
+        assert_eq!(original, None);
+    }
+
+    /// The other direction of the same rule: a survivor that has its own answers keeps
+    /// them. A fold is not an edit, and the row that was already there is not the one whose
+    /// history is in doubt.
+    #[test]
+    fn a_fold_never_overwrites_what_the_surviving_row_already_recorded() {
+        let mut conn = seeded();
+        let insert = |card_id: &str, set: &str, cn: &str, price: f64, notes: &str| {
+            conn.execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     purchase_price,purchase_currency,acquisition_source,notes,
+                     created_at,updated_at)
+                 VALUES (?1,?2,?3,'en','foil','NM',1,?4,'USD',?5,?6,unixepoch(),unixepoch())",
+                rusqlite::params![card_id, set, cn, price, notes, notes],
+            )
+            .unwrap();
+        };
+        insert("new-id", "2ed", "162", 10.0, "the one I kept");
+        insert("old-id", "lea", "161", 99.0, "the one I am folding in");
+
+        apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        let (price, notes): (f64, String) = conn
+            .query_row(
+                "SELECT purchase_price, notes FROM collection_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            price, 10.0,
+            "the survivor's own price is not up for revision"
+        );
+        assert_eq!(notes, "the one I kept");
+    }
+
+    /// Scryfall serves the log newest first, and chains are the case that breaks on: with
+    /// A→B in 2021 and B→C in 2023, applying newest-first repoints B's rows to C and *then*
+    /// moves A's rows to B — a dead id, recorded as applied, so the next poll never
+    /// revisits it and the row waits behind a flag for a card that is never coming.
+    #[test]
+    fn a_chain_of_merges_delivered_newest_first_still_lands_on_the_last_id() {
+        let mut conn = seeded();
+        let id = own(&conn, "a-id", "foil", 2);
+
+        let stats = apply(
+            &mut conn,
+            &[
+                // The order the API gives them in.
+                Migration {
+                    performed_at: Some("2023-05-01T00:00:00Z".to_owned()),
+                    ..migration("m2", "merge", "b-id", Some("new-id"))
+                },
+                Migration {
+                    performed_at: Some("2021-03-01T00:00:00Z".to_owned()),
+                    ..migration("m1", "merge", "a-id", Some("b-id"))
+                },
+            ],
+        )
+        .unwrap();
+
+        let (card, review): (String, Option<String>) = conn
+            .query_row(
+                "SELECT card_id, needs_review FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            card, "new-id",
+            "the chain was walked A→B→C, not B→C then A→B"
+        );
+        assert_eq!(
+            review, None,
+            "and it arrived on a card that exists, so nothing is owed to the user"
+        );
+        assert_eq!(stats.repointed, 2, "one hop each");
+    }
+
+    /// The case the skip comment names, exercised rather than asserted: a *fold* applied
+    /// twice is a quantity doubled, and the bookkeeping is the only thing preventing it.
+    #[test]
+    fn re_polling_a_fold_does_not_double_the_quantity() {
+        let mut conn = seeded();
+        own(&conn, "old-id", "foil", 3);
+        let target = own(&conn, "new-id", "foil", 2);
+        let m = [migration("m1", "merge", "old-id", Some("new-id"))];
+
+        let first = apply(&mut conn, &m).unwrap();
+        let second = apply(&mut conn, &m).unwrap();
+        let third = apply(&mut conn, &m).unwrap();
+
+        assert_eq!(first.folded, 1);
+        assert_eq!((second.folded, second.skipped), (0, 1));
+        assert_eq!((third.folded, third.skipped), (0, 1));
+        let (rows, quantity): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), sum(quantity) FROM collection_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, quantity), (1, 5), "five, and five again");
+        assert_eq!(
+            conn.query_row(
+                "SELECT quantity FROM collection_entries WHERE id = ?1",
+                [target],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            5
+        );
+    }
+
+    /// A delete flag says the printing is gone from Scryfall *for good*, and the sweep must
+    /// not answer that with "but I can see it". It can: `/migrations` is polled after the
+    /// sweep and before the bulk file that drops the card has rotated, so a flagged row
+    /// whose card is still in `cards` is the ordinary state for a day. Clearing it there
+    /// would erase the warning permanently — the migration is recorded and never reapplied.
+    #[test]
+    fn a_delete_flag_outlives_a_card_that_is_still_in_the_database() {
+        let mut conn = seeded();
+        let id = own(&conn, "new-id", "foil", 1);
+
+        apply(&mut conn, &[migration("m1", "delete", "new-id", None)]).unwrap();
+        // The card is still there — this is the day between the log and the bulk rotation.
+        assert_eq!(
+            sweep_orphans(&conn).unwrap(),
+            (0, 0),
+            "a delete flag is not the sweep's to clear"
+        );
+
+        let review: Option<String> = conn
+            .query_row(
+                "SELECT needs_review FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(review.unwrap().starts_with(DELETED_NOTE_PREFIX));
+
+        // ...while an orphan flag the sweep wrote itself still clears the moment the card
+        // is back, which is the whole reason the clear arm exists.
+        conn.execute("DELETE FROM cards WHERE id = 'new-id'", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE collection_entries SET needs_review = NULL WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        assert_eq!(sweep_orphans(&conn).unwrap(), (1, 0));
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('new-id','o1','Lightning Bolt','2ed','162','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(sweep_orphans(&conn).unwrap(), (0, 1));
+    }
+
+    /// The first message wins, in both flag writers. A row already carrying a sentence is
+    /// carrying the *earlier* thing that went wrong with it, and that is the one that
+    /// explains how it got here.
+    #[test]
+    fn a_row_that_is_already_flagged_keeps_the_first_explanation() {
+        let mut conn = seeded();
+        let id = own(&conn, "gone-id", "foil", 1);
+        conn.execute(
+            "UPDATE collection_entries SET needs_review = 'looked at by hand' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+        let stats = apply(&mut conn, &[migration("m1", "delete", "gone-id", None)]).unwrap();
+
+        assert_eq!(stats.flagged, 0, "there was nothing left to say");
+        let review: String = conn
+            .query_row(
+                "SELECT needs_review FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(review, "looked at by hand");
+    }
+
+    /// A wish is keyed on its oracle card first of all, so a repoint that moved the
+    /// printing and left the oracle id behind would strand it on a grain that describes
+    /// nothing — invisible to the next wish for the same card, and counted against the
+    /// wrong copies by the any-printing arm of the owned lookup.
+    #[test]
+    fn a_repointed_wish_takes_the_new_cards_oracle_id_with_it() {
+        let mut conn = seeded();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES ('stale-oracle','old-id','Lightning Bolt',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        let (oracle, card, set): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT oracle_id, card_id, set_code FROM wishlist_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(oracle.as_deref(), Some("o1"));
+        assert_eq!(card.as_deref(), Some("new-id"));
+        assert_eq!(set.as_deref(), Some("2ed"));
     }
 
     /// One transaction for the whole pass. A merge that failed halfway would leave some
