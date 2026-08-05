@@ -7,7 +7,9 @@
 2. Quickly change a card to a different printing by clicking on the printing in the view.
 3. A preview of the different printings on mouse hover, over 0.25 s.
 4. The deck builder should be a lot more visual — show the cards, not just descriptive text.
-5. Decks should calculate their price.
+
+(A fifth — deck price on gallery tiles — was raised and withdrawn 2026-08-06: the editor's
+existing stats-block price (Plan 4 Task 15) is the answer; no tile price.)
 
 ## What already exists (Plan 4, Task 14)
 
@@ -106,25 +108,9 @@ not a text row.
 - Group headers, orphan rows (no image — the flagged sentence needs its text), the maybe
   scratchpad, drag targets/indicator, and the stats block all carry over unchanged.
 
-## 5. Deck price everywhere decks are shown
-
-The editor already computes and shows the deck's price live (Plan 4 Task 15: the stats
-block sums each card's `prices.usd` × quantity — never `price_usd` — with an "n unpriced"
-counter and `PRICES_AS_OF`, over every zone but the maybe scratchpad). What is missing is
-the price *outside* the editor:
-
-- **Gallery tiles carry the deck's total** in the mono data face beside the card count —
-  computed backend-side in `deck_list` (one aggregate `LEFT JOIN` over `deck_cards` ×
-  `cards`, the same `json_extract(prices,'$.usd')` expression `deck_get` uses, `maybe`
-  excluded). Unpriced cards make the figure honest, not wrong: the tile shows `$412.80`
-  with the title carrying "3 cards unpriced · prices as of <date>".
-- Same number, one definition: the SQL expression is shared (a constant in `deck.rs`),
-  so the tile and the editor can never disagree the way the Cards figure once did.
-- Archived decks price like any other; an all-orphan deck shows "—".
-
 ## Sequencing
 
-Plan 4 is closing (final review + fix wave in flight). These five land as the next plan —
+Plan 4 is closing (final review + fix wave in flight). These four land as the next plan —
 suggested order: the visual deck builder first (it is the surface the other three touch),
 then the backend swap command + pane features (printing swap, hover preview), then the
 drag extension — each task with the established review loop, CDP verification, and the
