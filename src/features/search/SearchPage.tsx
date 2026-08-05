@@ -3,6 +3,7 @@ import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tansta
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { parseFinishes } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -78,10 +79,12 @@ function Row({ card }: { card: CardSummary }) {
             name: card.name,
             setCode: card.setCode,
             collectorNumber: card.collectorNumber,
-            // Neither is on `CardSummary`: no oracle id, and no `finishes` blob to offer.
-            // The popup answers with nonfoil and a way to the card, which is where both live.
-            oracleId: null,
-            finishes: [],
+            // Both ride on `CardSummary`, which is what lets a row be honest: the popup
+            // offers the finishes this printing exists in — the backend checks the enum and
+            // not the card, so a foil-only printing would otherwise take a nonfoil entry —
+            // and a wish made here can be for the card rather than for this printing.
+            oracleId: card.oracleId,
+            finishes: parseFinishes(card.finishes),
           }}
         />
       </span>
@@ -333,14 +336,18 @@ function Results({
           >
             {/* Sticky inside the scroll container rather than sitting above it: a header
               outside the scroller is wider than the rows by exactly the scrollbar, and
-              the columns drift apart by that much as soon as the list overflows. */}
+              the columns drift apart by that much as soon as the list overflows.
+
+              `z-20` beats the `z-10` a row takes while a quick-add is open in it. Equal
+              z-indexes are resolved by DOM order, and every row comes after this header —
+              so at `z-10` the row scrolling under it would be drawn *over* it. */}
             <div
               role="row"
               aria-rowindex={1}
               style={{ height: HEADER_HEIGHT }}
               className={cn(
                 GRID,
-                "sticky top-0 z-10 border-b border-border bg-surface px-3 text-xs text-dim",
+                "sticky top-0 z-20 border-b border-border bg-surface px-3 text-xs text-dim",
               )}
             >
               {/* `truncate` on every label, because two of these tracks are `minmax(0,…)`
@@ -416,8 +423,9 @@ function Results({
                       // The `:has` rule below: a row is positioned *and* transformed, which
                       // makes it a stacking context — so an open popup's `z-20` cannot lift
                       // it over the next row, which paints later simply for being later in
-                      // the DOM. The row it is open in has to come forward instead. The
-                      // popup opens downwards, so this never has to beat the sticky header.
+                      // the DOM. The row it is open in has to come forward instead — as far
+                      // as the rows, and no further: the sticky header above is `z-20`,
+                      // because a row lifted to its level would scroll over it.
                       "group absolute inset-x-0 top-0 cursor-pointer border-b border-border/50 px-3",
                       "has-[[aria-expanded=true]]:z-10",
                       "text-sm transition-colors duration-150 motion-reduce:transition-none",

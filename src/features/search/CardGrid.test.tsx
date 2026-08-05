@@ -1,13 +1,23 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS } from "@/lib/images";
-import type { CardSummary } from "@/lib/ipc";
+import type { CardSummary, WishInput } from "@/lib/ipc";
+
+// The tiles carry a quick-add now, and a wish written from one is a real `invoke` — which
+// in jsdom is a rejected promise about a missing Tauri runtime rather than a call anything
+// here could read.
+const wishlistAdd = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ipc")>()),
+  ipc: { collectionAdd: vi.fn(), wishlistAdd },
+}));
+
 import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
 
-const card = (id: string, name: string): CardSummary => ({
+const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSummary => ({
   id,
   name,
   setCode: "lea",
@@ -18,6 +28,8 @@ const card = (id: string, name: string): CardSummary => ({
   manaCost: "{R}",
   priceUsd: 400.5,
   layout: "normal",
+  oracleId: "o-bolt",
+  finishes,
   ownedQuantity: 0,
   wishlisted: false,
 });
@@ -30,6 +42,10 @@ const card = (id: string, name: string): CardSummary => ({
 beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 600 });
   Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+});
+
+beforeEach(() => {
+  wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
 });
 
 afterEach(() => {
@@ -108,6 +124,75 @@ describe("CardGrid", () => {
     // Adding a card is not opening it: the reader stays on the wall they were scanning.
     expect(await screen.findByRole("dialog", { name: "Add Lightning Bolt" })).toBeInTheDocument();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The tile's popup is built from the row, so it offers what the printing exists in — the
+   * search DTO carries `finishes` for exactly this. Offering nonfoil for every tile is how
+   * a foil-only printing takes a nonfoil entry, which then prices through a `usd` key its
+   * blob does not have and quietly under-reports what the collection is worth.
+   */
+  it("offers a foil-only printing nothing but foil", async () => {
+    wrap(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt", `["foil"]`)]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Add Lightning Bolt/ }));
+
+    const chips = within(await screen.findByRole("group", { name: "Finish" })).getAllByRole(
+      "button",
+    );
+    expect(chips.map((c) => c.textContent)).toEqual(["Foil"]);
+  });
+
+  /**
+   * A wall of art is where a reader decides they want a card, and a wish is usually for the
+   * card rather than the cardboard — so the tile carries the oracle id that keys one.
+   */
+  it("wishes for any printing of the card the tile shows", async () => {
+    wrap(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Add Lightning Bolt/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Wishlist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Any printing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    const wish = wishlistAdd.mock.calls[0][0] as WishInput;
+    expect(wish).toMatchObject({ oracleId: "o-bolt", name: "Lightning Bolt" });
+    // Naming the printing would pin the wish to it, which is the opposite of what was asked.
+    expect(wish.cardId).toBeUndefined();
+  });
+
+  /**
+   * A row is positioned *and* transformed, which makes it a stacking context: the popup's
+   * own `z-20` cannot lift it over the next row, which paints later simply for being later
+   * in the DOM — so the tiles below would be drawn over the open popup. The row it is open
+   * in has to come forward, and `:has` is what says so where the stacking context is.
+   */
+  it("brings the row holding an open popup in front of the rows below it", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        searchKey="k"
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: "Lightning Bolt" }).closest(".absolute");
+    expect(row).toHaveClass("has-[[aria-expanded=true]]:z-10");
   });
 
   /**

@@ -104,6 +104,23 @@ pub struct CardSummary {
     pub mana_cost: Option<String>,
     pub price_usd: Option<f64>,
     pub layout: String,
+    /// The oracle card this printing is of. Nullable, because a reversible card has none.
+    ///
+    /// Here so a result row can be wished for as *any* printing without opening the card
+    /// first — a wishlist usually means the card rather than the cardboard.
+    pub oracle_id: Option<String>,
+    /// The finishes this printing exists in, as the JSON array `cards.finishes` stores
+    /// (`["nonfoil","foil"]`); `None` when the column is empty.
+    ///
+    /// A quick-add offers exactly these and nothing else. Without it the grid and the table
+    /// offered nonfoil for every row, and a foil-only printing — UNF 449, whose blob really
+    /// is `["foil"]` — took a nonfoil entry that then priced through a `usd` key its blob
+    /// does not have, quietly under-reporting the collection's value.
+    ///
+    /// The two columns together average **50 bytes a row** over the live 116 k-card database
+    /// (`oracle_id` is most of it), so a 50-row page carries ~2.5 KB more. That is the whole
+    /// price of the trade the brief declined; it buys a correct entry on every surface.
+    pub finishes: Option<String>,
     /// Copies the collection holds of **this printing**, across every finish and
     /// condition. `0` rather than `Option`: "you own none of these" is a fact, not an
     /// absence, and a badge that has to distinguish `null` from `0` is a badge with a bug
@@ -265,7 +282,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // so that last figure is the worst one there is.
     let sql = format!(
         "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
-                c.type_line, c.mana_cost, c.price_usd, c.layout,
+                c.type_line, c.mana_cost, c.price_usd, c.layout, c.oracle_id, c.finishes,
                 coalesce((SELECT sum(e.quantity) FROM collection_entries e
                            WHERE e.card_id = c.id), 0),
                 EXISTS (SELECT 1 FROM wishlist_entries w
@@ -298,8 +315,10 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             mana_cost: row.get(7).map_err(|e| e.to_string())?,
             price_usd: row.get(8).map_err(|e| e.to_string())?,
             layout: row.get(9).map_err(|e| e.to_string())?,
-            owned_quantity: row.get(10).map_err(|e| e.to_string())?,
-            wishlisted: row.get(11).map_err(|e| e.to_string())?,
+            oracle_id: row.get(10).map_err(|e| e.to_string())?,
+            finishes: row.get(11).map_err(|e| e.to_string())?,
+            owned_quantity: row.get(12).map_err(|e| e.to_string())?,
+            wishlisted: row.get(13).map_err(|e| e.to_string())?,
         });
     }
     Ok(SearchResponse {
@@ -807,6 +826,8 @@ mod tests {
                 mana_cost: None,
                 price_usd: Some(400.5),
                 layout: "normal".into(),
+                oracle_id: Some("o-bolt".into()),
+                finishes: Some(r#"["nonfoil","foil"]"#.into()),
                 owned_quantity: 0,
                 wishlisted: false,
             }],
@@ -822,6 +843,7 @@ mod tests {
                     "id": "1", "name": "Lightning Bolt", "setCode": "lea", "setName": null,
                     "collectorNumber": "161", "rarity": null, "typeLine": "Instant",
                     "manaCost": null, "priceUsd": 400.5, "layout": "normal",
+                    "oracleId": "o-bolt", "finishes": "[\"nonfoil\",\"foil\"]",
                     "ownedQuantity": 0, "wishlisted": false
                 }],
                 "total": 5000,
@@ -1336,6 +1358,42 @@ mod tests {
         assert!(bolt.wishlisted);
         assert_eq!(helix.owned_quantity, 0);
         assert!(!helix.wishlisted);
+    }
+
+    /// What a quick-add from a result row needs to be honest.
+    ///
+    /// Without `finishes` on this DTO the art grid and the search table offered nonfoil for
+    /// every printing — the backend's `valid_finish` only checks the enum, so a foil-only
+    /// printing (UNF 449, measured in the app) took a nonfoil entry, which then priced
+    /// through a `usd` key its blob does not have and under-reported the collection's value.
+    /// Without `oracle_id` the same two surfaces could only wish for *this* printing.
+    /// Carried on the row, because a per-tile round trip for 50 tiles is 50 round trips.
+    #[test]
+    fn results_carry_the_finishes_a_printing_exists_in_and_its_oracle_card() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET finishes='[\"foil\"]', oracle_id='o-bolt' WHERE id='1'",
+            [],
+        )
+        .unwrap();
+
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bolt = r.items.iter().find(|c| c.id == "1").unwrap();
+        let helix = r.items.iter().find(|c| c.id == "2").unwrap();
+
+        assert_eq!(bolt.finishes.as_deref(), Some(r#"["foil"]"#));
+        assert_eq!(bolt.oracle_id.as_deref(), Some("o-bolt"));
+        // Both columns are nullable, and a row that has neither is not a row that has
+        // nonfoil: the caller reads `None` as "unknown" and offers its own default.
+        assert_eq!(helix.finishes, None);
+        assert_eq!(helix.oracle_id, None);
     }
 
     /// A wish pinned to one printing badges *that* printing, and not its siblings — which

@@ -69,6 +69,12 @@ export function AddToCollectionButton({
   align?: "start" | "end";
 }) {
   const [open, setOpen] = useState(false);
+  // Which list is being filled lives out here, above the popup that changes it, because it
+  // is half of what this button's name says — a trigger reading "…to collection" over an
+  // open wishlist form is wrong about what pressing it again would do. It therefore also
+  // outlives a close, which is the right answer for a reader working down a printings list
+  // adding wishes: the destination is their last choice, not a default reasserted each time.
+  const [mode, setMode] = useState<Mode>("collection");
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -102,8 +108,8 @@ export function AddToCollectionButton({
         aria-haspopup="dialog"
         // Named for the card and the printing, not for the control: forty of these in a
         // printings list are forty different cards, and "Add" is the same word on all of
-        // them.
-        aria-label={`Add ${target.name} (${target.setCode.toUpperCase()} ${target.collectorNumber}) to collection`}
+        // them. The destination is the popup's current one, not always the collection.
+        aria-label={`Add ${target.name} (${target.setCode.toUpperCase()} ${target.collectorNumber}) to ${mode}`}
         className={cn(
           "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
           "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
@@ -112,18 +118,37 @@ export function AddToCollectionButton({
       >
         <Plus className="size-3.5" aria-hidden="true" />
       </button>
-      {open && <AddPopup target={target} align={align} onDismiss={dismiss} />}
+      {open && (
+        <AddPopup
+          target={target}
+          align={align}
+          mode={mode}
+          onModeChange={setMode}
+          onDismiss={dismiss}
+        />
+      )}
     </span>
   );
+}
+
+/** A success line, and which add it belongs to. See the `role="status"` region below. */
+interface Report {
+  text: string;
+  seq: number;
 }
 
 function AddPopup({
   target,
   align,
+  mode,
+  onModeChange,
   onDismiss,
 }: {
   target: AddTarget;
   align: "start" | "end";
+  /** Owned by the trigger, whose accessible name says it. */
+  mode: Mode;
+  onModeChange: (next: Mode) => void;
   /** Escape: close *and* hand focus back. An outside click closes from the root's `onBlur`
    *  and deliberately does not hand it back — the reader is already somewhere else. */
   onDismiss: () => void;
@@ -131,12 +156,11 @@ function AddPopup({
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const finishes = target.finishes.length > 0 ? target.finishes : (["nonfoil"] as Finish[]);
-  const [mode, setMode] = useState<Mode>("collection");
   const [finish, setFinish] = useState<Finish>(finishes[0]);
   const [condition, setCondition] = useState<Condition>("NM");
   const [quantity, setQuantity] = useState(1);
   const [anyPrinting, setAnyPrinting] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState<Report | null>(null);
   const queryClient = useQueryClient();
 
   // The caret moves into the layer, as it does for the card pane and the set picker: the
@@ -149,7 +173,9 @@ function AddPopup({
   // The innermost open layer: capture phase, and the press is consumed so the card detail
   // pane underneath does not close on the same one. See `useDismissOnEscape` — and note
   // that two "inner" peers are *not* ordered by it, so this popup and the set picker must
-  // never be open at once (they cannot be: they live in different views).
+  // never be open at once. They share the search view, so what keeps them apart is not
+  // where they live: each closes when focus leaves its own root, and opening either moves
+  // focus into it, which closes the other on the way.
   useDismissOnEscape({ layer: "inner", onDismiss });
 
   const add = useMutation({
@@ -172,13 +198,23 @@ function AddPopup({
           ),
     onSuccess: () => {
       // The button said "Add", so the report says "Added" — one verb through the whole
-      // action.
-      setDone(`Added ${quantity} × ${target.name} to your ${mode}.`);
-      // Everything that counts cards: the two lists, their summary, and the search results
-      // that badge what is owned.
+      // action. Numbered because two identical copies is the commonest second add there
+      // is, and the same sentence set twice is a live region that never changed.
+      setDone((prev) => ({
+        text: `Added ${quantity} × ${target.name} to your ${mode}.`,
+        seq: (prev?.seq ?? 0) + 1,
+      }));
+      // The two lists this write belongs to, and their summaries.
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      // The search results are marked stale and deliberately *not* refetched. An infinite
+      // search holds every page the reader scrolled through — up to 100 of them, ~53 ms
+      // each against the real database — and query-core refetches active ones in sequence,
+      // so a plain invalidation is seconds of work behind an open popup. The only thing on
+      // a result row that this write changes is `ownedQuantity`/`wishlisted`, which no view
+      // renders yet (ledgered with the badges); the next search the reader runs refetches
+      // anyway. Drop `refetchType` when the badges land.
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"], refetchType: "none" });
     },
   });
 
@@ -208,7 +244,7 @@ function AddPopup({
             aria-pressed={mode === m}
             onClick={() => {
               if (m === mode) return;
-              setMode(m);
+              onModeChange(m);
               // Both messages name a destination, and this is the control that changes it:
               // left alone, a failed add to the collection would re-read as a failed add to
               // the wishlist, which is a sentence about something that never happened.
@@ -262,39 +298,33 @@ function AddPopup({
           </select>
         </div>
       ) : (
-        <div className="space-y-1">
-          <div role="group" aria-label="Which printing" className="flex gap-1">
-            {[
-              { any: false, label: "This printing" },
-              { any: true, label: "Any printing" },
-            ].map(({ any, label }) => (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={anyPrinting === any}
-                // A wish for "any printing" is keyed on the oracle card, and there is not
-                // always one to key it on: a reversible card has no oracle id at all, and
-                // the search DTO does not carry one. Disabled rather than hidden, with the
-                // way to it in the line below — a choice that silently disappears on some
-                // screens is a feature the reader has no reason to believe exists.
-                disabled={any && target.oracleId === null}
-                onClick={() => setAnyPrinting(any)}
-                className={cn(
-                  CHIP,
-                  "flex-1 disabled:opacity-40 disabled:hover:text-dim",
-                  FOCUS,
-                  filterChipState(anyPrinting === any),
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {target.oracleId === null && (
-            <p className="text-[0.7rem] leading-snug text-dim">
-              Open the card to wish for any printing of it.
-            </p>
-          )}
+        <div role="group" aria-label="Which printing" className="flex gap-1">
+          {[
+            { any: false, label: "This printing" },
+            { any: true, label: "Any printing" },
+          ].map(({ any, label }) => (
+            <button
+              key={label}
+              type="button"
+              aria-pressed={anyPrinting === any}
+              // A wish for "any printing" is keyed on the oracle card, and a reversible
+              // card has none — Scryfall gives those printings no `oracle_id`, anywhere,
+              // so no surface can offer this and none of them tells the reader to go
+              // looking elsewhere for it. Disabled rather than hidden: a choice that
+              // silently disappears on some cards is one the reader has no reason to
+              // believe exists.
+              disabled={any && target.oracleId === null}
+              onClick={() => setAnyPrinting(any)}
+              className={cn(
+                CHIP,
+                "flex-1 disabled:opacity-40 disabled:hover:text-dim",
+                FOCUS,
+                filterChipState(anyPrinting === any),
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -328,9 +358,14 @@ function AddPopup({
         {/* One live region, mounted with the popup and empty until there is something to
             say: a region that appears together with its text is a region a screen reader
             never saw change. Cleared on a failure so the last success is not read back as
-            though it were this one. */}
+            though it were this one.
+
+            The sentence is keyed by the add it reports, so adding the same copy twice
+            replaces the node rather than rewriting it with itself — React bails out of a
+            re-render on an identical string, and a live region whose text did not change
+            announces nothing. */}
         <p role="status" className="text-xs text-dim">
-          {add.isError ? "" : done}
+          {!add.isError && done && <span key={done.seq}>{done.text}</span>}
         </p>
         {add.isError && (
           // Stays open behind this, with every answer still in it: recording the same card

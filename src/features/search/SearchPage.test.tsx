@@ -1,21 +1,26 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { CardSummary, SearchRequest, SearchResponse, SetSummary } from "@/lib/ipc";
+import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the page and asks for the set list on the way up, so the
 // mock has to answer it — a missing `listSets` is a rejected query, not a compile error.
 const listSets = vi.hoisted(() => vi.fn());
 const prefetchImages = vi.hoisted(() => vi.fn());
+// Every row and every tile carries a quick-add, and what it writes is a real `invoke`.
+const collectionAdd = vi.hoisted(() => vi.fn());
+const wishlistAdd = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     searchCards,
     listSets,
     prefetchImages,
+    collectionAdd,
+    wishlistAdd,
     syncStatus: vi.fn(),
     syncRun: vi.fn(),
     onSyncProgress: vi.fn(),
@@ -37,6 +42,8 @@ const BOLT: CardSummary = {
   manaCost: "{R}",
   priceUsd: 400.5,
   layout: "normal",
+  oracleId: "o-bolt",
+  finishes: `["nonfoil","foil"]`,
   ownedQuantity: 0,
   wishlisted: false,
 };
@@ -53,6 +60,8 @@ const SPARSE: CardSummary = {
   manaCost: null,
   priceUsd: null,
   layout: "normal",
+  oracleId: null,
+  finishes: null,
   ownedQuantity: 0,
   wishlisted: false,
 };
@@ -117,6 +126,8 @@ beforeEach(() => {
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
   listSets.mockReset().mockResolvedValue([ALPHA]);
   prefetchImages.mockReset().mockResolvedValue(undefined);
+  collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   // The view opens on the art grid, which has no columns to assert on. Everything below
   // except the layout toggle's own describe is about the table, so it says so.
   useAppStore.setState({ searchView: "table", selectedCardId: null });
@@ -476,6 +487,72 @@ describe("SearchPage", () => {
     // the list a screenful. Typing in it must do neither.
     await userEvent.click(screen.getByRole("button", { name: /^Increase Quantity/ }));
     expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * The row builds the popup from what it was sent, and `finishes` is on the search DTO for
+   * exactly this: the backend takes any finish for any card, so a table that always offered
+   * nonfoil is how a foil-only printing gets a nonfoil entry — one that then prices through
+   * a `usd` key its blob does not have.
+   */
+  it("offers a row's real finishes, and can wish for any printing from it", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, finishes: `["foil"]` }]));
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ }));
+
+    const chips = within(await screen.findByRole("group", { name: "Finish" })).getAllByRole(
+      "button",
+    );
+    expect(chips.map((c) => c.textContent)).toEqual(["Foil"]);
+
+    // And the oracle id rides along too, so a wish made from a result row can be for the
+    // card rather than for this piece of cardboard.
+    await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Any printing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    const wish = wishlistAdd.mock.calls[0][0] as WishInput;
+    expect(wish).toMatchObject({ oracleId: "o-bolt", preferredFinish: "foil" });
+    expect(wish.cardId).toBeUndefined();
+  });
+
+  /** A row whose columns are all null is a row that knows no finishes — which is not the
+   *  same as knowing it is nonfoil, but nonfoil is what an unqualified copy of a card is. */
+  it("falls back to nonfoil for a row with no finishes recorded", async () => {
+    searchCards.mockResolvedValue(page([SPARSE]));
+    wrap(<SearchPage />);
+    await screen.findByText("Nameless Race");
+
+    await userEvent.click(screen.getByRole("button", { name: /^Add Nameless Race/ }));
+
+    const chips = within(await screen.findByRole("group", { name: "Finish" })).getAllByRole(
+      "button",
+    );
+    expect(chips.map((c) => c.textContent)).toEqual(["Nonfoil"]);
+  });
+
+  /**
+   * Two stacking rules that no other test would miss, because both are invisible until a
+   * popup is open over a scrolling list.
+   *
+   * A row is positioned *and* transformed, so it is a stacking context and the popup's own
+   * `z-20` cannot lift it over the next row — the row it is open in has to come forward.
+   * And the header it then competes with is sticky over the same list: at an equal
+   * `z-index` the row wins for being later in the DOM, and scrolls *over* the header.
+   */
+  it("lifts the row holding an open popup, and keeps the sticky header above it", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const row = screen.getByText("Lightning Bolt").closest('[role="row"]');
+    expect(row).toHaveClass("has-[[aria-expanded=true]]:z-10");
+    expect(screen.getByRole("columnheader", { name: "Name" }).closest('[role="row"]')).toHaveClass(
+      "sticky",
+      "z-20",
+    );
   });
 
   it("gives the actions column a header, for the readers who cannot see it is empty", async () => {

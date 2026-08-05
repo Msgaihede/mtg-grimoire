@@ -39,6 +39,8 @@ const BOLT: CardSummary = {
   manaCost: "{R}",
   priceUsd: 400.5,
   layout: "normal",
+  oracleId: "o1",
+  finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
 };

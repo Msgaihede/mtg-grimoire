@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { parseFinishes } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
 import type { CardSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -317,9 +318,10 @@ function Tile({
         <span className="min-w-0 flex-1 truncate">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
-        {/* `finishes` is not on the search DTO, so the popup offers nonfoil and says so —
-            putting a JSON blob on every row of a 116 k-row browse to save one chip is not
-            a trade this view makes. `static` hands the anchoring to the caption above. */}
+        {/* The row's own `finishes` and `oracleId`, both on the search DTO: the popup offers
+            what this printing exists in — a foil-only card must not take a nonfoil entry —
+            and a wish made here can be for the card rather than for this piece of cardboard.
+            `static` hands the anchoring to the caption above. */}
         <AddToCollectionButton
           align="start"
           className={cn(REVEAL_ON_HOVER, "static")}
@@ -328,8 +330,8 @@ function Tile({
             name: card.name,
             setCode: card.setCode,
             collectorNumber: card.collectorNumber,
-            oracleId: null,
-            finishes: [],
+            oracleId: card.oracleId,
+            finishes: parseFinishes(card.finishes),
           }}
         />
       </span>

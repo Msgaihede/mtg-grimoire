@@ -114,8 +114,9 @@ describe("AddToCollectionButton", () => {
   });
 
   /**
-   * The search DTO carries no `finishes`, so the grid and the table have nothing to offer.
-   * Nonfoil is the honest default — it is what an unqualified copy of a card is.
+   * `cards.finishes` is nullable, and a printing whose column is empty is one whose finishes
+   * are unknown rather than one that is nonfoil. Nonfoil is the honest default anyway — it
+   * is what an unqualified copy of a card is.
    */
   it("falls back to nonfoil when the surface does not know the finishes", async () => {
     await open({ ...BOLT, finishes: [] });
@@ -263,7 +264,55 @@ describe("AddToCollectionButton", () => {
     // is now one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    // Marked stale and *not* refetched: an infinite search holds up to 100 pages, and
+    // query-core refetches every one of them in sequence — 5 s of database work behind a
+    // popup, for a badge no view renders yet.
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["cards", "search"],
+      refetchType: "none",
+    });
+  });
+
+  /**
+   * Two identical copies of one card is the commonest second add there is — and a live
+   * region only announces what *changed*, so re-setting the same sentence is silence. React
+   * bails out of the render besides, on the same string.
+   */
+  it("announces the second identical copy as its own report", async () => {
+    await open();
+    const add = screen.getByRole("button", { name: "Add to collection" });
+
+    await userEvent.click(add);
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Added 1 × Lightning Bolt to your collection.",
+      ),
+    );
+    const first = screen.getByRole("status").firstElementChild;
+    expect(first).not.toBeNull();
+
+    await userEvent.click(add);
+
+    // The same words, in a node that replaced the one before it: what a screen reader hears
+    // as a second report rather than as nothing at all.
+    await waitFor(() => expect(screen.getByRole("status").firstElementChild).not.toBe(first));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Added 1 × Lightning Bolt to your collection.",
+    );
+    expect(collectionAdd).toHaveBeenCalledTimes(2);
+  });
+
+  /** The trigger names its destination, and the popup is where the destination is chosen —
+   *  so a trigger that still says "to collection" over an open wishlist form is wrong about
+   *  what pressing it again would do. */
+  it("says where the open popup is adding to", async () => {
+    const { trigger } = await open();
+
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to collection");
+
+    await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to wishlist");
   });
 
   /** The popup is 256px of controls hanging over a list. Tabbing out of it must not leave

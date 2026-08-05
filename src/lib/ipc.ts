@@ -76,6 +76,23 @@ export interface CardSummary {
   priceUsd: number | null;
   layout: string;
   /**
+   * The oracle card this printing is of, or `null` on a reversible card, which has none.
+   *
+   * Here so a result row can be wished for as *any* printing without opening the card first
+   * — a wishlist usually means the card rather than the cardboard.
+   */
+  oracleId: string | null;
+  /**
+   * JSON: the finishes this printing exists in (`["nonfoil","foil"]`). Parse it with
+   * `parseFinishes` from `@/lib/finish`; `null` means the column is empty, which is
+   * "unknown" rather than "nonfoil".
+   *
+   * A quick-add from a result row offers exactly these. Without them the grid and the table
+   * offered nonfoil for every card, and a foil-only printing took a nonfoil entry that then
+   * priced through a `usd` key its blob does not have.
+   */
+  finishes: string | null;
+  /**
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
    *
