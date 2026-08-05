@@ -875,6 +875,55 @@ mod tests {
         assert_eq!(hit.items[0].name, "Ancestral Recall");
     }
 
+    /// Every sort key, exercised — because `price` orders by a *select alias* over a
+    /// `NULLS LAST` clause, and an `ORDER BY` SQLite cannot resolve is a failure at
+    /// **prepare** time: the whole list, not one row out of place. The unknown key is here
+    /// for the reason the search's twin is: `sort` is matched against literals and never
+    /// interpolated, and the value below would be a syntax error if it ever reached the SQL.
+    #[test]
+    fn every_sort_key_orders_the_list_and_an_unknown_one_falls_back_to_name() {
+        let conn = seeded();
+        let wish = |name: &str, oracle: &str, quantity: i64, finish: Option<&str>| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some(oracle.to_owned()),
+                    name: Some(name.to_owned()),
+                    preferred_finish: finish.map(str::to_owned),
+                    quantity,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .id
+        };
+        // Two wishes on the priced printing (nonfoil $5, foil $40) and one on an oracle
+        // card with no printing at all, so the price sort has a NULL to place.
+        let cheap = wish("Lightning Bolt", "o1", 1, None);
+        let dear = wish("Lightning Bolt", "o1", 2, Some("foil"));
+        let unpriced = wish("Ancestral Recall", "o-recall", 9, None);
+
+        let ids = |sort: &str| {
+            list_wishes(
+                &conn,
+                &WishlistQuery {
+                    sort: Some(sort.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("price"), vec![dear, cheap, unpriced], "dearest first");
+        assert_eq!(ids("quantity"), vec![unpriced, dear, cheap]);
+        assert_eq!(ids("added"), vec![unpriced, dear, cheap], "newest first");
+        assert_eq!(ids("name"), vec![unpriced, cheap, dear], "A before L");
+        assert_eq!(ids("w.name; DROP TABLE wishlist_entries"), ids("name"));
+    }
+
     /// The price is the one the wish would be filled at: the preferred finish's, or the
     /// nonfoil one when the wish names no finish.
     #[test]
