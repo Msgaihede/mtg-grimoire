@@ -1,3 +1,4 @@
+import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { DeckZone } from "@/lib/ipc";
 
 /**
@@ -81,6 +82,67 @@ function isId(value: unknown): value is string {
  *  unwrapping anything. */
 export function dragData(payload: DragPayload): Record<string, unknown> {
   return { [MARK_KEY]: MARK, ...payload };
+}
+
+/**
+ * What a press inside a card does **not** start a drag from.
+ *
+ * A control marks itself, because the alternative — excluding every `button` — would take
+ * the card's own name away as a place to grab a row (it is a button: the keyboard's way into
+ * the card) and would make a search tile undraggable altogether, since its art is a button
+ * covering nearly all of it. Fields are excluded outright whether marked or not: a press in a
+ * text field is a text selection, never a drag.
+ *
+ * **Anything added inside a card that owns its own press marks itself `data-no-drag`.**
+ */
+export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
+
+/**
+ * A card that can be picked up — and a press on one of its controls that is a press on the
+ * control, not on the card.
+ *
+ * **Why this exists at all.** A whole deck row is draggable, and a deck row is full of
+ * controls: a stepper, a menu trigger, the menu itself. Chromium starts a drag from the
+ * nearest draggable *ancestor* of whatever was pressed, and the drag library adds no
+ * exclusion of its own — so without this, a press on the stepper's `−` plus five pixels of
+ * travel is a drag of the whole row, the click that was meant is never delivered, and letting
+ * go over the remove tray takes every copy out of the deck with nothing to undo it.
+ * **Measured in the running window before it was fixed** (2026-08-05): 4 copies moved zones
+ * from a press on `−`.
+ *
+ * `canDrag` is asked at `dragstart` and is handed the pointer's coordinates rather than what
+ * it pressed, so the press is remembered here: `mousedown` always precedes `dragstart` (a
+ * native drag is a mouse gesture — Chromium starts none from touch), and the listener is in
+ * the **capture** phase on the card itself so a control that stops the press from propagating
+ * cannot hide it from this.
+ */
+export function cardDraggable({
+  element,
+  payload,
+  notFrom = NOT_A_DRAG,
+}: {
+  element: HTMLElement;
+  /** Read at `dragstart`, so a row that has been renumbered since it mounted still carries
+   *  what it is now. */
+  payload: () => DragPayload;
+  /** Overridable for the one case where the default is wrong — nothing today. */
+  notFrom?: string;
+}): () => void {
+  let onControl = false;
+  const press = (event: Event) => {
+    const target = event.target;
+    onControl = target instanceof Element && target.closest(notFrom) !== null;
+  };
+  element.addEventListener("mousedown", press, true);
+  const stop = draggable({
+    element,
+    canDrag: () => !onControl,
+    getInitialData: () => dragData(payload()),
+  });
+  return () => {
+    element.removeEventListener("mousedown", press, true);
+    stop();
+  };
 }
 
 /**

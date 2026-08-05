@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Plus, Search } from "lucide-react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -10,7 +9,7 @@ import { useCardSearch } from "@/features/search/useCardSearch";
 import { ipcError, type CardSummary, type DeckZone } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { dragData } from "./dnd";
+import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
 import { ZONE_LABEL } from "./ZoneColumn";
 
@@ -216,15 +215,20 @@ export function DeckSearchPanel({
    *
    * The Add button beside the art does the same thing for the keyboard and for anyone who
    * would rather press than drag (spec §7's click-to-add fallback, which is the *primary*
-   * path — this is a shortcut over it).
+   * path — this is a shortcut over it), and it marks itself `data-no-drag` so that a press on
+   * it is a press: `cardDraggable` has the story, and the tile's *art* stays draggable
+   * because the exclusion is marked rather than guessed from the tag.
    */
-  const tileRef = useCallback((card: CardSummary, element: HTMLElement | null) => {
-    if (!element) return;
-    return draggable({
-      element,
-      getInitialData: () => dragData({ kind: "search-card", cardId: card.id, name: card.name }),
-    });
-  }, []);
+  const tileRef = useCallback(
+    (card: CardSummary, element: HTMLElement | null) =>
+      element
+        ? cardDraggable({
+            element,
+            payload: () => ({ kind: "search-card", cardId: card.id, name: card.name }),
+          })
+        : undefined,
+    [],
+  );
 
   const addFailure = add.isError ? ipcError(add.error) : null;
   // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
@@ -353,6 +357,9 @@ export function DeckSearchPanel({
           action={(card) => (
             <button
               type="button"
+              // The tile is draggable and this is its one control: a press that slips a few
+              // pixels is a press, not a drag (`cardDraggable`).
+              data-no-drag=""
               // Named for the card *and* where it is going: two tiles' buttons both called
               // "Add" are two controls a screen reader cannot tell apart, and the zone is the
               // one thing about this press that is not visible on the tile.

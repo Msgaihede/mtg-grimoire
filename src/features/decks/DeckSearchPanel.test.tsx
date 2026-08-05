@@ -221,6 +221,29 @@ describe("DeckSearchPanel", () => {
     ]);
   });
 
+  /**
+   * The tile's one control keeps its press.
+   *
+   * The same guard the deck rows need (`cardDraggable`), for the same reason: the press
+   * lands on the button and the `dragstart` lands on the tile, so a press that slips a few
+   * pixels would add nothing and drag instead. The tile's *art* is a button too and is
+   * deliberately still a drag handle — the exclusion is marked, not guessed from the tag.
+   */
+  it("does not drag a tile when the press landed on its Add button", async () => {
+    const { container } = panel();
+    const add = await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
+    const tile = container.querySelector('[draggable="true"]')!;
+
+    const held = await startDrag(tile, { pressOn: add });
+    expect(held.started).toBe(false);
+    await held.cancel();
+
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const again = await startDrag(tile, { pressOn: art });
+    expect(again.started).toBe(true);
+    await again.cancel();
+  });
+
   /** One copy, into the zone the header names. `deck_add_card` folds it into whatever is
    *  already there, so pressing twice is two copies rather than an error. */
   it("adds one copy of a card to the target zone", async () => {

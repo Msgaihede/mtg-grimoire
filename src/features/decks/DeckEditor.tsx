@@ -495,10 +495,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ref={editorRef}
       tabIndex={-1}
       aria-label={row ? `Deck editor: ${row.name}` : "Deck editor"}
-      // `relative` is the remove tray's anchor: it sits along this view's bottom edge, over
-      // the price line rather than above it, so a drag does not begin by moving every drop
-      // target on screen 40px upwards.
-      className={cn("relative flex h-full min-h-0 flex-col gap-3", FOCUS)}
+      className={cn("flex h-full min-h-0 flex-col gap-3", FOCUS)}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <button
@@ -749,37 +746,52 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* Spec §5: a price is never shown without saying how old it is. Once, under the deck,
-          rather than as a tooltip on every one of sixty rows. */}
-      <p className="shrink-0 text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+      {/* The strip under the deck. Spec §5: a price is never shown without saying how old it
+          is — once, here, rather than as a tooltip on every one of sixty rows. And, while a
+          row is in the air, the way out of the deck, drawn over it. */}
+      <div className="relative shrink-0">
+        <p className="text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
 
-      {dragging && (
-        // The way out of a deck, for a hand that is already holding the card. It exists only
-        // while a row is in the air, and it takes the place of the price line rather than a
-        // place of its own: appearing in the flow would push every column up by its own
-        // height at the exact moment the reader is aiming at one.
-        //
-        // No transition on either state — it appears instantly and it answers instantly. An
-        // affordance that fades in during a drag is an affordance that is still arriving when
-        // the reader has let go, and the motion budget spends its 150ms on chip and nav state.
-        //
-        // Destructive rather than gold: gold is where a card is *going*, and this is the one
-        // drop that takes something away. It names the card once it has it, because by then
-        // the platform's drag preview is the only other thing saying which card this is.
-        <div
-          ref={trayRef}
-          className={cn(
-            "absolute inset-x-0 bottom-0 z-30 flex h-10 items-center justify-center gap-1.5",
-            "rounded-md border border-dashed text-xs",
-            overTray
-              ? "border-destructive/60 bg-destructive/10 text-destructive"
-              : "border-border bg-surface text-dim",
-          )}
-        >
-          <Trash2 className="size-3.5" aria-hidden="true" />
-          {overTray ? `Remove ${dragging.name} from deck` : "Remove from deck"}
-        </div>
-      )}
+        {dragging && (
+          // The way out of a deck, for a hand that is already holding the card. It exists
+          // only while a row is in the air, and it takes the place of the price line rather
+          // than a place of its own: appearing in the flow would push every column up by its
+          // own height at the exact moment the reader is aiming at one.
+          //
+          // **Exactly the strip and not a pixel more.** `-top-3` is the `gap-3` above this
+          // line, which is empty; the height is whatever the price line is. A tray taller
+          // than that overhangs the columns, and an overhang here is a drop aimed at a
+          // column's last row that removes the card instead — the one mistake in this view
+          // with nothing to undo it.
+          //
+          // No transition on either state — it appears instantly and it answers instantly. An
+          // affordance that fades in during a drag is an affordance that is still arriving
+          // when the reader has let go, and the motion budget spends its 150ms on chip and
+          // nav state.
+          //
+          // Destructive rather than gold: gold is where a card is *going*, and this is the one
+          // drop that takes something away. It names the card once it has it, because by then
+          // the platform's drag preview is the only other thing saying which card this is.
+          //
+          // `aria-hidden` like the drop line: this is chrome for a gesture only a pointer can
+          // make, and the click paths it shortcuts (the stepper's zero) are the ones a screen
+          // reader is given.
+          <div
+            ref={trayRef}
+            aria-hidden="true"
+            className={cn(
+              "absolute inset-x-0 bottom-0 -top-3 z-30 flex items-center justify-center gap-1.5",
+              "rounded-md border border-dashed text-xs",
+              overTray
+                ? "border-destructive/60 bg-destructive/10 text-destructive"
+                : "border-border bg-surface text-dim",
+            )}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+            {overTray ? `Remove ${dragging.name} from deck` : "Remove from deck"}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

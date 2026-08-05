@@ -44,8 +44,9 @@ describe("dragData / readDragData", () => {
     // The shape is right and the mark is missing, which is exactly what a payload that was
     // built by something else looks like.
     expect(readDragData({ kind: "search-card", cardId: "c-bolt", name: "Bolt" })).toBeNull();
-    expect(readDragData({ kind: "deck-card", cardId: "c-bolt", name: "Bolt", fromZone: "main" }))
-      .toBeNull();
+    expect(
+      readDragData({ kind: "deck-card", cardId: "c-bolt", name: "Bolt", fromZone: "main" }),
+    ).toBeNull();
   });
 
   /** A marked payload whose fields are wrong is still refused: the mark says where a drag came

@@ -76,17 +76,31 @@ async function frame(): Promise<void> {
   });
 }
 
-/** A drag event: a `MouseEvent` with a `dataTransfer`, which is what the platform's really
- *  is. `fireEvent` rather than `dispatchEvent` so React's updates are flushed in `act`. */
-function send(target: Element | Window, type: string, dataTransfer: TestDataTransfer): void {
+/**
+ * A drag event: a `MouseEvent` with a `dataTransfer`, which is what the platform's really is.
+ * `fireEvent` rather than `dispatchEvent` so React's updates are flushed in `act`.
+ *
+ * Answers whether the event was cancelled, which is how a refused `dragstart` is told from
+ * one that started a drag.
+ */
+function send(target: Element | Window, type: string, dataTransfer: TestDataTransfer): boolean {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 8, clientY: 8 });
   // `dataTransfer` is not a `MouseEvent` field, and it is read-only where it does exist.
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  fireEvent(target, event);
+  return fireEvent(target, event);
 }
 
 /** A drag in flight: what a test can do while it is holding the card. */
 export interface Drag {
+  /**
+   * Whether a drag actually began.
+   *
+   * `false` when something refused it — which in this app means the press landed on one of
+   * the card's own controls (`cardDraggable`). The library refuses by calling
+   * `preventDefault()` on the `dragstart`, which is what this reads, and everything below is
+   * then inert.
+   */
+  started: boolean;
   /** Move over an element — a drop target, or something that is not one. */
   over(target: Element): Promise<void>;
   /** Off every drop target, without letting go. */
@@ -105,11 +119,21 @@ export interface Drag {
  * `dragstart` at the nearest draggable ancestor, and the library looks the element up
  * directly rather than searching upwards, so a test that starts a drag on a child of a row is
  * testing nothing.
+ *
+ * `pressOn` is where the press landed, which is **not** the same thing and is exactly the
+ * case that bites: pressing a control inside a draggable row gets a `mousedown` at the
+ * control and a `dragstart` at the row, because Chromium starts the drag from the nearest
+ * draggable *ancestor* of what was pressed. Verified in the running window, 2026-08-05:
+ * `mousedown` on a stepper's `−`, `dragstart` on the `<li>`, no click ever delivered.
  */
-export async function startDrag(source: Element): Promise<Drag> {
+export async function startDrag(
+  source: Element,
+  { pressOn = source }: { pressOn?: Element } = {},
+): Promise<Drag> {
   const data = new TestDataTransfer();
   let at: Element = source;
-  send(source, "dragstart", data);
+  send(pressOn, "mousedown", data);
+  const started = send(source, "dragstart", data);
   // `onDragStart` is dispatched a frame later — the library batches it with the drag preview.
   await frame();
 
@@ -120,6 +144,7 @@ export async function startDrag(source: Element): Promise<Drag> {
     await frame();
   };
   return {
+    started,
     over,
     leave: () => over(document.body),
     drop: async () => {

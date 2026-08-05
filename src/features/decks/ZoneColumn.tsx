@@ -1,8 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type Ref, type RefObject } from "react";
-import {
-  draggable,
-  dropTargetForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { MoreHorizontal } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
@@ -11,7 +8,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { dragData, dropWrite, readDragData, type DeckWrite } from "./dnd";
+import { cardDraggable, dropWrite, readDragData, type DeckWrite } from "./dnd";
 import { DropIndicator } from "./DropIndicator";
 
 /**
@@ -273,7 +270,9 @@ export function ZoneColumn({
     };
     return dropTargetForElements({
       element,
-      getData: () => ({ zone }),
+      // No `getData`: the write is derived from what the *drag* is carrying and this
+      // column's own `zone`, both of which are already in hand here. Data hung on the target
+      // would be data nothing reads.
       canDrop: ({ source }) => writeFor(source.data) !== null,
       onDragEnter: () => setOver(true),
       // Left, or the drag ended somewhere else — a cancelled drag clears its drop targets
@@ -401,9 +400,10 @@ function CardRow({
   // by construction. A mark there would report a shortage the reader does not have.
   const short = zone !== "maybe" && card.ownedQuantity < card.quantity;
 
-  // The row is the drag handle for the whole card, and `draggable()` is what marks it one:
-  // it sets `draggable="true"` on this element, which is also how the suite can prove the
-  // registration landed on the right row without a `DataTransfer` jsdom does not have.
+  // The row is the drag handle for the whole card — every part of it that is not one of its
+  // own controls, which is what `cardDraggable` is for and why a press on the stepper is
+  // still a press on the stepper. The registration also sets `draggable="true"` on this
+  // element, which is how the suite can see it landed on the right row.
   //
   // Re-registered only when the payload would change — the id, the name and the zone are the
   // whole of it — rather than on every render, because the editor re-renders on every drag
@@ -412,9 +412,9 @@ function CardRow({
   useEffect(() => {
     const element = rowRef.current;
     if (!element) return;
-    return draggable({
+    return cardDraggable({
       element,
-      getInitialData: () => dragData({ kind: "deck-card", cardId, name, fromZone: zone }),
+      payload: () => ({ kind: "deck-card", cardId, name, fromZone: zone }),
     });
   }, [cardId, name, zone]);
 
@@ -450,8 +450,12 @@ function CardRow({
           `stopPropagation` stops the *native* event at the root container, so an Escape
           pressed with the caret in this stepper never reaches the card pane's `window`
           listener and the pane cannot be closed from here at all. Measured in the running
-          app; pinned by `the editor lets Escape through to the card pane`. */}
-      <span className="row-span-2" onClick={(e) => e.stopPropagation()}>
+          app; pinned by `the editor lets Escape through to the card pane`.
+          `data-no-drag` is the other half of the same thought: the row is draggable, and
+          without the mark a press on `−` that travels five pixels is a drag of the whole row
+          with the press never delivered (`cardDraggable`). Every control added in here needs
+          it. */}
+      <span data-no-drag="" className="row-span-2" onClick={(e) => e.stopPropagation()}>
         <QuantityStepper
           size="sm"
           value={card.quantity}
@@ -478,8 +482,10 @@ function CardRow({
       </span>
 
       {/* Clicks only, for the reason the stepper's cell gives: the menu's own Escape is the
-          editor's `"inner"` layer and travels by `window`. */}
-      <span className="justify-self-end" onClick={(e) => e.stopPropagation()}>
+          editor's `"inner"` layer and travels by `window`. `data-no-drag` for the stepper's
+          reason — the menu that opens out of this carries its own, since it is drawn as a
+          sibling of this cell rather than inside it. */}
+      <span data-no-drag="" className="justify-self-end" onClick={(e) => e.stopPropagation()}>
         <button
           ref={triggerRef}
           type="button"
@@ -637,6 +643,9 @@ function RowMenu({
       tabIndex={-1}
       role="dialog"
       aria-label={`Actions for ${card.name}`}
+      // Inside a draggable row, so it says it is not part of the drag: without this, pressing
+      // "Move to Sideboard" and slipping a few pixels drags the row instead of pressing it.
+      data-no-drag=""
       className={cn(
         "absolute right-1 z-20 w-44 rounded-lg border border-border bg-bg/95 p-1",
         "text-xs shadow-lg",

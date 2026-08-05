@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { DeckCard } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
@@ -442,19 +442,29 @@ describe("ZoneColumn drops", () => {
     };
   }
 
-  /** Anything else in the window that can be dragged — the app's next feature, standing in
-   *  for itself. Cleaned up by hand: it is not part of a render. */
-  function elsewhere(data: Record<string, unknown>) {
+  /**
+   * Anything else in the window that can be dragged — the app's next feature, standing in for
+   * itself.
+   *
+   * Torn down in an `afterEach` rather than at the end of the test that made it: it is not
+   * part of a render, and a failed assertion half way through would otherwise leave a
+   * registered draggable in the document for every later test in this file.
+   */
+  let registered: (() => void)[] = [];
+  afterEach(() => {
+    for (const cleanup of registered) cleanup();
+    registered = [];
+  });
+
+  function elsewhere(data: Record<string, unknown>): HTMLElement {
     const element = document.createElement("div");
     document.body.append(element);
     const unregister = draggable({ element, getInitialData: () => data });
-    return {
-      element,
-      cleanup: () => {
-        unregister();
-        element.remove();
-      },
-    };
+    registered.push(() => {
+      unregister();
+      element.remove();
+    });
+    return element;
   }
 
   /** A row dropped on another zone is a move, and the column names the write itself: it is
@@ -533,13 +543,77 @@ describe("ZoneColumn drops", () => {
       fromZone: "main",
     });
 
-    const held = await startDrag(other.element);
+    const held = await startDrag(other);
     await held.over(scroller("Sideboard"));
 
     expect(line("Sideboard")).toBeNull();
 
     await held.drop();
     expect(side.onDropCard).not.toHaveBeenCalled();
-    other.cleanup();
+  });
+
+  /**
+   * **A press on one of the row's own controls is not a drag of the row.**
+   *
+   * The whole row is draggable and the row is full of controls, so this is the failure that
+   * costs a reader a deck: Chromium starts a drag from the nearest draggable *ancestor* of
+   * whatever was pressed, and the drag library excludes nothing of its own. Measured in the
+   * running window before the guard existed (2026-08-05): `mousedown` on a stepper's `−` plus
+   * five pixels of travel dragged the row, the press was never delivered as a click, and
+   * letting go over another column moved all four copies.
+   *
+   * The guard is `cardDraggable`'s, and what it reads is where the *press* landed — which is
+   * why this test presses one place and drags from another, exactly as the platform does.
+   */
+  it("does not drag the row when the press landed on one of its controls", async () => {
+    const { main, side, line, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
+    const row = screen.getByRole("listitem");
+
+    const held = await startDrag(row, {
+      pressOn: screen.getByRole("button", { name: /decrease copies/i }),
+    });
+
+    expect(held.started).toBe(false);
+
+    await held.over(scroller("Sideboard"));
+    expect(line("Sideboard")).toBeNull();
+
+    await held.drop();
+    expect(side.onDropCard).not.toHaveBeenCalled();
+    expect(main.onDropCard).not.toHaveBeenCalled();
+  });
+
+  /** And the row itself still is one: the guard is a control's press, not a row's. */
+  it("still drags the row when the press landed on the row", async () => {
+    const { side, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
+    const row = screen.getByRole("listitem");
+
+    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    expect(held.started).toBe(true);
+
+    await held.over(scroller("Sideboard"));
+    await held.drop();
+
+    expect(side.onDropCard).toHaveBeenCalledWith(
+      expect.objectContaining({ write: "move", to: "side" }),
+    );
+  });
+
+  /**
+   * Letting go of a cancelled drag *over* a column, rather than after wandering off it: the
+   * library clears its drop targets before it finishes, so the line comes down on the way out
+   * and nothing is written on the way past.
+   */
+  it("writes nothing when a drag is cancelled over a column", async () => {
+    const { side, line, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
+
+    const held = await startDrag(screen.getByRole("listitem"));
+    await held.over(scroller("Sideboard"));
+    expect(line("Sideboard")).toBeInTheDocument();
+
+    await held.cancel();
+
+    expect(line("Sideboard")).toBeNull();
+    expect(side.onDropCard).not.toHaveBeenCalled();
   });
 });
