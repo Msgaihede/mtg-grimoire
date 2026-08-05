@@ -497,16 +497,18 @@ describe("CardGrid", () => {
   });
 
   /**
-   * The one wall that is not a page-width wall: the deck editor's docked panel measures 343px
-   * inside its scrollbar and padding, which is eleven pixels short of two standard tiles — so
-   * it drew one 343px card per row in a 341px-tall column, less than a whole card ever on
-   * screen. The floor is a prop for exactly that, and the numbers here are the measured ones.
+   * The one wall that is not a page-width wall: the deck editor's docked panel measures 331px
+   * inside the panel's own padding, the scrollbar and this wall's padding — 330 in the running
+   * window — which is 23 short of two standard tiles, so it drew one 330px card per row in a
+   * 341px-tall column, less than a whole card ever on screen. The floor is a prop for exactly
+   * that, and the numbers here are the measured ones.
    */
   it("fits two tiles in the deck panel's column when it is given a lower floor", () => {
-    expect(columnsFor(343)).toBe(1);
-    expect(columnsFor(343, 150)).toBe(2);
-    // Still a floor and not a width: the pair share out the whole column, gap included.
-    expect(tileWidthFor(343, 150)).toBeCloseTo((343 - 12) / 2);
+    expect(columnsFor(330)).toBe(1);
+    expect(columnsFor(330, 150)).toBe(2);
+    // Still a floor and not a width: the pair share out the whole column, gap included — 159px
+    // each, which is what the running window measures.
+    expect(tileWidthFor(330, 150)).toBeCloseTo(159);
   });
 
   it("asks for the next page once the reader is near the bottom of the loaded rows", () => {

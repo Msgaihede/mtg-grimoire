@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Plus, Search } from "lucide-react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -15,6 +15,9 @@ import { ZONE_LABEL } from "./ZoneColumn";
 /** The shared focus recipe: a gold outline standing off the control, never a ring. */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
+/** Why the disclosure will not open, said where it is refused. */
+const NO_ROOM = "Not enough room — close the card details or widen the window";
+
 /**
  * How wide the panel is when it is open, in px and in the class that draws it — the editor
  * reads the number to decide whether there is room for the panel at all.
@@ -23,9 +26,11 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  * the filter row: 320 leaves **267** inside the panel's padding, the wall's padding and the
  * scrollbar, which is one tile at any floor a card is still legible at (two would be 127px
  * each). 384 leaves 331 and holds two. The filter row is the smaller half of it — the
- * mana-value chips are nine 36px squares 4px apart, **356px**, and at 320 they would wrap to a
- * second line rather than break anything (one `flex-wrap` on their own group), costing 44px of
- * the wall's height for the privilege of a narrower panel.
+ * mana-value chips are nine 36px squares 4px apart, **356px**, which at 320 would *squash* to
+ * fit (their group has no `flex-wrap`, and a flex item with a set width still shrinks); with
+ * one `flex-wrap` on that group they would instead wrap to a second line, costing 44px of the
+ * wall's height for the privilege of a narrower panel. Neither is a break, and neither is
+ * worth the tile.
  *
  * Measured in the running window at 1280×800: header 36, filter row 168 (four wrapped lines),
  * count line 16, and 341px of card wall.
@@ -111,6 +116,7 @@ export function DeckSearchPanel({
   /** What the *reader* last chose. What is drawn is this and `roomy` together. */
   const [open, setOpen] = useState(true);
   const shown = open && roomy;
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const zoneFieldId = useId();
 
   const search = useCardSearch();
@@ -120,26 +126,67 @@ export function DeckSearchPanel({
   const selectCard = useAppStore((s) => s.setSelectedCardId);
 
   /**
+   * The caret, when the card pane closes and what opened it is not there any more.
+   *
+   * This panel is what took it away: at 1024 a tile press opens the pane, the pane's arrival
+   * squeezes the row, the row squeezes this panel down to its rail — and the tile that was
+   * pressed unmounts with it. `CardDetailPane` hands the caret back to whatever opened it and
+   * checks `isConnected` before it does, so an opener that has gone means the pane simply
+   * closes and the caret lands on `<body>`, with the next Tab restarting from the top of the
+   * app. The disclosure is the honest place for it: it is where the reader's search went, and
+   * it is a Tab away from the search box and the results either way.
+   *
+   * Read off a *remembered* collapse rather than off `roomy` at the moment the card closes,
+   * because by then it is usually false again — closing the pane is what gives the width back,
+   * so the panel is already reopening on the same commit. What matters is that this panel shut
+   * while the card was open, which is the thing that unmounted the opener.
+   *
+   * And only when nothing else took the caret: an opener still on screen (a zone row, say) has
+   * already been handed it, and stealing it from there would be worse than the bug.
+   */
+  const hadCard = useRef(selectedCardId !== null);
+  const shutUnderCard = useRef(false);
+  useEffect(() => {
+    const had = hadCard.current;
+    hadCard.current = selectedCardId !== null;
+    if (selectedCardId !== null) {
+      if (!roomy) shutUnderCard.current = true;
+      return;
+    }
+    const shut = shutUnderCard.current;
+    shutUnderCard.current = false;
+    if (!had || !shut) return;
+    if (document.activeElement === document.body) toggleRef.current?.focus();
+  }, [selectedCardId, roomy]);
+
+  /**
    * The disclosure, in both of its states — one control, one name, and `aria-expanded` for the
    * difference. Named for what it reveals rather than for what pressing it does, so the name
    * does not change under a reader who is looking for it.
    *
-   * Disabled, with the reason, in the one state where pressing it could not work: there is not
+   * Refused, with the reason, in the one state where pressing it could not work: there is not
    * enough width for the deck and the panel both, so the press would be recorded and nothing
    * would move. The sentence says what to do about it, which is the app's rule for anything
    * that refuses.
+   *
+   * `aria-disabled` and a press that does nothing, **not** `disabled`: a disabled button is out
+   * of the tab order, which would leave the reason hanging on a hover a keyboard reader cannot
+   * perform — a rail that cannot be activated and never says why. This way the control is
+   * reachable, the `title` is its description, and it is also somewhere the caret can be put
+   * (see the effect above).
    */
   const toggle = (
     <button
+      ref={toggleRef}
       type="button"
       aria-expanded={shown}
-      disabled={!roomy}
-      title={roomy ? undefined : "Not enough room — close the card details or widen the window"}
-      onClick={() => setOpen((v) => !v)}
+      aria-disabled={!roomy || undefined}
+      title={roomy ? undefined : NO_ROOM}
+      onClick={() => roomy && setOpen((v) => !v)}
       className={cn(
         "flex shrink-0 items-center gap-1.5 rounded-md text-xs text-dim",
-        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-        "disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-dim",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        roomy ? "hover:text-text" : "cursor-not-allowed opacity-60",
         shown ? "px-1 py-1" : "w-9 flex-col justify-start border border-border py-2",
         FOCUS,
       )}
@@ -154,8 +201,6 @@ export function DeckSearchPanel({
     </button>
   );
 
-  if (!shown) return toggle;
-
   const addFailure = add.isError ? ipcError(add.error) : null;
   // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
   // in hand — reading it as "show the error instead" would throw away results the reader is
@@ -166,40 +211,59 @@ export function DeckSearchPanel({
   return (
     // A `section`, not an `aside`: the card pane is the app's one complementary landmark, and
     // a second unnamed one would answer to the same role query.
+    //
+    // **One root for both states**, rather than a bare rail in the collapsed one. React
+    // reconciles by position, so two shapes would mean the disclosure is a *different* button
+    // either side of a collapse — and the caret handed to the rail when the card pane closed
+    // would be dropped again one commit later, when the returning width reopened the panel
+    // around a freshly mounted copy of it. Measured in the running window; the effect above
+    // reads as if it works with either shape and only works with this one.
     <section
       aria-label="Add cards"
       // One hairline down the left edge, and it is the only chrome the panel adds: the zone
       // columns beside it are bordered boxes and these controls sit on the page, so without it
       // the "Add to" select reads as part of the deck's own header row. Everything right of
-      // the line is not your deck.
+      // the line is not your deck. The rail carries its own border instead — at 36px a hairline
+      // beside a bordered button would be two lines saying one thing.
       className={cn(
-        "flex min-h-0 shrink-0 flex-col gap-2 border-l border-border pl-3",
-        PANEL_WIDTH,
+        "flex min-h-0 shrink-0 flex-col gap-2",
+        shown ? cn("border-l border-border pl-3", PANEL_WIDTH) : "w-9",
       )}
     >
-      <div className="flex shrink-0 items-center gap-2">
+      {/* Collapsed, this row *is* the panel, so it takes the height and lets the rail stretch
+          down it — a 36px strip reads as an edge, an 80px one reads as a stray button. */}
+      <div
+        className={cn(
+          "flex gap-2",
+          shown ? "shrink-0 items-center" : "min-h-0 flex-1 items-stretch",
+        )}
+      >
         {toggle}
         {/* The zone choice sits above the results rather than on each of them: it is the click
             path's answer to "where does this go", and therefore the keyboard's — which is what
             makes drag a shortcut in Task 14 rather than the only way in. */}
-        <label htmlFor={zoneFieldId} className="ml-auto shrink-0 text-xs text-dim">
-          Add to
-        </label>
-        <select
-          id={zoneFieldId}
-          value={targetZone}
-          onChange={(e) => onTargetZoneChange(e.target.value as DeckZone)}
-          className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
-        >
-          {zones.map((zone) => (
-            <option key={zone} value={zone}>
-              {ZONE_LABEL[zone]}
-            </option>
-          ))}
-        </select>
+        {shown && (
+          <>
+            <label htmlFor={zoneFieldId} className="ml-auto shrink-0 text-xs text-dim">
+              Add to
+            </label>
+            <select
+              id={zoneFieldId}
+              value={targetZone}
+              onChange={(e) => onTargetZoneChange(e.target.value as DeckZone)}
+              className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
+            >
+              {zones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {ZONE_LABEL[zone]}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
       </div>
 
-      {addFailure && (
+      {shown && addFailure && (
         <p
           role="alert"
           className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
@@ -208,22 +272,24 @@ export function DeckSearchPanel({
         </p>
       )}
 
-      <FilterBar search={search} layoutToggle={false} />
+      {shown && <FilterBar search={search} layoutToggle={false} />}
 
-      {/* One live region, mounted for the life of the panel: a region that appears together
-          with its text announces nothing, because there was no change to notice. */}
-      <p
-        role="status"
-        className={cn(
-          "shrink-0 text-xs",
-          empty && failure ? "text-destructive" : "text-dim",
-          empty && "py-8 text-center",
-        )}
-      >
-        {summaryOf(search, failure)}
-      </p>
+      {/* One live region, mounted for as long as the panel is open: a region that appears
+          together with its text announces nothing, because there was no change to notice. */}
+      {shown && (
+        <p
+          role="status"
+          className={cn(
+            "shrink-0 text-xs",
+            empty && failure ? "text-destructive" : "text-dim",
+            empty && "py-8 text-center",
+          )}
+        >
+          {summaryOf(search, failure)}
+        </p>
+      )}
 
-      {!empty && failure && (
+      {shown && !empty && failure && (
         <div
           role="alert"
           className="flex shrink-0 items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
@@ -248,7 +314,7 @@ export function DeckSearchPanel({
         </div>
       )}
 
-      {!empty && (
+      {shown && !empty && (
         <CardGrid
           rows={rows}
           // The panel's own search, so a new one starts at the top of the wall rather than

@@ -665,7 +665,7 @@ describe("DeckEditor", () => {
       expect(rail).toHaveAttribute("aria-expanded", "false");
       // Not a control that records an intention and moves nothing: there is no width for what
       // it would open, and it says so rather than doing nothing.
-      expect(rail).toBeDisabled();
+      expect(rail).toHaveAttribute("aria-disabled", "true");
       expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
       expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
     } finally {
@@ -679,7 +679,9 @@ describe("DeckEditor", () => {
       await open();
 
       expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Search cards" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Search cards" })).not.toHaveAttribute(
+        "aria-disabled",
+      );
     } finally {
       restore();
     }
@@ -691,7 +693,10 @@ describe("DeckEditor", () => {
     try {
       await open();
 
-      expect(await screen.findByRole("button", { name: "Search cards" })).toBeDisabled();
+      expect(await screen.findByRole("button", { name: "Search cards" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
       expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
     } finally {
       restore();

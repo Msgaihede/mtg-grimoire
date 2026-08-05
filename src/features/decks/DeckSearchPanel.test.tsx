@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -259,14 +259,77 @@ describe("DeckSearchPanel", () => {
    * disabled, because a press could not open anything and a control that records an intention
    * and moves nothing is worse than one that says why.
    */
-  it("draws its rail, disabled and explained, when the editor has no room for it", () => {
-    panel({ roomy: false });
+  it("draws its rail, refused and explained, when the editor has no room for it", async () => {
+    const view = panel({ roomy: false });
 
     const rail = screen.getByRole("button", { name: "Search cards" });
-    expect(rail).toBeDisabled();
     expect(rail).toHaveAttribute("aria-expanded", "false");
     expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+
+    // `aria-disabled` and a press that does nothing, never the `disabled` attribute: a
+    // disabled button leaves the tab order, and the reason for the refusal would then be
+    // reachable only by hovering — which is not something a keyboard has.
+    expect(rail).toHaveAttribute("aria-disabled", "true");
+    expect(rail).not.toBeDisabled();
+    rail.focus();
+    expect(rail).toHaveFocus();
+
+    // And "does nothing" has to include not quietly flipping the reader's own choice: a press
+    // that toggled it would look inert here and then keep the panel shut when the room came
+    // back, which is the reader being answered by a control they never operated.
+    await userEvent.click(rail);
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+
+    view.update({ roomy: true });
+
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+  });
+
+  /**
+   * The panel is what took the caret away, so the panel is what gives it somewhere to go.
+   *
+   * At 1024 a tile press opens the card pane, the pane's arrival squeezes this panel down to
+   * its rail, and the tile that was pressed unmounts with it — so `CardDetailPane`'s hand-back
+   * finds an opener that is not connected, and Escape drops the caret on `<body>` with the next
+   * Tab restarting from the top of the app.
+   */
+  it("takes the caret when the pane closes and the tile that opened it has gone", async () => {
+    const view = panel();
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    // The card opens, and its arrival is what squeezes the panel out.
+    act(() => useAppStore.setState({ selectedCardId: "1" }));
+    view.update({ roomy: false });
+    // The pane closes with the caret on it and nothing connected to hand it back to.
+    (document.activeElement as HTMLElement | null)?.blur();
+    act(() => useAppStore.setState({ selectedCardId: null }));
+
+    expect(screen.getByRole("button", { name: "Search cards" })).toHaveFocus();
+
+    // And it is still there one commit later, when the width the closing pane gave back
+    // reopens the panel around it. The disclosure is one node across both states for exactly
+    // this: two shapes would mean a fresh button here, and the caret back on `<body>`.
+    view.update({ roomy: true });
+
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search cards" })).toHaveFocus();
+  });
+
+  /** And it does not steal one: an opener still on screen has already been handed the caret
+   *  back, which is where the reader was. */
+  it("leaves the caret alone when something else still has it", async () => {
+    const view = panel();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+
+    act(() => useAppStore.setState({ selectedCardId: "1" }));
+    view.update({ roomy: false });
+    elsewhere.focus();
+    act(() => useAppStore.setState({ selectedCardId: null }));
+
+    expect(elsewhere).toHaveFocus();
+    elsewhere.remove();
   });
 
   /**

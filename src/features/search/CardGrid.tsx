@@ -122,10 +122,11 @@ export function CardGrid<T extends GridCard>({
    * Narrowest a tile may get here, overriding {@link TILE_MIN_WIDTH}.
    *
    * For the one wall that is not a page-width wall: the deck editor's docked panel is 384px,
-   * and 384 is **343** once the panel's own scrollbar and the wall's padding are off it —
-   * eleven pixels short of two 170px tiles, so the whole column drew one 343px card per row
-   * at 508px of height, less than one of which was ever on screen. Measured in the running
-   * window; the arithmetic looked fine until the scrollbar was counted.
+   * and 384 is **331** once the panel's own left padding (12), the scrollbar (17) and this
+   * wall's padding (24) are off it — measured at 330 in the running window, and 23 short of
+   * two 170px tiles. At the standard floor the column drew one 330px card per row at 490px of
+   * height, inside a wall 341px tall: less than a whole card, ever. The arithmetic looked fine
+   * until the scrollbar and the panel's own padding were counted.
    *
    * A floor, not a width: tiles still share out the leftover ({@link tileWidthFor}), and the
    * `grid` image is 488px wide, so a smaller floor is a deeper downscale and never a blowup.
