@@ -127,8 +127,14 @@ fn json_raw(col: &str) -> String {
 }
 
 /// The head schema version — what [`migrate`] walks a database up to, and what
-/// `migrate_is_idempotent_and_creates_tables` pins. Named because three tests and the
-/// final `PRAGMA user_version` write all have to mean the same number.
+/// `migrate_is_idempotent_and_creates_tables` pins. Named because three tests all have to
+/// mean the same number.
+///
+/// **No migration step writes this constant.** Each step ends with the literal version it
+/// produces (`PRAGMA user_version = 3;` in the v3 step, and so on), because a step that
+/// wrote *head* would commit "fully migrated" before the steps after it had run — and
+/// would keep the version assertion passing while doing it. This constant is the thing
+/// tests compare against, not the thing steps write.
 pub const SCHEMA_VERSION: i64 = 4;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
@@ -142,6 +148,16 @@ pub const SCHEMA_VERSION: i64 = 4;
 /// UNIQUE index as *distinct*, so a nullable column in the grain is a column that stops
 /// enforcing anything the moment it is empty — which for `serial_number` (NULL on every
 /// card that is not serialized, i.e. nearly all of them) would mean no grain at all.
+///
+/// # `grading` enters identity as **raw text**
+///
+/// It is compared byte for byte, not as JSON, so `{"company":"PSA","grade":10}` and
+/// `{"grade":10,"company":"PSA"}` are two different graded copies of the same card. Anything
+/// that writes this column therefore serializes through the one fixed-field struct that owns
+/// the shape — never a hand-built string, never a map with non-deterministic key order.
+/// Get that wrong and the same physical card forks into a new row on every edit, silently,
+/// with no constraint anywhere to catch it. (`json_valid` is enforced by the table's CHECK;
+/// *canonical* is enforced by nothing but this rule.)
 pub const COLLECTION_GRAIN: &str = "card_id, finish, condition, lang, altered, signed, proxy, \
      misprint, coalesce(serial_number, ''), coalesce(grading, '')";
 
@@ -293,6 +309,13 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 -- normalisation is lossy (EU 'GD' and NA 'MP' arrive as one grade) and the
                 -- user's own file is the only place the difference still exists.
                 condition_original TEXT,
+                -- `>= 0`, not `> 0`, and the wishlist's `> 0` differs on purpose. A
+                -- stepper taken down to zero is a real state here: the row keeps its
+                -- condition, its price, its tags and its acquisition story while the user
+                -- owns none of that printing today. So every aggregate that reads this has
+                -- to decide *deliberately* whether a zero row counts as owned — and a
+                -- 'cards owned' figure that counts rows rather than quantity will be
+                -- wrong the first time somebody trades a playset away.
                 quantity INTEGER NOT NULL CHECK (quantity >= 0),
                 tradelist_quantity INTEGER NOT NULL DEFAULT 0
                     CHECK (tradelist_quantity >= 0),
@@ -377,7 +400,13 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             grain = COLLECTION_GRAIN,
             wish = WISHLIST_GRAIN
         ))?;
-        tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+        // Literal `4`, for the same reason v3 writes a literal `3`: this step is what makes
+        // a database version 4, and the next step added here will make head 5. Writing
+        // `SCHEMA_VERSION` would commit "migrated" before that step had run — and it would
+        // also quietly defang `migrate_is_idempotent_and_creates_tables`, which pins
+        // `user_version == SCHEMA_VERSION` and would keep passing while the last step was
+        // never reached. **Every future step ends with its own literal.**
+        tx.execute_batch("PRAGMA user_version = 4;")?;
         tx.commit()?;
     }
     Ok(())
@@ -792,21 +821,34 @@ mod tests {
             assert_eq!(n, 1, "`{table}` is not sync data");
         }
         // And the denormalised printing is still the printing the user recorded, not
-        // whatever the new `cards` row says. That is the point of storing it.
-        let (set, cn): (String, String) = conn
+        // whatever the new `cards` row says. That is the point of storing it. The soft
+        // reference and the quantity come back too: surviving the swap as an emptied or
+        // repointed row would satisfy the count above and be no use to anyone.
+        let (card_id, set, cn, qty): (String, String, String, i64) = conn
             .query_row(
-                "SELECT set_code, collector_number FROM collection_entries",
+                "SELECT card_id, set_code, collector_number, quantity FROM collection_entries",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!((set.as_str(), cn.as_str()), ("lea", "161"));
+        assert_eq!(
+            (card_id.as_str(), set.as_str(), cn.as_str(), qty),
+            ("bolt", "lea", "161", 4),
+            "user rows are not sync data"
+        );
     }
 
     /// Two copies are one row when they agree on the grain, and two rows when they do not.
     /// The `coalesce`s are load-bearing: SQLite treats NULLs in a UNIQUE index as distinct,
     /// so without them a second unserialised copy would insert instead of conflicting, and
     /// the upsert every quick-add depends on would silently create duplicates.
+    ///
+    /// Every term of [`COLLECTION_GRAIN`] is exercised, one at a time, because this is the
+    /// constant all of Plan 3 upserts against and a term silently dropped from it is a term
+    /// that stops distinguishing anything. Deleting any of `finish`, `condition`,
+    /// `serial_number`, the four flags or `grading` from the constant fails a line below —
+    /// and turning `coalesce(serial_number, '')` back into a bare `serial_number` fails the
+    /// very first assertion, because two NULLs would stop conflicting.
     #[test]
     fn the_collection_grain_is_unique_including_the_nullable_parts() {
         let conn = Connection::open_in_memory().unwrap();
@@ -827,10 +869,53 @@ mod tests {
         add("foil", "NM", Some("042/500")).unwrap();
         add("foil", "NM", Some("043/500")).unwrap();
 
+        // The four flags. Each is in the grain because an altered — or signed, or proxy,
+        // or misprinted — copy is a *different object* from a clean one, not a note about
+        // the same one; a playset of four is not four of whatever the first one is. Each
+        // is toggled on its own against the clean row the first `add` already stored, so a
+        // flag dropped from the constant collides with that row and fails here by name.
+        let flagged = |flag: &str| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO collection_entries
+                        (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                         {flag},created_at,updated_at)
+                     VALUES ('bolt','lea','161','en','foil','NM',1,1,unixepoch(),unixepoch())"
+                ),
+                [],
+            )
+        };
+        for flag in ["altered", "signed", "proxy", "misprint"] {
+            flagged(flag)
+                .unwrap_or_else(|e| panic!("`{flag}` must be part of the grain, but: {e}"));
+            assert!(
+                flagged(flag).is_err(),
+                "the same `{flag}` copy twice is one row"
+            );
+        }
+
+        // `grading` likewise, and as raw text (see `COLLECTION_GRAIN`): a slabbed copy is
+        // not the ungraded one, and a PSA 10 is not a CGC 9.5. Identical grading is the
+        // same slab and must conflict — which is exactly why the text has to be written
+        // canonically, since only the bytes are compared.
+        let graded = |grading: &str| {
+            conn.execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     grading,created_at,updated_at)
+                 VALUES ('bolt','lea','161','en','foil','NM',1,?1,unixepoch(),unixepoch())",
+                [grading],
+            )
+        };
+        let psa10 = r#"{"company":"PSA","grade":10}"#;
+        graded(psa10).expect("a graded copy is not the ungraded one");
+        graded(r#"{"company":"CGC","grade":9.5}"#).expect("and one grader's 10 is not another's");
+        assert!(graded(psa10).is_err(), "the same slab twice is one row");
+
         let n: i64 = conn
             .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n, 5);
+        assert_eq!(n, 11);
     }
 
     /// The enums, enforced where they cannot be argued with. `finishes` is a strict enum
@@ -842,7 +927,7 @@ mod tests {
         migrate(&conn).unwrap();
         // A different card every time, so that the *only* thing that can reject a row is
         // the value under test. Held on one `card_id` the accepted values would collide
-        // with each other on the grain — `nonfoil`/`NM` is both the third finish and the
+        // with each other on the grain — `nonfoil`/`NM` is the first finish *and* the
         // first condition — and a UNIQUE failure would read exactly like a CHECK failure.
         let nth = std::cell::Cell::new(0);
         let add = |finish: &str, condition: &str, qty: i64| {
