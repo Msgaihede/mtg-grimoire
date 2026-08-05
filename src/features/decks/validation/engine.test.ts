@@ -383,8 +383,9 @@ describe("copy limits", () => {
   });
 
   /**
-   * The commander is one of the 100 (CR 903.5b), so a card in the commander zone and the
-   * same card in the main deck is two copies of it — a state the zone model allows, because
+   * The commander is one of the 100 (CR 903.5a), and CR 903.5b's different-name rule is
+   * about the deck those 100 cards are — so a card in the commander zone and the same card
+   * in the main deck is two copies of it, a state the zone model allows because
    * `deck_cards` is unique on `(deck, card, zone)`.
    */
   it("counts the commander zone as part of the deck", () => {
