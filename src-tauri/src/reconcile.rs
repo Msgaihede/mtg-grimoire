@@ -20,6 +20,12 @@
 //! has no answer of its own. That is `collection::add_entry`'s and `wishlist::add_wish`'s
 //! `ON CONFLICT` rule verbatim, and it is what makes "nothing the user recorded is lost"
 //! a claim this module can actually keep.
+//!
+//! Three user tables now, `deck_cards` among them, and the deck tables are why that fold
+//! is the most dangerous statement in the module: `deck_allocations.collection_entry_id`
+//! is an enforced `ON DELETE CASCADE` reference, so a fold that deleted first would take a
+//! deck's claim on copies that still exist. [`fold_into_existing`] moves the claims before
+//! it deletes, in the same transaction — the cascade is left with nothing to take.
 
 use crate::scryfall::Migration;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -37,7 +43,11 @@ pub struct ReconcileStats {
 /// Is there any user data to reconcile at all?
 ///
 /// Scryfall asks applications not to make requests they do not need, and a database with no
-/// collection and no wishlist has nothing an id migration could be about.
+/// collection, no wishlist and no deck list has nothing an id migration could be about.
+///
+/// `deck_cards` and not `decks`, because `deck_cards` is where a deck's card ids are: an
+/// empty deck names no printing this module acts on, and `decks.cover_card_id` — the only
+/// other card id in the deck tables — is cosmetic and untouched here.
 ///
 /// A count that cannot be read answers `1`, so an unreadable database is treated as having
 /// rows: skipping the poll on a failed `count(*)` would make a broken read look like an
@@ -46,6 +56,7 @@ pub fn user_data_is_empty(conn: &Connection) -> bool {
     let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(1);
     count("SELECT count(*) FROM collection_entries") == 0
         && count("SELECT count(*) FROM wishlist_entries") == 0
+        && count("SELECT count(*) FROM deck_cards") == 0
 }
 
 /// Apply every migration this database has not already applied.
@@ -54,6 +65,18 @@ pub fn user_data_is_empty(conn: &Connection) -> bool {
 /// ids that no longer describe what they own.
 pub fn apply(conn: &mut Connection, migrations: &[Migration]) -> rusqlite::Result<ReconcileStats> {
     let mut stats = ReconcileStats::default();
+    // Merge destinations resolve through the pass's own map, so a chain lands every row
+    // on its FINAL id no matter how the log was ordered or dated. [`oldest_first`] still
+    // runs — it keeps `card_migrations` recorded in a sane order — but correctness no
+    // longer leans on dates Scryfall only publishes to the day.
+    let resolved: std::collections::HashMap<&str, &str> = migrations
+        .iter()
+        .filter(|m| m.strategy == "merge")
+        .filter_map(|m| {
+            let new = m.new_card_id.as_deref()?.trim();
+            (!new.is_empty()).then_some((m.old_card_id.as_str(), new))
+        })
+        .collect();
     let tx = conn.transaction()?;
     for m in oldest_first(migrations) {
         let already: bool = tx
@@ -76,7 +99,7 @@ pub fn apply(conn: &mut Connection, migrations: &[Migration]) -> rusqlite::Resul
             // form sends): repointing a row at `''` would orphan it permanently and put
             // every other blank-id row on the same grain.
             ("merge", Some(new_id)) if !new_id.trim().is_empty() => {
-                merge(&tx, m, new_id.trim(), &mut stats)?
+                merge(&tx, m, final_id(&resolved, new_id.trim()), &mut stats)?
             }
             ("delete", _) => stats.flagged += flag_deleted(&tx, m)?,
             // A strategy this app has never heard of, or a merge with nowhere to merge to.
@@ -135,6 +158,33 @@ fn oldest_first(migrations: &[Migration]) -> Vec<&Migration> {
         (None, None) => std::cmp::Ordering::Equal,
     });
     ordered
+}
+
+/// Where a merge destination *ends up*, walked through one pass's own old→new map.
+///
+/// [`oldest_first`] fixes the chains it can see, and `performed_at` is why it cannot see
+/// them all: Scryfall publishes it to the **day**, so A→B and B→C performed on one day
+/// arrive newest-first and the stable sort — equal keys, order preserved — keeps them that
+/// way. The pass would then repoint A's rows to B, an id it retired a moment earlier,
+/// record both migrations as applied, and never revisit either: the row waits behind a flag
+/// for a card that is never coming. Ordering cannot fix that; resolution can, and it fixes
+/// the dated case too — those rows now take one hop instead of one per link.
+///
+/// The recorded `card_migrations` row still keeps Scryfall's own `new_card_id`: the
+/// bookkeeping mirrors the log, and the *rows* land on the truth.
+///
+/// Bounded by the map's size, so a cycle (A→B, B→A) stops instead of spinning.
+fn final_id<'a>(
+    resolved: &std::collections::HashMap<&'a str, &'a str>,
+    mut id: &'a str,
+) -> &'a str {
+    for _ in 0..resolved.len() {
+        match resolved.get(id) {
+            Some(&next) => id = next,
+            None => break,
+        }
+    }
+    id
 }
 
 /// What goes in `card_migrations.note`: Scryfall's own note, and for a strategy this app
@@ -268,6 +318,40 @@ fn merge(
             stats.flagged += flag_unfoldable(tx, "wishlist_entries", id, new_id)?;
         }
     }
+
+    // A deck list is user data by the same argument as the collection: the user typed it,
+    // and an upstream id change is not a reason for a card to leave a deck. Same three
+    // arms, this table's grain (`schema::DECK_CARD_GRAIN`, which has `zone` in it).
+    //
+    // `name` is **not** refreshed, and it is the one column the collection loop does not
+    // have to decide about. It is the oracle name, and a merge says two ids are one
+    // printing — not that the card is called something else. A card that really is renamed
+    // reaches the user through the sweep's flag, which is a sentence they can read, rather
+    // than through a deck list that quietly says something different than it did yesterday.
+    let deck_rows: Vec<i64> = tx
+        .prepare("SELECT id FROM deck_cards WHERE card_id = ?1")?
+        .query_map(params![m.old_card_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for id in deck_rows {
+        let repointed = tx.execute(
+            "UPDATE OR IGNORE deck_cards
+                SET card_id = ?2,
+                    set_code = coalesce(?3, set_code),
+                    collector_number = coalesce(?4, collector_number),
+                    lang = coalesce(?5, lang),
+                    needs_review = ?6,
+                    updated_at = unixepoch()
+              WHERE id = ?1",
+            params![id, new_id, set_code, collector_number, lang, note],
+        )?;
+        if repointed == 1 {
+            stats.repointed += 1;
+        } else if fold_deck_card_into_existing(tx, id, new_id)? {
+            stats.folded += 1;
+        } else {
+            stats.flagged += flag_unfoldable(tx, "deck_cards", id, new_id)?;
+        }
+    }
     Ok(())
 }
 
@@ -324,6 +408,11 @@ fn collision_target(
 /// *this* row's condition — the string one import used — and it cannot describe a condition
 /// it was never written beside. Both stay the survivor's, and the entry editor is where
 /// they change.
+///
+/// **And the decks' claims on the row move with it.** `deck_allocations` holds the only
+/// enforced foreign key pointed at a collection entry, `ON DELETE CASCADE`, so the delete
+/// below would take the user's reservations with it — copies that still exist, in a deck
+/// that still wants them. See the comment on the three statements.
 fn fold_into_existing(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
@@ -345,6 +434,37 @@ fn fold_into_existing(
             updated_at = unixepoch()
           FROM (SELECT * FROM collection_entries WHERE id = ?2) AS s
           WHERE t.id = ?1",
+        params![target, source],
+    )?;
+    // The FK treaty (schema v5): `deck_allocations.collection_entry_id` cascades on
+    // delete for `remove_entry`'s sake — so THIS delete, the app's only non-user one,
+    // must leave nothing for the cascade to take. Claims on the folding row move to the
+    // survivor; where the deck already claims the survivor, the two claims fold first
+    // (their grain is one row per (deck, entry), the same shape as the entries' own).
+    //
+    // All three statements seek through `idx_deck_allocations_entry`, and all three are
+    // inside the caller's transaction with the delete below: an allocation is never
+    // briefly homeless, and a pass that fails takes the repoint back with it.
+    tx.execute(
+        "UPDATE deck_allocations AS t SET
+            quantity = t.quantity + s.quantity,
+            updated_at = unixepoch()
+          FROM (SELECT deck_id, quantity FROM deck_allocations
+                 WHERE collection_entry_id = ?2) AS s
+          WHERE t.deck_id = s.deck_id AND t.collection_entry_id = ?1",
+        params![target, source],
+    )?;
+    tx.execute(
+        "DELETE FROM deck_allocations
+          WHERE collection_entry_id = ?2
+            AND EXISTS (SELECT 1 FROM deck_allocations t
+                         WHERE t.deck_id = deck_allocations.deck_id
+                           AND t.collection_entry_id = ?1)",
+        params![target, source],
+    )?;
+    tx.execute(
+        "UPDATE deck_allocations SET collection_entry_id = ?1, updated_at = unixepoch()
+          WHERE collection_entry_id = ?2",
         params![target, source],
     )?;
     tx.execute(
@@ -400,6 +520,46 @@ fn fold_wish_into_existing(
     Ok(true)
 }
 
+/// The deck list's fold. Same shape again, `schema::DECK_CARD_GRAIN` compared between two
+/// rows, and the same rule: the quantity moves before the row does.
+///
+/// `zone` is in the grain, so this only ever folds two rows the deck runs *in the same
+/// zone* — the same printing in `main` and in `maybe` is two intentions, and a merge is not
+/// a reason to collapse them into one.
+///
+/// Nothing else moves, because a deck card holds nothing else the user typed: no price, no
+/// acquisition story, no tags. The quantities add, exactly as `deck.rs`'s own `ON CONFLICT`
+/// adds them when the same printing is added to a zone twice.
+fn fold_deck_card_into_existing(
+    tx: &rusqlite::Transaction<'_>,
+    source: i64,
+    new_id: &str,
+) -> rusqlite::Result<bool> {
+    let target: Option<i64> = tx
+        .query_row(
+            // `?2` rather than `s.card_id` for the same reason [`collision_target`] takes
+            // the new language: this is the grain of the row **after** the repoint.
+            "SELECT t.id FROM deck_cards t, deck_cards s
+              WHERE s.id = ?1 AND t.id <> s.id
+                AND t.deck_id = s.deck_id AND t.card_id = ?2 AND t.zone = s.zone",
+            params![source, new_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(target) = target else {
+        return Ok(false);
+    };
+    tx.execute(
+        "UPDATE deck_cards SET
+            quantity = quantity + (SELECT quantity FROM deck_cards WHERE id = ?2),
+            updated_at = unixepoch()
+          WHERE id = ?1",
+        params![target, source],
+    )?;
+    tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![source])?;
+    Ok(true)
+}
+
 /// A row that could neither be repointed nor folded. Defensive: [`collision_target`] and
 /// its wishlist twin describe the grains the repoint would violate exactly, so there should
 /// always be a row to fold into. If one is ever missed, the row stays where it is and says
@@ -451,7 +611,7 @@ fn flag_deleted(tx: &rusqlite::Transaction<'_>, m: &Migration) -> rusqlite::Resu
          identify it, or remove this entry."
     );
     let mut flagged = 0;
-    for table in ["collection_entries", "wishlist_entries"] {
+    for table in ["collection_entries", "wishlist_entries", "deck_cards"] {
         flagged += tx.execute(
             &format!(
                 "UPDATE {table} SET needs_review = ?2, updated_at = unixepoch()
@@ -475,10 +635,11 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
          card-data sync, or it may return with the next one.";
     let mut flagged = 0;
     let mut cleared = 0;
-    for table in ["collection_entries", "wishlist_entries"] {
+    for table in ["collection_entries", "wishlist_entries", "deck_cards"] {
         // `card_id IS NOT NULL` is not redundant on the wishlist: a wish for *any*
         // printing carries no card id at all (spec §6), and it resolves to whatever
         // printing the list joins to — it is not an orphan and must never be flagged as one.
+        // On the other two the column is `NOT NULL`, so the guard is vacuous and harmless.
         flagged += conn.execute(
             &format!(
                 "UPDATE {table} SET needs_review = ?1, updated_at = unixepoch()
@@ -544,6 +705,48 @@ mod tests {
                 (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
              VALUES (?1,'lea','161','en',?2,'NM',?3,unixepoch(),unixepoch()) RETURNING id",
             rusqlite::params![card_id, finish, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A deck, taking every default the table offers. These three seed helpers are this
+    /// module's own — `schema::tests` has helpers of the same names, but they belong to
+    /// that module's tests and are free to change with them; `own` above already sets the
+    /// precedent that a seeder lives beside the tests that read it.
+    fn deck(conn: &Connection, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO decks (name, created_at, updated_at)
+             VALUES (?1, unixepoch(), unixepoch()) RETURNING id",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One printing in one zone of one deck, with the printing denormalised beside the
+    /// soft `card_id` exactly as `deck.rs` writes it — the *old* printing, which is what
+    /// a merge has to refresh.
+    fn deck_card(conn: &Connection, deck_id: i64, card_id: &str, zone: &str, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_cards
+                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                 created_at,updated_at)
+             VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,?4,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![deck_id, card_id, zone, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One deck's claim on one collection entry.
+    fn allocate(conn: &Connection, deck_id: i64, entry_id: i64, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_allocations
+                (deck_id, collection_entry_id, quantity, created_at, updated_at)
+             VALUES (?1,?2,?3,unixepoch(),unixepoch()) RETURNING id",
+            rusqlite::params![deck_id, entry_id, quantity],
             |r| r.get(0),
         )
         .unwrap()
@@ -1101,6 +1304,13 @@ mod tests {
     /// A→B in 2021 and B→C in 2023, applying newest-first repoints B's rows to C and *then*
     /// moves A's rows to B — a dead id, recorded as applied, so the next poll never
     /// revisits it and the row waits behind a flag for a card that is never coming.
+    ///
+    /// Two defences stand behind that now, and this test is where the second one shows: the
+    /// row makes the trip in **one** repoint rather than one per link, because [`final_id`]
+    /// resolves the destination before the row is moved. (It read `2`, "one hop each", when
+    /// the ordering was the only defence.) The dated chain never needed the resolution — the
+    /// sort alone got it here — but it gets it anyway, and that is the point: correctness no
+    /// longer depends on which of the two arrives first.
     #[test]
     fn a_chain_of_merges_delivered_newest_first_still_lands_on_the_last_id() {
         let mut conn = seeded();
@@ -1137,7 +1347,10 @@ mod tests {
             review, None,
             "and it arrived on a card that exists, so nothing is owed to the user"
         );
-        assert_eq!(stats.repointed, 2, "one hop each");
+        assert_eq!(
+            stats.repointed, 1,
+            "one hop, not one per link: A→C was resolved before the row was touched"
+        );
     }
 
     /// The case the skip comment names, exercised rather than asserted: a *fold* applied
@@ -1301,5 +1514,260 @@ mod tests {
             .query_row("SELECT card_id FROM collection_entries", [], |r| r.get(0))
             .unwrap();
         assert_eq!(card, "old-id", "the repoint rolled back with the pass");
+    }
+
+    /// THE gate (plan-3 final review, I6): the fold is the app's only non-user delete, and
+    /// with `deck_allocations.collection_entry_id` ON DELETE CASCADE it would silently
+    /// destroy a deck's reservation on copies that still exist. The allocations move to the
+    /// fold survivor BEFORE the delete — so the CASCADE, which is right for `remove_entry`,
+    /// fires over nothing here.
+    #[test]
+    fn a_fold_moves_deck_allocations_to_the_surviving_entry_before_it_deletes() {
+        let mut conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let old = own(&conn, "old-id", "foil", 3);
+        let existing = own(&conn, "new-id", "foil", 2);
+        let deck = deck(&conn, "Burn");
+        allocate(&conn, deck, old, 3);
+
+        apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        let (entry, qty): (i64, i64) = conn
+            .query_row(
+                "SELECT collection_entry_id, quantity FROM deck_allocations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (entry, qty),
+            (existing, 3),
+            "the claim survived the fold, on the survivor"
+        );
+    }
+
+    /// The collision case: the deck already holds a claim on the survivor. Two claims on
+    /// what is now one entry are one claim with both quantities — the same statement the
+    /// fold makes about the entries themselves.
+    #[test]
+    fn a_fold_merges_colliding_allocations_instead_of_violating_their_grain() {
+        let mut conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let old = own(&conn, "old-id", "foil", 2);
+        let existing = own(&conn, "new-id", "foil", 1);
+        let burn = deck(&conn, "Burn");
+        allocate(&conn, burn, old, 2);
+        allocate(&conn, burn, existing, 1);
+
+        apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "one entry, one deck — one claim");
+        let (entry, qty): (i64, i64) = conn
+            .query_row(
+                "SELECT collection_entry_id, quantity FROM deck_allocations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (entry, qty),
+            (existing, 3),
+            "two plus one, on the row that survived"
+        );
+    }
+
+    /// Deck rows are user rows: a merge repoints them, folding on the deck grain when the
+    /// deck already runs the new printing in that zone.
+    ///
+    /// The refreshed printing is asserted on the *repointed* row, because that is the row
+    /// the refresh happens to: the fold's survivor keeps its own `set_code`/
+    /// `collector_number`, which already describe the new card — `collection_entries`'
+    /// fold makes exactly the same statement about exactly the same columns.
+    #[test]
+    fn a_merge_repoints_deck_cards_and_folds_same_zone_collisions() {
+        let mut conn = seeded();
+        let burn = deck(&conn, "Burn");
+        let source = deck_card(&conn, burn, "old-id", "main", 3);
+        let target = deck_card(&conn, burn, "new-id", "main", 2);
+        let maybe = deck_card(&conn, burn, "old-id", "maybe", 1);
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!(
+            (stats.repointed, stats.folded),
+            (1, 1),
+            "the maybe row moved, the main row folded"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 2,
+            "one row per zone, and the maybe row is not one of them"
+        );
+        let (id, card, qty): (i64, String, i64) = conn
+            .query_row(
+                "SELECT id, card_id, quantity FROM deck_cards WHERE zone = 'main'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((id, card.as_str(), qty), (target, "new-id", 5));
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM deck_cards WHERE id = ?1",
+                [source],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0,
+            "the folded row is gone, not duplicated"
+        );
+        // Zone is part of the grain, so the same printing in `maybe` is a different row
+        // with a different intention — it repoints on its own, printing and all.
+        let (card, set, cn, name): (String, String, String, String) = conn
+            .query_row(
+                "SELECT card_id, set_code, collector_number, name FROM deck_cards WHERE id = ?1",
+                [maybe],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (card.as_str(), set.as_str(), cn.as_str()),
+            ("new-id", "2ed", "162")
+        );
+        assert_eq!(
+            name, "Lightning Bolt",
+            "a merge says two ids are one printing, not that the card is called something else"
+        );
+    }
+
+    /// A delete **flags** a deck row too, and the sweep is the half that needs no log: a
+    /// deck card whose printing left `cards` is flagged and cleared when it returns. The
+    /// deck list keeps rendering the vanished printing's name throughout — that is what
+    /// the denormalised `name` is for.
+    #[test]
+    fn a_delete_flags_deck_rows_and_the_sweep_clears_what_returns() {
+        let mut conn = seeded();
+        let burn = deck(&conn, "Burn");
+        let vanished = deck_card(&conn, burn, "gone-id", "main", 2);
+        let live = deck_card(&conn, burn, "new-id", "side", 1);
+
+        let stats = apply(&mut conn, &[migration("m2", "delete", "gone-id", None)]).unwrap();
+
+        assert_eq!(
+            stats.flagged, 1,
+            "the third table is flagged like the other two"
+        );
+        let (review, rows): (Option<String>, i64) = conn
+            .query_row(
+                "SELECT needs_review, (SELECT count(*) FROM deck_cards)
+                   FROM deck_cards WHERE id = ?1",
+                [vanished],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(review.unwrap().contains("2026-07-01"));
+        assert_eq!(rows, 2, "flagged, never deleted");
+
+        conn.execute("DELETE FROM cards WHERE id = 'new-id'", [])
+            .unwrap();
+        assert_eq!(
+            sweep_orphans(&conn).unwrap(),
+            (1, 0),
+            "the live row lost its printing; the flagged one keeps its first message"
+        );
+        let review: Option<String> = conn
+            .query_row(
+                "SELECT needs_review FROM deck_cards WHERE id = ?1",
+                [live],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(review.unwrap().contains("card database"));
+
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('new-id','o1','Lightning Bolt','2ed','162','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(sweep_orphans(&conn).unwrap(), (0, 1), "and it clears again");
+        let (cleared, kept): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT (SELECT needs_review FROM deck_cards WHERE id = ?1),
+                        (SELECT needs_review FROM deck_cards WHERE id = ?2)",
+                [live, vanished],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cleared, None);
+        assert!(
+            kept.unwrap().starts_with(DELETED_NOTE_PREFIX),
+            "a delete flag is not the sweep's to clear, on any table"
+        );
+    }
+
+    /// A user who keeps decks and no collection still has card ids that Scryfall can
+    /// migrate — without this the poll never happens and their deck lists rot quietly.
+    #[test]
+    fn a_database_whose_only_user_rows_are_decks_still_reconciles() {
+        let conn = seeded();
+        assert!(user_data_is_empty(&conn));
+        let burn = deck(&conn, "Burn");
+        // A deck with no cards names no printing the reconciler acts on: `deck_cards` is
+        // where the card ids are, and `decks.cover_card_id` is not one this module touches.
+        assert!(user_data_is_empty(&conn));
+        deck_card(&conn, burn, "new-id", "main", 1);
+        assert!(!user_data_is_empty(&conn));
+    }
+
+    /// Same-day chains (plan-3 carryover §4). `performed_at` is date-only, so A→B and B→C
+    /// performed on ONE day arrive newest-first and the stable sort keeps them that way —
+    /// order alone cannot save the row. Destinations resolve transitively instead.
+    #[test]
+    fn a_same_day_chain_lands_on_the_final_id() {
+        let mut conn = seeded();
+        let id = own(&conn, "a-id", "foil", 2);
+        apply(
+            &mut conn,
+            &[
+                Migration {
+                    performed_at: Some("2026-07-01".into()),
+                    ..migration("m2", "merge", "b-id", Some("new-id"))
+                },
+                Migration {
+                    performed_at: Some("2026-07-01".into()),
+                    ..migration("m1", "merge", "a-id", Some("b-id"))
+                },
+            ],
+        )
+        .unwrap();
+        let card: String = conn
+            .query_row(
+                "SELECT card_id FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            card, "new-id",
+            "resolved a→b→new through the map, not through the sort"
+        );
     }
 }

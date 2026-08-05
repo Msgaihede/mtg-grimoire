@@ -540,7 +540,7 @@ async fn finish_unchanged(
 /// On the same 24 h cadence as everything else here, because it is called from the same two
 /// places a sync can finish. Skipped entirely when there is nothing to reconcile: Scryfall
 /// asks applications not to make requests they do not need, and a database with no
-/// collection and no wishlist has no ids to migrate.
+/// collection, no wishlist and no deck list has no ids to migrate.
 ///
 /// A failure is logged and dropped. The bulk data is ingested either way, and an id
 /// migration that did not apply today applies tomorrow — whereas failing the whole sync
