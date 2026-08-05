@@ -229,7 +229,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         Some(k) => Some(valid_format(conn, k)?.to_owned()),
         None => None,
     };
-    let changed = conn
+    // One transaction, for [`allocate_deck`]'s sake: sleeving a deck up rewrites its claims
+    // as a DELETE and N INSERTs, and in autocommit a reader between them would see a built
+    // deck holding nothing while a failure part-way would strand a half-rebuilt claim set
+    // under an `is_built` that had already flipped. The flag and the claims it means are one
+    // fact and are written as one. Every other allocation site already had a transaction to
+    // join; this is the only one that had to open its own.
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let changed = tx
         .execute(
             "UPDATE decks SET
                 name = coalesce(?2, name),
@@ -259,8 +266,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // claims are recomputed the next time it is touched, because walking the whole gallery
     // on a toggle would make one checkbox a write over every deck the user owns.
     if patch.is_built.is_some() {
-        allocate_deck(conn, id)?;
+        allocate_deck(&tx, id)?;
     }
+    tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 
@@ -736,16 +744,25 @@ fn read_deck_cards(conn: &Connection, deck_id: i64) -> Result<Vec<DeckCardRow>, 
 /// box" would refuse commanders that are legal.
 ///
 /// So the read repairs itself, for the rows that ask and only those: one lookup per distinct
-/// printing whose P/T are both missing, gunzipped **in Rust** through
-/// [`crate::card_row::raw_json`] over `CAST(raw AS BLOB)`, because `json_extract` over a gzip
-/// member is a hard `malformed JSON` error rather than a NULL (CLAUDE.md). A deck is a
-/// hundred rows, so this is a hundred 2 KB inflations at worst, and it costs nothing at all
-/// on a database that has synced.
+/// printing that is **both** missing its P/T and of a type that could have one, gunzipped
+/// **in Rust** through [`crate::card_row::raw_json`] over `CAST(raw AS BLOB)`, because
+/// `json_extract` over a gzip member is a hard `malformed JSON` error rather than a NULL
+/// (CLAUDE.md).
+///
+/// The type gate is what keeps this from being permanent: on a *fully synced* database both
+/// columns are NULL for every land, instant, sorcery, enchantment and ordinary artifact —
+/// Scryfall simply omits the keys, and NULL is then the correct answer — so an ungated
+/// recovery would inflate and parse a 2 KB blob for the majority of every deck, forever,
+/// and find nothing every time. See [`may_have_a_power_toughness_box`].
 fn fill_unknown_power_toughness(conn: &Connection, rows: &mut [DeckCardRow]) -> Result<(), String> {
     let unknown: Vec<String> = {
         let mut ids: Vec<String> = rows
             .iter()
-            .filter(|r| r.power.is_none() && r.toughness.is_none())
+            .filter(|r| {
+                r.power.is_none()
+                    && r.toughness.is_none()
+                    && may_have_a_power_toughness_box(r.type_line.as_deref())
+            })
             .map(|r| r.card_id.clone())
             .collect();
         ids.sort_unstable();
@@ -777,6 +794,27 @@ fn fill_unknown_power_toughness(conn: &Connection, rows: &mut [DeckCardRow]) -> 
         }
     }
     Ok(())
+}
+
+/// Whether a missing P/T is worth going to `raw` for.
+///
+/// The three types that print a P/T box: creatures, and — since 2026 — Vehicles and
+/// Spacecraft, which is the same list CR 903.3 gives for what a legendary permanent must be
+/// to command a deck. Everything else has no box, so NULL is not a gap in the data but the
+/// fact itself, and looking is a guaranteed miss.
+///
+/// Matched against the **whole** type line, which is why a transform card is covered: `cards`
+/// stores the combined `"Land // Legendary Creature — Demon"`, so a back-face creature is
+/// found by the same substring. A **NULL** type line is treated as *could be* — an orphan has
+/// no type line and neither does a card row that arrived without one, and the conservative
+/// direction for an unknown is to look. One wasted lookup is cheaper than a commander refused.
+fn may_have_a_power_toughness_box(type_line: Option<&str>) -> bool {
+    match type_line {
+        None => true,
+        Some(t) => ["Creature", "Vehicle", "Spacecraft"]
+            .iter()
+            .any(|k| t.contains(k)),
+    }
 }
 
 /// A bulk line's printed P/T: top level, then the front face — [`crate::card_row`]'s own
@@ -2063,6 +2101,12 @@ mod tests {
         let conn = seeded();
         let ship = r#"{"object":"card","name":"Skysovereign, Consul Flagship","power":"6","toughness":"5"}"#;
         let delver = r#"{"object":"card","name":"Delver of Secrets","card_faces":[{"name":"Delver of Secrets","power":"1","toughness":"1"},{"name":"Insectile Aberration","power":"3","toughness":"2"}]}"#;
+        // A land whose blob *lies*: no land has a P/T, so these keys can only be reached by
+        // a lookup — which is exactly what the type gate must not make. If the gate ever
+        // goes, this row starts reading 9/9 and says so.
+        let island = r#"{"object":"card","name":"Island","power":"9","toughness":"9"}"#;
+        // No type line at all: unknown, so it is looked at — the conservative direction.
+        let nameless = r#"{"object":"card","name":"Mystery","power":"2","toughness":"3"}"#;
         for (id, oracle, name, set, cn, type_line, raw) in [
             (
                 "ship",
@@ -2070,7 +2114,7 @@ mod tests {
                 "Skysovereign, Consul Flagship",
                 "kld",
                 "234",
-                "Legendary Artifact — Vehicle",
+                Some("Legendary Artifact — Vehicle"),
                 ship,
             ),
             (
@@ -2079,9 +2123,19 @@ mod tests {
                 "Delver of Secrets // Insectile Aberration",
                 "isd",
                 "51",
-                "Creature — Human Wizard",
+                Some("Creature — Human Wizard"),
                 delver,
             ),
+            (
+                "island",
+                "o5",
+                "Island",
+                "isd",
+                "255",
+                Some("Basic Land — Island"),
+                island,
+            ),
+            ("mystery", "o6", "Mystery", "ust", "1", None, nameless),
         ] {
             conn.execute(
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -2103,6 +2157,8 @@ mod tests {
         add_card(&conn, deck.id, "ship", "commander", 1).unwrap();
         add_card(&conn, deck.id, "delver", "main", 4).unwrap();
         add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+        add_card(&conn, deck.id, "island", "main", 20).unwrap();
+        add_card(&conn, deck.id, "mystery", "main", 1).unwrap();
 
         let stored: Option<String> = conn
             .query_row("SELECT power FROM cards WHERE id = 'ship'", [], |r| {
@@ -2133,6 +2189,107 @@ mod tests {
             bolt.power.is_none() && bolt.toughness.is_none(),
             "and an Instant really has no P/T box — recovery is not invention"
         );
+
+        // The gate, in the only way it can be observed: a land whose blob carries a P/T is
+        // read as having none, because the blob is never opened. On a fully synced database
+        // this is most of every deck — every land, instant, sorcery, enchantment and
+        // ordinary artifact has both columns NULL *correctly*, and an ungated recovery would
+        // inflate a 2 KB blob for each of them on every read, for ever, and find nothing.
+        let island = card_row(&detail, "island", "main");
+        assert!(
+            island.power.is_none() && island.toughness.is_none(),
+            "a Land's blob is never opened — no type that prints a P/T box, no lookup"
+        );
+        // …and an unknown type line is still looked at, because unknown is not `no`.
+        let mystery = card_row(&detail, "mystery", "main");
+        assert_eq!(
+            (mystery.power.as_deref(), mystery.toughness.as_deref()),
+            (Some("2"), Some("3"))
+        );
+    }
+
+    /// The gate itself, over the type lines that decide it. `Vehicle` and `Spacecraft` are
+    /// on the list for CR 903.3's reason, and the combined type line of a transform card is
+    /// why a back-face creature needs no special case.
+    #[test]
+    fn only_a_type_line_that_could_print_a_power_toughness_box_is_worth_a_lookup() {
+        for worth in [
+            "Creature — Human Wizard",
+            "Legendary Artifact — Vehicle",
+            "Artifact — Spacecraft",
+            "Land Creature — Forest Dryad",
+            "Land // Legendary Creature — Demon",
+        ] {
+            assert!(may_have_a_power_toughness_box(Some(worth)), "{worth}");
+        }
+        for not in [
+            "Instant",
+            "Sorcery",
+            "Basic Land — Island",
+            "Enchantment — Aura",
+            "Legendary Planeswalker — Jace",
+            "Artifact — Equipment",
+        ] {
+            assert!(!may_have_a_power_toughness_box(Some(not)), "{not}");
+        }
+        assert!(
+            may_have_a_power_toughness_box(None),
+            "unknown is not `no`: an orphan, or a row that arrived without a type line"
+        );
+    }
+
+    /// A build toggle is one fact — the flag and the claims it means — so it is one
+    /// transaction. Failure injected where it hurts: after the rebuild has deleted the old
+    /// claims and before it has written the new ones.
+    #[test]
+    fn an_is_built_toggle_and_its_reallocation_commit_or_fail_together() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 4).unwrap();
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
+
+        conn.execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON deck_allocations
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let err = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                is_built: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("boom"), "{err}");
+        assert!(
+            !read_deck(&conn, deck.id).unwrap().unwrap().is_built,
+            "the flag did not flip on a rebuild that could not finish"
+        );
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(entry, 4)],
+            "and the claims the delete removed are back — mid-rebuild is not a state anyone \
+             can read"
+        );
+
+        // Nothing was stranded: with the failure gone the same toggle goes through.
+        conn.execute_batch("DROP TRIGGER boom;").unwrap();
+        let built = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                is_built: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(built.is_built);
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
     }
 
     /// The claims follow every zone write, because a deck the user is editing is a deck
