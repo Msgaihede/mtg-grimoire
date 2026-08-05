@@ -193,16 +193,23 @@ export function identityOf(card: CardFacts): ReadonlySet<string> {
  * identity at all, and calling {@link colorIdentityIssues} with one would report every
  * coloured card in the deck for a commander the user has not chosen yet.
  *
- * Oathbreaker's signature spell is left out on purpose: it must fit *inside* the
- * oathbreaker's identity, so letting it widen the thing it is measured against would make
- * that rule unfalsifiable.
+ * Under Oathbreaker the definers are the **planeswalkers**, and nothing else in the zone. The
+ * signature spell must fit *inside* the oathbreaker's identity, so letting it widen the thing
+ * it is measured against would make that rule unfalsifiable; and a card that is neither — a
+ * creature somebody dropped into the zone — has an eligibility error of its own rather than a
+ * say in what the deck may contain. A partner pair contributes both identities, which is the
+ * same union `oathbreakerZoneIssues` holds each signature spell to.
  */
 export function commanderIdentity(zone: CardFacts[], spec: FormatSpec): ReadonlySet<string> | null {
-  const definers =
-    spec.commanderRule === "oathbreaker" ? zone.filter((c) => !isInstantOrSorcery(c)) : zone;
+  const definers = spec.commanderRule === "oathbreaker" ? zone.filter(isPlaneswalkerCard) : zone;
   if (definers.length === 0) return null;
+  return unionIdentity(definers);
+}
+
+/** CR 702.124c: two commanders make one identity, and it is the union of theirs. */
+function unionIdentity(cards: CardFacts[]): Set<string> {
   const union = new Set<string>();
-  for (const card of definers) for (const colour of identityOf(card)) union.add(colour);
+  for (const card of cards) for (const colour of identityOf(card)) union.add(colour);
   return union;
 }
 
@@ -267,6 +274,13 @@ const EDH_REQUIREMENT =
   "a legendary creature, a legendary Vehicle or Spacecraft with a power and toughness, or a " +
   "card that says it can be your commander";
 
+/** EDH's rule plus planeswalkers — Brawl's by CR 903.12c, and Tiny Leaders' by its own list.
+ *  The two rules coincide today and are still separate rows, because what makes them separate
+ *  rule names lives on the spec (`restrictedSemantic`, `maxManaValue`) rather than here. */
+const BROAD_REQUIREMENT =
+  "a legendary creature or planeswalker, a legendary Vehicle or Spacecraft with a power and " +
+  "toughness, or a card that says it can be your commander";
+
 const RULES: Record<CommanderRule, RuleDefinition> = {
   // CR 903.3, 2026 wording.
   edh: {
@@ -286,9 +300,7 @@ const RULES: Record<CommanderRule, RuleDefinition> = {
   brawl: {
     noun: "commander",
     nounPhrase: "a commander",
-    requirement:
-      "a legendary creature or planeswalker, a legendary Vehicle or Spacecraft with a power " +
-      "and toughness, or a card that says it can be your commander",
+    requirement: BROAD_REQUIREMENT,
     legendary: true,
     creature: true,
     planeswalker: true,
@@ -339,19 +351,22 @@ const RULES: Record<CommanderRule, RuleDefinition> = {
     canBeYourCommander: true,
     everUncommon: false,
   },
-  // Research doc: "leg. creature/PW/Vehicle" — planeswalkers like Brawl, Vehicles like EDH,
-  // and no Spacecraft. The list is the authority's, not an inference from the other rows.
+  // Research doc: "leg. creature/PW/Vehicle" — planeswalkers like Brawl, Vehicles like EDH.
+  // **Spacecraft is in even though that cell does not name it**, because the omission is
+  // terseness rather than a rule: the pool itself disagrees with the strict reading. Two
+  // legendary Spacecraft are `tlr: legal` in the live data (The Seriema `{1}{W}{W}` 5/5 and
+  // Inspirit, Flagship Vessel `{U}{R}{W}`), both under the format's mana-value ceiling, and
+  // refusing them would manufacture an error about cards the format's own list admits.
+  // Where the doc is silent, a false negative beats a confident false error.
   tlr: {
     noun: "commander",
     nounPhrase: "a commander",
-    requirement:
-      "a legendary creature or planeswalker, a legendary Vehicle with a power and toughness, " +
-      "or a card that says it can be your commander",
+    requirement: BROAD_REQUIREMENT,
     legendary: true,
     creature: true,
     planeswalker: true,
     vehicle: true,
-    spacecraft: false,
+    spacecraft: true,
     canBeYourCommander: true,
     everUncommon: false,
   },
@@ -412,9 +427,11 @@ export function commanderIneligibility(
     !hasPowerAndToughness &&
     (!def.legendary || isLegendary(typeLine))
   ) {
+    // "legendary" only where the rule asks for it — Pauper Commander's does not, and saying it
+    // would add a requirement the format has never had.
     return (
       `${card.name} has no power and toughness, so it cannot be your ${def.noun} in ${format}; ` +
-      `a legendary ${vehicle ? "Vehicle" : "Spacecraft"} needs one.`
+      `a ${def.legendary ? "legendary " : ""}${vehicle ? "Vehicle" : "Spacecraft"} needs one.`
     );
   }
 
@@ -494,7 +511,15 @@ function namesCard(printed: string, card: CardFacts): boolean {
 
 type Pairing =
   /** `excused` is the card the pairing — and only the pairing — makes a legal commander. */
-  { ok: true; excused?: CardFacts } | { ok: false; message: string };
+  | { ok: true; excused?: CardFacts }
+  /**
+   * `covers` names the cards whose own eligibility sentence this failure has already said, so
+   * the reader gets one finding instead of three. Only ever the two-Backgrounds case, and
+   * deliberately **not** a general suppression: when a pairing fails *and* one of the cards is
+   * illegal for an unrelated reason (a nonlegendary creature beside a legend), both sentences
+   * are true and hiding either one loses a problem the user has to fix.
+   */
+  | { ok: false; message: string; covers?: CardFacts[] };
 
 /**
  * CR 702.124: two commanders are legal only through a partner ability, and the variants never
@@ -526,7 +551,10 @@ function pairingOf(a: CardFacts, b: CardFacts): Pairing {
     return { ok: true };
   }
 
-  return { ok: false, message: pairingFailure(a, fa, b, fb) };
+  // Two Backgrounds get one sentence, not three: the pairing message already says everything
+  // each card's own "is a Background" refusal would.
+  const covers = fa.isBackground && fb.isBackground ? [a, b] : undefined;
+  return { ok: false, message: pairingFailure(a, fa, b, fb), covers };
 }
 
 function sameTag(a: string, b: string): boolean {
@@ -635,6 +663,7 @@ export function validateCommanderZone(zone: CardFacts[], spec: FormatSpec): Vali
   const pair = zone.length === 2 ? pairingOf(zone[0], zone[1]) : null;
   for (const card of zone) {
     if (pair?.ok && pair.excused === card) continue;
+    if (pair !== null && !pair.ok && pair.covers?.includes(card)) continue;
     const why = commanderIneligibility(card, rule, spec);
     if (why !== null) issues.push(error("commander-eligibility", why, [card.cardId]));
   }
@@ -652,8 +681,15 @@ export function validateCommanderZone(zone: CardFacts[], spec: FormatSpec): Vali
 }
 
 /**
- * Oathbreaker's command zone is a pair rather than a commander: one planeswalker and one
- * instant or sorcery, and the spell must fit inside the planeswalker's colour identity.
+ * Oathbreaker's command zone is a pair rather than a commander: a planeswalker and an instant
+ * or sorcery, and the spell must fit inside the planeswalker's colour identity.
+ *
+ * **Partner oathbreakers are legal**, and the format's own rules say so: two oathbreakers whose
+ * planeswalkers have a partner ability bring **two** signature spells, one each. Four
+ * oathbreaker-legal planeswalkers carry one today — Tevesh Szat, Jeska Thrice Reborn, Rowan
+ * Kenrith and Will Kenrith — and Tevesh + Jeska is a staple pairing, so refusing it would be
+ * two confident wrong sentences about a real deck. CR 702.124 does the pairing here exactly as
+ * it does for commanders; a mixed or partnerless pair still errors.
  *
  * The signature spell is not judged by {@link commanderIneligibility} — an instant is not a
  * planeswalker and never will be. Anything that is neither is.
@@ -685,11 +721,32 @@ function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationI
         `${format} decks need an oathbreaker: one planeswalker in the command zone.`,
       ),
     );
-  } else if (walkers.length > 1) {
+  } else if (walkers.length === 2) {
+    // The same 702.124 machinery, so "Tevesh Szat has partner, but X does not" is the sentence
+    // an unpartnered second oathbreaker gets — one pairing rule, not two.
+    const pair = pairingOf(walkers[0], walkers[1]);
+    if (!pair.ok) {
+      issues.push(
+        error(
+          "commander-partner",
+          pair.message,
+          walkers.map((card) => card.cardId),
+        ),
+      );
+    }
+  } else if (walkers.length > 2) {
     issues.push(
-      error("commander-count", `${format} decks have one oathbreaker; you have ${walkers.length}.`),
+      error(
+        "commander-count",
+        `${format} decks have at most two oathbreakers, and only with a partner ability; you ` +
+          `have ${walkers.length}.`,
+      ),
     );
   }
+
+  // One signature spell **per oathbreaker**: a partner pair brings two. The cap never exceeds
+  // two, because more than two oathbreakers is already its own error.
+  const spellCap = Math.max(1, Math.min(walkers.length, 2));
   if (spells.length === 0) {
     issues.push(
       error(
@@ -697,26 +754,32 @@ function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationI
         `${format} decks need a signature spell: one instant or sorcery in the command zone.`,
       ),
     );
-  } else if (spells.length > 1) {
+  } else if (spells.length > spellCap) {
     issues.push(
       error(
         "commander-count",
-        `${format} decks have one signature spell; you have ${spells.length}.`,
+        spellCap === 1
+          ? `${format} decks have one signature spell; you have ${spells.length}.`
+          : `${format} decks have one signature spell for each oathbreaker; you have ` +
+              `${spells.length} for ${walkers.length} oathbreakers.`,
       ),
     );
   }
 
-  // The one place a command-zone card is measured against another one.
-  if (walkers.length === 1) {
-    const oathbreaker = identityOf(walkers[0]);
+  // The one place a command-zone card is measured against another one — and with partners it
+  // is measured against the **combined** identity (702.124c), the same union the deck is held
+  // to. Outside the walker-count branches on purpose: two oathbreakers must not switch it off.
+  if (walkers.length > 0) {
+    const oathbreakers = unionIdentity(walkers);
+    const possessive = walkers.length > 1 ? "oathbreakers'" : "oathbreaker's";
     for (const spell of spells) {
       const identity = identityOf(spell);
-      if ([...identity].every((colour) => oathbreaker.has(colour))) continue;
+      if ([...identity].every((colour) => oathbreakers.has(colour))) continue;
       issues.push(
         error(
           "color-identity",
           `${spell.name}'s color identity (${nameIdentity(identity)}) is outside your ` +
-            `oathbreaker's (${nameIdentity(oathbreaker)}); a signature spell must fit inside it.`,
+            `${possessive} (${nameIdentity(oathbreakers)}); a signature spell must fit inside it.`,
           [spell.cardId],
         ),
       );

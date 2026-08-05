@@ -475,6 +475,12 @@ function legalityIssues(
  * (`commanderIneligibility` under the `pdh` rule), and a `banned` still speaks — it is only
  * the pool answer that is being ignored, not the ban list.
  *
+ * **The exemption is the best available answer, not a precise one.** The key cannot tell TRAP C
+ * apart from a genuine exclusion: an uncommon that Pauper Commander really does not admit and
+ * an uncommon that is `not_legal` only because it is not a common are the same `"not_legal"`
+ * string. Suppressing it costs the second case and buys the first, and the first is every legal
+ * PDH deck ever built — so it is suppressed, and this comment is the record of what that costs.
+ *
  * Keyed on `commanderRule`, which is a seeded cell, so this stays a data-driven rule rather
  * than the format comparison this file refuses to grow.
  */

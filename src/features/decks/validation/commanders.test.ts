@@ -78,7 +78,13 @@ const ETERNITY_ELEVATOR = inZone({
   colorIdentity: "",
 });
 
-/** A legendary Spacecraft that does have one — `Station` turns it into a creature at 7+. */
+/**
+ * A legendary Spacecraft that does have one — `Station` turns it into a creature at 7+.
+ *
+ * A pure **eligibility** fixture: live, this printing is `commander: not_legal`, so a real
+ * deck would hear about it from the pool check instead. The blob here is the fixtures' own
+ * all-legal one, because what is under test is CR 903.3 and not a card pool.
+ */
 const ENTERPRISE_D = inZone({
   name: "U.S.S. Enterprise-D, Galaxy-Class",
   typeLine: "Legendary Artifact — Spacecraft",
@@ -88,6 +94,22 @@ const ENTERPRISE_D = inZone({
   toughness: "5",
   colors: "",
   colorIdentity: "",
+});
+
+/**
+ * The card FINDING 2 turns on: a legendary Spacecraft that Tiny Leaders: Reborn's own list
+ * admits (`tlr: legal`), mana value 3 so it clears the format's ceiling, 5/5 so it clears
+ * CR 903.3. Refusing it would be an error about a card the format allows.
+ */
+const THE_SERIEMA = inZone({
+  name: "The Seriema",
+  typeLine: "Legendary Artifact — Spacecraft",
+  manaCost: "{1}{W}{W}",
+  cmc: 3,
+  power: "5",
+  toughness: "5",
+  colors: "W",
+  colorIdentity: "W",
 });
 
 /** One of the 32 cards that say so in their own rules text. */
@@ -480,6 +502,58 @@ const NAHIRI = inZone({
     "Nahiri, the Lithomancer can be your commander.",
 });
 
+/**
+ * The staple partner pair of the Oathbreaker format, and the reason its zone is not capped at
+ * one planeswalker. Both print plain `Partner` as the **last line, with no reminder text and
+ * no trailing newline** — which is also the tightest case the line-anchored regex has to read.
+ * Combined identity BR.
+ */
+const TEVESH_SZAT = inZone({
+  name: "Tevesh Szat, Doom of Fools",
+  typeLine: "Legendary Planeswalker — Szat",
+  manaCost: "{4}{B}",
+  cmc: 5,
+  colors: "B",
+  colorIdentity: "B",
+  oracleText:
+    "+2: Create two 0/1 black Thrull creature tokens.\n" +
+    "Tevesh Szat, Doom of Fools can be your commander.\n" +
+    "Partner",
+});
+
+const JESKA_THRICE_REBORN = inZone({
+  name: "Jeska, Thrice Reborn",
+  typeLine: "Legendary Planeswalker — Jeska",
+  manaCost: "{2}{R}",
+  cmc: 3,
+  colors: "R",
+  colorIdentity: "R",
+  oracleText:
+    "−X: Jeska deals X damage to each of up to three targets.\n" +
+    "Jeska, Thrice Reborn can be your commander.\n" +
+    "Partner",
+});
+
+const DARK_RITUAL = inZone({
+  name: "Dark Ritual",
+  typeLine: "Instant",
+  manaCost: "{B}",
+  cmc: 1,
+  colors: "B",
+  colorIdentity: "B",
+  oracleText: "Add {B}{B}{B}.",
+});
+
+const PATH_TO_EXILE = inZone({
+  name: "Path to Exile",
+  typeLine: "Instant",
+  manaCost: "{W}",
+  cmc: 1,
+  colors: "W",
+  colorIdentity: "W",
+  oracleText: "Exile target creature. Its controller may search their library for a basic land.",
+});
+
 const SWORDS_TO_PLOWSHARES = inZone({
   name: "Swords to Plowshares",
   typeLine: "Instant",
@@ -542,6 +616,12 @@ const KOZILEK = inZone({
 const EDH_REQUIREMENT =
   "a commander must be a legendary creature, a legendary Vehicle or Spacecraft with a power " +
   "and toughness, or a card that says it can be your commander";
+
+/** A failed pairing often arrives beside an eligibility complaint about one of the cards, so
+ *  the pairing sentence is read by code rather than by index. */
+function pairingMessage(issues: ValidationIssue[]): string | undefined {
+  return issues.find((i) => i.code === "commander-partner")?.message;
+}
 
 describe("eligibility by rule", () => {
   it("takes a legendary creature and refuses one that is not legendary (edh)", () => {
@@ -612,14 +692,29 @@ describe("eligibility by rule", () => {
       "Swords to Plowshares is not a legal commander in Pauper Commander: a commander must be " +
         "a creature, Vehicle or Spacecraft that has been printed at uncommon.",
     );
+    // The P/T clause reaches Pauper Commander too — **without** the word "legendary", which
+    // this format has never asked for and which the sentence would otherwise invent.
+    expect(commanderIneligibility(ETERNITY_ELEVATOR, "pdh", spec("paupercommander"))).toBe(
+      "The Eternity Elevator has no power and toughness, so it cannot be your commander in " +
+        "Pauper Commander; a Spacecraft needs one.",
+    );
   });
 
-  /** Tiny Leaders: Reborn takes planeswalkers like Brawl and Vehicles like EDH — and the
-   *  research doc's list stops there, so a Spacecraft is not one of its commanders. */
-  it("takes creatures, planeswalkers and Vehicles in tiny leaders", () => {
+  /**
+   * Tiny Leaders: Reborn takes planeswalkers like Brawl and Vehicles like EDH — **and
+   * Spacecraft**, even though the research doc's cell stops at "Vehicle". The pool settles it:
+   * The Seriema is `tlr: legal`, mana value 3 and 5/5, so the strict reading would refuse a
+   * card the format's own list admits. The doc's omission is terseness, not a rule.
+   */
+  it("takes creatures, planeswalkers, Vehicles and Spacecraft in tiny leaders", () => {
     expect(commanderIneligibility(TEFERI_HERO_OF_DOMINARIA, "tlr", spec("tlr"))).toBeNull();
     expect(commanderIneligibility(SHORIKAI, "tlr", spec("tlr"))).toBeNull();
-    expect(commanderIneligibility(ENTERPRISE_D, "tlr", spec("tlr"))).toContain(
+    expect(commanderIneligibility(THE_SERIEMA, "tlr", spec("tlr"))).toBeNull();
+    // The P/T clause still applies, and so does the legendary one.
+    expect(commanderIneligibility(ETERNITY_ELEVATOR, "tlr", spec("tlr"))).toContain(
+      "has no power and toughness",
+    );
+    expect(commanderIneligibility(GRIZZLY_BEARS, "tlr", spec("tlr"))).toContain(
       "is not a legal commander in Tiny Leaders: Reborn",
     );
   });
@@ -646,10 +741,6 @@ describe("eligibility by rule", () => {
 
 describe("partners and pairing (702.124)", () => {
   const zone = (a: CardFacts, b: CardFacts) => validateCommanderZone([a, b], spec("commander"));
-  /** A failed pairing often comes with an eligibility complaint about one of the cards
-   *  (a Background is not a creature), so the pairing sentence is read by code, not index. */
-  const pairing = (issues: ValidationIssue[]): string | undefined =>
-    issues.find((i) => i.code === "commander-partner")?.message;
 
   it("takes two commanders that both have partner, and refuses one that does not", () => {
     expect(zone(ISHAI, VIAL_SMASHER)).toEqual([]);
@@ -724,7 +815,7 @@ describe("partners and pairing (702.124)", () => {
       oracleText: "Partner with Regna, the Redeemer\nVigilance",
     });
 
-    expect(pairing(zone(NIKARA, impostor))).toBe(
+    expect(pairingMessage(zone(NIKARA, impostor))).toBe(
       "Yannik, Scavenging Sentinel partners only with Regna, the Redeemer; Nikara, Lair " +
         "Scavenger is not that card.",
     );
@@ -735,11 +826,11 @@ describe("partners and pairing (702.124)", () => {
   it("pairs a partner variant only with the same variant", () => {
     expect(zone(WERNOG, ELMAR)).toEqual([]);
 
-    expect(pairing(zone(WERNOG, SPLINTER))).toBe(
+    expect(pairingMessage(zone(WERNOG, SPLINTER))).toBe(
       "Wernog, Rider's Chaplain has partner—Friends forever and Splinter, the Mentor has " +
         "partner—Character select; two commanders must share one partner ability.",
     );
-    expect(pairing(zone(WERNOG, ISHAI))).toBe(
+    expect(pairingMessage(zone(WERNOG, ISHAI))).toBe(
       "Wernog, Rider's Chaplain has partner—Friends forever and Ishai, Ojutai " +
         "Dragonspeaker has partner; two commanders must share one partner ability.",
     );
@@ -748,14 +839,31 @@ describe("partners and pairing (702.124)", () => {
   it("pairs Choose a Background with a legendary Background and nothing else", () => {
     expect(zone(LULU, FAR_TRAVELER)).toEqual([]);
 
-    expect(pairing(zone(FAR_TRAVELER, HAUNTED_ONE))).toBe(
-      "Far Traveler and Haunted One are both Backgrounds; a Background is a second commander " +
-        'beside a card that says "Choose a Background".',
-    );
-    expect(pairing(zone(LULU, commander()))).toBe(
+    // **One** finding, not three: each Background's own "is a Background" refusal says exactly
+    // what the pairing sentence already said, so the pairing covers them.
+    expect(zone(FAR_TRAVELER, HAUNTED_ONE)).toEqual([
+      {
+        severity: "error",
+        code: "commander-partner",
+        message:
+          "Far Traveler and Haunted One are both Backgrounds; a Background is a second " +
+          'commander beside a card that says "Choose a Background".',
+        cardIds: ["c-Far Traveler", "c-Haunted One"],
+      },
+    ]);
+    expect(pairingMessage(zone(LULU, commander()))).toBe(
       'Lulu, Loyal Hollyphant says "Choose a Background", so the other commander must be a ' +
         "legendary Background; Kenrith, the Returned King is not one.",
     );
+  });
+
+  /** The covering is narrow on purpose. A pairing failure beside an *unrelated* eligibility
+   *  problem is two true sentences, and the reader needs both. */
+  it("still reports an eligibility problem the pairing sentence does not cover", () => {
+    expect(zone(GRIZZLY_BEARS, KOZILEK).map((i) => i.code)).toEqual([
+      "commander-eligibility",
+      "commander-partner",
+    ]);
   });
 
   /** A Background is not a creature, so CR 903.3 refuses it — the pairing is what makes it
@@ -779,14 +887,14 @@ describe("partners and pairing (702.124)", () => {
   it("pairs Doctor's companion with a legendary Time Lord Doctor", () => {
     expect(zone(ROSE_TYLER, TENTH_DOCTOR)).toEqual([]);
 
-    expect(pairing(zone(ROSE_TYLER, SUSAN_FOREMAN))).toBe(
+    expect(pairingMessage(zone(ROSE_TYLER, SUSAN_FOREMAN))).toBe(
       "Rose Tyler has Doctor's companion, so the other commander must be a legendary Time Lord " +
         "Doctor; Susan Foreman is not one.",
     );
   });
 
   it("says so when neither commander has any partner ability", () => {
-    expect(pairing(zone(commander(), KOZILEK))).toBe(
+    expect(pairingMessage(zone(commander(), KOZILEK))).toBe(
       "Kenrith, the Returned King and Kozilek, Butcher of Truth cannot both be commanders; a " +
         "second commander needs a partner ability.",
     );
@@ -852,15 +960,71 @@ describe("the oathbreaker zone", () => {
   });
 
   it("refuses a second signature spell and a card that is neither", () => {
-    expect(zone(NAHIRI, SWORDS_TO_PLOWSHARES, BOLT_IN_ZONE).map((i) => i.code)).toContain(
-      "commander-count",
-    );
+    expect(zone(NAHIRI, SWORDS_TO_PLOWSHARES, BOLT_IN_ZONE)).toContainEqual({
+      severity: "error",
+      code: "commander-count",
+      message: "Oathbreaker decks have one signature spell; you have 2.",
+    });
     expect(zone(NAHIRI, SWORDS_TO_PLOWSHARES, commander())[0]).toMatchObject({
       code: "commander-eligibility",
       message:
         "Kenrith, the Returned King is not a legal oathbreaker in Oathbreaker: an oathbreaker " +
         "must be a planeswalker.",
     });
+  });
+
+  /**
+   * The format allows **two** oathbreakers when the planeswalkers partner, and then two
+   * signature spells — one each. Tevesh Szat + Jeska, Thrice Reborn is the staple pairing, and
+   * refusing it was two confident wrong sentences about a real deck.
+   */
+  it("takes a partner pair of oathbreakers with one signature spell each", () => {
+    expect(zone(TEVESH_SZAT, JESKA_THRICE_REBORN, DARK_RITUAL, BOLT_IN_ZONE)).toEqual([]);
+
+    // One each, and no more: the cap is per oathbreaker, not a flat two.
+    expect(
+      zone(TEVESH_SZAT, JESKA_THRICE_REBORN, DARK_RITUAL, BOLT_IN_ZONE, {
+        ...DARK_RITUAL,
+        cardId: "c-Dark Ritual 2",
+      }),
+    ).toContainEqual({
+      severity: "error",
+      code: "commander-count",
+      message:
+        "Oathbreaker decks have one signature spell for each oathbreaker; you have 3 for 2 oathbreakers.",
+    });
+  });
+
+  /** The same CR 702.124 machinery as the commander zone, so an unpartnered second
+   *  oathbreaker gets the sentence it would get anywhere else. */
+  it("refuses two oathbreakers that do not partner, and a third whatever they have", () => {
+    expect(pairingMessage(zone(TEVESH_SZAT, NAHIRI, DARK_RITUAL))).toBe(
+      "Tevesh Szat, Doom of Fools has partner, but Nahiri, the Lithomancer has no partner " +
+        "ability; a second commander needs one.",
+    );
+
+    expect(
+      zone(TEVESH_SZAT, JESKA_THRICE_REBORN, NAHIRI, DARK_RITUAL).map((i) => i.code),
+    ).toContain("commander-count");
+  });
+
+  /**
+   * The identity check is **outside** the walker-count branches on purpose: with two
+   * oathbreakers it is the combined identity (702.124c) that each signature spell has to fit
+   * inside, and switching the rule off for partner decks is the failure that hides.
+   */
+  it("holds each signature spell to the combined identity of a partner pair", () => {
+    expect(zone(TEVESH_SZAT, JESKA_THRICE_REBORN, PATH_TO_EXILE)).toContainEqual({
+      severity: "error",
+      code: "color-identity",
+      message:
+        "Path to Exile's color identity (W) is outside your oathbreakers' (BR); a signature " +
+        "spell must fit inside it.",
+      cardIds: ["c-Path to Exile"],
+    });
+    expect(commanderIdentity([TEVESH_SZAT, JESKA_THRICE_REBORN], spec("oathbreaker"))).toEqual(
+      new Set(["B", "R"]),
+    );
   });
 });
 
