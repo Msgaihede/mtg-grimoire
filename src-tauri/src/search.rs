@@ -50,6 +50,19 @@ pub struct SearchRequest {
     pub rarity: Option<String>,
     /// Defaults to true: digital-only printings are hidden unless asked for.
     pub paper_only: Option<bool>,
+    /// `Some(true)` narrows to printings the collection has an entry for, `Some(false)` to
+    /// those it does not. Spec §7's owned/wishlist status filter, buildable at last now
+    /// that the table exists.
+    ///
+    /// **An entry, not a copy.** A row emptied to zero is a row the collection keeps (see
+    /// [`crate::collection::set_quantity`]), and this filter counts it as owned — the same
+    /// reading as `CollectionSummary::unique_cards`, "printings recorded, not printings
+    /// currently held". So a card whose only entry sits at zero passes `owned: true` while
+    /// its [`CardSummary::owned_quantity`] reads `0`, and does *not* appear under
+    /// `owned: false`. Deliberate, and the one place it could surprise a reader is a "what
+    /// am I missing" list, which is the wishlist's `fulfilled` filter — that one counts
+    /// copies, because a wish is filled by copies rather than by paperwork.
+    pub owned: Option<bool>,
     /// `"name"` | `"released"` | `"price"`. Anything else — including nothing at all —
     /// is the default: relevance when `text` is set, name order when it is not.
     pub sort: Option<String>,
@@ -91,6 +104,13 @@ pub struct CardSummary {
     pub mana_cost: Option<String>,
     pub price_usd: Option<f64>,
     pub layout: String,
+    /// Copies the collection holds of **this printing**, across every finish and
+    /// condition. `0` rather than `Option`: "you own none of these" is a fact, not an
+    /// absence, and a badge that has to distinguish `null` from `0` is a badge with a bug
+    /// waiting in it.
+    pub owned_quantity: i64,
+    /// Whether a wish covers this printing — pinned to it, or unpinned on its oracle card.
+    pub wishlisted: bool,
 }
 
 /// A page of results plus the size of the whole match set, for the pager.
@@ -161,6 +181,28 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // `None`: this query reads `cards` and nothing else, so there is no second place a set
     // code could come from — see `push_card_filters`.
     filters::push_card_filters(&mut p, &req.card_filters(), "c", None);
+    // `EXISTS` rather than a join: a card with four collection rows must still be one
+    // result row, and this way the count subquery carries the same predicate for free.
+    // Not in `filters.rs` because it is a statement about the *user*, not about a card.
+    //
+    // The probe itself is indexed (`idx_collection_card`), but the *driver* is still
+    // `cards`, so `owned: true` over a browse walks the whole table looking for matches it
+    // mostly does not find. Measured on the 116 k-row database: the capped count takes
+    // 149 ms against a 12 000-printing collection and 381 ms against a 200-printing one,
+    // where the cap is unreachable and the scan therefore runs to the end. Narrowed by any
+    // text (0.1 ms) or combined with `owned: false` (17 ms) it is nowhere near that. If the
+    // browse case needs to be faster, the shape that fixes it is driving from the small
+    // side — `JOIN (SELECT DISTINCT card_id FROM collection_entries)` — at the cost of a
+    // sort that the name index currently supplies for free.
+    match req.owned {
+        Some(true) => p
+            .wheres
+            .push("EXISTS (SELECT 1 FROM collection_entries e WHERE e.card_id = c.id)".to_owned()),
+        Some(false) => p.wheres.push(
+            "NOT EXISTS (SELECT 1 FROM collection_entries e WHERE e.card_id = c.id)".to_owned(),
+        ),
+        None => {}
+    }
     let where_sql = p.where_sql();
     let mut params = p.params;
 
@@ -197,9 +239,25 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     let total_is_capped = counted > TOTAL_CAP;
     let total = counted.min(TOTAL_CAP);
 
+    // The two status columns ride on the page query and **never on the count**, which does
+    // not need them: they are correlated subqueries costing two indexed probes per row the
+    // page *produces*, rather than per row counted — and the count walks to 5 001 on every
+    // keystroke, which is where the ~10 ms browse budget already goes.
+    //
+    // Produces, not returns: `OFFSET` discards rows the query has already built, so a deep
+    // page pays for its offset too. Measured on the 116 k-row database against a
+    // 12 000-printing collection: the first page of 50 goes 0.16 ms → 1.6 ms, 200 rows cost
+    // 3.5 ms, and page 100 (offset 5 000) goes 35 ms → 53 ms. The pager stops at the cap,
+    // so that last figure is the worst one there is.
     let sql = format!(
         "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
-                c.type_line, c.mana_cost, c.price_usd, c.layout
+                c.type_line, c.mana_cost, c.price_usd, c.layout,
+                coalesce((SELECT sum(e.quantity) FROM collection_entries e
+                           WHERE e.card_id = c.id), 0),
+                EXISTS (SELECT 1 FROM wishlist_entries w
+                         WHERE w.card_id = c.id
+                            OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
+                                AND w.oracle_id = c.oracle_id))
          FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     // Pushed last, because `?` binds by position and these are the last two in the SQL.
@@ -226,6 +284,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             mana_cost: row.get(7).map_err(|e| e.to_string())?,
             price_usd: row.get(8).map_err(|e| e.to_string())?,
             layout: row.get(9).map_err(|e| e.to_string())?,
+            owned_quantity: row.get(10).map_err(|e| e.to_string())?,
+            wishlisted: row.get(11).map_err(|e| e.to_string())?,
         });
     }
     Ok(SearchResponse {
@@ -733,6 +793,8 @@ mod tests {
                 mana_cost: None,
                 price_usd: Some(400.5),
                 layout: "normal".into(),
+                owned_quantity: 0,
+                wishlisted: false,
             }],
             total: 5000,
             total_is_capped: true,
@@ -745,7 +807,8 @@ mod tests {
                 "items": [{
                     "id": "1", "name": "Lightning Bolt", "setCode": "lea", "setName": null,
                     "collectorNumber": "161", "rarity": null, "typeLine": "Instant",
-                    "manaCost": null, "priceUsd": 400.5, "layout": "normal"
+                    "manaCost": null, "priceUsd": 400.5, "layout": "normal",
+                    "ownedQuantity": 0, "wishlisted": false
                 }],
                 "total": 5000,
                 "totalIsCapped": true
@@ -1208,6 +1271,179 @@ mod tests {
         // A set the local database has no printings for still appears — it is the count
         // that lets the picker decide, not this function.
         assert_eq!(sets[0].card_count, 0);
+    }
+
+    /// Spec §7: owned and wishlisted status travel with the result row, so the grid can
+    /// badge a card the reader already has without a second round trip per tile.
+    #[test]
+    fn results_carry_what_the_user_owns_and_wants() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('1','lea','161','en','nonfoil','NM',3,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('1','lea','161','en','foil','NM',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        // An any-printing wish, matched through the oracle id rather than the printing.
+        conn.execute("UPDATE cards SET oracle_id='o-bolt' WHERE id='1'", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES ('o-bolt',NULL,'Lightning Bolt',4,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bolt = r.items.iter().find(|c| c.id == "1").unwrap();
+        let helix = r.items.iter().find(|c| c.id == "2").unwrap();
+
+        assert_eq!(bolt.owned_quantity, 4, "both finishes count toward 'owned'");
+        assert!(bolt.wishlisted);
+        assert_eq!(helix.owned_quantity, 0);
+        assert!(!helix.wishlisted);
+    }
+
+    /// A wish pinned to one printing badges *that* printing, and not its siblings — which
+    /// is the whole difference between "I want a Lightning Bolt" and "I want the Alpha
+    /// one", carried through to the grid. The unpinned case is above; this is its twin, and
+    /// the two together are what the `OR` in that subquery is for.
+    #[test]
+    fn a_pinned_wish_badges_only_the_printing_it_names() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET oracle_id='o-bolt' WHERE id IN ('1','2')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id,card_id,set_code,name,quantity,
+                created_at,updated_at)
+             VALUES ('o-bolt','1','lea','Lightning Bolt',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let wished = |id: &str| r.items.iter().find(|c| c.id == id).unwrap().wishlisted;
+        assert!(wished("1"));
+        assert!(
+            !wished("2"),
+            "a wish for one printing is not a wish for every printing of the oracle card"
+        );
+    }
+
+    /// The zero-row ruling, reaching the search: the collection keeps an entry taken to
+    /// zero (`collection::set_quantity`), so this filter — which asks whether the
+    /// collection has an *entry* for a printing, the same reading as
+    /// `CollectionSummary::unique_cards` — still calls it owned, while `owned_quantity`
+    /// counts copies and reads 0. Pinned rather than assumed, because the two halves
+    /// disagreeing is exactly the kind of thing a badge would render as a bug.
+    #[test]
+    fn an_entry_emptied_to_zero_is_still_an_entry_the_collection_has() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('1','lea','161','en','nonfoil','NM',0,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let owned = run_search(
+            &conn,
+            &SearchRequest {
+                owned: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(owned.items.len(), 1);
+        assert_eq!(owned.items[0].id, "1");
+        assert_eq!(
+            owned.items[0].owned_quantity, 0,
+            "an entry, but no copies — the badge and the filter answer different questions"
+        );
+
+        let missing = run_search(
+            &conn,
+            &SearchRequest {
+                owned: Some(false),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            missing
+                .items
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["2"],
+            "a printing the collection has a record of is not one it is missing"
+        );
+    }
+
+    /// The filter §7 promised and Plan 2 could not build, because the table did not exist.
+    /// Both directions, and the capped count has to agree with the page.
+    #[test]
+    fn the_owned_filter_narrows_in_both_directions() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('1','lea','161','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let owned = run_search(
+            &conn,
+            &SearchRequest {
+                owned: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(owned.total, 1);
+        assert_eq!(owned.items[0].id, "1");
+
+        let missing = run_search(
+            &conn,
+            &SearchRequest {
+                owned: Some(false),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(missing.total, 1);
+        assert_eq!(missing.items[0].id, "2");
     }
 
     /// The count is the picker's only signal, and the picker sits above a search that

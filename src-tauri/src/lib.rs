@@ -11,6 +11,7 @@ pub mod schema;
 pub mod scryfall;
 pub mod search;
 pub mod sync;
+pub mod wishlist;
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -98,7 +99,11 @@ pub fn run() {
             collection::collection_update,
             collection::collection_remove,
             collection::collection_list,
-            collection::collection_summary
+            collection::collection_summary,
+            wishlist::wishlist_add,
+            wishlist::wishlist_set_quantity,
+            wishlist::wishlist_remove,
+            wishlist::wishlist_list
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
