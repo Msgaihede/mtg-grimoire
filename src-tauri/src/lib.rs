@@ -2,6 +2,7 @@ pub mod card;
 pub mod card_row;
 pub mod collection;
 pub mod db;
+pub mod deck;
 pub mod filters;
 pub mod images;
 pub mod ingest;
@@ -105,7 +106,15 @@ pub fn run() {
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
-            wishlist::wishlist_list
+            wishlist::wishlist_list,
+            deck::deck_create,
+            deck::deck_update,
+            deck::deck_delete,
+            deck::deck_duplicate,
+            deck::deck_list,
+            deck::deck_add_card,
+            deck::deck_set_card_quantity,
+            deck::deck_move_card
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the

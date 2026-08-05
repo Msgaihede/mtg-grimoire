@@ -1587,6 +1587,51 @@ mod tests {
         );
     }
 
+    /// The mixed case neither test above can see on its own, and the one the three
+    /// allocation statements were written for: deck A claims **both** the folding row and
+    /// the survivor, deck B claims only the folding row. A's two claims become one; B's
+    /// single claim moves across intact.
+    ///
+    /// This is the fence around a mis-correlated `EXISTS` in the middle statement — one
+    /// that asked "does *anyone* claim the survivor" rather than "does *this deck*" would
+    /// delete B's claim outright, and with `ON DELETE CASCADE` on the entry there would be
+    /// nothing left to notice it. Both existing tests have exactly one deck, so both would
+    /// keep passing.
+    #[test]
+    fn a_fold_merges_one_decks_colliding_claims_while_anothers_only_moves() {
+        let mut conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let old = own(&conn, "old-id", "foil", 5);
+        let existing = own(&conn, "new-id", "foil", 4);
+        let a = deck(&conn, "Burn");
+        let b = deck(&conn, "Storm");
+        allocate(&conn, a, old, 2);
+        allocate(&conn, a, existing, 1);
+        allocate(&conn, b, old, 3);
+
+        apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        let claims: Vec<(i64, i64, i64)> = conn
+            .prepare(
+                "SELECT deck_id, collection_entry_id, quantity FROM deck_allocations
+                  ORDER BY deck_id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            claims,
+            vec![(a, existing, 3), (b, existing, 3)],
+            "A's two claims are one claim of three; B's three moved across untouched"
+        );
+    }
+
     /// Deck rows are user rows: a merge repoints them, folding on the deck grain when the
     /// deck already runs the new printing in that zone.
     ///

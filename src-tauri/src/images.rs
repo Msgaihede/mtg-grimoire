@@ -906,7 +906,11 @@ pub async fn prefetch_images(
 /// At the measured 100 ms pacing this is a little over three minutes of background work.
 pub const MAX_PREWARM: usize = 2_000;
 
-/// The cards the user owns or wants, that have no cached image yet.
+/// The cards the user owns, wants, or has put in a deck, that have no cached image yet.
+///
+/// Three arms rather than two since the decks landed, because the deck gallery and the
+/// deckbuilder show art like every other surface — and a user whose cards live only in
+/// decks would otherwise have nothing pre-warmed at all.
 ///
 /// **`grid` only.** Spec §5 says `thumb` + `grid`; the app has no `thumb` surface yet (the
 /// tables show no art), and fetching 9 KB per card for a view that does not exist is a
@@ -921,7 +925,9 @@ pub fn prewarm_keys(
         "SELECT card_id FROM (
             SELECT card_id FROM collection_entries
             UNION
-            SELECT card_id FROM wishlist_entries WHERE card_id IS NOT NULL)
+            SELECT card_id FROM wishlist_entries WHERE card_id IS NOT NULL
+            UNION
+            SELECT card_id FROM deck_cards)
           WHERE card_id NOT IN
                 (SELECT card_id FROM image_cache WHERE variant = ?1 AND face = 0)
           LIMIT ?2",
@@ -2389,6 +2395,10 @@ mod tests {
     /// Spec §5's pre-warm, scoped to what the user owns rather than to the database — 116 k
     /// `grid` images would be ~7 GB. Resumable by construction: a key already in
     /// `image_cache` is not selected, so the next pass picks up where this one stopped.
+    ///
+    /// Three arms, because a card on screen is a card on screen: the collection, the
+    /// wishlist, and — since the decks landed — every deck card. A user whose cards live
+    /// only in decks would otherwise browse a gallery of cold tiles.
     #[test]
     fn the_prewarm_selects_owned_cards_that_are_not_cached_yet() {
         let conn = seeded();
@@ -2406,9 +2416,25 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO decks (name, created_at, updated_at)
+             VALUES ('Burn', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let deck = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO deck_cards
+                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                 created_at,updated_at)
+             VALUES (?1,'ab000000-0000-0000-0000-000000000001','isd','51','en','Delver',
+                     'main',4,unixepoch(),unixepoch())",
+            [deck],
+        )
+        .unwrap();
 
         let keys = prewarm_keys(&conn, Variant::Grid, 100).unwrap();
-        assert_eq!(keys.len(), 2, "owned and wished, front faces only");
+        assert_eq!(keys.len(), 3, "owned, wished and decked, front faces only");
         assert!(keys
             .iter()
             .all(|k| k.face == 0 && k.variant == Variant::Grid));
@@ -2421,6 +2447,6 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(prewarm_keys(&conn, Variant::Grid, 100).unwrap().len(), 1);
+        assert_eq!(prewarm_keys(&conn, Variant::Grid, 100).unwrap().len(), 2);
     }
 }
