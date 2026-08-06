@@ -743,11 +743,12 @@ function TypeBars({ types }: { types: TypeCount[] }) {
   if (types.length === 0) return null;
   const max = Math.max(...types.map((t) => t.count), 1);
   return (
-    // The one cluster that takes the width that is left. Measured at 1024px, where the four
-    // charts wrap onto two lines: capping this one leaves the second line half empty, and the
-    // counts sit at the end of the *track* rather than of the fill so that a column of them
-    // lines up and can be read down.
-    <div className="min-w-[11rem] flex-1">
+    // The one cluster that flexes — but capped: a bar is read against its neighbours, and at
+    // a wide window an uncapped track turns three creatures into a metre of gold (measured at
+    // ~1900px, where the bars dwarfed every number beside them). 28rem keeps the longest
+    // label + track + count readable in one eye span; the counts sit at the end of the
+    // *track* rather than of the fill so a column of them lines up and can be read down.
+    <div className="min-w-[11rem] max-w-md flex-1">
       <p id={id} className="text-xs text-dim">
         Card types
       </p>
