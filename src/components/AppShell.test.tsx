@@ -1,7 +1,8 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useRef } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SyncOutcome, SyncStatus } from "@/lib/ipc";
+import type { DeckDetail, SyncOutcome, SyncStatus } from "@/lib/ipc";
 
 const syncStatus = vi.hoisted(() => vi.fn());
 const syncRun = vi.hoisted(() => vi.fn());
@@ -10,13 +11,29 @@ const onSyncProgress = vi.hoisted(() => vi.fn());
 // the reconcile event on the way up. Mocked because a `.catch` cannot catch the
 // synchronous `TypeError` of calling `undefined`.
 const onCollectionReconciled = vi.hoisted(() => vi.fn());
+/** The two writes a card dropped on the sidebar means. */
+const deckAddCard = vi.hoisted(() => vi.fn());
+const wishlistAdd = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { syncStatus, syncRun, onSyncProgress, onCollectionReconciled, searchCards: vi.fn() },
+  ipc: {
+    syncStatus,
+    syncRun,
+    onSyncProgress,
+    onCollectionReconciled,
+    searchCards: vi.fn(),
+    deckAddCard,
+    wishlistAdd,
+  },
 }));
 
-import { AppShell } from "./AppShell";
+import { AppShell, DROP_RING } from "./AppShell";
+import { REPORT_MS } from "./useSidebarDrops";
+import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
+import { deckDetailKey } from "@/features/decks/useDeck";
+import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
+import { startDrag } from "@/test-drag";
 
 const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   cardCount: 116_568,
@@ -43,12 +60,25 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * The shell reaches for the module's own client (`useSyncInvalidation`'s reason: it renders
+ * here with no provider around it), so this is the cache the sidebar's drops write through —
+ * spied once, cleared per test, rather than re-wrapped each time.
+ */
+const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
 beforeEach(() => {
-  useAppStore.setState({ activeView: "search" });
+  // The open deck decides whether the Decks entry can take a card, so it is reset with the
+  // view — a deck left open by one test would make the next one's inert case a lie.
+  useAppStore.setState({ activeView: "search", openDeckId: null });
+  queryClient.clear();
+  invalidate.mockClear();
   syncStatus.mockReset().mockResolvedValue(status());
   syncRun.mockReset().mockResolvedValue({ updated: false, cardCount: 116_568, updatedAt: null });
   onSyncProgress.mockReset().mockResolvedValue(() => {});
   onCollectionReconciled.mockReset().mockResolvedValue(() => {});
+  deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
 });
 
 it("renders nav and refresh button", async () => {
@@ -252,4 +282,200 @@ it("switches the active view", async () => {
   expect(useAppStore.getState().activeView).toBe("decks");
   expect(screen.getByRole("button", { name: "Decks" })).toHaveAttribute("aria-current", "page");
   expect(screen.getByRole("button", { name: "Search" })).not.toHaveAttribute("aria-current");
+});
+
+/**
+ * The sidebar as a place to let a card go.
+ *
+ * Driven over the drag library's own code path (`src/test-drag.ts`) from a source registered
+ * the way every card surface in the app registers one — `cardDraggable` with a payload — so
+ * what these tests exercise is the real `readDragData` boundary and the real drop target, not
+ * a callback called by hand. What jsdom still cannot reach is recorded in `test-drag.ts` and
+ * is the live CDP pass's to prove.
+ */
+describe("the sidebar's drop targets", () => {
+  const BOLT: DragPayload = { kind: "card", cardId: "c-bolt", name: "Lightning Bolt" };
+
+  /** A card that can be picked up, standing in for the four walls that carry one. */
+  function CardSource({ payload }: { payload: DragPayload }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      const element = ref.current;
+      if (!element) return;
+      return cardDraggable({ element, payload: () => payload });
+    }, [payload]);
+    return <div ref={ref}>a card</div>;
+  }
+
+  /** The shell with a card in it, and that card in the air. */
+  async function pickUp(payload: DragPayload = BOLT) {
+    render(
+      <AppShell>
+        <CardSource payload={payload} />
+      </AppShell>,
+    );
+    return startDrag(screen.getByText("a card"));
+  }
+
+  const entry = (label: string) => screen.getByRole("button", { name: label });
+  /** The entry's own live region — the line under its button, where a drop reports. */
+  const report = (label: string) =>
+    within(entry(label).parentElement as HTMLElement).getByRole("status");
+
+  /** Only the name is read out of it, and only to say which deck a card landed in. */
+  const openDeck = (id: number, name: string) => {
+    useAppStore.setState({ openDeckId: id });
+    queryClient.setQueryData(deckDetailKey(id), {
+      deck: { id, name },
+      cards: [],
+    } as unknown as DeckDetail);
+  };
+
+  it("rings the entries a card can land on, and stands the ring down when the drag is cancelled", async () => {
+    openDeck(7, "Burn");
+    const held = await pickUp();
+
+    expect(entry("Decks")).toHaveClass(DROP_RING);
+    expect(entry("Wishlist")).toHaveClass(DROP_RING);
+    // The collection is deliberately not a target: `collection_add` carries a finish, a
+    // condition and a language that a drop cannot answer.
+    expect(entry("Collection")).not.toHaveClass("ring-accent");
+
+    await held.cancel();
+
+    expect(entry("Decks")).not.toHaveClass("ring-accent");
+    expect(entry("Wishlist")).not.toHaveClass("ring-accent");
+  });
+
+  it("leaves Decks inert while no deck is open, and says why", async () => {
+    const held = await pickUp();
+    const decks = entry("Decks");
+
+    expect(decks).not.toHaveClass("ring-accent");
+    expect(decks).toHaveAttribute("title", "Open a deck to drop cards into it");
+    // The wishlist takes a card from anywhere, whatever the Decks view is doing.
+    expect(entry("Wishlist")).toHaveClass(DROP_RING);
+
+    await held.over(decks);
+    await held.drop();
+
+    expect(deckAddCard).not.toHaveBeenCalled();
+    expect(report("Decks")).toBeEmptyDOMElement();
+  });
+
+  it("wishes for the printing dropped on Wishlist", async () => {
+    const held = await pickUp();
+    // The region exists before there is anything to say: a live region that first appears
+    // with its sentence already in it announces nothing.
+    expect(report("Wishlist")).toBeEmptyDOMElement();
+
+    await held.over(entry("Wishlist"));
+    await held.drop();
+
+    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+    // Quantity 1, and the printing that was dragged — a wish made from a card the reader was
+    // looking at is a wish for *that* one.
+    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "c-bolt", quantity: 1 });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // A search result draws `wishlisted`, so the heart on every printing of this card has
+    // just changed.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /** Every payload this app drags names a card, and a deck row is a card like any other:
+   *  dropped on the wishlist it is a wish for that printing. */
+  it("takes a card dragged out of a deck row too", async () => {
+    const held = await pickUp({
+      kind: "deck-card",
+      cardId: "c-bolt",
+      name: "Lightning Bolt",
+      fromZone: "main",
+    });
+
+    await held.over(entry("Wishlist"));
+    await held.drop();
+
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "c-bolt", quantity: 1 }),
+    );
+  });
+
+  it("adds one copy to the open deck's main zone and names the deck", async () => {
+    openDeck(7, "Burn");
+    const held = await pickUp();
+
+    await held.over(entry("Decks"));
+    await held.drop();
+
+    await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
+    expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", "main", 1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /**
+   * A deck deleted in another view answers `GONE`, and this surface is outside the editor's
+   * refused-write family — so the sentence is read here and the re-read is fired from here.
+   */
+  it("says a refused add in the same line, and re-reads the deck behind it", async () => {
+    openDeck(7, "Burn");
+    deckAddCard.mockRejectedValue("That deck is not there any more.");
+    const held = await pickUp();
+
+    await held.over(entry("Decks"));
+    await held.drop();
+
+    await waitFor(() =>
+      expect(report("Decks")).toHaveTextContent("That deck is not there any more."),
+    );
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  it("clears the line when the next card is picked up", async () => {
+    const held = await pickUp();
+    await held.over(entry("Wishlist"));
+    await held.drop();
+    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+
+    const again = await startDrag(screen.getByText("a card"));
+
+    expect(report("Wishlist")).toBeEmptyDOMElement();
+    await again.cancel();
+  });
+
+  it("clears the line after four seconds", async () => {
+    // `setTimeout` only: the drag helper waits on a real animation frame, and the mutation
+    // settles on a microtask — faking either would stall the gesture rather than the timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const held = await pickUp();
+      await held.over(entry("Wishlist"));
+      await held.drop();
+      await act(async () => {});
+      expect(report("Wishlist")).toHaveTextContent("Added to wishlist.");
+
+      await act(async () => {
+        vi.advanceTimersByTime(REPORT_MS);
+      });
+
+      expect(report("Wishlist")).toBeEmptyDOMElement();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** The same card twice is two writes: `add_wish` folds into the row that is already there,
+   *  and the sum is the backend's arithmetic rather than a number this hook keeps. */
+  it("sends a second identical drop as a second write", async () => {
+    const held = await pickUp();
+    await held.over(entry("Wishlist"));
+    await held.drop();
+    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+
+    const again = await startDrag(screen.getByText("a card"));
+    await again.over(entry("Wishlist"));
+    await again.drop();
+
+    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
+    expect(wishlistAdd).toHaveBeenNthCalledWith(2, { cardId: "c-bolt", quantity: 1 });
+  });
 });

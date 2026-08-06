@@ -29,6 +29,15 @@ function opened(id: number | null): number {
 }
 
 /**
+ * Where one deck's detail is cached — one spelling, every side of the lookup.
+ *
+ * Exported because the editor is not the only reader: the sidebar's drop reads the open
+ * deck's *name* out of this cache to say where a card landed (`useSidebarDrops`), and a key
+ * written out a second time is a key that can drift from this one silently.
+ */
+export const deckDetailKey = (id: number | null) => ["decks", "detail", id];
+
+/**
  * One deck, everything in it, and every write that changes what is in it.
  *
  * **One query, not three.** The editor, the mana curve and the legality panel all read
@@ -43,7 +52,7 @@ function opened(id: number | null): number {
 export function useDeck(id: number | null) {
   const queryClient = useQueryClient();
 
-  const detailKey = ["decks", "detail", id];
+  const detailKey = deckDetailKey(id);
 
   const query = useQuery({
     queryKey: detailKey,
