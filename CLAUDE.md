@@ -29,7 +29,13 @@ watches only one reports a clean console it never looked at).
   `rawKeyDown`, which carries no `text` — the page *hears* the key and Chromium activates
   nothing, so `key Enter` on a focused button is a keydown and not a click (measured live
   2026-08-06: the nav button stayed unpressed). `press Enter|Space [selector]` carries the
-  text, focuses the selector first if given, and is what a keyboard pass wants.
+  text, focuses the selector first if given, and is what a keyboard pass wants. **A keypress
+  is `keyDown`-with-text plus `keyUp` and nothing else**: Chromium synthesises the keypress
+  from the keydown, so adding an explicit `char` sends a *second* one — measured on a deck
+  stepper, one `press Enter` moved it 1 → 2 and the three-event form moved it 2 → 4 while
+  reporting a single press. **When a live pass checks a key that activates something, count
+  the activations, not whether one happened** — Space activates on keyup and hides this
+  entirely.
 - **`media` and `size` take a trailing expression and it is evaluated *in that session*.** A
   separate `eval` after them measures nothing: `setEmulatedMedia` is reverted the instant its
   socket closes, and every invocation of the script is its own socket. Worse, WebView2 ignores
@@ -41,13 +47,17 @@ watches only one reports a clean console it never looked at).
   with an explicit `size 1280 800`.
 - **`drag <source> <target>`** is a real Chromium drag (`Input.setInterceptDrags` +
   `Input.dragIntercepted` + `Input.dispatchDragEvent`), with `--press <css>`, `--from x,y`,
-  `--cancel` and `--probe <expr>` for reading the page mid-flight. It cleans up after itself,
-  which matters because a drag run that dies leaves **two** things behind that make *every
-  later drag* fail silently: the browser's drag controller (`dragCancel` + `mouseReleased` +
-  `setInterceptDrags:false`) and pdnd's `[data-pdnd-honey-pot]`, left covering the pointer so
-  the next `mousePressed` lands on it. **The press must land somewhere visible** — a row whose
-  centre is below the fold starts nothing, which is what `--press`/`--from` are for, and a
-  scroller left scrolled hides rows from `click` the same way.
+  `--cancel` and `--probe <expr>` for reading the page mid-flight. **It cleans up after
+  itself, including after a drag that never started** — which is the case worth naming,
+  because that is the one that has already pressed the mouse button. A dying run otherwise
+  leaves the browser's drag controller holding a press with interception on, and pdnd's
+  `[data-pdnd-honey-pot]` covering the pointer so the next `mousePressed` lands on it. Two
+  traps live in that cleanup: an `Input.DragData` **must** carry `dragOperationsMask` or the
+  call is rejected outright (`Invalid parameters`, measured), and the four cleanup steps each
+  need their own `try` — sharing one made the block all-or-nothing, and the step most likely
+  to fail was the first. **The press must land somewhere visible** — a row whose centre is
+  below the fold starts nothing, which is what `--press`/`--from` are for, and a scroller left
+  scrolled hides rows from `click` the same way.
 - **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
   fault.** Reload with the recorder attached and read the entries that arrive after.
 

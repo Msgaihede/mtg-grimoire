@@ -205,12 +205,26 @@ async function main() {
 
       // `press Enter|Space [selector]` — a key that *activates* the focused control.
       //
-      // Chromium synthesises the click on a focused `<button>` from a keypress that carries
-      // `text`, and `key`'s `rawKeyDown` carries none — so `key Enter` on a button is a
-      // keydown the page hears and an activation that never happens. Whether that is what you
-      // want depends entirely on what you are testing, which is why these are two commands
-      // and not one. The optional selector focuses first, because "press Enter on this
-      // control" is what a keyboard pass actually wants to say.
+      // Chromium activates a focused `<button>` off the **keypress**, and it synthesises that
+      // keypress itself from a `keyDown` that carries `text`. `key`'s `rawKeyDown` carries
+      // none — so `key Enter` on a button is a keydown the page hears and an activation that
+      // never happens. Whether that is what you want depends entirely on what you are testing,
+      // which is why these are two commands and not one.
+      //
+      // **Two events, never three.** Adding an explicit `char` after a `keyDown` that already
+      // carries text sends a *second* keypress, and a stepper pressed that way steps twice
+      // while this command reports one press. Measured on a focused button: `keyDown(text)` +
+      // `char` + `keyUp` = **2 clicks**; `keyDown(text)` + `keyUp` = **1**. Space hides the
+      // fault — it activates on keyup — so a live check that only asks *whether* the control
+      // fired will pass over it. Ask how many times.
+      //
+      // The injected `char` was wrong in a second way, which is why it is not merely
+      // redundant: a page that `preventDefault()`s the keydown suppresses the keypress
+      // Chromium would have synthesised, but not a char dispatched from here — so that path
+      // could manufacture activations a real keyboard cannot produce.
+      //
+      // The optional selector focuses first, because "press Enter on this control" is what a
+      // keyboard pass actually wants to say.
       case "press": {
         const k = ACTIVATION_KEYS[args[0]];
         if (!k) {
@@ -228,7 +242,6 @@ async function main() {
           if (!focused) throw new Error(`nothing focusable matches ${args[1]}`);
         }
         await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...k });
-        await cdp.send("Input.dispatchKeyEvent", { type: "char", ...k });
         await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k, text: undefined });
         console.log("pressed");
         break;
@@ -247,21 +260,36 @@ async function main() {
       // * A run that dies mid-flight leaves **two** pieces of state behind, and both make
       //   every later drag fail with "the browser never started a drag": the drag controller
       //   (cleared here with `dragCancel` + `mouseReleased` + `setInterceptDrags:false`, in a
-      //   `finally`) and pdnd's **honey pot** (`[data-pdnd-honey-pot]`), left covering the
-      //   pointer so the next `mousePressed` lands on it. Both are cleaned at both ends.
+      //   `finally` whose four steps each get their own `try` — see there) and pdnd's **honey
+      //   pot** (`[data-pdnd-honey-pot]`), left covering the pointer so the next
+      //   `mousePressed` lands on it. Both are cleaned at both ends, including after a drag
+      //   that never started — which is the case that matters, because that is the one that
+      //   leaves the button down.
       // * The press must land on something **visible**. A row or tile inside a short scroller
       //   can have its geometric centre off-screen, and a press there starts nothing —
       //   `--from x,y` names a point instead, and `--press` names a different element.
       // * The target is measured **after** the drag starts, because the most interesting drop
       //   target in this app (the remove tray) does not exist until a card is in the air.
       case "drag": {
-        const [source, target] = args;
         const flag = (name) => {
           const i = args.indexOf(name);
           return i === -1 ? null : (args[i + 1] ?? "");
         };
         const cancel = args.includes("--cancel");
+        // Positional arguments are what is left once the flags and their values are taken
+        // out, not `args[0]` and `args[1]`: `drag --cancel <src> <tgt>` is a reasonable thing
+        // to type, and reading positions blindly made "--cancel" the source selector.
+        const flagsWithValues = ["--press", "--from", "--probe"];
+        const positional = args.filter((arg, i) => {
+          if (arg.startsWith("--")) return false;
+          const before = args[i - 1];
+          return !(before && flagsWithValues.includes(before));
+        });
+        const [source, target] = positional;
+        if (!source || !target) throw new Error("drag takes a source and a target selector");
         let data = null;
+        /** Whether the successful path already let the button go. */
+        let released = false;
         cdp.on((m) => {
           if (m.method === "Input.dragIntercepted") data ??= m.params.data;
         });
@@ -307,30 +335,51 @@ async function main() {
             data,
           });
           await mouse("mouseReleased", to.x, to.y, 0);
+          released = true;
           const outcome = cancel ? "cancelled" : "dropped";
           console.log(
             JSON.stringify({ started: data.items, from, to, outcome, probe: measured }, null, 2),
           );
         } finally {
-          try {
-            await cdp.send("Input.dispatchDragEvent", {
-              type: "dragCancel",
-              x: 0,
-              y: 0,
-              data: data ?? { items: [] },
-            });
-            await cdp.send("Input.dispatchMouseEvent", {
-              type: "mouseReleased",
-              x: 0,
-              y: 0,
-              button: "left",
-              buttons: 0,
-              clickCount: 1,
-            });
-            await cdp.send("Input.setInterceptDrags", { enabled: false });
-            await evaluate(cdp, honeyPot);
-          } catch {
-            /* the socket is going away anyway */
+          // **Four independent steps, four `try`s.** One shared `catch` made this whole block
+          // all-or-nothing, and the first step is the one most likely to fail — which is how
+          // the cleanup came to fail in precisely the state it exists for. When the browser
+          // never started a drag, `data` is null; the fallback then has to be a *valid*
+          // `Input.DragData`, and `dragOperationsMask` is mandatory (without it the call is
+          // rejected at deserialization). That rejection took `mouseReleased`,
+          // `setInterceptDrags:false` and the honey-pot removal down with it, leaving the
+          // button held and interception on — the exact poisoned window the `finally`
+          // promises to close, reachable only from the failure it was written for.
+          const steps = [
+            () =>
+              cdp.send("Input.dispatchDragEvent", {
+                type: "dragCancel",
+                x: 0,
+                y: 0,
+                data: data ?? { items: [], dragOperationsMask: 1 },
+              }),
+            // Only when the successful path did not already release: a second `mouseReleased`
+            // with no press behind it is a stray event in the page's log.
+            () =>
+              released
+                ? Promise.resolve()
+                : cdp.send("Input.dispatchMouseEvent", {
+                    type: "mouseReleased",
+                    x: 0,
+                    y: 0,
+                    button: "left",
+                    buttons: 0,
+                    clickCount: 1,
+                  }),
+            () => cdp.send("Input.setInterceptDrags", { enabled: false }),
+            () => evaluate(cdp, honeyPot),
+          ];
+          for (const step of steps) {
+            try {
+              await step();
+            } catch {
+              /* every one of these is worth attempting whatever the last one did */
+            }
           }
         }
         break;

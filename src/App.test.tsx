@@ -364,16 +364,28 @@ it("closes the card when the reader leaves the view", async () => {
  * corrected. Found in the running app (2026-08-06), invisible to every suite here: a test
  * that fires Escape at the row never travels the path that was broken.
  */
-it("closes the card on Escape from inside a collection row's stepper", async () => {
-  collectionList.mockResolvedValue({ items: [BOLT_ENTRY], total: 1 });
+it("closes the card on Escape from inside a collection row's controls", async () => {
+  // Two rows, because a collection row's *other* guarded cell — the remove button — is
+  // offered only at zero copies, and both cells carry the same stop.
+  collectionList.mockResolvedValue({
+    items: [BOLT_ENTRY, { ...BOLT_ENTRY, id: 8, name: "Counterspell", quantity: 0 }],
+    total: 2,
+  });
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: "Collection" }));
 
   await userEvent.click(await screen.findByRole("row", { name: /Lightning Bolt/ }));
   expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
 
-  const stepper = screen.getByRole("spinbutton", { name: /Quantity of Lightning Bolt/ });
-  stepper.focus();
+  screen.getByRole("spinbutton", { name: /Quantity of Lightning Bolt/ }).focus();
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("row", { name: /Counterspell/ }));
+  expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+
+  screen.getByRole("button", { name: /Remove Counterspell .* from your collection/ }).focus();
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
@@ -397,7 +409,7 @@ it("closes the card on Escape from inside the search table's add button", async 
 /** And the third: the wishlist's stepper cell, which had its own copy of the blanket stop
  *  and its own local helper to hide it in. Three lists, one bug, one fix — and this test
  *  exists so a fourth list is caught by the suite rather than by a reader. */
-it("closes the card on Escape from inside a wishlist row's stepper", async () => {
+it("closes the card on Escape from inside a wishlist row's controls", async () => {
   wishlistList.mockResolvedValue({ items: [BOLT_WISH], total: 1 });
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
@@ -406,6 +418,16 @@ it("closes the card on Escape from inside a wishlist row's stepper", async () =>
   expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
 
   screen.getByRole("spinbutton", { name: /Copies wanted of Lightning Bolt/ }).focus();
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+
+  // The row's second guarded cell. Both carried the stop; a test that checked one of them
+  // would have let the other keep it.
+  await userEvent.click(screen.getByRole("row", { name: /Lightning Bolt/ }));
+  expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+
+  screen.getByRole("button", { name: /Remove Lightning Bolt .* from your wishlist/ }).focus();
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();

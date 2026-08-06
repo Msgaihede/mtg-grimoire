@@ -12,9 +12,9 @@ export default tseslint.config(
   // which are kept on as free static analysis.
   reactHooks.configs.flat["recommended-latest"],
   // Developer tooling that runs in Node rather than in the webview. Listed by hand rather
-  // than pulled from the `globals` package: five names is not worth a dependency, and the
-  // list being short is itself a fence — anything in `scripts/` that needs more of Node
-  // than this should be asked why.
+  // than pulled from the `globals` package: half a dozen names is not worth a dependency,
+  // and the list being short is itself a fence — anything in `scripts/` that needs more of
+  // Node than this should be asked why.
   {
     files: ["scripts/**/*.mjs"],
     languageOptions: {
