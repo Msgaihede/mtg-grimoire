@@ -15,6 +15,12 @@ import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { faceCount, groupByIllustration, legalityChips } from "./printings";
+import {
+  PrintingPreview,
+  PREVIEW_FRAME_ATTR,
+  usePrintingDwell,
+  type DwellRowProps,
+} from "./PrintingPreview";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
@@ -214,9 +220,24 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   }, [onClose, deckRow]);
 
   // The outer layer: bubble phase, and it yields to any control open over the results —
-  // the set filter's listbox, anything later — that consumed the press from the capture
-  // phase. Without that the pane closes underneath such a control on the same press, and
-  // the two focus hand-backs fight over where the caret lands. See `useDismissOnEscape`.
+  // the set filter's listbox, a printings row's hover preview, anything later — that consumed
+  // the press from the capture phase. Without that the pane closes underneath such a control on
+  // the same press, and the two focus hand-backs fight over where the caret lands. See
+  // `useDismissOnEscape`.
+  //
+  // **The `"inner"` rung is one at a time, and no z-index or state union enforces it** — the
+  // protocol orders exactly two rungs, so two inner layers open at once would both consume the
+  // same press. What keeps this pane's apart is that each yields to the thing that would open
+  // the other:
+  //
+  // * the **quick-add popup** on a printings row closes when focus leaves its own root, and
+  //   opening anything else moves the caret into that instead;
+  // * the **hover preview** closes on the hover-leave or blur that ended its dwell, and on the
+  //   press inside a row — which is how the popup is opened — *and* refuses to start at all
+  //   while a control in this pane reads `aria-expanded="true"`, which is the case a press
+  //   cannot cover: hovering a neighbouring row with the popup open presses nothing.
+  //
+  // Both halves are `usePrintingDwell`'s, and its doc has the measurement they came from.
   useDismissOnEscape({ layer: "outer", onDismiss: close });
 
   const card = useQuery({
@@ -312,11 +333,16 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       ref={paneRef}
       tabIndex={-1}
       aria-label="Card details"
+      // The box a printings row's hover preview is positioned in and clipped by — one mark,
+      // because they are one box: `relative` makes the pane the containing block those
+      // coordinates are in, and it is the scroller, so it is also what would cut a picture in
+      // half. See {@link PREVIEW_FRAME_ATTR}.
+      {...{ [PREVIEW_FRAME_ATTR]: "" }}
       // A block that scrolls, not a flex column: in a column the art is a flex item, and a
       // pane shorter than the card would compress the image to fit rather than scroll —
       // which is the one thing Scryfall's usage rules forbid outright.
       className={cn(
-        "w-96 shrink-0 space-y-4 overflow-y-auto rounded-lg border border-border bg-surface p-4",
+        "relative w-96 shrink-0 space-y-4 overflow-y-auto rounded-lg border border-border bg-surface p-4",
         FOCUS,
       )}
     >
@@ -618,6 +644,9 @@ function Printings({
   swap: SwapOffer | null;
 }) {
   const headingId = useId();
+  // One dwell timer for the whole list — see {@link usePrintingDwell} for why it cannot be one
+  // per row. Called before the early return below, because a hook is.
+  const dwell = usePrintingDwell();
   // A card with no `oracleId` never asked for printings, so it has no list to fail at
   // loading: nothing to say, and no empty section to say it in. (Nor does a card whose
   // printings all left `cards` — same shape, same silence.)
@@ -667,11 +696,16 @@ function Printings({
                 card={card}
                 current={p.id === card.id}
                 swap={swap}
+                dwell={dwell.rowProps(p.id)}
               />
             ))}
           </ul>
         </div>
       ))}
+      {/* The one picture the whole list shares, drawn last so it stands over the rows it
+          covers, and positioned against the pane rather than against this section — which is
+          why it can be mounted anywhere inside it. */}
+      <PrintingPreview printingId={dwell.printingId} anchor={dwell.anchor} />
     </section>
   );
 }
@@ -681,14 +715,18 @@ function PrintingRow({
   card,
   current,
   swap,
+  dwell,
 }: {
   printing: Printing;
   card: CardDetail;
   current: boolean;
   swap: SwapOffer | null;
+  /** The row's half of the list's one hover preview — see {@link usePrintingDwell}. */
+  dwell: DwellRowProps;
 }) {
   return (
     <li
+      {...dwell}
       className={cn(
         "group rounded-md px-2 py-1 text-xs",
         // The one printing this pane is about. A gold hairline down its edge rather than a

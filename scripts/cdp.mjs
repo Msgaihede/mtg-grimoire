@@ -16,6 +16,7 @@
 //     node scripts/cdp.mjs text "Wishlist"            # click the first element with this text
 //     node scripts/cdp.mjs key Escape
 //     node scripts/cdp.mjs press Enter "[aria-label='Add Sol Ring to Main deck']"
+//     node scripts/cdp.mjs hover "<css>" --rest 400 --probe "expr"   # a real dwell
 //     node scripts/cdp.mjs drag "<source css>" "<target css>"  # a real Chromium drag
 //     node scripts/cdp.mjs size 1024 768 "expr"      # or `size reset`; expr runs in-session
 //     node scripts/cdp.mjs media prefers-reduced-motion reduce "expr"  # measured in-session
@@ -385,6 +386,79 @@ async function main() {
         break;
       }
 
+      // `hover <css> [--from x,y] [--rest <ms>] [--probe <expr>]`
+      //
+      // A real pointer, resting: `Input.dispatchMouseEvent` `mouseMoved` events, which is what
+      // puts Chromium's own hover pipeline in play — the page gets `mouseover`/`mouseout` with
+      // real `relatedTarget`s, and React synthesises `onMouseEnter`/`onMouseLeave` from those
+      // and from nothing else. A `dispatchEvent` out of `eval` proves nothing about hover.
+      //
+      // **It approaches from somewhere.** The browser remembers where the pointer was left, so
+      // a move onto an element the pointer is already inside crosses no boundary and fires no
+      // enter at all — which is a hover command that silently does nothing on its second run.
+      // The default approach is 40px above the element's own top edge, clamped into the window;
+      // `--from` names a point when that lands somewhere unhelpful.
+      //
+      // **The probe is read twice, in this session**: once the moment the pointer arrives, and
+      // again after `--rest` milliseconds without moving. That pair is what a dwell timer looks
+      // like from outside — `before` is what the page shows a pointer passing through, `after`
+      // is what it shows one that stopped — and reading it from a second invocation would
+      // measure a page whose pointer has been sitting still for however long the shell took.
+      case "hover": {
+        const flag = (name) => {
+          const i = args.indexOf(name);
+          return i === -1 ? null : (args[i + 1] ?? "");
+        };
+        const flagsWithValues = ["--from", "--rest", "--probe"];
+        const positional = args.filter((arg, i) => {
+          if (arg.startsWith("--")) return false;
+          const before = args[i - 1];
+          return !(before && flagsWithValues.includes(before));
+        });
+        const selector = positional[0];
+        if (!selector) throw new Error("hover takes a selector");
+        const rest = Number(flag("--rest") ?? 400);
+        const probe = flag("--probe");
+        const at = await evaluate(
+          cdp,
+          `(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return null;
+            el.scrollIntoView({ block: "center" });
+            const r = el.getBoundingClientRect();
+            return {
+              x: Math.round(r.x + r.width / 2),
+              y: Math.round(r.y + r.height / 2),
+              approach: { x: Math.round(r.x + r.width / 2), y: Math.max(2, Math.round(r.top - 40)) },
+            };
+          })()`,
+        );
+        if (!at) throw new Error(`no element matches ${selector}`);
+        const parked = flag("--from");
+        const from = parked
+          ? { x: Number(parked.split(",")[0]), y: Number(parked.split(",")[1]) }
+          : at.approach;
+        const move = (x, y) =>
+          cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, buttons: 0 });
+        await move(from.x, from.y);
+        // A few steps rather than a teleport: a real pointer arrives, and a page that watches
+        // `mousemove` (a drag threshold, an auto-scroller) sees the same thing a hand does.
+        for (const t of [0.34, 0.67, 1]) {
+          await move(
+            Math.round(from.x + (at.x - from.x) * t),
+            Math.round(from.y + (at.y - from.y) * t),
+          );
+          await new Promise((r) => setTimeout(r, 16));
+        }
+        const before = probe ? await evaluate(cdp, probe) : undefined;
+        await new Promise((r) => setTimeout(r, rest));
+        const after = probe ? await evaluate(cdp, probe) : undefined;
+        console.log(
+          JSON.stringify({ at: { x: at.x, y: at.y }, from, rest, before, after }, null, 2),
+        );
+        break;
+      }
+
       case "type":
         for (const ch of args.join(" ")) {
           await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch });
@@ -534,7 +608,8 @@ async function main() {
 
       default:
         console.error(
-          "usage: cdp.mjs <eval|click|text|key|press|type|drag|size|media|shot|console> [args]\n" +
+          "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|size|media|shot|console> " +
+            "[args]\n" +
             "  the app must be running with --remote-debugging-port=9222",
         );
         process.exitCode = 2;
