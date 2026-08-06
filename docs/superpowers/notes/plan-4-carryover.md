@@ -349,3 +349,16 @@ points at the ledger rather than re-litigating it.
 Also worth keeping: **auto-scroll during a drag was forced live for the first time in Task 15**
 (an overfilled column, 0 → 408 px). Tasks 13 and 14 could not make the columns overflow at
 either width and said so.
+
+## Final-wave residuals (adjudicated at close, 2026-08-06)
+
+The whole-branch review's fix wave (`f32fccc`) closed all seven fix-now items; its
+re-review left three observations, adjudicated:
+
+- `DecksPage.tsx:555` — the delete confirmation's "Its N cards go with it" quotes the
+  SIZE_ZONES count, understating by sideboard/maybe (and now companion). Plan 6's copy
+  pass: either count every row for the confirm (a delete takes them all) or name the zones.
+- `schema.rs:239` — the seed's overview gloss still explains NULL `sideboard_max` via
+  Limited only; the enumerating comment at :607 is correct. One-word doc fold, Plan 6.
+- The executed plan doc's `card_count` spec (main+commander+companion) is superseded by
+  the final ruling — a record, deliberately left unedited.
