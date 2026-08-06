@@ -7,7 +7,6 @@ import { startDrag } from "@/test-drag";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { DROP_LINE_ATTR } from "./DropIndicator";
 import { card, resetRowIds } from "./validation/fixtures";
-import { STACK_MAX_WIDTH, STACK_OVERLAP, UNDER_PLATE } from "./VisualCard";
 import { groupCards, shouldFlipUp, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
 
 /** Every callback the column reports through, so a test only names the one it is about. */
@@ -30,9 +29,6 @@ function draw(cards: DeckCard[], overrides: Partial<Parameters<typeof ZoneColumn
     title: ZONE_LABEL.main,
     cards,
     groupBy: null,
-    // The dense rows, which is what every test below this line is about. The card view has
-    // its own describe at the foot of the file, and `VisualCard.test.tsx` has the card.
-    view: "compact" as const,
     moveTargets: ["side", "maybe"] as const,
     openMenuCardId: null,
     busy: false,
@@ -285,10 +281,8 @@ describe("ZoneColumn", () => {
    * swap deletes the row the pane was opened from — the new printing's row is a different React
    * key — so the pane finds the *slot* instead, `document.querySelector` over the attribute
    * every deck control draws (`CardDetailPane`'s `deckControlFor`, `dnd.ts`'s
-   * {@link deckCardSlot}). Both views owe it one, and only the card view's is exercised end to
-   * end — `App.test.tsx` opens the editor in its default view. Without this the attribute could
-   * be deleted from the dense row with the whole suite green, and every reader who pressed
-   * "Show as list" would lose the caret to `<body>` on the Escape after a swap.
+   * {@link deckCardSlot}). `App.test.tsx` exercises the whole hand-back end to end; this pin
+   * is what lets that test name the mechanism — delete the attribute and both fail.
    */
   it("marks the row with the slot the card pane hands the caret back to", () => {
     const row = card({ name: "Lightning Bolt" });
@@ -338,6 +332,23 @@ describe("ZoneColumn", () => {
     expect(screen.getByText(/left the card database/)).toBeInTheDocument();
     // Nothing tries to draw a picture of a card that is not there.
     expect(container.querySelector("img")).toBeNull();
+  });
+
+  /**
+   * The thumbnail is the `art` crop, drawn as decoration: the name is the row's text and the
+   * picture repeats it, so it hides from the accessibility tree and carries no alt of its
+   * own. `draggable={false}` is load-bearing — the row is the drag source, and a browser
+   * would otherwise offer the picture itself as the thing being dragged.
+   */
+  it("draws the row's art crop as decoration the drag cannot pick up", () => {
+    const { container } = draw([card({ name: "Lightning Bolt" })]);
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", expect.stringContaining("/art/"));
+    expect(img).toHaveAttribute("alt", "");
+    expect(img).toHaveAttribute("draggable", "false");
+    expect(img?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 
   /** The click path `deck_move_card` needs, and the one drag is built on top of in Task 14. */
@@ -433,135 +444,6 @@ describe("ZoneColumn", () => {
 });
 
 /**
- * The same column, drawn as cards.
- *
- * Everything *around* the cards is deliberately identical — the heading and its count, the
- * group headers and theirs, the empty state, the drop target, the menu — so what these pin is
- * the pile itself: one card per row, stacked under its own heading, and the `<li>` contract the
- * drag layer is built on unchanged. `VisualCard.test.tsx` has the card.
- */
-describe("ZoneColumn as cards", () => {
-  const visual = (cards: DeckCard[], overrides: Partial<Parameters<typeof ZoneColumn>[0]> = {}) =>
-    draw(cards, { view: "visual", ...overrides });
-
-  /** One card per row, and one image per card whatever the deck wants of it. */
-  it("draws each row as its card", () => {
-    const { container } = visual([
-      card({ name: "Lightning Bolt", quantity: 4 }),
-      card({ name: "Bear", typeLine: "Creature — Bear" }),
-    ]);
-
-    expect(container.querySelectorAll("img")).toHaveLength(2);
-    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
-    expect(screen.getByText("×4")).toBeInTheDocument();
-  });
-
-  /**
-   * The pile: every card after the first in a group is pulled up over the one before it, and
-   * the first of each group starts a fresh one — a stack that ran across a heading would put
-   * Creatures under the Instant heading's own last card.
-   */
-  it("stacks each group from its own first card", () => {
-    visual(
-      [
-        card({ name: "Bolt", typeLine: "Instant" }),
-        card({ name: "Shock", typeLine: "Instant" }),
-        card({ name: "Bear", typeLine: "Creature — Bear" }),
-      ],
-      { groupBy: "type" },
-    );
-
-    const creatures = within(screen.getByRole("list", { name: "Creature" })).getAllByRole(
-      "listitem",
-    );
-    const instants = within(screen.getByRole("list", { name: "Instant" })).getAllByRole("listitem");
-
-    expect(creatures[0]).not.toHaveClass(STACK_OVERLAP);
-    expect(instants[0]).not.toHaveClass(STACK_OVERLAP);
-    expect(instants[1]).toHaveClass(STACK_OVERLAP);
-  });
-
-  /** The chrome is the column's, not the row's: the same headings and the same counts. */
-  it("keeps the headings and the counts it has as a list", () => {
-    visual(
-      [
-        card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
-        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
-      ],
-      { groupBy: "type" },
-    );
-
-    expect(screen.getByRole("region", { name: "Main deck, 6 cards" })).toBeInTheDocument();
-    expect(screen.getByText("Instant").parentElement).toHaveTextContent("Instant4");
-    expect(screen.getByRole("list", { name: "Creature" })).toBeInTheDocument();
-  });
-
-  /** A card with no printing behind it has no art to draw, in this view as in the other. */
-  it("draws no picture for an orphaned row", () => {
-    const { container } = visual([
-      card({ name: "Lightning Bolt", needsReview: "This printing left the card database." }),
-    ]);
-
-    expect(container.querySelector("img")).toBeNull();
-    expect(screen.getByText(/left the card database/)).toBeInTheDocument();
-  });
-
-  /** The menu is the column's, and it opens on a card exactly as it opens on a row. */
-  it("opens a row menu on a card", async () => {
-    const { rerender, props } = visual([card({ name: "Lightning Bolt" })]);
-
-    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
-    expect(props.onOpenMenu).toHaveBeenCalled();
-
-    rerender(<ZoneColumn {...props} openMenuCardId="c-Lightning Bolt" />);
-    await userEvent.click(screen.getByRole("button", { name: "Move to Sideboard" }));
-
-    expect(props.onMove).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "Lightning Bolt" }),
-      "side",
-    );
-  });
-
-  /**
-   * A column of cards is as wide as a card, and only in this view: measured in the running
-   * window, the main column at 1280 with the pane closed is 621px, which drew a 596 × 834px
-   * poster and turned a 44-card deck into six screens of scrolling. The cap is a fact about
-   * the *view*, so the column carries it and the editor's layout is left alone.
-   */
-  it("caps its width at a card in this view, and not in the other", () => {
-    const { rerender, props } = visual([card({ name: "Lightning Bolt" })]);
-    const column = () => screen.getByRole("region", { name: /^Main deck/ });
-
-    expect(column()).toHaveClass(STACK_MAX_WIDTH);
-
-    rerender(<ZoneColumn {...props} view="compact" />);
-    expect(column()).not.toHaveClass(STACK_MAX_WIDTH);
-  });
-
-  /**
-   * **A menu on a card hangs off the card's title strip, not off the card.** A row is 40px and
-   * a card is 323px, so anchoring to the card's own bottom edge put the menu 300px below the
-   * strip the reader pressed — measured in the running window, on a card at the foot of the
-   * column, where flipping was *worse* than not flipping.
-   *
-   * Which way it opens is arithmetic this cannot see (`shouldFlipUp` has its own tests): every
-   * rectangle in jsdom is zero, so the menu always fits below and the unflipped anchor is the
-   * deterministic half — which is the half these two classes differ in.
-   */
-  it("hangs a menu off the card's title strip rather than off the whole row", () => {
-    const { rerender, props } = visual([card({ name: "Lightning Bolt" })], {
-      openMenuCardId: "c-Lightning Bolt",
-    });
-    const menu = () => screen.getByRole("dialog", { name: /lightning bolt/i });
-
-    expect(menu()).toHaveClass(UNDER_PLATE);
-
-    rerender(<ZoneColumn {...props} view="compact" />);
-    expect(menu()).toHaveClass("top-1");
-  });
-});
-
-/**
  * The column as one end of a drag: what it accepts, what it refuses, and what it says while
  * a card is in the air over it.
  *
@@ -580,12 +462,11 @@ describe("ZoneColumn drops", () => {
    * Two columns, because a move needs both ends: a row is dragged out of one zone and into
    * another, and the column that takes it is not the column that had it.
    */
-  function drawPair(cards: DeckCard[], view: "visual" | "compact" = "compact") {
+  function drawPair(cards: DeckCard[]) {
     const main = handlers();
     const side = handlers();
     const common = {
       groupBy: null,
-      view,
       moveTargets: ["main", "side"] as const,
       openMenuCardId: null,
       busy: false,
@@ -761,42 +642,6 @@ describe("ZoneColumn drops", () => {
     expect(side.onDropCard).toHaveBeenCalledWith(
       expect.objectContaining({ write: "move", to: "side" }),
     );
-  });
-
-  /**
-   * **The `<li>` is still the drag handle when the row is drawn as a card.** The drag layer is
-   * registered on the row element and every drop this editor takes is aimed at one — so a view
-   * that moved the registration onto the card front would be a view where a deck cannot be
-   * rearranged, and nothing in `dnd.ts`'s own tests would notice.
-   */
-  it("drags a card out of one zone and into another in the card view", async () => {
-    const { side, scroller } = drawPair([card({ name: "Lightning Bolt" })], "visual");
-
-    const held = await startDrag(screen.getByRole("listitem"));
-    expect(held.started).toBe(true);
-    await held.over(scroller("Sideboard"));
-    await held.drop();
-
-    expect(side.onDropCard).toHaveBeenCalledWith({
-      write: "move",
-      cardId: "c-Lightning Bolt",
-      from: "main",
-      to: "side",
-    });
-  });
-
-  /** And the guard that goes with it, on the controls this view overlays on the art. */
-  it("does not drag the card when the press landed on one of its controls", async () => {
-    const { side, scroller } = drawPair([card({ name: "Lightning Bolt", quantity: 2 })], "visual");
-
-    const held = await startDrag(screen.getByRole("listitem"), {
-      pressOn: screen.getByRole("button", { name: /decrease copies/i }),
-    });
-
-    expect(held.started).toBe(false);
-    await held.over(scroller("Sideboard"));
-    await held.drop();
-    expect(side.onDropCard).not.toHaveBeenCalled();
   });
 
   /**

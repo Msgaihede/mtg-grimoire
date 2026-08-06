@@ -13,9 +13,11 @@ import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { cardImageUrl } from "@/lib/images";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
 import { shouldFlipUp } from "@/lib/shouldFlipUp";
+import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import {
   cardDraggable,
@@ -26,7 +28,6 @@ import {
   type DeckWrite,
 } from "./dnd";
 import { DropIndicator } from "./DropIndicator";
-import { STACK_MAX_WIDTH, UNDER_PLATE, VisualCard } from "./VisualCard";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
@@ -51,16 +52,6 @@ export const ZONE_LABEL: Record<DeckZone, string> = {
 
 /** The two questions a deck list is read for: what does it *do*, and what does it *cost*. */
 export type GroupBy = "type" | "manaValue";
-
-/**
- * The two ways a zone can be drawn.
- *
- * `"visual"` is the deck as cards — overlapped so each one's title band shows, which is how a
- * deck has been laid out on a table since before there were deckbuilders. `"compact"` is the
- * dense text row, which is what a reader comparing prices and collector numbers wants. The
- * editor owns the choice for a session and passes it down; neither is a setting.
- */
-export type ZoneView = "visual" | "compact";
 
 /** One heading and the rows under it. */
 export interface CardGroup {
@@ -101,21 +92,11 @@ const OTHER = "Other";
 const SCROLLER_ATTR = "data-zone-scroller";
 
 /**
- * Where a row's menu hangs, which is not the same place in a text row and on a card.
- *
- * A row is 40px tall, so "inside the row, top-aligned or bottom-aligned" is the whole story. A
- * **card is 323px**, and anchoring a menu to *its* bottom edge puts it 300px below the strip
- * the reader pressed — measured in the running window (2026-08-06): opened on a card at the
- * foot of the column, the flip put the menu *further* out of the scroller than not flipping
- * would have. So a card's anchor is its **title strip**: down means under the plate, where the
- * controls already are, and up means above the card's top edge, over the pile it is sitting on.
- *
- * `under` is what the flip is measured against, live off the DOM rather than recomputed from
- * the geometry constants — one source of truth, and it is the element the menu is drawn under.
+ * Where a row's menu hangs. A row is ~40px tall, so "inside the row, top-aligned or
+ * bottom-aligned" is the whole story — the flip is measured against the row itself.
  */
 const MENU_ANCHOR = {
-  row: { under: null, down: "top-1", up: "bottom-1" },
-  card: { under: "[data-no-drag]", down: UNDER_PLATE, up: "bottom-full" },
+  row: { down: "top-1", up: "bottom-1" },
 } as const;
 
 type MenuAnchor = keyof typeof MENU_ANCHOR;
@@ -206,9 +187,6 @@ export interface ZoneColumnProps {
   /** `null` draws a flat list: the commander and companion zones hold one or two cards, and a
    *  heading over a single row is a heading that says nothing. */
   groupBy: GroupBy | null;
-  /** Cards or rows. Everything else about the column — the heading, the counts, the groups,
-   *  the drop target, the menu — is the same either way. */
-  view: ZoneView;
   /** The zones a row here can be moved to, in the order the menu offers them. The editor
    *  derives it from the format's spec, so a Modern deck is never offered a commander zone. */
   moveTargets: readonly DeckZone[];
@@ -271,7 +249,6 @@ export function ZoneColumn({
   title,
   cards,
   groupBy,
-  view,
   moveTargets,
   openMenuCardId,
   busy,
@@ -315,7 +292,7 @@ export function ZoneColumn({
         zone={zone}
         moveTargets={moveTargets}
         busy={busy}
-        anchor={view === "visual" ? "card" : "row"}
+        anchor="row"
         triggerRef={openTriggerRef}
         onClose={onCloseMenu}
         onMove={onMove}
@@ -365,10 +342,6 @@ export function ZoneColumn({
       // one taking the card.
       className={cn(
         "relative flex min-h-0 flex-col overflow-hidden rounded-lg border border-border",
-        // A column of cards is as wide as a card, not as wide as the row layout would let it
-        // be. Here rather than in the editor because it is a fact about the *view* — see
-        // `STACK_MAX_WIDTH` for what a column without it drew.
-        view === "visual" && STACK_MAX_WIDTH,
         FOCUS,
         className,
       )}
@@ -385,7 +358,7 @@ export function ZoneColumn({
       <div
         ref={scrollerRef}
         {...{ [SCROLLER_ATTR]: "" }}
-        className="min-h-0 flex-1 overflow-y-auto p-1"
+        className="@container min-h-0 flex-1 overflow-y-auto p-1"
       >
         {cards.length === 0 ? (
           <p className="px-2 py-3 text-xs text-dim">Nothing here yet.</p>
@@ -401,36 +374,19 @@ export function ZoneColumn({
                 </p>
               )}
               <ul aria-label={group.label || undefined}>
-                {group.cards.map((card, at) =>
-                  view === "visual" ? (
-                    <VisualCard
-                      key={card.id}
-                      card={card}
-                      zone={zone}
-                      zoneTitle={title}
-                      // The stack is a fact about a card's place in its *group*, not in the
-                      // column: the first card under every heading starts a new pile.
-                      stacked={at > 0}
-                      menuOpen={openMenuCardId === card.cardId}
-                      menu={menuFor(card)}
-                      onOpenMenu={takeTrigger}
-                      onSetQuantity={onSetQuantity}
-                      onSelect={onSelect}
-                    />
-                  ) : (
-                    <CardRow
-                      key={card.id}
-                      card={card}
-                      zone={zone}
-                      zoneTitle={title}
-                      menuOpen={openMenuCardId === card.cardId}
-                      menu={menuFor(card)}
-                      onOpenMenu={takeTrigger}
-                      onSetQuantity={onSetQuantity}
-                      onSelect={onSelect}
-                    />
-                  ),
-                )}
+                {group.cards.map((card) => (
+                  <CardRow
+                    key={card.id}
+                    card={card}
+                    zone={zone}
+                    zoneTitle={title}
+                    menuOpen={openMenuCardId === card.cardId}
+                    menu={menuFor(card)}
+                    onOpenMenu={takeTrigger}
+                    onSetQuantity={onSetQuantity}
+                    onSelect={onSelect}
+                  />
+                ))}
               </ul>
             </div>
           ))
@@ -477,6 +433,14 @@ function CardRow({
   // The allocator never claims a copy for the scratchpad, so every `maybe` row reads 0 owned
   // by construction. A mark there would report a shortage the reader does not have.
   const short = zone !== "maybe" && card.ownedQuantity < card.quantity;
+  // The `art` crop (626×457 in `images.rs`), not the whole card: a full face at row height is
+  // an unreadable speck, while the crop is the piece of the card a player recognizes it by.
+  // The one retry story, like every card frame in the app — fed `null` for an orphan, whose
+  // printing has left the card database: nothing tries to draw a picture of a card that is
+  // not there, and the hook's null story is exactly "no state machine at all".
+  const art = useImageRetry(
+    card.needsReview === null ? cardImageUrl(card.cardId, 0, "art") : null,
+  );
 
   // The row is the drag handle for the whole card — every part of it that is not one of its
   // own controls, which is what `cardDraggable` is for and why a press on the stepper is
@@ -533,17 +497,47 @@ function CardRow({
           without the mark a press on `−` that travels five pixels is a drag of the whole row
           with the press never delivered (`cardDraggable`). Every control added in here needs
           it. */}
-      <span data-no-drag="" className="row-span-2" onClick={(e) => e.stopPropagation()}>
-        <QuantityStepper
-          size="sm"
-          value={card.quantity}
-          min={0}
-          // Named for the card *and* the zone: the same printing can sit in the main deck and
-          // the sideboard, and two steppers called "Copies of Lightning Bolt" would be two
-          // controls a screen reader cannot tell apart.
-          label={`Copies of ${card.name} in ${zoneTitle}`}
-          onChange={(next) => onSetQuantity(card, next)}
-        />
+      <span className="row-span-2 flex items-center gap-2">
+        <span data-no-drag="" onClick={(e) => e.stopPropagation()}>
+          <QuantityStepper
+            size="sm"
+            value={card.quantity}
+            min={0}
+            // Named for the card *and* the zone: the same printing can sit in the main deck
+            // and the sideboard, and two steppers called "Copies of Lightning Bolt" would be
+            // two controls a screen reader cannot tell apart.
+            label={`Copies of ${card.name} in ${zoneTitle}`}
+            onChange={(next) => onSetQuantity(card, next)}
+          />
+        </span>
+
+        {/* The card at a glance, as decoration beside the name — `aria-hidden`, empty alt,
+            and `draggable={false}` because the row is the drag source and a browser would
+            otherwise offer the picture itself. The frame keeps the row's geometry while the
+            art is still arriving, and stays as a quiet blank when a printing has none.
+            Decoration yields first: below ~17rem of column (measured live at 1280px with the
+            card pane docked — stepper + picture + name did not fit, and the column grew the
+            sideways scrollbar nothing in this app is allowed) the picture goes and the row
+            is the dense text row it always was. A container query, because it is a fact
+            about the column's width, not the window's — and the picture shares the stepper's
+            grid cell rather than owning a column, so hiding it costs no phantom gap. Clicks
+            fall through to the row, which opens the card: a picture of the card is the card. */}
+        <span
+          aria-hidden="true"
+          className="hidden h-9 w-12 overflow-hidden rounded bg-surface @[17rem]:block"
+        >
+          {art.src && !art.failed && (
+            <img
+              src={art.src}
+              alt=""
+              draggable={false}
+              loading="lazy"
+              decoding="async"
+              onError={art.onError}
+              className="size-full object-cover"
+            />
+          )}
+        </span>
       </span>
 
       <span className="flex min-w-0 items-baseline gap-1.5">
@@ -687,15 +681,12 @@ function RowMenu({
     measured.current = true;
     const r = row.getBoundingClientRect();
     const v = view.getBoundingClientRect();
-    // What the menu hangs off: the row itself, or — on a card — the strip at the top of it,
-    // whose foot is the control bar. `rowTop`/`rowBottom` are where a downward menu *starts*
-    // and where an upward one *ends*, which for a text row are the row's own two edges.
-    const under = MENU_ANCHOR[anchor].under;
-    const strip = under ? row.querySelector(under)?.getBoundingClientRect() : null;
+    // `rowTop`/`rowBottom` are where a downward menu *starts* and where an upward one
+    // *ends* — for a text row, the row's own two edges.
     setFlip(
       shouldFlipUp({
-        rowTop: strip ? strip.top : r.top,
-        rowBottom: strip ? r.top : r.bottom,
+        rowTop: r.top,
+        rowBottom: r.bottom,
         menuHeight: panel.offsetHeight,
         viewTop: v.top,
         viewBottom: v.bottom,

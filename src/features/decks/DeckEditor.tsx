@@ -22,7 +22,7 @@ import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd
 import { useDeck } from "./useDeck";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { ValidationPanel } from "./ValidationPanel";
-import { ZONE_LABEL, ZoneColumn, type GroupBy, type ZoneView } from "./ZoneColumn";
+import { ZONE_LABEL, ZoneColumn, type GroupBy } from "./ZoneColumn";
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
@@ -82,18 +82,6 @@ const GROUPINGS: { id: GroupBy; label: string }[] = [
   { id: "type", label: "Type" },
   { id: "manaValue", label: "Mana value" },
 ];
-
-/**
- * What the view switch says, which is what pressing it *does* rather than where you are.
- *
- * One button and not a pair of chips: there are two states, the button is only ever offering
- * the other one, and a two-chip group would spend twice the width saying so. The wording is
- * the app's rule for every control — a verb and its object.
- */
-const OTHER_VIEW: Record<ZoneView, { view: ZoneView; label: string }> = {
-  visual: { view: "compact", label: "Show as list" },
-  compact: { view: "visual", label: "Show as cards" },
-};
 
 /**
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
@@ -158,16 +146,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
-  /**
-   * Cards or rows, for as long as this editor is open.
-   *
-   * Cards by default: the deck builder is the one surface in the app whose whole subject is
-   * what the cards *are*, and a reader who wants the dense list is one press away. Deliberately
-   * not persisted — it is a way of looking at the deck in front of you, not a setting about
-   * every deck, and the app keeps no preferences store to put it in that would not also have to
-   * answer for the Search view's own grid/table switch.
-   */
-  const [view, setView] = useState<ZoneView>("visual");
   const [layer, setLayer] = useState<Layer>(null);
   const [showMaybe, setShowMaybe] = useState(false);
   /** Where the docked panel's adds land. Here rather than in the panel because it is a fact
@@ -709,30 +687,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           )}
 
-          {/* The two controls that decide how the deck reads, together at the end of the
-              header: how it is drawn, and how it is bucketed.
-
-              **Not a chip.** It wore `filterChipState(false)` first, which is the exact paint
-              of the two `aria-pressed` chips beside it in their *off* state — an action
-              dressed as a state, and one that can never light up, so "Show as cards" read as a
-              filter that was switched off rather than as a thing to press. It is the same
-              control the format `<select>` at the head of this row is: a filled surface in the
-              filter row's height and focus, which is this app's own clothes for "a control
-              here that is not a chip". `hover:text-text` because it is a button and answers a
-              pointer; the select does not, because a select does not need to. */}
-          <button
-            type="button"
-            onClick={() => setView(OTHER_VIEW[view].view)}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "ml-auto border-border bg-surface px-3 text-dim hover:text-text",
-            )}
-          >
-            {OTHER_VIEW[view].label}
-          </button>
-
-          <div role="group" aria-label="Group cards by" className="flex gap-1">
+          <div role="group" aria-label="Group cards by" className="ml-auto flex gap-1">
             {GROUPINGS.map(({ id, label }) => (
               <button
                 key={id}
@@ -813,7 +768,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   // The compact zones hold one card or two, and a "Creature 1" heading over a
                   // single commander is a heading that says nothing.
                   groupBy={zone === "main" || zone === "side" ? groupBy : null}
-                  view={view}
                   moveTargets={moveTargets}
                   openMenuCardId={menu?.zone === zone ? menu.cardId : null}
                   busy={menuBusy}
@@ -867,7 +821,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   title={ZONE_LABEL.maybe}
                   cards={byZone.maybe}
                   groupBy={groupBy}
-                  view={view}
                   moveTargets={moveTargets}
                   openMenuCardId={menu?.zone === "maybe" ? menu.cardId : null}
                   busy={menuBusy}

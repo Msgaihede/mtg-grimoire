@@ -306,34 +306,18 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The deck builder opens as **cards**: it is the one surface in the app whose whole subject
-   * is what the cards are, and the user asked for it in those words. The switch beside the
-   * grouping says what pressing it does, never where you are.
+   * The deck is rows — name, cost, printing, price — each with the card's art crop as a
+   * thumbnail beside the name (the user asked for exactly this: the dense list, with a small
+   * picture, never the stacked card faces it replaced). The thumbnail's own contract —
+   * decoration, `alt=""`, undraggable — is `ZoneColumn.test.tsx`'s.
    */
-  it("opens the deck as cards", async () => {
-    await open();
+  it("opens the deck as rows with the printings' facts and a thumbnail each", async () => {
+    const { container } = await open();
 
-    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show as list" })).toBeInTheDocument();
-  });
-
-  /**
-   * And the dense rows are one press away, for the reader comparing prices and collector
-   * numbers — which is the whole reason the text list stays.
-   */
-  it("switches to the compact list and back", async () => {
-    await open();
-
-    await userEvent.click(screen.getByRole("button", { name: "Show as list" }));
-
-    expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
-    // The two facts the dense rows exist for, and the two the cards leave to this list.
+    // The two facts the dense rows exist for.
     expect(screen.getAllByText("LEA · 161")).toHaveLength(2);
     expect(screen.getByText("$4.50")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Show as cards" }));
-
-    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
+    expect(container.querySelector('li img[alt=""]')).not.toBeNull();
   });
 
   /** Two ways to read the same list, and the deck decides which one answers the question in

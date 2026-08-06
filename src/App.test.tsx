@@ -530,11 +530,11 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
 
   expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", "main");
 
-  // The deck redraws on the printing it now holds — the card in the column is the M10 art.
+  // The deck redraws on the printing it now holds — the row's thumbnail is the M10 art.
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "Lightning Bolt" }).querySelector("img"),
-    ).toHaveAttribute("src", expect.stringContaining("/grid/c2/0")),
+      screen.getByRole("button", { name: "Lightning Bolt" }).closest("li")?.querySelector("img"),
+    ).toHaveAttribute("src", expect.stringContaining("/art/c2/0")),
   );
   // And the pane has followed it: the mark is on the row that was pressed, and the row that
   // had it is offering itself again.
@@ -705,19 +705,15 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
 });
 
 /**
- * The same hand-back with the deck drawn as a **list**, because the editor has two views and
- * the test above only ever draws one.
+ * The same hand-back, asked the other way: one row, no fold — what is being asked is where
+ * the caret lands, and the announcement is the other test's subject.
  *
- * The pane finds its way home through an attribute on whichever control stands for the slot
- * (`DECK_CARD_ATTR`), and the card and the row are two different controls in two different
- * files — so "the visual card carries it" is not evidence that the dense row does. Deleting it
- * from `ZoneColumn`'s row left every suite green until this existed; `ZoneColumn.test.tsx` pins
- * the attribute itself, and this is the press-to-caret path it is there for.
- *
- * One row and no fold: what is being asked is where the caret lands, and the announcement is
- * the other test's subject.
+ * The pane finds its way home through an attribute on the control that stands for the slot
+ * (`DECK_CARD_ATTR`, on the row's name button). Deleting it from `ZoneColumn`'s row left
+ * every suite green until this existed; `ZoneColumn.test.tsx` pins the attribute itself, and
+ * this is the press-to-caret path it is there for.
  */
-it("hands the caret back to the deck's row when the deck is drawn as a list", async () => {
+it("hands the caret back to the deck's row after a swap", async () => {
   deckList.mockResolvedValue([BURN]);
   deckGet
     .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] })
@@ -730,7 +726,6 @@ it("hands the caret back to the deck's row when the deck is drawn as a list", as
   await userEvent.click(screen.getByRole("button", { name: "Decks" }));
   await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
   await screen.findByLabelText("Deck name");
-  await userEvent.click(screen.getByRole("button", { name: "Show as list" }));
 
   await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
   const pane = await screen.findByRole("complementary", { name: /card details/i });
