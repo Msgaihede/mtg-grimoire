@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
+const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 // The docked search panel is the editor's own filter bar, set picker and result wall.
 const searchCards = vi.hoisted(() => vi.fn());
@@ -26,13 +27,37 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMoveCard,
     deckAddCard,
     deckMissingToWishlist,
+    deckSwapPrinting,
     formatSpecs,
     searchCards,
     listSets,
   },
 }));
 
+/**
+ * The mutations this editor mounted, kept where a test can reach them.
+ *
+ * For exactly one of them, and it says which: `swapPrinting` has **no control in this view**
+ * — the card pane's printings rows press it — while the mutation itself is mounted here,
+ * because this is the component whose refused-write family it belongs to. Wrapped rather than
+ * replaced: `useDeck` runs for real, its answer is handed straight back, and the only thing
+ * this adds is a handle on the object the editor is itself holding. A sibling component
+ * calling `useDeck(4)` would not do: two `useMutation` calls are two observers, and the one
+ * the editor watches is the one that has to be made to fail.
+ */
+const mounted = vi.hoisted(() => ({ deck: null as unknown as Deck }));
+vi.mock("./useDeck", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./useDeck")>();
+  function useDeck(id: number | null) {
+    const deck = real.useDeck(id);
+    mounted.deck = deck;
+    return deck;
+  }
+  return { ...real, useDeck };
+});
+
 import { DeckEditor } from "./DeckEditor";
+import type { Deck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
 const DECK: DeckRow = {
@@ -162,6 +187,7 @@ beforeEach(() => {
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
+  deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   // Nothing found by default: a result named after a card already in the deck would be a
   // second button by that name, and every test here addresses rows by the card's name.
@@ -941,6 +967,33 @@ describe("DeckEditor", () => {
 
     await open();
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+
+    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+  });
+
+  /**
+   * And the sixth, which is the one with no button in this view: the printing swap is pressed
+   * on the **card pane's** printings rows, and the pane is a sibling of this editor rather
+   * than part of it.
+   *
+   * It is in the family for the family's reason — `swap_printing` opens with `touch_deck` like
+   * every other zone write, so a swap onto a deck that has been deleted answers the same
+   * sentence, and an editor that went on painting the deck behind that refusal would be the
+   * dead-deck-still-painted case exactly. Driven through the mutation the editor mounted
+   * (see `mounted`), because the affordance that will start it is Task 5's.
+   */
+  it("re-reads the deck when a printing swap is refused", async () => {
+    deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
+    deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
+
+    await open();
+    act(() => {
+      mounted.deck.swapPrinting.mutate({
+        fromCardId: "c-Lightning Bolt",
+        toCardId: "p-m10",
+        zone: "main",
+      });
+    });
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
   });

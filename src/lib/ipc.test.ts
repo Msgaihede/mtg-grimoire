@@ -254,6 +254,20 @@ describe("ipc argument names match the Rust command signatures", () => {
       to: "side",
     });
 
+    // The one zone write that names **two** cards, so it spells neither of them `cardId` the
+    // way its five siblings do — a payload that did would deserialize into neither parameter.
+    // The answer is read back too: `folded` is the server's arithmetic, and a mirror typed
+    // `void` would throw away the one thing the UI has to say about a swap.
+    invoke.mockResolvedValue({ folded: true, quantity: 5 });
+    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", "main");
+    expect(invoke).toHaveBeenCalledWith("deck_swap_printing", {
+      deckId: 4,
+      fromCardId: "p1",
+      toCardId: "p2",
+      zone: "main",
+    });
+    expect(swapped).toEqual({ folded: true, quantity: 5 });
+
     invoke.mockResolvedValue(2);
     const wishes = await ipc.deckMissingToWishlist(4);
     expect(invoke).toHaveBeenCalledWith("deck_missing_to_wishlist", { deckId: 4 });

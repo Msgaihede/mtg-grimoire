@@ -165,6 +165,36 @@ fn printing_row(conn: &Connection, card_id: &str) -> Result<Option<Printing>, St
     .map_err(|e| e.to_string())
 }
 
+/// Which oracle card a printing is of — `None` when the id is not in `cards`, **and equally
+/// when the row it finds has no `oracle_id`**.
+///
+/// One answer for both, because they are the same answer to the only question asked here:
+/// *can these two printings be compared?* `cards.oracle_id` is NULLABLE (no live row is null,
+/// all 116 k of them, but the column is), and a null is as uncomparable as a missing row —
+/// folding it into the SQL rather than into a `match` is what keeps a caller from reading
+/// `Some(null)` as an oracle two printings could share.
+fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT oracle_id FROM cards WHERE id = ?1 AND oracle_id IS NOT NULL",
+        params![card_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// What [`swap_printing`] says when the two ids are printings of *different cards*.
+///
+/// Names both, because which two were paired is the whole question — and it names the one in
+/// the deck as **the deck lists it** and the target as **`cards` has it now**, which is what
+/// the reader is looking at on each side of the press.
+fn not_the_same_card(from: &str, to: &str) -> String {
+    format!(
+        "`{to}` is not another printing of `{from}`. Swapping a printing changes which \
+         printing of a card this deck plays, never which card it plays."
+    )
+}
+
 /// Move the deck's `updated_at` — and, in the same statement, learn whether the deck is
 /// there at all.
 ///
@@ -572,6 +602,11 @@ pub struct SwapResult {
 /// that was read out of `cards` a second ago. So an id that does not resolve is not an
 /// orphan to be preserved, it is a sync that raced the click ([`PRINTING_GONE`]).
 ///
+/// "Of the same card" is **enforced** rather than assumed: the two ids' `oracle_id`s are
+/// compared and a mismatch is refused ([`not_the_same_card`]), because every statement below
+/// would carry the quantity onto whatever it is handed. The one pair that cannot be compared —
+/// a `from` printing that has left `cards` — is allowed through; see the guard's comment.
+///
 /// `needs_review` is deliberately **not** carried across. The flag says the row's printing
 /// left the card database, and a swap onto a printing that is in it is exactly the cure —
 /// the new row is written clean. A fold leaves the target row's flag alone, [`add_card`]'s
@@ -594,12 +629,14 @@ pub fn swap_printing(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
 
-    let quantity: i64 = tx
+    // The name comes across with the quantity because a refusal below has to say what is in
+    // the deck, and the row's own denormalized name is what the deck list is showing.
+    let (quantity, from_name): (i64, String) = tx
         .query_row(
-            "SELECT quantity FROM deck_cards
+            "SELECT quantity, name FROM deck_cards
               WHERE deck_id = ?1 AND card_id = ?2 AND zone = ?3",
             params![deck_id, from_card_id, zone],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -609,6 +646,25 @@ pub fn swap_printing(
 
     let (set_code, collector_number, lang, name) =
         printing_row(&tx, to_card_id)?.ok_or_else(|| PRINTING_GONE.to_owned())?;
+
+    // "Another printing of the same card" is this command's whole promise, and nothing below
+    // enforces it: the insert carries the quantity onto whatever id it is handed, so a caller
+    // that paired the wrong two would turn four Bolts into four Black Lotuses at the same
+    // count, silently. Compared here rather than in the UI because the UI is exactly what
+    // could be wrong.
+    //
+    // Both sides have to resolve for there to be a comparison. A **from** printing that is not
+    // in `cards` is the deck's orphan row, and its oracle id is unknowable — refusing on
+    // "cannot tell" would fence the copies onto a dead printing, which is the one row this
+    // command most needs to be able to move (see the doc above: `needs_review` is not carried
+    // across, because a swap is the cure).
+    if let (Some(from_oracle), Some(to_oracle)) =
+        (oracle_of(&tx, from_card_id)?, oracle_of(&tx, to_card_id)?)
+    {
+        if from_oracle != to_oracle {
+            return Err(not_the_same_card(&from_name, &name));
+        }
+    }
 
     // [`add_card`]'s insert, grain and all — the same statement, because "put these copies
     // in that zone" is the same write whether they came from a search or from another row.
@@ -1738,10 +1794,18 @@ mod tests {
             vec![(lea, 3)],
             "the allocator takes the exact printing first, so the claim is the Alpha row"
         );
+        stop_the_clock(&conn, deck.id);
 
         let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap();
 
         assert_eq!((swapped.folded, swapped.quantity), (false, 3));
+        // The other half of what every refusal below pins: a swap *is* an edit, so the deck
+        // rises in a gallery that sorts by this column. Without this the whole file could
+        // pass with `touch_deck` deleted.
+        assert!(
+            touched_at(&conn, deck.id) > UNMOVED,
+            "a swap moves `updated_at`: the gallery resorts for it"
+        );
         assert_eq!(
             zone_rows(&conn, deck.id),
             vec![("bolt-m10".to_owned(), "main".to_owned(), 3)],
@@ -1879,6 +1943,57 @@ mod tests {
              nothing"
         );
         assert_eq!(touched_at(&conn, deck.id), UNMOVED);
+    }
+
+    /// A swap changes **which printing of a card** a deck plays. Nothing about the statements
+    /// it runs would stop it changing *which card* — the quantity is carried across whatever
+    /// it is pointed at — so a caller that paired the wrong two ids would turn three Bolts
+    /// into three Serra Angels at the same count, silently and with no way back.
+    #[test]
+    fn a_swap_to_a_different_card_is_refused_and_writes_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        stop_the_clock(&conn, deck.id);
+
+        let err = swap_printing(&conn, deck.id, "bolt-lea", "serra-lea", "main").unwrap_err();
+
+        assert!(
+            err.contains("Lightning Bolt") && err.contains("Serra Angel"),
+            "the refusal names both cards, because which two were paired is the whole \
+             question: {err}"
+        );
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("bolt-lea".to_owned(), "main".to_owned(), 3)],
+            "the copies stay on the card the reader put in the deck"
+        );
+        assert_eq!(touched_at(&conn, deck.id), UNMOVED);
+    }
+
+    /// The one row the guard must not fence in: a deck card whose printing has left `cards`.
+    ///
+    /// Its oracle id is unknowable — that is what an orphan *is* — so there is nothing to
+    /// compare, and refusing on "cannot tell" would trap the copies on a dead printing that
+    /// the reader is trying to escape. The target here is deliberately a **different** card:
+    /// with a same-card target the test would pass just as well against a guard that never
+    /// skipped, and would prove nothing.
+    #[test]
+    fn a_swap_off_an_orphaned_printing_is_allowed() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
+            .unwrap();
+
+        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "serra-8ed", "main").unwrap();
+
+        assert_eq!((swapped.folded, swapped.quantity), (false, 3));
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("serra-8ed".to_owned(), "main".to_owned(), 3)],
+            "the copies left the dead printing for the one the reader chose"
+        );
     }
 
     #[test]

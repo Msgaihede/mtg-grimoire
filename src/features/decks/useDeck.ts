@@ -174,6 +174,34 @@ export function useDeck(id: number | null) {
   });
 
   /**
+   * Swap a deck card to another printing of the same card — the card pane's "Use this
+   * printing", pressed from outside this editor.
+   *
+   * **No optimistic patch**, where the stepper above has one, and it is the fold that decides
+   * it: a zone holds a printing at most once, so a swap onto a printing the zone already has
+   * turns two rows into one. Guessing that would mean deleting a line and growing another
+   * before knowing whether the write went through — and the one number a reader would check
+   * afterwards is precisely the one only the server can compute. So the guess is not worth the
+   * beat it saves: the row keeps saying what the last read said until the next one lands.
+   *
+   * `["decks"]` like every zone write, for the same reason: `allocate_deck` runs inside the
+   * swap's transaction, and the allocator takes the exact printing first — so the copies this
+   * deck reserves can change even though its counts did not.
+   */
+  const swapPrinting = useMutation({
+    mutationFn: ({
+      fromCardId,
+      toCardId,
+      zone,
+    }: {
+      fromCardId: string;
+      toCardId: string;
+      zone: DeckZone;
+    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, zone),
+    onSuccess: invalidate,
+  });
+
+  /**
    * Everything this deck is short of, onto the wishlist. Answers how many wishes were
    * touched.
    *
@@ -209,6 +237,7 @@ export function useDeck(id: number | null) {
     addCard,
     setQuantity,
     moveCard,
+    swapPrinting,
     missingToWishlist,
   };
 }

@@ -723,6 +723,21 @@ export interface DeckDetail {
 }
 
 /**
+ * What a printing swap answers: where the copies ended up, and whether they had company.
+ *
+ * The reason the swap has a return type of its own rather than the `EntryChange` its
+ * neighbours share: two rows can become one. A zone holds a printing at most once (the grain
+ * is `(deck, card, zone)`), so swapping onto a printing the zone already has *folds* — and a
+ * deck list that silently loses a line reads like a bug unless something says so.
+ */
+export interface SwapResult {
+  /** The target zone already held that printing, so the two rows became one. */
+  folded: boolean;
+  /** What the row the copies now live in holds — the **sum**, when `folded`. */
+  quantity: number;
+}
+
+/**
  * One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
  *
  * A new format is a seeded row rather than a code branch, and that is only true if nothing
@@ -951,6 +966,21 @@ export const ipc = {
    *  maybe pile like anything else. */
   deckMoveCard: (deckId: number, cardId: string, from: DeckZone, to: DeckZone) =>
     invoke<void>("deck_move_card", { deckId, cardId, from, to }),
+  /**
+   * Swap a deck card to **another printing of the same card**: same zone, same copies, folding
+   * into whatever that zone already holds of the printing swapped to. The card pane's "Use
+   * this printing".
+   *
+   * The one zone write whose identity comes from a fresh `cards` lookup rather than from the
+   * row being changed — a move keeps a printing the reader already chose, a swap *is* the
+   * reader choosing a new one — so a `toCardId` that no longer resolves is answered as a sync
+   * that raced the click, not as an orphan to preserve. The backend refuses two printings of
+   * different cards outright; an orphaned `fromCardId` is the exception, because a printing
+   * the database has lost has no oracle id to compare and is exactly the row a swap has to be
+   * able to rescue.
+   */
+  deckSwapPrinting: (deckId: number, fromCardId: string, toCardId: string, zone: DeckZone) =>
+    invoke<SwapResult>("deck_swap_printing", { deckId, fromCardId, toCardId, zone }),
   /**
    * Everything this deck is short of, onto the wishlist. Answers how many **wishes were
    * touched** — one per oracle card, so the same card short in two zones is one wish for the

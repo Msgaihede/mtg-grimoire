@@ -323,14 +323,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
   //
-  // **All five writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
+  // **All six writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
   // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
   // panel or on the stats strip reaches the same sentence — and without them here that surface
   // would report a deck that is gone while the zone columns beside it went on painting it, with
   // every further press failing the same way and nothing on screen explaining why. The family
   // is the point: no refused deck write may leave a dead deck painted.
+  //
+  // The sixth is the one with no control in this view: `swapPrinting` is pressed on the card
+  // pane's printings rows, and the pane is a **sibling** of this editor. The mutation is
+  // mounted here anyway, because this is the surface that would be left painting a deck that
+  // is gone — the pane says its own refusal beside the row that was pressed, and this re-read
+  // is what keeps the deck behind it from disagreeing.
   const refetch = deck.query.refetch;
-  const lastOfAny = newest([...writes, deck.addCard, deck.missingToWishlist]);
+  const lastOfAny = newest([...writes, deck.addCard, deck.missingToWishlist, deck.swapPrinting]);
   const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;
   useEffect(() => {
     if (failedAt) void refetch();

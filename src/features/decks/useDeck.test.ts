@@ -2,16 +2,24 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { DeckCard, DeckDetail, DeckRow } from "@/lib/ipc";
+import type { DeckCard, DeckDetail, DeckRow, SwapResult } from "@/lib/ipc";
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
+const deckSwapPrinting = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckGet, deckAddCard, deckSetCardQuantity, deckMoveCard, deckMissingToWishlist },
+  ipc: {
+    deckGet,
+    deckAddCard,
+    deckSetCardQuantity,
+    deckMoveCard,
+    deckMissingToWishlist,
+    deckSwapPrinting,
+  },
 }));
 
 import { useDeck } from "./useDeck";
@@ -75,6 +83,7 @@ beforeEach(() => {
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 9, quantity: 3, removed: false });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
+  deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
 });
 
 describe("useDeck", () => {
@@ -153,6 +162,46 @@ describe("useDeck", () => {
 
     await result.current.moveCard.mutateAsync({ cardId: "p2", from: "maybe", to: "side" });
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", "maybe", "side");
+  });
+
+  /**
+   * The pane's "Use this printing", addressed like every other zone write — by deck, card and
+   * zone — and the only one that names two cards: the printing being left and the one being
+   * taken up.
+   *
+   * **No optimistic patch, deliberately**, where the stepper beside it has one: what the row
+   * ends up holding is the *server's* arithmetic. A swap onto a printing the zone already has
+   * folds two rows into one, so a guess would have to delete a line and grow another — and a
+   * guess that got it wrong would be a deck list that lost a card until the read landed. The
+   * fold is only knowable after the write, and the answer carries it.
+   */
+  it("swaps a printing and reads back what the server folded", async () => {
+    let answer: (result: SwapResult) => void = () => {};
+    deckSwapPrinting.mockReturnValue(
+      new Promise<SwapResult>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const swap = result.current.swapPrinting.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      zone: "main",
+    });
+
+    await waitFor(() => expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", "main"));
+    // Mid-flight, and the deck on screen is still the deck that was read: no guess was
+    // written. This is what "no optimism" costs and buys — a beat of the old printing rather
+    // than a line that disappears and comes back.
+    expect(client.getQueryData(["decks", "detail", 4])).toEqual(DETAIL);
+
+    answer({ folded: true, quantity: 7 });
+
+    expect(await swap).toEqual({ folded: true, quantity: 7 });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 
   /**
