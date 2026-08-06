@@ -20,7 +20,8 @@ npm run tauri dev
 ```
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
-`drag <source css> <target css>` · `size 1024 768 "<expr>"` ·
+`drag <source css> <target css>` · `hover <css> [--rest ms] [--probe expr]` ·
+`size 1024 768 "<expr>"` ·
 `media prefers-reduced-motion reduce "<expr>"` · `shot out.png [w h]` · `console out.jsonl`
 (stays attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that
 watches only one reports a clean console it never looked at).
@@ -57,7 +58,22 @@ watches only one reports a clean console it never looked at).
   need their own `try` — sharing one made the block all-or-nothing, and the step most likely
   to fail was the first. **The press must land somewhere visible** — a row whose centre is
   below the fold starts nothing, which is what `--press`/`--from` are for, and a scroller left
-  scrolled hides rows from `click` the same way.
+  scrolled hides rows from `click` the same way. **The target has the same problem and a
+  worse failure**: `boxOf` reads a layout rectangle, and a zone column wrapped onto the deck
+  editor's second (scrolled-away) line reports coordinates *outside* its scroller's clip — so
+  a drop dispatched there lands on whatever is painted at that point, which during a
+  `deck-card` drag is the remove tray. Measured 2026-08-06: a drop aimed at the Companion
+  column took the card out of the deck instead. Scroll the zones row first and hit-test the
+  point (`document.elementFromPoint(...)` inside the target) before believing a centre.
+- **`hover <css> [--from x,y] [--rest ms] [--probe expr]`** is a real dwell — `mouseMoved`
+  events, so React synthesises `onMouseEnter`/`onMouseLeave` from Chromium's own hover
+  pipeline and a `dispatchEvent` out of `eval` proves nothing. Two facts it cost a session to
+  learn: **it approaches from outside the element** (the browser remembers where the pointer
+  was left, so a move onto an element it is already inside crosses no boundary and fires no
+  enter — a hover command that silently does nothing on its second run), and **its probe is
+  read twice in the one session**, on arrival and again after `--rest`, because that pair is
+  what a dwell looks like from outside. A dwell measured from the *last* move undercounts by
+  up to one approach step: the enter that arms the timer is one move earlier.
 - **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
   fault.** Reload with the recorder attached and read the entries that arrive after.
 
@@ -308,6 +324,41 @@ belong to the sync, and a hand-written row in either makes every later measureme
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
+- **Every deck write goes through a `useDeck` mutation, and `DeckEditor`'s `newest([...])`
+  counts six of them** — add, set-quantity, move, remove, missing-to-wishlist, swap-printing.
+  A refused write re-reads the deck through whichever of the six answered last, so a sibling's
+  GONE is what turns the columns into the gone paragraph. Two surfaces outside the editor
+  borrow a mutation whole rather than defining one — `useSwapFromPane` (the card pane) and
+  `useSidebarDrops` (the sidebar's Decks entry) — and **the refusal rule lives on the single
+  definition in `useDeck.ts`**, never on a call site: two definitions would be two places to
+  keep one rule. The borrowing site owns only its own *reporting* (per-call `mutate`
+  callbacks).
+- **`deck_swap_printing` is one transaction that folds on `DECK_CARD_GRAIN`.** Swapping a
+  row to a printing the same zone already holds is not an error and not two rows: the
+  `ON CONFLICT (deck_id, card_id, zone) DO UPDATE` sums the quantities and the answer carries
+  `folded: true` with the landed total, which the pane announces ("Folded into one row of 2 in
+  Main deck."). It refuses same-printing, a missing from-row (naming the zone), a raced sync
+  (the to-printing has left `cards`), and a **different oracle card** — the guard is inside the
+  transaction, because "swap this printing" must never become "swap this card".
+- **The visual deck builder is a per-session toggle, not a setting** (`useState` in
+  `DeckEditor`, default visual). Its geometry is three hand-derived numbers in `VisualCard.tsx`
+  — `PLATE = 12` (% of card height: the printed name box ends at 10.5%), `TITLE_BAND = 0.19`
+  (what a stacked card leaves showing) and `STACK_OVERLAP = "-mt-[113.4%]"` (= `CARD_ASPECT ×
+  (1 − TITLE_BAND)`, a percentage margin resolving against *width*, which is what makes the
+  stack fluid). Tailwind reads class names as text, so those literals cannot be templated; a
+  test re-derives every one. Measured live at 1280: a 231 × 323px card showing a 61px band and
+  a 39px plate. **The title plate is a `pointer-events-none` sibling of the card front, never
+  a child** — the front is a `button` with an `aria-label`, and ARIA prunes a button's
+  descendants, so a plate inside it would announce nothing.
+- **Every card surface in the app is a drag source, through the one `cardDraggable`**, and the
+  payload they all carry is `{ kind: "card"; cardId; name }` — search tiles, collection *table*
+  rows, **pinned** wishes only (an any-printing wish names no printing to drag), and the card
+  pane's printings rows. A zone treats `"card"` exactly as the panel's `"search-card"`: add
+  one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
+  it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
+  deck open, which — because `setActiveView` clears `openDeckId` — is *every* drag started
+  from Search, Collection or Wishlist. So the sidebar's Decks target is reachable only from
+  inside the Decks view (the docked panel, a deck card, the card pane).
 
 ## Hard rules
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.

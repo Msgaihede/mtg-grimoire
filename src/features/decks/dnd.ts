@@ -17,9 +17,15 @@ import type { DeckZone } from "@/lib/ipc";
  * entries are the first — the answer has to be in the payload rather than deduced from where
  * the pointer happens to be.
  *
- * Every drag has a click path from Tasks 12–13 — the panel's Add button, the row menu's "Move
- * to", the stepper down to zero, and the quick-add on every surface that carries a `"card"`.
- * This is speed, not capability.
+ * Almost every drag has a click path from Tasks 12–13 — the panel's Add button, the row menu's
+ * "Move to", the stepper down to zero, and the quick-add on every surface that carries a
+ * `"card"`. Speed, not capability, with **one measured exception**: a printings row dragged to
+ * the sidebar's Decks entry adds that printing to the open deck, and the card pane offers no
+ * button that does it (its quick-add writes the collection or the wishlist, and "Use this
+ * printing" *replaces* a row the deck already has). A deck row let go on Wishlist is not the
+ * exception — that one has a longer click path through the pane's quick-add in wishlist mode.
+ * So this gesture is the one place the drag layer is the only way in; if that stops being
+ * acceptable, the answer is a button in the pane, not a rule here.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string }

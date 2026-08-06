@@ -222,6 +222,19 @@ function NavItem({
         // Only while a card is in the air, and only when it cannot land: a tooltip about
         // dropping on an entry nobody is dragging anything onto is chrome explaining a gesture
         // that is not being made.
+        //
+        // **It is a description, not a tooltip, and the smoke measured which.** A native
+        // tooltip needs `:hover`, and Chromium freezes `:hover` at the element a drag started
+        // from for the whole drag — measured 2026-08-06 with a card parked on this entry for
+        // 1.6 s: `title` present, `document.querySelectorAll(":hover")` still ending at the
+        // search tile, nothing in the DOM (`[role=tooltip]`: 0). So no reader ever *sees* this
+        // sentence. What they get instead is the accname spec's fallback: mid-drag the AX node
+        // reads `button "Decks", description "Open a deck to drop cards into it"` (measured
+        // through `Accessibility.getPartialAXTree` in the same run), which is worth keeping and
+        // costs nothing. Giving the eye the same sentence means putting it in the `role=status`
+        // line below — a change that would announce it on *every* drag while no deck is open,
+        // which is a product call and is written up in
+        // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
         title={inert ? (drop.inertReason ?? undefined) : undefined}
         className={cn(
           "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
