@@ -69,6 +69,12 @@ const printing = (over: Partial<Printing> = {}): Printing => ({
 /** What `card_printings` answers: a capped page plus the size of the list it came from. */
 const page = (items: Printing[], total = items.length): PrintingsResponse => ({ items, total });
 
+/**
+ * Enough of a `deck_get` answer for the pane, which asks it one question: is this deck still
+ * there? (`useSwapFromPane` mounts the editor's own read so the two surfaces agree.)
+ */
+const DECK_DETAIL = { deck: { id: 4, name: "Burn" }, cards: [] };
+
 const printings = [printing()];
 
 const cardDetail = vi.fn();
@@ -150,7 +156,9 @@ const face = (over: Partial<CardFace>): CardFace => ({
 beforeEach(() => {
   cardDetail.mockReset();
   cardPrintings.mockReset();
-  deckGet.mockReset().mockResolvedValue(null);
+  // A deck the read can find: a `deck_get` that answers nothing means the deck was deleted,
+  // and the pane stops offering swaps it could only have refused (see the `gone` test).
+  deckGet.mockReset().mockResolvedValue(DECK_DETAIL);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   useAppStore.setState(useAppStore.getInitialState());
 });
@@ -499,6 +507,9 @@ describe("the printings list, opened from a deck row", () => {
 
   const useIt = () =>
     screen.getByRole("button", { name: "Use this printing (M10 146) in Main deck" });
+  /** The same button while its own write is in flight — the visible label changes, so the
+   *  accessible name has to change with it (WCAG 2.5.3). */
+  const swapping = () => screen.getByRole("button", { name: "Swapping… (M10 146) in Main deck" });
 
   /**
    * A card opened from a search tile, the collection or the wishlist has no deck row behind it,
@@ -615,9 +626,11 @@ describe("the printings list, opened from a deck row", () => {
     await userEvent.click(button);
 
     expect(deckSwapPrinting).toHaveBeenCalledTimes(1);
-    expect(useIt()).toBeDisabled();
-    // It says what it is doing while it does it, in the same words as the button it replaces.
-    expect(useIt()).toHaveTextContent("Swapping…");
+    // It says what it is doing while it does it — in the visible label *and* in the accessible
+    // name, which `swapping()` is querying by: a name that still said "Use this printing" over
+    // a button reading "Swapping…" is a control voice control can no longer press.
+    expect(swapping()).toBeDisabled();
+    expect(swapping()).toHaveTextContent("Swapping…");
   });
 
   /**

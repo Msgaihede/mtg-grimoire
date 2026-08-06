@@ -4,6 +4,7 @@ import { FlipHorizontal2, X } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { ZONE_LABEL } from "@/features/decks/ZoneColumn";
 import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
@@ -37,10 +38,46 @@ const STATUS_CLASS: Record<string, string> = {
 };
 
 /**
+ * What one pane leaves for the next when a swap re-keys it under the reader's hands.
+ *
+ * A successful swap writes `selectedCardId`, `App` keys the pane on it, and this component is
+ * therefore **unmounted and remounted** on the printing the deck now holds — so what the write
+ * did has to cross that gap, and there is no prop to carry it: the pane that could say it is
+ * gone before the sentence exists.
+ *
+ * Module-scoped rather than store state for the reason `store.ts` gives about `returnToDeckId` —
+ * a note between two mounts of one component is not application state — with the difference that
+ * this one never outlives the commit it was written in: the mounting pane consumes it, and a
+ * pane that is not the one it was left for discards it. Stamped with the card it belongs to so
+ * it can tell those two apart.
+ *
+ * **The caret is deliberately not in here.** The obvious other passenger would be the opener the
+ * replaced pane was holding — but that opener is the deck control the reader pressed the card
+ * open from, and the swap *deletes* it: the row it drew is gone and the new printing's row is a
+ * different React key. Passing it on would hand the caret to an element the next refetch
+ * unmounts. `close` asks the deck for the control standing for the slot **now** instead.
+ */
+let handover: { cardId: string; report: string | null } | null = null;
+
+/**
+ * The deck's own control for a slot, or `null` — where the caret belongs when a pane opened
+ * from a deck row closes and the control it was opened from has been replaced.
+ *
+ * The card ids this interpolates are Scryfall UUIDs and the zones are a five-value enum, so
+ * there is nothing here a quoted attribute selector can be broken by.
+ */
+function deckControlFor(row: PaneDeckContext | null): HTMLElement | null {
+  if (!row) return null;
+  return document.querySelector<HTMLElement>(
+    `[${DECK_CARD_ATTR}="${deckCardSlot(row.zone, row.cardId)}"]`,
+  );
+}
+
+/**
  * What a printings row needs to offer "Use this printing", or `null` on a pane that was not
  * opened from a deck row.
  *
- * One object rather than four props threaded through two components, and it is the *whole*
+ * One object rather than five props threaded through two components, and it is the *whole*
  * condition: a row draws the action if and only if this is here. Spec §2 scopes the swap to
  * decks — the collection's printing identity carries finish and condition, and a swap there
  * would invent facts the same way a drop onto it would.
@@ -53,6 +90,18 @@ interface SwapOffer {
   pendingId: string | null;
   /** The printing whose swap was refused, and the sentence to say beside it. */
   refused: { printingId: string; reason: string } | null;
+  /**
+   * The deck read answers nothing: another view deleted it, so there is nothing left to offer.
+   *
+   * Not `null`-the-whole-offer, because the commonest way to learn this is **the refusal
+   * itself** — a press against a deleted deck answers GONE, the mutation's `onError` re-reads,
+   * and the read comes back empty. Dropping the offer wholesale would take the sentence
+   * explaining that down with the buttons it explains.
+   */
+  gone: boolean;
+  /** What the swap that opened *this* pane did, when it did something worth saying — a fold.
+   *  It reaches here through {@link handover}, because the write re-keyed the pane. */
+  report: string | null;
   onUse: (printingId: string) => void;
 }
 
@@ -77,6 +126,23 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   const [shown, setShown] = useState(cardId);
   const paneRef = useRef<HTMLElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  /** What the write that re-keyed this pane did, once there is a pane to say it in. Set from
+   *  the {@link handover} in the mount effect — see the live region it is drawn in. */
+  const [report, setReport] = useState<string | null>(null);
+
+  /**
+   * The deck row this card was opened from — read first, because the pane's *close* depends on
+   * it: a pane opened out of a deck owes the caret to that deck's control (see `close`).
+   *
+   * The pane is a sibling of the deck editor rather than part of it, so what joins them is the
+   * store on one side (`openCardFromDeck`, written by a zone column's click) and a shared query
+   * cache on the other ({@link useSwapFromPane} mounts the editor's own `["decks", "detail"]`
+   * read, so this costs no `deck_get` while an editor is up). With no context it is an idle
+   * mutation over a query that asks for nothing.
+   */
+  const deckRow = useAppStore((s) => s.paneDeckContext);
+  const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  const { swap, deckGone } = useSwapFromPane(deckRow);
 
   // A different card is a different card, and the back of the last one is not where a
   // reader wants to arrive. Reset during render — React's own answer to state that has to
@@ -101,11 +167,32 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   // lands on `<body>`, and the next Tab restarts from the top of the app. Measured live on
   // 2026-08-06: every Escape out of the pane dropped focus to `<body>` under `tauri dev`.
   // Nothing is skipped in production, where the effect runs once and the caret is outside.
+  //
+  // And **never `<body>`**, which is the state a swap leaves behind: the button that was
+  // pressed disabled itself for the write, so the browser blurred it with no `relatedTarget` at
+  // all, and this pane was then re-keyed onto the printing the swap chose. Recording `<body>`
+  // as an opener makes the next Escape a hand-back to nowhere — `close` has the answer for that
+  // case, and it is a better one than any element this effect could record.
   useEffect(() => {
+    const passed = handover;
+    // Consumed or discarded, never left lying: a note for a pane that never mounted would be
+    // read by whichever card the reader opened next.
+    handover = null;
+    // **The second commit is the feature here, not a cost to be optimised away.** This sentence
+    // goes into a live region (the mark on the deck's row), and a region that appears together
+    // with its text announces nothing — it has to be mounted first and change afterwards, which
+    // is exactly what a state write from a mount effect does. Reading the handover during render
+    // instead would fill the region on its first commit and silence it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (passed?.cardId === cardId) setReport(passed.report);
     const active = document.activeElement as HTMLElement | null;
-    if (!paneRef.current?.contains(active)) openerRef.current = active;
+    if (active !== document.body && !paneRef.current?.contains(active)) {
+      openerRef.current = active;
+    }
     paneRef.current?.focus();
-  }, []);
+    // `cardId` is the pane's identity — `App` keys on it — so this list is constant for the
+    // life of the component and the effect still runs exactly once.
+  }, [cardId]);
 
   const close = useCallback(() => {
     const opener = openerRef.current;
@@ -113,8 +200,17 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     // Called before React flushes the close, while this pane still holds the focus: an
     // element that unmounts with the caret on it drops it to `<body>`, and the next Tab
     // restarts from the top of the app.
-    if (opener?.isConnected) opener.focus();
-  }, [onClose]);
+    //
+    // The opener of a pane opened from a deck row is the control on that row — and a swap
+    // **replaces that control**: the row it was drawn from is deleted and the printing's new
+    // row is a different key, so by the time the reader presses Escape the element the caret
+    // is owed to has been unmounted by the refetch. The deck's own controls carry the slot
+    // they draw (`DECK_CARD_ATTR`), so the caret goes to the card the deck holds *now*, which
+    // is the card the reader was working on. Measured in the running window: without this the
+    // caret lands on `<body>` after every swap, whatever was stashed.
+    const home = opener?.isConnected ? opener : deckControlFor(deckRow);
+    if (home?.isConnected) home.focus();
+  }, [onClose, deckRow]);
 
   // The outer layer: bubble phase, and it yields to any control open over the results —
   // the set filter's listbox, anything later — that consumed the press from the capture
@@ -126,19 +222,6 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     queryKey: ["card", cardId],
     queryFn: () => ipc.cardDetail(cardId),
   });
-
-  /**
-   * The deck row this card was opened from, and the swap it makes possible.
-   *
-   * The pane is a sibling of the deck editor rather than part of it, so what joins them is the
-   * store on one side (`openCardFromDeck`, written by a zone column's click) and a shared query
-   * cache on the other ({@link useSwapFromPane} mounts the editor's own `["decks", "detail"]`
-   * read, so this costs no `deck_get` while an editor is up). With no context this is an idle
-   * mutation over a query that asks for nothing.
-   */
-  const deckRow = useAppStore((s) => s.paneDeckContext);
-  const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
-  const swap = useSwapFromPane(deckRow);
 
   const swapping = swap.isPending;
   const startSwap = swap.mutate;
@@ -152,10 +235,26 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       startSwap(
         { fromCardId: deckRow.cardId, toCardId, zone: deckRow.zone },
         {
-          // The pane follows the deck. The reader asked for this printing to be the one in the
-          // deck, so it becomes the card in front of them — and the mark moves onto the row
-          // they pressed, in one store write, because `openCardFromDeck` is both.
-          onSuccess: () => openCardFromDeck({ ...deckRow, cardId: toCardId }),
+          onSuccess: (result) => {
+            // What this pane knows and the one replacing it cannot: where the caret came from,
+            // and what the write did. Left before the store write, because that write is what
+            // unmounts this component.
+            handover = {
+              cardId: toCardId,
+              // **A zone holds a printing at most once**, so a swap onto one the zone already
+              // had turns two rows into one — a line disappears out of the deck list, and a
+              // list that silently loses a line reads like a bug (`ipc.ts`'s `SwapResult`).
+              // The server's arithmetic, never a guess: `quantity` is what the surviving row
+              // holds. Nothing is said when nothing merged.
+              report: result.folded
+                ? `Folded into one row of ${result.quantity} in ${ZONE_LABEL[deckRow.zone]}.`
+                : null,
+            };
+            // The pane follows the deck. The reader asked for this printing to be the one in
+            // the deck, so it becomes the card in front of them — and the mark moves onto the
+            // row they pressed, in one store write, because `openCardFromDeck` is both.
+            openCardFromDeck({ ...deckRow, cardId: toCardId });
+          },
         },
       );
     },
@@ -169,6 +268,8 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       swap.isError && swap.variables
         ? { printingId: swap.variables.toCardId, reason: ipcError(swap.error) }
         : null,
+    gone: deckGone,
+    report,
     onUse: usePrinting,
   };
 
@@ -617,6 +718,11 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
   const pending = swap.pendingId === printing.id;
   const refused = swap.refused?.printingId === printing.id ? swap.refused.reason : null;
   const wasPending = useRef(false);
+  // A deck that is gone offers nothing — no button on any row, and no mark on its own: "this
+  // deck uses this printing" is not true of a deck that is not there, and forty buttons whose
+  // only way of finding out is to be pressed are forty wrong offers. The editor beside this is
+  // already saying so. What survives is the refusal that usually *taught* the pane this.
+  const offering = !swap.gone;
 
   // The disabled-on-press hazard, in the shape it takes **inside a dismissible layer**: a
   // browser blurs a control that disables itself, with no `relatedTarget` at all, so the caret
@@ -631,6 +737,10 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
     }
     wasPending.current = pending;
   }, [pending]);
+
+  // Nothing to offer and nothing to explain: the row is its facts again, with no empty line
+  // under them.
+  if (!offering && !refused) return null;
 
   return (
     // `pt-0.5` and not a pixel more: the row's own padding is what separates one printing from
@@ -649,11 +759,23 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
           Could not use this printing — {refused}
         </p>
       )}
-      {swap.row.cardId === printing.id ? (
+      {!offering ? null : swap.row.cardId === printing.id ? (
         // The deck's own printing says so rather than offering itself. Static text, in the
         // dim the rest of the row's facts are set in: it is a fact about the deck, not a
         // control, and dressing it as one that cannot be pressed would be worse than saying it.
-        <p className="text-[0.7rem] text-dim">This deck uses this printing</p>
+        //
+        // **And it is the pane's live region**, which is why it is `role="status"` for a
+        // sentence that mostly never changes. A swap re-keys this whole pane, so a report
+        // rendered by the pane that made the write goes with it — but the pane that *replaces*
+        // it draws this line on its first commit and the mount effect fills in what the write
+        // did one commit later, which is a change inside a mounted region and therefore the
+        // one shape a screen reader announces. (A region that appears together with its text
+        // announces nothing — `DeckSearchPanel`'s note, and the reason this is not a fresh
+        // element beside the mark.)
+        <p role="status" className="text-right text-[0.7rem] text-dim">
+          This deck uses this printing
+          {swap.report && <> — {swap.report}</>}
+        </p>
       ) : (
         <button
           ref={buttonRef}
@@ -666,9 +788,17 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
           onClick={() => swap.onUse(printing.id)}
           // Forty rows, forty buttons, one visible label: the set and the collector number are
           // what tell them apart, and the zone is what says which slot is being rewritten — the
-          // same printing can sit in the main deck and the sideboard. The visible words lead, so
-          // voice control still reaches it by what is written on it.
-          aria-label={`Use this printing (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${ZONE_LABEL[swap.row.zone]}`}
+          // same printing can sit in the main deck and the sideboard. The visible words lead
+          // and change with the button, because an accessible name that no longer contains the
+          // visible label is a control voice control can no longer press (WCAG 2.5.3, and
+          // `DeckStats`' send button is the precedent this borrows).
+          //
+          // The zone is the context's, which is the slot the pane was opened on. A row moved
+          // to another zone under an open pane makes that word stale — and only the word: the
+          // write is addressed by the same slot, finds no row in the zone it names, and is
+          // refused in the pane beside the button. The label lies for one press; the deck does
+          // not change.
+          aria-label={`${pending ? "Swapping…" : "Use this printing"} (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${ZONE_LABEL[swap.row.zone]}`}
           className={cn(
             "shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-dim",
             "transition-colors duration-150 hover:text-text disabled:opacity-50",

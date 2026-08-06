@@ -331,11 +331,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // every further press failing the same way and nothing on screen explaining why. The family
   // is the point: no refused deck write may leave a dead deck painted.
   //
-  // The sixth is the one with no control in this view: `swapPrinting` is pressed on the card
-  // pane's printings rows, and the pane is a **sibling** of this editor. The mutation is
-  // mounted here anyway, because this is the surface that would be left painting a deck that
-  // is gone — the pane says its own refusal beside the row that was pressed, and this re-read
-  // is what keeps the deck behind it from disagreeing.
+  // The sixth entry is the one with no control in this view: `swapPrinting` is pressed on the
+  // card pane's printings rows, and the pane is a **sibling** of this editor.
+  //
+  // **It can never fire as the code stands, and that is not an oversight to be tidied away.**
+  // Nothing in this tree drives *this* observer — TanStack shares a mutation's state with no
+  // other call site, so the pane's press lands in the pane's own copy and this one stays idle
+  // for the life of the editor. What actually carries a pane-fired refusal back to these
+  // columns is the `onError` invalidation on the mutation's single definition (`useDeck.ts`,
+  // where the reasoning is). This entry is the belt to that braces: it costs one array element,
+  // it is where an in-editor swap would land the day one is added, and reading it as live GONE
+  // coverage would be reading it as something it cannot do today.
   const refetch = deck.query.refetch;
   const lastOfAny = newest([...writes, deck.addCard, deck.missingToWishlist, deck.swapPrinting]);
   const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;

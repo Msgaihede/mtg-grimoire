@@ -256,7 +256,10 @@ describe("useSwapFromPane", () => {
     const { result } = renderHook(() => useSwapFromPane(null), { wrapper });
 
     expect(deckGet).not.toHaveBeenCalled();
-    expect(result.current.isIdle).toBe(true);
+    expect(result.current.swap.isIdle).toBe(true);
+    // And nothing to report about a deck nobody asked for: `deckGone` is about a read that
+    // answered *nothing*, not about a read that never happened.
+    expect(result.current.deckGone).toBe(false);
   });
 
   /** The context's deck, all the way to the command — `decks.id` is an INTEGER key and the
@@ -267,7 +270,7 @@ describe("useSwapFromPane", () => {
       { wrapper },
     );
 
-    const answer = await result.current.mutateAsync({
+    const answer = await result.current.swap.mutateAsync({
       fromCardId: "p1",
       toCardId: "p2",
       zone: "side",
@@ -299,9 +302,31 @@ describe("useSwapFromPane", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await expect(
-      result.current.mutateAsync({ fromCardId: "p1", toCardId: "p2", zone: "main" }),
+      result.current.swap.mutateAsync({ fromCardId: "p1", toCardId: "p2", zone: "main" }),
     ).rejects.toBe("That deck is not there any more.");
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
+  });
+
+  /**
+   * The read the pane takes this hook for: a deck that has been deleted answers nothing, and
+   * the pane needs to know *before* the press — otherwise its only way of finding out is to
+   * make a write the deck can only refuse.
+   *
+   * Loading is deliberately not gone: a pane that flashed "no offers" for one frame on the way
+   * up would be telling the reader something untrue about their deck.
+   */
+  it("reports a deck the read cannot find, and calls nothing gone while it is loading", async () => {
+    deckGet.mockResolvedValue(null);
+    const { result } = renderHook(
+      () => useSwapFromPane({ deckId: 4, zone: "main", cardId: "p1" }),
+      {
+        wrapper,
+      },
+    );
+
+    expect(result.current.deckGone).toBe(false);
+
+    await waitFor(() => expect(result.current.deckGone).toBe(true));
   });
 });

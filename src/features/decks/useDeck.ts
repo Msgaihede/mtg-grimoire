@@ -277,5 +277,17 @@ export type Deck = ReturnType<typeof useDeck>;
  * lives on the definition, and two definitions are two places to keep it.
  */
 export function useSwapFromPane(context: PaneDeckContext | null) {
-  return useDeck(context?.deckId ?? null).swapPrinting;
+  const deck = useDeck(context?.deckId ?? null);
+  return {
+    swap: deck.swapPrinting,
+    /**
+     * The read succeeded and answered nothing: another view has deleted this deck.
+     *
+     * `DeckEditor`'s `gone`, from the query the two of them share — which is the point of
+     * mounting the whole hook. It lets the pane stop offering a write the deck can only refuse,
+     * so the two surfaces agree *before* the press rather than after it. Loading is not gone.
+     */
+    deckGone:
+      context !== null && !deck.query.isPending && !deck.query.isError && deck.query.data === null,
+  };
 }

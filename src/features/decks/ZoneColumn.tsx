@@ -16,7 +16,14 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { cardDraggable, dropWrite, readDragData, type DeckWrite } from "./dnd";
+import {
+  cardDraggable,
+  deckCardSlot,
+  DECK_CARD_ATTR,
+  dropWrite,
+  readDragData,
+  type DeckWrite,
+} from "./dnd";
 import { DropIndicator } from "./DropIndicator";
 import { STACK_MAX_WIDTH, UNDER_PLATE, VisualCard } from "./VisualCard";
 
@@ -565,6 +572,8 @@ function CardRow({
           type="button"
           // Opening the card is the row's job and this is the row's keyboard handle. The click
           // bubbles to the row, which does the same thing — one destination, two ways in.
+          // The slot it draws, so the card pane can hand the caret back here (see the attribute).
+          {...{ [DECK_CARD_ATTR]: deckCardSlot(zone, card.cardId) }}
           className={cn("min-w-0 truncate text-left text-sm", FOCUS)}
         >
           {card.name}

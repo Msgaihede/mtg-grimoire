@@ -218,10 +218,34 @@ describe("SetCombobox", () => {
    */
   it("puts an exact code match first, ahead of the sets that merely contain it", async () => {
     listSets.mockResolvedValue([
-      { code: "l12", name: "League Tokens 2012", setType: "token", releasedAt: "2012-01-01", cardCount: 12 },
-      { code: "pal99", name: "Arena League 1999", setType: "promo", releasedAt: "1999-01-01", cardCount: 9 },
-      { code: "olep", name: "Oversized League Prizes", setType: "memorabilia", releasedAt: "1997-01-01", cardCount: 4 },
-      { code: "lea", name: "Limited Edition Alpha", setType: "core", releasedAt: "1993-08-05", cardCount: 295 },
+      {
+        code: "l12",
+        name: "League Tokens 2012",
+        setType: "token",
+        releasedAt: "2012-01-01",
+        cardCount: 12,
+      },
+      {
+        code: "pal99",
+        name: "Arena League 1999",
+        setType: "promo",
+        releasedAt: "1999-01-01",
+        cardCount: 9,
+      },
+      {
+        code: "olep",
+        name: "Oversized League Prizes",
+        setType: "memorabilia",
+        releasedAt: "1997-01-01",
+        cardCount: 4,
+      },
+      {
+        code: "lea",
+        name: "Limited Edition Alpha",
+        setType: "core",
+        releasedAt: "1993-08-05",
+        cardCount: 295,
+      },
     ]);
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
@@ -247,8 +271,20 @@ describe("SetCombobox", () => {
    */
   it("puts an exact code match ahead of a longer code that starts with it", async () => {
     listSets.mockResolvedValue([
-      { code: "plst", name: "The List", setType: "masters", releasedAt: "2020-09-26", cardCount: 1400 },
-      { code: "pls", name: "Planeshift", setType: "expansion", releasedAt: "2001-02-05", cardCount: 143 },
+      {
+        code: "plst",
+        name: "The List",
+        setType: "masters",
+        releasedAt: "2020-09-26",
+        cardCount: 1400,
+      },
+      {
+        code: "pls",
+        name: "Planeshift",
+        setType: "expansion",
+        releasedAt: "2001-02-05",
+        cardCount: 143,
+      },
     ]);
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 

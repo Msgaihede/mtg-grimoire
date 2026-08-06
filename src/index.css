@@ -23,50 +23,50 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    /* The display face. Titles, the first-run hero, section headers — never body text and
+  /* The display face. Titles, the first-run hero, section headers — never body text and
        never below 18px, which is the whole of Cinzel's brief. */
-    --font-heading: 'Cinzel', Georgia, serif;
-    --font-sans: 'Geist Variable', sans-serif;
-    /* Data: collector numbers, prices, counts. */
-    --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
-    --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+  --font-heading: "Cinzel", Georgia, serif;
+  --font-sans: "Geist Variable", sans-serif;
+  /* Data: collector numbers, prices, counts. */
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
 /* The app is dark-only by design (spec §7). Every shadcn semantic variable below
@@ -76,83 +76,83 @@
    unconditionally, and <html class="dark"> exists only to switch on Tailwind's
    `dark:` variant that shadcn components ship with — never to select a second theme. */
 :root {
-    --background: var(--color-bg);
-    --foreground: var(--color-text);
-    --card: var(--color-surface);
-    --card-foreground: var(--color-text);
-    --popover: var(--color-surface);
-    --popover-foreground: var(--color-text);
-    --primary: var(--color-accent);
-    --primary-foreground: var(--color-accent-fg);
-    --secondary: var(--color-surface);
-    --secondary-foreground: var(--color-text);
-    /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
-    --muted: var(--color-surface);
-    --muted-foreground: var(--color-dim);
-    --accent: var(--color-accent);
-    --accent-foreground: var(--color-accent-fg);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: var(--color-border);
-    --input: var(--color-border);
-    --ring: var(--color-accent);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: var(--color-surface);
-    --sidebar-foreground: var(--color-text);
-    --sidebar-primary: var(--color-accent);
-    --sidebar-primary-foreground: var(--color-accent-fg);
-    --sidebar-accent: var(--color-surface);
-    --sidebar-accent-foreground: var(--color-text);
-    --sidebar-border: var(--color-border);
-    --sidebar-ring: var(--color-accent);
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-accent-fg);
+  --secondary: var(--color-surface);
+  --secondary-foreground: var(--color-text);
+  /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-dim);
+  --accent: var(--color-accent);
+  --accent-foreground: var(--color-accent-fg);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-text);
+  --sidebar-primary: var(--color-accent);
+  --sidebar-primary-foreground: var(--color-accent-fg);
+  --sidebar-accent: var(--color-surface);
+  --sidebar-accent-foreground: var(--color-text);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-accent);
 }
 
 .dark {
-    --background: var(--color-bg);
-    --foreground: var(--color-text);
-    --card: var(--color-surface);
-    --card-foreground: var(--color-text);
-    --popover: var(--color-surface);
-    --popover-foreground: var(--color-text);
-    --primary: var(--color-accent);
-    --primary-foreground: var(--color-accent-fg);
-    --secondary: var(--color-surface);
-    --secondary-foreground: var(--color-text);
-    /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
-    --muted: var(--color-surface);
-    --muted-foreground: var(--color-dim);
-    --accent: var(--color-accent);
-    --accent-foreground: var(--color-accent-fg);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: var(--color-border);
-    --input: var(--color-border);
-    --ring: var(--color-accent);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: var(--color-surface);
-    --sidebar-foreground: var(--color-text);
-    --sidebar-primary: var(--color-accent);
-    --sidebar-primary-foreground: var(--color-accent-fg);
-    --sidebar-accent: var(--color-surface);
-    --sidebar-accent-foreground: var(--color-text);
-    --sidebar-border: var(--color-border);
-    --sidebar-ring: var(--color-accent);
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-accent-fg);
+  --secondary: var(--color-surface);
+  --secondary-foreground: var(--color-text);
+  /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-dim);
+  --accent: var(--color-accent);
+  --accent-foreground: var(--color-accent-fg);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-text);
+  --sidebar-primary: var(--color-accent);
+  --sidebar-primary-foreground: var(--color-accent-fg);
+  --sidebar-accent: var(--color-surface);
+  --sidebar-accent-foreground: var(--color-text);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-accent);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
+  }
   body {
     @apply bg-background text-foreground;
-    }
+  }
   html {
     @apply font-sans;
     /* The app is dark-only, and the controls the platform draws for itself — the format
@@ -160,7 +160,7 @@
        rather than the palette. Without this the format picker opens a white list over a
        dark table. */
     color-scheme: dark;
-    }
+  }
 }
 
 /* App palette — the single source of truth for colour. The :root/.dark block above
@@ -191,34 +191,34 @@
      component assumes. Vendoring one no longer needs the `bg-muted` → `bg-surface`
      rewrite CLAUDE.md used to require. */
   --color-muted: var(--color-surface);
-  --color-accent: oklch(0.75 0.12 85);      /* gold */
+  --color-accent: oklch(0.75 0.12 85); /* gold */
   --color-accent-fg: oklch(0.2 0.02 85);
 
   /* The five colours, as printed symbols are filled. Mana UI only — chips, pips, the
      line. Never a panel, never a border, never text. Glyphs sit on these in near-black,
      exactly like a real symbol. */
-  --color-mana-w: #FFFBD5;
-  --color-mana-u: #AAE0FA;
-  --color-mana-b: #CBC2BF;
-  --color-mana-r: #F9AA8F;
-  --color-mana-g: #9BD3AE;
-  --color-mana-c: #C8C4BF;
+  --color-mana-w: #fffbd5;
+  --color-mana-u: #aae0fa;
+  --color-mana-b: #cbc2bf;
+  --color-mana-r: #f9aa8f;
+  --color-mana-g: #9bd3ae;
+  --color-mana-c: #c8c4bf;
 
   /* Frame/pie deeps — saturated enough to carry meaning at 1px. For identity pips and,
      later, charts. Not interchangeable with the fills above. */
-  --color-pie-w: #F8E7B9;
-  --color-pie-u: #0E68AB;
-  --color-pie-b: #3B3A3E;
-  --color-pie-r: #D3202A;
-  --color-pie-g: #00733E;
-  --color-pie-gold: #D9B95C;
-  --color-pie-c: #C8C4BF;
+  --color-pie-w: #f8e7b9;
+  --color-pie-u: #0e68ab;
+  --color-pie-b: #3b3a3e;
+  --color-pie-r: #d3202a;
+  --color-pie-g: #00733e;
+  --color-pie-gold: #d9b95c;
+  --color-pie-c: #c8c4bf;
 
   /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
-  --color-rarity-common: #9AA0A6;
-  --color-rarity-uncommon: #B3C7CE;
-  --color-rarity-rare: #BFA35A;
-  --color-rarity-mythic: #E86A33;
+  --color-rarity-common: #9aa0a6;
+  --color-rarity-uncommon: #b3c7ce;
+  --color-rarity-rare: #bfa35a;
+  --color-rarity-mythic: #e86a33;
 
   /* The one animation in the app: the mana line's sweep while a sync has no denominator.
      Held to 150ms elsewhere per the direction's motion budget. */
@@ -226,8 +226,14 @@
 }
 
 @keyframes mana-sweep {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
 }
 
-body { @apply bg-bg text-text antialiased; }
+body {
+  @apply bg-bg text-text antialiased;
+}

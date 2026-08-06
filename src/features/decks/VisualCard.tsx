@@ -7,7 +7,7 @@ import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { cardDraggable } from "./dnd";
+import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
@@ -243,6 +243,9 @@ export function VisualCard({
         // See the plate's own note.
         aria-label={card.name}
         onClick={() => onSelect(card.cardId, zone)}
+        // The slot this card draws, so the card pane can hand the caret back to it after a
+        // swap has replaced the row it was drawn from (`DECK_CARD_ATTR` has the story).
+        {...{ [DECK_CARD_ATTR]: deckCardSlot(zone, card.cardId) }}
         className={cn(
           "relative block w-full overflow-hidden rounded-lg bg-surface text-left",
           // Not a real card any more, and the frame says so before the sentence under it is

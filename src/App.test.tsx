@@ -119,6 +119,14 @@ const SWAPPED_BOLT: DeckCard = card({
   collectorNumber: "146",
   quantity: 1,
 });
+/** The second printing already in the zone, so a swap onto it **folds** two rows into one. */
+const OTHER_BOLT: DeckCard = card({
+  name: "Lightning Bolt",
+  cardId: "c2",
+  setCode: "m10",
+  collectorNumber: "146",
+  quantity: 2,
+});
 
 const ALPHA: Printing = {
   id: "c1",
@@ -574,4 +582,88 @@ it("says a refused swap in the pane, and the deck behind it goes with it", async
   expect(
     await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
   ).toBeInTheDocument();
+});
+
+/**
+ * A deck already known to be gone offers nothing, rather than forty buttons whose only way of
+ * finding out is to be pressed.
+ *
+ * The pane reads the deck through the same query the editor draws from (`useSwapFromPane` takes
+ * the whole hook for exactly this), so the two surfaces agree **before** the press: the editor
+ * says the deck is not there and the pane stops claiming a printing is in it.
+ */
+it("stops offering swaps into a deck the read says is gone", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] }).mockResolvedValue(null);
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+  await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+  const pane = await screen.findByRole("complementary", { name: /card details/i });
+  expect(within(pane).getByRole("button", { name: /^Use this printing/ })).toBeInTheDocument();
+
+  // The deck goes, and the editor's own re-read is what tells both surfaces. Any deck write
+  // would do it; the format select is the cheapest one to press that is not the swap.
+  await userEvent.selectOptions(screen.getByLabelText("Deck format"), "modern");
+  expect(
+    await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
+  ).toBeInTheDocument();
+
+  expect(
+    within(pane).queryByRole("button", { name: /^Use this printing/ }),
+  ).not.toBeInTheDocument();
+  // And the mark with it: "this deck uses this printing" is not true of a deck that is gone.
+  expect(within(pane).queryByText(/this deck uses this printing/i)).not.toBeInTheDocument();
+});
+
+/**
+ * The two things a successful swap owes the reader afterwards, both of which have to survive
+ * the pane being **re-keyed** by the write itself (`App` keys the pane on `selectedCardId`).
+ *
+ * 1. **The fold.** A zone holds a printing at most once, so a swap onto one the zone already had
+ *    merges two rows into one and a line disappears from the deck list — `ipc.ts`'s `SwapResult`
+ *    exists to say so, and nothing said it.
+ * 2. **The caret.** The pressed button disabled itself for the write, so the browser left the
+ *    caret on `<body>`; then the pane it was in unmounted. Escape out of the new pane has to
+ *    land somewhere, and the somewhere is the deck's card for the printing the deck now holds —
+ *    the control the reader opened the card from, as the swap has just rebuilt it.
+ */
+it("announces a fold and hands the caret to the deck's card when the pane closes", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet
+    .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT, OTHER_BOLT] })
+    .mockResolvedValue({ deck: BURN, cards: [SWAPPED_BOLT] });
+  deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 3 });
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+  await userEvent.click(screen.getAllByRole("button", { name: "Lightning Bolt" })[0]);
+
+  const pane = await screen.findByRole("complementary", { name: /card details/i });
+  await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
+
+  // Said in the pane that replaced the one the press was made in, on the row that is now the
+  // deck's — a live region drawn empty of this sentence on its first commit and filled one
+  // commit later, which is the only shape a screen reader announces.
+  expect(await screen.findByText(/folded into one row of 3 in Main deck/i)).toBeInTheDocument();
+
+  // What a browser does to a control that disables itself and jsdom does not: the caret is on
+  // `<body>` by the time the pane is re-keyed.
+  (document.activeElement as HTMLElement).blur();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument(),
+  );
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+  // The deck's card for the printing the deck now holds — not `<body>`, and not the element the
+  // press was made from, which the swap deleted along with its row.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveFocus());
 });

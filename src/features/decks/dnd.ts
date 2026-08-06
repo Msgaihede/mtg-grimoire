@@ -98,6 +98,28 @@ export function dragData(payload: DragPayload): Record<string, unknown> {
 export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
 
 /**
+ * The second DOM contract a deck card control carries: the **slot** it draws, as
+ * `"<zone>:<card id>"` — the address every deck write is made to.
+ *
+ * How the card pane hands the caret back when it closes after a swap. An attribute rather than
+ * a ref because the pane is not in the deck's tree and owns none of its elements — and least of
+ * all *this* element, whose whole story is that the swap replaces it: the row it was drawn from
+ * is deleted and the new printing's row is a different React key, so a ref taken when the pane
+ * opened points at something unmounted by the time Escape is pressed. A slot is a question the
+ * DOM can answer after the fact.
+ *
+ * Here rather than in `ZoneColumn` because both views carry it and `ZoneColumn` imports
+ * `VisualCard`: the other direction would be an import cycle for one string. This module is
+ * already where a card control's DOM contracts live ({@link NOT_A_DRAG} above).
+ */
+export const DECK_CARD_ATTR = "data-deck-card";
+
+/** The value of {@link DECK_CARD_ATTR} for one slot — one spelling, both sides of the lookup. */
+export function deckCardSlot(zone: DeckZone, cardId: string): string {
+  return `${zone}:${cardId}`;
+}
+
+/**
  * A card that can be picked up — and a press on one of its controls that is a press on the
  * control, not on the card.
  *
