@@ -90,6 +90,23 @@ function send(target: Element | Window, type: string, dataTransfer: TestDataTran
   return fireEvent(target, event);
 }
 
+/**
+ * One drag event, for a test that is not driving a whole gesture — a component that listens
+ * for `dragstart` and has a single assertion about what it did.
+ *
+ * Worth having rather than a bare `fireEvent.dragStart`: the library listens for that event on
+ * `document` too, finds no `dataTransfer` on it, and prints *"It appears as though you have are
+ * not testing DragEvents correctly"* to stderr — a warning about the test rather than about the
+ * app, in a suite whose console is meant to stay quiet. This sends the same object the gestures
+ * above send, so the library takes the event as the platform's.
+ *
+ * A test using this still ends whatever it started: the `afterEach` at the top of this module
+ * lets go at `window`, which is why it lives here rather than in the one test that wants it.
+ */
+export function fireDragEvent(target: Element, type: string): boolean {
+  return send(target, type, new TestDataTransfer());
+}
+
 /** A drag in flight: what a test can do while it is holding the card. */
 export interface Drag {
   /**

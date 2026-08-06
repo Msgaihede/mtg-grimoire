@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CardDetail, Printing, PrintingsResponse } from "@/lib/ipc";
+import { fireDragEvent } from "@/test-drag";
 
 const detail: CardDetail = {
   id: "p1",
@@ -249,7 +250,9 @@ describe("the printings list preview", () => {
   /**
    * A row that is being dragged is not a row being read. The listener is on the row rather than
    * on any drag machinery, so it is already right for the day every card surface becomes a drag
-   * source and these rows carry their printing with them.
+   * source and these rows carry their printing with them — which is now, so the press goes
+   * through `test-drag`'s own event: a bare `fireEvent.dragStart` at a registered `cardDraggable`
+   * has no `dataTransfer`, and the library says so on stderr rather than starting anything.
    */
   it("cancels the dwell when the row starts a drag", async () => {
     await openPane();
@@ -257,7 +260,7 @@ describe("the printings list preview", () => {
 
     fireEvent.mouseEnter(row);
     tick(200);
-    fireEvent.dragStart(row);
+    fireDragEvent(row, "dragstart");
 
     tick(10_000);
     expect(preview()).toBeNull();
