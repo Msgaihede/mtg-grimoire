@@ -396,8 +396,10 @@ async function main() {
       // **It approaches from somewhere.** The browser remembers where the pointer was left, so
       // a move onto an element the pointer is already inside crosses no boundary and fires no
       // enter at all — which is a hover command that silently does nothing on its second run.
-      // The default approach is 40px above the element's own top edge, clamped into the window;
-      // `--from` names a point when that lands somewhere unhelpful.
+      // The default approach is 40px above the element's own top edge, held to at least y=2 so
+      // a row near the top of the window still has somewhere to be approached from; `--from`
+      // names a point when that lands somewhere unhelpful, which is also the answer for the
+      // horizontal case — the approach shares the element's own x, so there is nothing to clamp.
       //
       // **The probe is read twice, in this session**: once the moment the pointer arrives, and
       // again after `--rest` milliseconds without moving. That pair is what a dwell timer looks
@@ -417,7 +419,10 @@ async function main() {
         });
         const selector = positional[0];
         if (!selector) throw new Error("hover takes a selector");
-        const rest = Number(flag("--rest") ?? 400);
+        // `flag` answers `""` for a flag typed with no value at all — `hover "css" --rest` —
+        // and `Number("")` is 0, which would silently turn a dwell measurement into a
+        // measurement of nothing. A flag with no value is the flag not being given.
+        const rest = Number(flag("--rest") || 400);
         const probe = flag("--probe");
         const at = await evaluate(
           cdp,

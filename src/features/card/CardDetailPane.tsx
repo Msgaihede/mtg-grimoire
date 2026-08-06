@@ -234,8 +234,9 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   //   opening anything else moves the caret into that instead;
   // * the **hover preview** closes on the hover-leave or blur that ended its dwell, and on the
   //   press inside a row — which is how the popup is opened — *and* refuses to start at all
-  //   while a control in this pane reads `aria-expanded="true"`, which is the case a press
-  //   cannot cover: hovering a neighbouring row with the popup open presses nothing.
+  //   while a popup is open in this pane (a trigger carrying both `aria-haspopup` and
+  //   `aria-expanded="true"`), which is the case a press cannot cover: hovering a neighbouring
+  //   row with the popup open presses nothing.
   //
   // Both halves are `usePrintingDwell`'s, and its doc has the measurement they came from.
   useDismissOnEscape({ layer: "outer", onDismiss: close });
@@ -647,6 +648,16 @@ function Printings({
   // One dwell timer for the whole list — see {@link usePrintingDwell} for why it cannot be one
   // per row. Called before the early return below, because a hook is.
   const dwell = usePrintingDwell();
+  const dropPreview = dwell.cancel;
+  // A refetch that replaces the rows takes any picture with it. The preview is measured against
+  // the row it hangs off, and a row that has left the document measures 0×0 — an invisible
+  // layer, at the top of the pane, that Escape still has to be spent on. Nothing tells a hover
+  // that its element was unmounted, so the list says so: this is the only place that knows the
+  // rows changed. (`items` keeps its identity across a refetch that changed nothing — query
+  // structural sharing — so this is not an effect that runs on every render.)
+  useEffect(() => {
+    dropPreview();
+  }, [items, dropPreview]);
   // A card with no `oracleId` never asked for printings, so it has no list to fail at
   // loading: nothing to say, and no empty section to say it in. (Nor does a card whose
   // printings all left `cards` — same shape, same silence.)

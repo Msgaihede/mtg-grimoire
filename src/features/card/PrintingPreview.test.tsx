@@ -67,7 +67,7 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 import { CardDetailPane } from "./CardDetailPane";
-import { PREVIEW_DWELL_MS } from "./PrintingPreview";
+import { previewBox, PREVIEW_DWELL_MS } from "./PrintingPreview";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -105,6 +105,7 @@ async function openPane() {
   );
   await screen.findByText(/3 printings/);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  return qc;
 }
 
 /** Move the frozen clock, and let React commit what that woke up. */
@@ -119,6 +120,58 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+/**
+ * Where the picture goes — the half of this feature jsdom cannot see, since every rectangle in
+ * it is zero.
+ *
+ * The fixtures are rectangles **measured in the running window** on 2026-08-06 (Lightning Bolt,
+ * 62 printings, the pane docked at the right of a 1280 × 800 and then a 1024 × 768 window), so
+ * a regression here is a regression against something that was true on screen.
+ */
+describe("previewBox", () => {
+  /** The pane at 1280 × 800: 710px of it, below the ribbon. */
+  const PANE = { top: 70, bottom: 780, left: 876, right: 1260, width: 384 };
+  /** A printings row halfway down it, 335px of content between the pane's padding. */
+  const ROW = { top: 409, bottom: 441, left: 893, right: 1228, width: 335 };
+
+  it("hangs the full-size picture under the row, right-aligned to it", () => {
+    // 240 wide is the cap; 334 is 240 × 936/672, the `display` variant's own shape.
+    expect(previewBox(ROW, PANE)).toEqual({ top: 445, left: 988, width: 240, height: 334 });
+  });
+
+  it("flips it above a row too near the foot of the pane", () => {
+    const low = { ...ROW, top: 700, bottom: 732 };
+    const box = previewBox(low, PANE);
+    expect(box.height).toBe(334);
+    // Ending 4px above the row rather than starting 4px below it, and still inside the pane.
+    expect(box.top + box.height).toBe(low.top - 4);
+    expect(box.top).toBeGreaterThanOrEqual(PANE.top);
+  });
+
+  /**
+   * The 15px clip, which only the running window found: at the 1024 × 768 floor a row halfway
+   * down the pane has 323px above it and 323px below, so a 334px picture fits **neither** side
+   * — `shouldFlipUp` says "open the way it reads" and the pane cuts the bottom off it.
+   */
+  it("shrinks to the room a short pane leaves rather than being cut off by it", () => {
+    const short = { ...PANE, bottom: 748 };
+    const row = { ...ROW, top: 393, bottom: 425 };
+    const box = previewBox(row, short);
+
+    expect(box.width).toBe(229);
+    expect(box.height).toBe(318);
+    // The whole of it inside the pane, which is the only claim that matters.
+    expect(box.top).toBeGreaterThanOrEqual(short.top);
+    expect(box.top + box.height).toBeLessThanOrEqual(short.bottom);
+  });
+
+  it("never asks for a negative box when there is no room at all", () => {
+    const box = previewBox(ROW, { ...PANE, top: 409, bottom: 441 });
+    expect(box.width).toBe(0);
+    expect(box.height).toBe(0);
+  });
 });
 
 /**
@@ -261,6 +314,46 @@ describe("the printings list preview", () => {
   });
 
   /**
+   * A press is the reader doing something other than reading, and it is how every other layer
+   * in this pane is opened — so it takes the picture down before that layer goes up. This is
+   * the *first* half of "never the pane's second open layer"; the guard below is the second.
+   */
+  it("takes it down on a press inside the row", async () => {
+    await openPane();
+    const row = rowOf("M10 146");
+
+    fireEvent.mouseEnter(row);
+    tick(PREVIEW_DWELL_MS);
+    expect(preview()).not.toBeNull();
+
+    act(() => void fireEvent.pointerDown(row));
+
+    expect(preview()).toBeNull();
+    // And it does not come back on the same still pointer: a press ended the dwell, it did not
+    // postpone it.
+    tick(10_000);
+    expect(preview()).toBeNull();
+  });
+
+  /**
+   * The keyboard's press. A control inside a row is activated with Enter or Space, and the
+   * layer that opens is drawn inside that same row — so the caret never leaves it and no blur
+   * arrives. Without this the picture would sit over the popup the press just opened.
+   */
+  it("takes it down on Enter in the row, where no blur would", async () => {
+    await openPane();
+    const add = screen.getByRole("button", { name: /\(M10 146\)/ });
+
+    act(() => add.focus());
+    tick(PREVIEW_DWELL_MS);
+    expect(preview()).not.toBeNull();
+
+    act(() => void fireEvent.keyDown(add, { key: "Enter" }));
+
+    expect(preview()).toBeNull();
+  });
+
+  /**
    * The other half of "never the pane's second open layer" — the half a press cannot cover.
    *
    * With the quick-add popup open, hovering a *different* row moves no focus and presses
@@ -279,6 +372,58 @@ describe("the printings list preview", () => {
 
     expect(preview()).toBeNull();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  /**
+   * …and only for a **layer**. The guard above is a whole-pane query, which makes it a kill
+   * switch if it is aimed at the wrong attribute: this app writes a bare `aria-expanded` on
+   * plain disclosures that stay open for minutes — a rail, a Maybe pile, an archived list, a
+   * "why" — and the day this pane grows one (an expanded Rulings section) every preview in it
+   * would stop appearing with nothing on screen or in the suite to say why. So the guard reads
+   * the popup's own signature, both attributes, and a disclosure is none of its business.
+   */
+  it("is not suppressed by a disclosure that is merely open", async () => {
+    await openPane();
+
+    // A future section of this pane, in the shape the app already writes them: expanded, and
+    // not a layer — no `aria-haspopup`.
+    const rulings = document.createElement("button");
+    rulings.setAttribute("aria-expanded", "true");
+    rulings.textContent = "Rulings";
+    screen.getByRole("complementary", { name: /card details/i }).append(rulings);
+
+    fireEvent.mouseEnter(rowOf("M10 146"));
+    tick(PREVIEW_DWELL_MS);
+
+    expect(preview()).toHaveAttribute("src", expect.stringContaining("/display/p2/0"));
+  });
+
+  /**
+   * A picture measured against a row that has left the document is a 0×0 box at the top of the
+   * pane — invisible, and still an `"inner"` layer holding the next Escape press. Nothing tells
+   * a hover that its element was unmounted, so the list says so when its rows are replaced.
+   */
+  it("goes down with the rows it was measured against", async () => {
+    const qc = await openPane();
+
+    fireEvent.mouseEnter(rowOf("M10 146"));
+    tick(PREVIEW_DWELL_MS);
+    expect(preview()).not.toBeNull();
+
+    // What a refetch does: the same query, a different list. (`p2` is gone from it, so React
+    // cannot reuse the row the picture was hung on.)
+    act(() => {
+      qc.setQueryData(["card", "printings", "o1"], {
+        items: [printing(), printing({ id: "p4", setCode: "2ed", collectorNumber: "162" })],
+        total: 2,
+      });
+      // Query-core batches every observer notification through a `setTimeout(…, 0)`, and the
+      // clock is frozen — so without this the cache holds the new list and nothing has been
+      // told about it yet.
+      vi.advanceTimersByTime(0);
+    });
+
+    expect(preview()).toBeNull();
   });
 
   /**

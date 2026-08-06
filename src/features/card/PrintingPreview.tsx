@@ -52,6 +52,19 @@ const PREVIEW_RATIO = 936 / 672;
 /** What the picture stands off its row by — the 4px a row menu keeps from what it hangs off. */
 const PREVIEW_GAP = 4;
 
+/**
+ * What tells a **dismissible layer** apart from a disclosure that is merely open.
+ *
+ * `aria-expanded` alone is not it, and getting that wrong would be a silent kill switch for
+ * this whole feature: the app uses the bare attribute for plain disclosures that are open for
+ * minutes at a time (`DeckSearchPanel`'s rail, `DeckEditor`'s Maybe pile, `DecksPage`'s
+ * archived list, `ValidationPanel`'s "why"), and a pane that ever grows one — an expanded
+ * Rulings section — would stop previewing anything, everywhere, with nothing to say why.
+ * Every layer this has to be exclusive with is a *popup*, and every popup trigger in this app
+ * pairs the two attributes (`AddToCollection`, `SetCombobox`, both row menus, both panels).
+ */
+const OPEN_POPUP = '[aria-haspopup][aria-expanded="true"]';
+
 /** The printing whose art is on screen, and the row it hangs off. */
 interface Shown {
   printingId: string;
@@ -76,6 +89,12 @@ export interface PrintingDwell {
   /** The row it was asked for from, which is what it is measured against. */
   anchor: HTMLElement | null;
   rowProps: (printingId: string) => DwellRowProps;
+  /**
+   * Take it down from outside the rows — for the list, when the rows themselves are replaced.
+   * A picture measured against an element that has left the document is a 0×0 layer nobody can
+   * see and Escape still has to close. Stable, so it can be an effect's dependency.
+   */
+  cancel: () => void;
 }
 
 /**
@@ -94,11 +113,11 @@ export interface PrintingDwell {
  *   starting on it, unmounting — and on a **press** inside it, pointer or Enter/Space. The
  *   press is the load-bearing one: every other layer in this pane is opened by a press on a
  *   control inside a row, so the press that raises one has already taken this down.
- * * *The other one first.* A dwell **refuses to start** while a control in the pane has
- *   something expanded (see `start`) — the case a press cannot cover, since hovering a
- *   neighbouring row moves no focus and presses nothing. Measured in the running window before
- *   the guard existed: the quick-add popup open, the pointer resting two rows down, and a card
- *   image over the finish chips a quarter second later.
+ * * *The other one first.* A dwell **refuses to start** while a popup is open in the pane
+ *   ({@link OPEN_POPUP}) — the case a press cannot cover, since hovering a neighbouring row
+ *   moves no focus and presses nothing. Measured in the running window before the guard
+ *   existed: the quick-add popup open, the pointer resting two rows down, and a card image
+ *   over the finish chips a quarter second later.
  *
  * Escape is its own case and needs no hand-back: the caret was never in here — the picture is
  * `aria-hidden` decoration with nothing to focus — so a dismissed preview leaves the reader
@@ -121,17 +140,18 @@ export function usePrintingDwell(): PrintingDwell {
   const start = useCallback(
     (printingId: string, anchor: HTMLElement) => {
       cancel();
-      // Not over something the reader already opened. `aria-expanded` is the row's own control
-      // saying so — the quick-add popup's trigger sets it, and any layer worth being exclusive
-      // with will have a control that does too — read off the pane rather than out of state
-      // the popup keeps to itself. One query over one docked pane, on the enter and nowhere
-      // else. See the second half of this hook's doc for the case it is here for.
-      if (anchor.closest(`[${PREVIEW_FRAME_ATTR}]`)?.querySelector('[aria-expanded="true"]')) {
-        return;
-      }
+      // Not over a layer the reader already opened. The trigger's own two attributes say so
+      // ({@link OPEN_POPUP}), read off the pane rather than out of state the popup keeps to
+      // itself — one query over one docked pane, on the enter and nowhere else. See the second
+      // half of this hook's doc for the case it is here for, and `OPEN_POPUP` for why it is
+      // not the bare `aria-expanded`.
+      if (anchor.closest(`[${PREVIEW_FRAME_ATTR}]`)?.querySelector(OPEN_POPUP)) return;
       timer.current = setTimeout(() => {
         timer.current = null;
-        setShown({ printingId, anchor });
+        // The row can leave while the quarter second runs — a refetch that replaces the list,
+        // a card that is no longer in `cards`. Measuring against a detached element gives a
+        // 0×0 picture at the top of the pane and an Escape press with nothing to show for it.
+        if (anchor.isConnected) setShown({ printingId, anchor });
       }, PREVIEW_DWELL_MS);
     },
     [cancel],
@@ -179,7 +199,7 @@ export function usePrintingDwell(): PrintingDwell {
     [start, cancel],
   );
 
-  return { printingId: shown?.printingId ?? null, anchor: shown?.anchor ?? null, rowProps };
+  return { printingId: shown?.printingId ?? null, anchor: shown?.anchor ?? null, rowProps, cancel };
 }
 
 /**
@@ -206,12 +226,65 @@ export function PrintingPreview({
   return <Preview key={printingId} printingId={printingId} anchor={anchor} />;
 }
 
-/** Where the picture sits, in the pane's own coordinates. */
+/** Where the picture sits, and how big it is. */
 interface Box {
   top: number;
   left: number;
   width: number;
   height: number;
+}
+
+/** The parts of a `DOMRect` the placement reads — so the arithmetic can be tested without one. */
+export interface PreviewRect {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+  width: number;
+}
+
+/**
+ * Where one printing's picture goes, in **viewport** coordinates: beside its row, as big as the
+ * pane will take, on whichever side has the room.
+ *
+ * Pure and exported because nothing about it can be seen in jsdom — every rectangle there is
+ * zero — and because it has already been wrong once in a way only the running window showed.
+ * The size is fitted to `max(room above, room below)` rather than to the pane or the row alone:
+ * at the direction's **1024 × 768 floor** a row halfway down the pane has 323px above it and
+ * 323px below, `shouldFlipUp` correctly answers "neither side takes it, open the way it reads",
+ * and a picture that did not shrink was **cut off by 15px** at the pane's edge. Both cases are
+ * fixtures in this module's test.
+ *
+ * The caller translates the answer into the pane's own box; this decides the shape and the side.
+ */
+export function previewBox(row: PreviewRect, view: PreviewRect): Box {
+  const below = view.bottom - row.bottom - PREVIEW_GAP;
+  const above = row.top - view.top - PREVIEW_GAP;
+  const width = Math.max(
+    0,
+    Math.min(PREVIEW_WIDTH, row.width, Math.floor(Math.max(above, below) / PREVIEW_RATIO)),
+  );
+  // Floored, not rounded: a height rounded *up* past the room measured above is the 15px again,
+  // one pixel at a time.
+  const height = Math.floor(width * PREVIEW_RATIO);
+  // Beside the row, not over it: the picture starts at the row's *bottom* edge going down and
+  // ends at its *top* edge coming up, which is the other way round from a menu drawn over its
+  // row. The gap is part of what has to fit.
+  const up = shouldFlipUp({
+    rowTop: row.bottom,
+    rowBottom: row.top,
+    menuHeight: height + PREVIEW_GAP,
+    viewTop: view.top,
+    viewBottom: view.bottom,
+  });
+  return {
+    top: up ? row.top - PREVIEW_GAP - height : row.bottom + PREVIEW_GAP,
+    // Right-aligned to the row, which leaves the rarity, set and collector number of the rows
+    // underneath showing down the left — so the reader can still see where they are.
+    left: row.right - width,
+    width,
+    height,
+  };
 }
 
 function Preview({ printingId, anchor }: { printingId: string; anchor: HTMLElement }) {
@@ -229,47 +302,18 @@ function Preview({ printingId, anchor }: { printingId: string; anchor: HTMLEleme
     const element = frameRef.current;
     const frame = element?.closest<HTMLElement>(`[${PREVIEW_FRAME_ATTR}]`);
     if (!element || !frame) return;
-    const row = anchor.getBoundingClientRect();
     const view = frame.getBoundingClientRect();
-    // The room the pane leaves on either side of the row, gap already taken out. The picture is
-    // sized to the better of the two, so "it fits somewhere" is arithmetic rather than luck —
-    // at the direction's 1024 × 768 floor a row halfway down the pane has 323px above it and
-    // 323px below, and a 338px picture that ignored that was **cut off by 15px** at the pane's
-    // edge, `shouldFlipUp` having correctly reported that neither side would take it.
-    const below = view.bottom - row.bottom - PREVIEW_GAP;
-    const above = row.top - view.top - PREVIEW_GAP;
-    const width = Math.max(
-      0,
-      Math.min(PREVIEW_WIDTH, row.width, Math.floor(Math.max(above, below) / PREVIEW_RATIO)),
-    );
-    // Floored, not rounded: a height rounded *up* past the room measured above is the 15px
-    // again, one pixel at a time.
-    const height = Math.floor(width * PREVIEW_RATIO);
-    // Beside the row, not over it: the picture starts at the row's *bottom* edge going down and
-    // ends at its *top* edge coming up, which is the other way round from a menu drawn over its
-    // row. The gap is part of what has to fit.
-    const up = shouldFlipUp({
-      rowTop: row.bottom,
-      rowBottom: row.top,
-      menuHeight: height + PREVIEW_GAP,
-      viewTop: view.top,
-      viewBottom: view.bottom,
-    });
-    // Viewport rectangles into the pane's own box: an absolutely positioned child is placed
-    // against its containing block's *padding* box (hence `clientTop`/`clientLeft`, which are
-    // exactly the border widths) and does not scroll with the content, so the scroll offset is
-    // part of the coordinate rather than something the browser adds back.
+    const placed = previewBox(anchor.getBoundingClientRect(), view);
+    // Viewport coordinates into the pane's own box. An absolutely positioned child is placed
+    // against its containing block's *padding* box — hence `clientTop`/`clientLeft`, which are
+    // exactly the border widths — and those coordinates are the pane's **content**, which the
+    // scroller moves under the reader. `getBoundingClientRect` has already had that movement
+    // taken out of it, so adding the scroll offset back is what puts the picture on the row
+    // rather than where the row would be at the top of the list.
     setBox({
-      top:
-        (up ? row.top - PREVIEW_GAP - height : row.bottom + PREVIEW_GAP) -
-        view.top -
-        frame.clientTop +
-        frame.scrollTop,
-      // Right-aligned to the row, which leaves the rarity, set and collector number of the rows
-      // underneath showing down the left — so the reader can still see where they are.
-      left: row.right - width - view.left - frame.clientLeft + frame.scrollLeft,
-      width,
-      height,
+      ...placed,
+      top: placed.top - view.top - frame.clientTop + frame.scrollTop,
+      left: placed.left - view.left - frame.clientLeft + frame.scrollLeft,
     });
   }, [anchor]);
 
