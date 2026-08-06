@@ -76,8 +76,9 @@ export function useImageRetry(src: string | null): ImageRetry {
   const [attempt, setAttempt] = useState(0);
   const [shown, setShown] = useState(src);
 
-  // Compared by value, not by identity: `cardImageUrl(...)` is rebuilt on every render and
-  // is a new string every time, so an identity check here would reset the machine forever.
+  // Equal strings compare equal, so this fires only when the image genuinely changes:
+  // `cardImageUrl(…)` builds a new string on every render and every one of them is `===` the
+  // last. What is being compared is the URL, not the object that carried it.
   if (shown !== src) {
     setShown(src);
     setState("showing");

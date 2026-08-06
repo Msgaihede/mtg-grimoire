@@ -302,6 +302,37 @@ describe("DeckEditor", () => {
     expect(within(zone).getByRole("button", { name: "Kenrith" })).toBeInTheDocument();
   });
 
+  /**
+   * The deck builder opens as **cards**: it is the one surface in the app whose whole subject
+   * is what the cards are, and the user asked for it in those words. The switch beside the
+   * grouping says what pressing it does, never where you are.
+   */
+  it("opens the deck as cards", async () => {
+    await open();
+
+    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show as list" })).toBeInTheDocument();
+  });
+
+  /**
+   * And the dense rows are one press away, for the reader comparing prices and collector
+   * numbers — which is the whole reason the text list stays.
+   */
+  it("switches to the compact list and back", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show as list" }));
+
+    expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
+    // The two facts the dense rows exist for, and the two the cards leave to this list.
+    expect(screen.getAllByText("LEA · 161")).toHaveLength(2);
+    expect(screen.getByText("$4.50")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show as cards" }));
+
+    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+
   /** Two ways to read the same list, and the deck decides which one answers the question in
    *  front of you. */
   it("regroups the deck by mana value on request", async () => {

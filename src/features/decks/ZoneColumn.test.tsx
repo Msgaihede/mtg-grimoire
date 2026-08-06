@@ -6,6 +6,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { DROP_LINE_ATTR } from "./DropIndicator";
 import { card, resetRowIds } from "./validation/fixtures";
+import { STACK_OVERLAP } from "./VisualCard";
 import { groupCards, shouldFlipUp, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
 
 /** Every callback the column reports through, so a test only names the one it is about. */
@@ -28,6 +29,9 @@ function draw(cards: DeckCard[], overrides: Partial<Parameters<typeof ZoneColumn
     title: ZONE_LABEL.main,
     cards,
     groupBy: null,
+    // The dense rows, which is what every test below this line is about. The card view has
+    // its own describe at the foot of the file, and `VisualCard.test.tsx` has the card.
+    view: "compact" as const,
     moveTargets: ["side", "maybe"] as const,
     openMenuCardId: null,
     busy: false,
@@ -399,6 +403,98 @@ describe("ZoneColumn", () => {
 });
 
 /**
+ * The same column, drawn as cards.
+ *
+ * Everything *around* the cards is deliberately identical — the heading and its count, the
+ * group headers and theirs, the empty state, the drop target, the menu — so what these pin is
+ * the pile itself: one card per row, stacked under its own heading, and the `<li>` contract the
+ * drag layer is built on unchanged. `VisualCard.test.tsx` has the card.
+ */
+describe("ZoneColumn as cards", () => {
+  const visual = (cards: DeckCard[], overrides: Partial<Parameters<typeof ZoneColumn>[0]> = {}) =>
+    draw(cards, { view: "visual", ...overrides });
+
+  /** One card per row, and one image per card whatever the deck wants of it. */
+  it("draws each row as its card", () => {
+    const { container } = visual([
+      card({ name: "Lightning Bolt", quantity: 4 }),
+      card({ name: "Bear", typeLine: "Creature — Bear" }),
+    ]);
+
+    expect(container.querySelectorAll("img")).toHaveLength(2);
+    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText("×4")).toBeInTheDocument();
+  });
+
+  /**
+   * The pile: every card after the first in a group is pulled up over the one before it, and
+   * the first of each group starts a fresh one — a stack that ran across a heading would put
+   * Creatures under the Instant heading's own last card.
+   */
+  it("stacks each group from its own first card", () => {
+    visual(
+      [
+        card({ name: "Bolt", typeLine: "Instant" }),
+        card({ name: "Shock", typeLine: "Instant" }),
+        card({ name: "Bear", typeLine: "Creature — Bear" }),
+      ],
+      { groupBy: "type" },
+    );
+
+    const creatures = within(screen.getByRole("list", { name: "Creature" })).getAllByRole(
+      "listitem",
+    );
+    const instants = within(screen.getByRole("list", { name: "Instant" })).getAllByRole("listitem");
+
+    expect(creatures[0]).not.toHaveClass(STACK_OVERLAP);
+    expect(instants[0]).not.toHaveClass(STACK_OVERLAP);
+    expect(instants[1]).toHaveClass(STACK_OVERLAP);
+  });
+
+  /** The chrome is the column's, not the row's: the same headings and the same counts. */
+  it("keeps the headings and the counts it has as a list", () => {
+    visual(
+      [
+        card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+      ],
+      { groupBy: "type" },
+    );
+
+    expect(screen.getByRole("region", { name: "Main deck, 6 cards" })).toBeInTheDocument();
+    expect(screen.getByText("Instant").parentElement).toHaveTextContent("Instant4");
+    expect(screen.getByRole("list", { name: "Creature" })).toBeInTheDocument();
+  });
+
+  /** A card with no printing behind it has no art to draw, in this view as in the other. */
+  it("draws no picture for an orphaned row", () => {
+    const { container } = visual([
+      card({ name: "Lightning Bolt", needsReview: "This printing left the card database." }),
+    ]);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText(/left the card database/)).toBeInTheDocument();
+  });
+
+  /** The menu is the column's, and it opens on a card exactly as it opens on a row. */
+  it("opens a row menu on a card", async () => {
+    const { rerender, props } = visual([card({ name: "Lightning Bolt" })]);
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
+    expect(props.onOpenMenu).toHaveBeenCalled();
+
+    rerender(<ZoneColumn {...props} openMenuCardId="c-Lightning Bolt" />);
+    await userEvent.click(screen.getByRole("button", { name: "Move to Sideboard" }));
+
+    expect(props.onMove).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Lightning Bolt" }),
+      "side",
+    );
+  });
+
+});
+
+/**
  * The column as one end of a drag: what it accepts, what it refuses, and what it says while
  * a card is in the air over it.
  *
@@ -417,11 +513,12 @@ describe("ZoneColumn drops", () => {
    * Two columns, because a move needs both ends: a row is dragged out of one zone and into
    * another, and the column that takes it is not the column that had it.
    */
-  function drawPair(cards: DeckCard[]) {
+  function drawPair(cards: DeckCard[], view: "visual" | "compact" = "compact") {
     const main = handlers();
     const side = handlers();
     const common = {
       groupBy: null,
+      view,
       moveTargets: ["main", "side"] as const,
       openMenuCardId: null,
       busy: false,
@@ -597,6 +694,42 @@ describe("ZoneColumn drops", () => {
     expect(side.onDropCard).toHaveBeenCalledWith(
       expect.objectContaining({ write: "move", to: "side" }),
     );
+  });
+
+  /**
+   * **The `<li>` is still the drag handle when the row is drawn as a card.** The drag layer is
+   * registered on the row element and every drop this editor takes is aimed at one — so a view
+   * that moved the registration onto the card front would be a view where a deck cannot be
+   * rearranged, and nothing in `dnd.ts`'s own tests would notice.
+   */
+  it("drags a card out of one zone and into another in the card view", async () => {
+    const { side, scroller } = drawPair([card({ name: "Lightning Bolt" })], "visual");
+
+    const held = await startDrag(screen.getByRole("listitem"));
+    expect(held.started).toBe(true);
+    await held.over(scroller("Sideboard"));
+    await held.drop();
+
+    expect(side.onDropCard).toHaveBeenCalledWith({
+      write: "move",
+      cardId: "c-Lightning Bolt",
+      from: "main",
+      to: "side",
+    });
+  });
+
+  /** And the guard that goes with it, on the controls this view overlays on the art. */
+  it("does not drag the card when the press landed on one of its controls", async () => {
+    const { side, scroller } = drawPair([card({ name: "Lightning Bolt", quantity: 2 })], "visual");
+
+    const held = await startDrag(screen.getByRole("listitem"), {
+      pressOn: screen.getByRole("button", { name: /decrease copies/i }),
+    });
+
+    expect(held.started).toBe(false);
+    await held.over(scroller("Sideboard"));
+    await held.drop();
+    expect(side.onDropCard).not.toHaveBeenCalled();
   });
 
   /**

@@ -1,12 +1,11 @@
+import { StrictMode, type ComponentType, type ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cardImageUrl,
-  IMAGE_RETRY_FLOOR_MS,
-  IMAGE_RETRY_LIMIT,
-  IMAGE_RETRY_SPREAD_MS,
-} from "@/lib/images";
-import { useImageRetry } from "./useImageRetry";
+import { cardImageUrl, IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS } from "@/lib/images";
+// The schedule comes through the hook's own re-export rather than from `@/lib/images`,
+// because that re-export exists so a caller needs one import rather than two — and a caller
+// is exactly what this file is. Dropped, it fails here rather than in a component.
+import { IMAGE_RETRY_LIMIT, imageRetryDelayMs, useImageRetry } from "./useImageRetry";
 
 /**
  * A real image URL, because the retry marker is a query string appended to it.
@@ -19,17 +18,21 @@ import { useImageRetry } from "./useImageRetry";
 const BASE = cardImageUrl("aaa", 0, "grid");
 const OTHER = cardImageUrl("bbb", 0, "grid");
 
-/** Long enough to cover the first dithered wait whatever `Math.random` returned. */
-const PAST_THE_RETRY = IMAGE_RETRY_FLOOR_MS + IMAGE_RETRY_SPREAD_MS;
+/**
+ * Long enough to cover the first dithered wait whatever `Math.random` returned — which is
+ * the schedule's own arithmetic at its worst case rather than a second copy of it.
+ */
+const PAST_THE_RETRY = imageRetryDelayMs(1, 1);
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 /** The hook under a changing `src`, which is the half a plain `renderHook` cannot reach. */
-function retry(src: string | null = BASE) {
+function retry(src: string | null = BASE, wrapper?: ComponentType<{ children: ReactNode }>) {
   return renderHook(({ src }: { src: string | null }) => useImageRetry(src), {
     initialProps: { src },
+    wrapper,
   });
 }
 
@@ -186,6 +189,70 @@ describe("useImageRetry", () => {
 
     expect(result.current.retrying).toBe(false);
     expect(result.current.failed).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * The frame left the page while it was waiting — scrolled out of a virtualised wall, or a
+   * deck closed. A timer that outlives it fires `setAttempt` into an unmounted component,
+   * which React answers with a warning and a leak that scales with how much scrolling the
+   * reader does.
+   */
+  it("cancels a pending retry when the frame goes away", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { result, unmount } = retry();
+
+    act(() => result.current.onError());
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * The slot's image was taken away mid-wait: a deck's cover cleared, a tile whose row
+   * emptied. There is nothing left to retry, so the schedule goes with it — and `retrying`
+   * has to go with it too, or the frame sits on "Retrying…" over a card that no longer has
+   * an image to retry.
+   */
+  it("drops the schedule when the image is taken away mid-wait", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { result, rerender } = retry();
+
+    act(() => result.current.onError());
+    expect(result.current.retrying).toBe(true);
+
+    rerender({ src: null });
+
+    expect(result.current.src).toBeNull();
+    expect(result.current.retrying).toBe(false);
+    expect(result.current.failed).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * Under `StrictMode`, which is how the app itself mounts every one of these.
+   *
+   * Two things it does that nothing else does: it renders twice, so the reset-during-render
+   * above runs a second time on the same commit; and it mounts, tears down and re-mounts every
+   * effect, so a schedule whose cleanup is missing becomes *two* timers for one failure — one
+   * of them holding a stale `attempt`, which is the retry that comes back marked `?retry=1`
+   * twice and never reaches the second wait at all.
+   */
+  it("keeps one timer and one retry under StrictMode's double mount", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { result } = retry(BASE, StrictMode);
+
+    expect(result.current.src).toBe(BASE);
+
+    act(() => result.current.onError());
+
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => void vi.advanceTimersByTime(PAST_THE_RETRY));
+
+    expect(result.current.src).toBe(`${BASE}?retry=1`);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

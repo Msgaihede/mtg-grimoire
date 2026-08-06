@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Ref, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+  type RefObject,
+} from "react";
 import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { MoreHorizontal } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
@@ -10,6 +18,7 @@ import { usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { cardDraggable, dropWrite, readDragData, type DeckWrite } from "./dnd";
 import { DropIndicator } from "./DropIndicator";
+import { STACK_MAX_WIDTH, UNDER_PLATE, VisualCard } from "./VisualCard";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
@@ -34,6 +43,16 @@ export const ZONE_LABEL: Record<DeckZone, string> = {
 
 /** The two questions a deck list is read for: what does it *do*, and what does it *cost*. */
 export type GroupBy = "type" | "manaValue";
+
+/**
+ * The two ways a zone can be drawn.
+ *
+ * `"visual"` is the deck as cards — overlapped so each one's title band shows, which is how a
+ * deck has been laid out on a table since before there were deckbuilders. `"compact"` is the
+ * dense text row, which is what a reader comparing prices and collector numbers wants. The
+ * editor owns the choice for a session and passes it down; neither is a setting.
+ */
+export type ZoneView = "visual" | "compact";
 
 /** One heading and the rows under it. */
 export interface CardGroup {
@@ -72,6 +91,26 @@ const OTHER = "Other";
 /** How a row menu finds the box that would clip it. An attribute rather than a ref chain
  *  because the menu is three components away from the scroller and owns none of them. */
 const SCROLLER_ATTR = "data-zone-scroller";
+
+/**
+ * Where a row's menu hangs, which is not the same place in a text row and on a card.
+ *
+ * A row is 40px tall, so "inside the row, top-aligned or bottom-aligned" is the whole story. A
+ * **card is 323px**, and anchoring a menu to *its* bottom edge puts it 300px below the strip
+ * the reader pressed — measured in the running window (2026-08-06): opened on a card at the
+ * foot of the column, the flip put the menu *further* out of the scroller than not flipping
+ * would have. So a card's anchor is its **title strip**: down means under the plate, where the
+ * controls already are, and up means above the card's top edge, over the pile it is sitting on.
+ *
+ * `under` is what the flip is measured against, live off the DOM rather than recomputed from
+ * the geometry constants — one source of truth, and it is the element the menu is drawn under.
+ */
+const MENU_ANCHOR = {
+  row: { under: null, down: "top-1", up: "bottom-1" },
+  card: { under: "[data-no-drag]", down: UNDER_PLATE, up: "bottom-full" },
+} as const;
+
+type MenuAnchor = keyof typeof MENU_ANCHOR;
 
 /**
  * Which way a row's menu opens — down from the row's top edge, or up from its bottom.
@@ -180,6 +219,9 @@ export interface ZoneColumnProps {
   /** `null` draws a flat list: the commander and companion zones hold one or two cards, and a
    *  heading over a single row is a heading that says nothing. */
   groupBy: GroupBy | null;
+  /** Cards or rows. Everything else about the column — the heading, the counts, the groups,
+   *  the drop target, the menu — is the same either way. */
+  view: ZoneView;
   /** The zones a row here can be moved to, in the order the menu offers them. The editor
    *  derives it from the format's spec, so a Modern deck is never offered a commander zone. */
   moveTargets: readonly DeckZone[];
@@ -234,6 +276,7 @@ export function ZoneColumn({
   title,
   cards,
   groupBy,
+  view,
   moveTargets,
   openMenuCardId,
   busy,
@@ -256,6 +299,34 @@ export function ZoneColumn({
   /** Whether a card the column can take is over it. Only ever true for a drop this column
    *  would act on — `canDrop` below means a refused payload never enters at all. */
   const [over, setOver] = useState(false);
+  /**
+   * The control that opened the menu that is open — **one ref for the column**, because the
+   * column holds at most one open menu (`openMenuCardId` is one card id) and the menu is drawn
+   * from here rather than by each card.
+   *
+   * Drawn here so there is one construction site for it: two views of the same list would
+   * otherwise be two places where "what a row can do" is decided, and they would drift. What
+   * the menu needs the trigger for is the toggle exception in its blur handler — see there.
+   */
+  const openTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const takeTrigger = (card: DeckCard, trigger: HTMLButtonElement) => {
+    openTriggerRef.current = trigger;
+    onOpenMenu(card, trigger);
+  };
+  const menuFor = (card: DeckCard): ReactNode =>
+    openMenuCardId === card.cardId ? (
+      <RowMenu
+        card={card}
+        zone={zone}
+        moveTargets={moveTargets}
+        busy={busy}
+        anchor={view === "visual" ? "card" : "row"}
+        triggerRef={openTriggerRef}
+        onClose={onCloseMenu}
+        onMove={onMove}
+        onSetCover={onSetCover}
+      />
+    ) : null;
 
   // The column takes drops on its scroller: everything under the heading, which is the part
   // of the column that reads as the list. `canDrop` and the drop itself ask the same
@@ -299,6 +370,10 @@ export function ZoneColumn({
       // one taking the card.
       className={cn(
         "relative flex min-h-0 flex-col overflow-hidden rounded-lg border border-border",
+        // A column of cards is as wide as a card, not as wide as the row layout would let it
+        // be. Here rather than in the editor because it is a fact about the *view* — see
+        // `STACK_MAX_WIDTH` for what a column without it drew.
+        view === "visual" && STACK_MAX_WIDTH,
         FOCUS,
         className,
       )}
@@ -331,23 +406,36 @@ export function ZoneColumn({
                 </p>
               )}
               <ul aria-label={group.label || undefined}>
-                {group.cards.map((card) => (
-                  <CardRow
-                    key={card.id}
-                    card={card}
-                    zone={zone}
-                    zoneTitle={title}
-                    moveTargets={moveTargets}
-                    menuOpen={openMenuCardId === card.cardId}
-                    busy={busy}
-                    onOpenMenu={onOpenMenu}
-                    onCloseMenu={onCloseMenu}
-                    onSetQuantity={onSetQuantity}
-                    onMove={onMove}
-                    onSetCover={onSetCover}
-                    onSelect={onSelect}
-                  />
-                ))}
+                {group.cards.map((card, at) =>
+                  view === "visual" ? (
+                    <VisualCard
+                      key={card.id}
+                      card={card}
+                      zone={zone}
+                      zoneTitle={title}
+                      // The stack is a fact about a card's place in its *group*, not in the
+                      // column: the first card under every heading starts a new pile.
+                      stacked={at > 0}
+                      menuOpen={openMenuCardId === card.cardId}
+                      menu={menuFor(card)}
+                      onOpenMenu={takeTrigger}
+                      onSetQuantity={onSetQuantity}
+                      onSelect={onSelect}
+                    />
+                  ) : (
+                    <CardRow
+                      key={card.id}
+                      card={card}
+                      zone={zone}
+                      zoneTitle={title}
+                      menuOpen={openMenuCardId === card.cardId}
+                      menu={menuFor(card)}
+                      onOpenMenu={takeTrigger}
+                      onSetQuantity={onSetQuantity}
+                      onSelect={onSelect}
+                    />
+                  ),
+                )}
               </ul>
             </div>
           ))
@@ -370,27 +458,21 @@ function CardRow({
   card,
   zone,
   zoneTitle,
-  moveTargets,
   menuOpen,
-  busy,
+  menu,
   onOpenMenu,
-  onCloseMenu,
   onSetQuantity,
-  onMove,
-  onSetCover,
   onSelect,
 }: {
   card: DeckCard;
   zone: DeckZone;
   zoneTitle: string;
-  moveTargets: readonly DeckZone[];
   menuOpen: boolean;
-  busy: boolean;
+  /** The row's menu, built by the column — one construction site for both views. A direct
+   *  child of the `<li>`, which is what it is positioned and measured against. */
+  menu: ReactNode;
   onOpenMenu: (card: DeckCard, trigger: HTMLButtonElement) => void;
-  onCloseMenu: () => void;
   onSetQuantity: (card: DeckCard, quantity: number) => void;
-  onMove: (card: DeckCard, to: DeckZone) => void;
-  onSetCover: (card: DeckCard) => void;
   onSelect: (cardId: string) => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -549,18 +631,7 @@ function CardRow({
         </p>
       )}
 
-      {menuOpen && (
-        <RowMenu
-          card={card}
-          zone={zone}
-          moveTargets={moveTargets}
-          busy={busy}
-          triggerRef={triggerRef}
-          onClose={onCloseMenu}
-          onMove={onMove}
-          onSetCover={onSetCover}
-        />
-      )}
+      {menu}
     </li>
   );
 }
@@ -577,6 +648,7 @@ function RowMenu({
   zone,
   moveTargets,
   busy,
+  anchor,
   triggerRef,
   onClose,
   onMove,
@@ -586,6 +658,8 @@ function RowMenu({
   zone: DeckZone;
   moveTargets: readonly DeckZone[];
   busy: boolean;
+  /** What this menu is hanging off — see {@link MENU_ANCHOR}. */
+  anchor: MenuAnchor;
   /** The control that opened this. Pressing it again is a *toggle*, not a click away. */
   triggerRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
@@ -615,16 +689,21 @@ function RowMenu({
     measured.current = true;
     const r = row.getBoundingClientRect();
     const v = view.getBoundingClientRect();
+    // What the menu hangs off: the row itself, or — on a card — the strip at the top of it,
+    // whose foot is the control bar. `rowTop`/`rowBottom` are where a downward menu *starts*
+    // and where an upward one *ends*, which for a text row are the row's own two edges.
+    const under = MENU_ANCHOR[anchor].under;
+    const strip = under ? row.querySelector(under)?.getBoundingClientRect() : null;
     setFlip(
       shouldFlipUp({
-        rowTop: r.top,
-        rowBottom: r.bottom,
+        rowTop: strip ? strip.top : r.top,
+        rowBottom: strip ? r.top : r.bottom,
         menuHeight: panel.offsetHeight,
         viewTop: v.top,
         viewBottom: v.bottom,
       }),
     );
-  }, []);
+  }, [anchor]);
 
   // The caret moves into the layer, as it does for every other one in the app: the panel's
   // own controls are then the next thing Tab reaches, and Escape has something to hand back.
@@ -649,10 +728,10 @@ function RowMenu({
       className={cn(
         "absolute right-1 z-20 w-44 rounded-lg border border-border bg-bg/95 p-1",
         "text-xs shadow-lg",
-        // Anchored to the row's top edge normally, and to its bottom edge on the rows near
-        // the foot of the column — where opening downwards would put half the menu past the
+        // Anchored under whatever it belongs to normally, and above it on the rows near the
+        // foot of the column — where opening downwards would put half the menu past the
         // scroller's edge, with nothing to scroll it back into view.
-        flip ? "bottom-1" : "top-1",
+        flip ? MENU_ANCHOR[anchor].up : MENU_ANCHOR[anchor].down,
         FOCUS,
       )}
       // Anchored to the row, so a press in here is a press on the row unless it is stopped —
@@ -684,7 +763,12 @@ function RowMenu({
       // panel is positioned against the row rather than against the button.
       onBlur={(e) => {
         if (busy) return;
-        if (e.relatedTarget === triggerRef.current) return;
+        // **`null` is not the trigger.** A blur with no `relatedTarget` is focus going
+        // *nowhere* — a disabled control, a click on the page background — and it is exactly
+        // the case the guard above is about. Comparing it to a trigger the column has not
+        // recorded yet (`null === null`) would answer "the reader pressed the trigger" for a
+        // press that never happened, and the menu would refuse to close at all.
+        if (e.relatedTarget !== null && e.relatedTarget === triggerRef.current) return;
         if (!panelRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >
