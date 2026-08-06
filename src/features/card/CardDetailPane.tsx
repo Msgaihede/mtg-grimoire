@@ -736,6 +736,7 @@ function PrintingRow({
   dwell: DwellRowProps;
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
+  const viewPrinting = useAppStore((s) => s.viewPrinting);
 
   // The row is the printing, and it can be carried off the list — spec §1's fourth drag
   // source, and the only one where the reader is choosing a *piece of cardboard* rather than a
@@ -763,12 +764,22 @@ function PrintingRow({
     <li
       ref={rowRef}
       {...dwell}
+      // The mouse's way into the printing: a click anywhere on the row that is not one of its
+      // own controls shows this printing in the pane. The keyboard's way in is the set-code
+      // button below — the same split `ZoneColumn`'s rows use, and for the same reason: a
+      // `role="button"` on the row would make the controls inside it presentational.
+      onClick={current ? undefined : () => viewPrinting(printing.id)}
       className={cn(
         "group rounded-md px-2 py-1 text-xs",
         // The one printing this pane is about. A gold hairline down its edge rather than a
         // fill: gold means "here" everywhere else in the app, and a filled row in a list of
         // forty would be the brightest thing under the art.
-        current ? "border-l-2 border-accent bg-bg pl-1.5 text-text" : "text-dim",
+        current
+          ? "border-l-2 border-accent bg-bg pl-1.5 text-text"
+          : cn(
+              "text-dim transition-colors duration-150 hover:bg-surface",
+              "motion-reduce:transition-none",
+            ),
       )}
     >
       {/* The facts, on one line. `items-center` rather than baseline because the line ends in
@@ -776,10 +787,24 @@ function PrintingRow({
           prices it lines up with. */}
       <div className="flex items-center gap-2">
         <RarityGem rarity={printing.rarity} className="shrink-0" />
-        <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
-          {printing.setCode.toUpperCase()} · {printing.collectorNumber}
-          {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
-        </span>
+        {current ? (
+          <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
+            {printing.setCode.toUpperCase()} · {printing.collectorNumber}
+            {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
+          </span>
+        ) : (
+          <button
+            type="button"
+            // The row's keyboard handle: show this printing. The click bubbles to the row,
+            // which does the same thing — one destination, two ways in.
+            aria-label={`Show ${printing.setCode.toUpperCase()} · ${printing.collectorNumber}`}
+            title={printing.setName ?? undefined}
+            className={cn("min-w-0 flex-1 truncate text-left font-mono", FOCUS)}
+          >
+            {printing.setCode.toUpperCase()} · {printing.collectorNumber}
+            {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
+          </button>
+        )}
         {printing.lang !== "en" && <LangBadge lang={printing.lang} />}
         {/* Per finish, from the blob — never one number standing for both. */}
         {parseFinishes(printing.finishes).map((f) => (
@@ -793,21 +818,31 @@ function PrintingRow({
           </span>
         ))}
         {/* This row's printing, not the pane's card: the set and the collector number are the
-            row's own, and so are the finishes it may be owned in. */}
-        <AddToCollectionButton
-          className={REVEAL_ON_HOVER}
-          target={{
-            cardId: printing.id,
-            name: card.name,
-            setCode: printing.setCode,
-            collectorNumber: printing.collectorNumber,
-            oracleId: card.oracleId,
-            finishes: parseFinishes(printing.finishes),
-          }}
-        />
+            row's own, and so are the finishes it may be owned in. The wrapper stops the row's
+            own click: a press on the quick-add (or inside its popup) is not a request to show
+            this printing. */}
+        <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
+          <AddToCollectionButton
+            className={REVEAL_ON_HOVER}
+            target={{
+              cardId: printing.id,
+              name: card.name,
+              setCode: printing.setCode,
+              collectorNumber: printing.collectorNumber,
+              oracleId: card.oracleId,
+              finishes: parseFinishes(printing.finishes),
+            }}
+          />
+        </span>
       </div>
 
-      {swap && <DeckLine printing={printing} swap={swap} />}
+      {/* Stopped for the quick-add's reason: "Use this printing" writes to the deck, and the
+          row underneath must not also swap the pane to the row it was pressed on. */}
+      {swap && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <DeckLine printing={printing} swap={swap} />
+        </div>
+      )}
     </li>
   );
 }

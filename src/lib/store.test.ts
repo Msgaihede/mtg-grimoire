@@ -129,6 +129,26 @@ describe("the deck row a card was opened from", () => {
     expect(useAppStore.getState().paneDeckContext).toBeNull();
   });
 
+  /**
+   * The third way a card id lands in the pane, and the narrowest: browsing another printing
+   * of whatever is open is navigation *inside* the pane, so the deck row — and with it the
+   * pane's "Use this printing" offers — survives the click. `setSelectedCardId` here instead
+   * would silently drop the swap affordance the moment a reader compared printings, which is
+   * the one moment it is for.
+   */
+  it("keeps the row while the reader browses printings inside the pane", () => {
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    useAppStore.getState().viewPrinting("p2");
+
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      deckId: 4,
+      zone: "main",
+      cardId: "p1",
+    });
+  });
+
   /** The pane closes through the same setter, so the context goes with it. */
   it("forgets the row when the pane closes", () => {
     useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });

@@ -528,6 +528,71 @@ describe("CardDetailPane", () => {
 });
 
 /**
+ * A printings row is first of all a way to *look at* that printing: clicking it re-anchors
+ * the pane onto the row's card. Navigation inside the pane, so the deck row the card was
+ * opened from — and the swap offers it carries — survives the trip (`store.test.ts` pins the
+ * write itself; these pin the rows).
+ */
+describe("browsing the printings list", () => {
+  const PRINTINGS = [printing(), printing({ id: "p2", setCode: "m10", collectorNumber: "146" })];
+
+  it("shows the printing a row is clicked on", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(PRINTINGS));
+
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: "Show M10 · 146" }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+  });
+
+  /** The current printing is where the reader already is: its row offers no trip, and its
+   *  facts are plain text rather than a control. */
+  it("offers no click on the row the pane is already showing", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(PRINTINGS));
+
+    wrap("p1");
+
+    // Every other row is a trip; the pane's own printing is not offered one.
+    expect(await screen.findByRole("button", { name: "Show M10 · 146" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Show ISD/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the deck row while the reader browses", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(PRINTINGS));
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: "Show M10 · 146" }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      deckId: 4,
+      zone: "main",
+      cardId: "p1",
+    });
+  });
+
+  /** The row's own controls keep their clicks to themselves: a press on the quick-add is not
+   *  a request to show that printing. */
+  it("does not navigate from a press on a row's quick-add", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(PRINTINGS));
+    useAppStore.getState().setSelectedCardId("p1");
+
+    wrap("p1");
+    const row = (await screen.findByRole("button", { name: "Show M10 · 146" })).closest(
+      "li",
+    ) as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: /^Add / }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+  });
+});
+
+/**
  * "Use this printing" — the printings list read as a way to *change* the deck rather than only
  * to look at it (spec §2).
  *

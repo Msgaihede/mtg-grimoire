@@ -58,6 +58,17 @@ interface AppState {
    */
   openCardFromDeck: (context: PaneDeckContext) => void;
   /**
+   * Show another printing of the card the pane is already on — navigation *inside* the pane,
+   * from a click on a printings row.
+   *
+   * The third way a card id lands in the pane, and the narrowest: `setSelectedCardId` means
+   * "opened from somewhere that is not a deck row" and clears the context;
+   * `openCardFromDeck` means "opened as a deck row" and sets it. This means neither — the
+   * reader is browsing printings of whatever is open, so the context (and with it the pane's
+   * "Use this printing" offers) must survive the click.
+   */
+  viewPrinting: (cardId: string) => void;
+  /**
    * The deck the editor is open on, or `null` when Decks is showing its gallery.
    *
    * The one navigation fact decks need, and it is here for the same reason the whole store
@@ -123,6 +134,8 @@ export const useAppStore = create<AppState>((set) => ({
   paneDeckContext: null,
   openCardFromDeck: (paneDeckContext) =>
     set({ selectedCardId: paneDeckContext.cardId, paneDeckContext }),
+  // Deliberately not touching `paneDeckContext` — see the interface doc.
+  viewPrinting: (selectedCardId) => set({ selectedCardId }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.
   openDeckId: null,
