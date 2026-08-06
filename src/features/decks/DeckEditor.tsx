@@ -120,6 +120,20 @@ const OTHER_VIEW: Record<ZoneView, { view: ZoneView; label: string }> = {
  * opening the set filter from there has nothing to blur, so both are open and one Escape
  * closes both. Known, accepted, and cheap next to the alternative: dropping that guard would
  * take a menu down as though its refused write had worked.
+ *
+ * **The card pane docked beside this view carries two more, and they are peers of these**: its
+ * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
+ * way the set filter is, by focus — it closes when the caret leaves its root, and every layer
+ * here focuses itself on the way up. **The preview genuinely coexists with a row menu**, and
+ * that is correct rather than a gap: a pointer wandering off this view onto a printings row
+ * moves no focus, so the menu never blurs, and the dwell's own "not over a layer the reader
+ * already opened" guard (`PrintingPreview`'s `OPEN_POPUP`) queries *inside the preview's
+ * frame*, which is the pane — a menu open out here is not something it can see. Escape then
+ * unwinds three rungs in three presses, menu → preview → pane, and only the last of those is
+ * ordered by the protocol: the first two are both capture-phase, so what separates them is
+ * registration order, and the menu is always the earlier one — reaching the preview means
+ * taking the pointer off this view, and bringing it back takes the preview down with the
+ * row's own mouse-leave.
  */
 type Layer = { kind: "menu"; zone: DeckZone; cardId: string } | { kind: "check" } | null;
 

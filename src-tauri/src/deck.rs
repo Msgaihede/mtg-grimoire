@@ -604,8 +604,15 @@ pub struct SwapResult {
 ///
 /// "Of the same card" is **enforced** rather than assumed: the two ids' `oracle_id`s are
 /// compared and a mismatch is refused ([`not_the_same_card`]), because every statement below
-/// would carry the quantity onto whatever it is handed. The one pair that cannot be compared —
-/// a `from` printing that has left `cards` — is allowed through; see the guard's comment.
+/// would carry the quantity onto whatever it is handed. The pair that cannot be compared — a
+/// `from` printing that has left `cards` — is allowed through; see the guard's comment. It is
+/// not the only way to be uncomparable, and the doc would be flattering the guard to stop
+/// there: [`oracle_of`] answers `None` for a NULL `oracle_id` as much as for a missing row, so
+/// a null on *either* side skips the comparison — and a null on the **to** side would let an
+/// unverified cross-card write through, where the `from` side's is the deliberate case above.
+/// That is a fence around a nullable column rather than a card anyone can reach: `oracle_id` is
+/// NULLABLE and no live row is null, 0 of 116 590 including all 81 reversible printings,
+/// because `card_row` falls back to `card_faces[0]`.
 ///
 /// `needs_review` is deliberately **not** carried across. The flag says the row's printing
 /// left the card database, and a swap onto a printing that is in it is exactly the cure —

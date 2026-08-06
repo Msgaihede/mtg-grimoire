@@ -134,10 +134,17 @@ export function CardGrid<T extends GridCard>({
   /**
    * What a tile carries when it is dragged — and, by being absent, that it cannot be.
    *
-   * The wall draws the search results *and* the collection, and only the search's tiles are
-   * printings a deck can be built from: a collection tile is an *entry*, whose finish and
-   * condition a drop cannot answer. So this is a prop rather than a behaviour, and a wall
-   * given none registers no drag at all.
+   * The wall draws the search results *and* the collection, and only the search passes one.
+   * **That is a product call and this note is where it is recorded**, not a fact about the
+   * tiles: a collection tile is a *card* — `CollectionPage` sums the entries behind one
+   * printing into a single tile, and breaking them apart is the table's job — so a
+   * `{ kind: "card" }` payload would be as honest here as it is on the collection *rows* that
+   * carry one. What decided it is the enumeration this feature was built from: the drag
+   * sources outside the deck editor are the search's tiles, the collection's **table rows**,
+   * the pinned wishes and the pane's printings. The day the collection's wall should be one
+   * too, it passes this prop and nothing else changes — which is why this is a prop rather
+   * than a behaviour, one component drawing both walls, and a wall given none registers no
+   * drag at all.
    *
    * Hold it still (module scope, or a `useCallback`): React detaches and re-runs a callback
    * ref whose identity changed, so a fresh arrow on every render would tear the registration
@@ -146,7 +153,12 @@ export function CardGrid<T extends GridCard>({
    *
    * {@link tileRef} is the lower-level seam beside it, for the one caller that registers its
    * own drag (the deck editor's docked panel, whose tiles carry a `"search-card"` because they
-   * are inside the editor). Passing both is not wrong — they compose — but nothing needs to.
+   * are inside the editor). **One or the other, never both.** They do not compose: the tile
+   * runs the `tileRef` first and then registers its own `cardDraggable` on the *same* element,
+   * and the library keeps one draggable per element in a `WeakMap` — so the second
+   * registration silently replaces the caller's, either teardown unregisters the element
+   * outright, and a development build logs "You have already registered a `draggable` on the
+   * same element" for every tile on the wall.
    */
   dragPayload?: (card: T) => DragPayload;
   /**
@@ -310,9 +322,13 @@ function Tile<T extends GridCard>({
   // every render of a tile, and this wall re-renders on every scrolled row. Which is also why
   // both slots below are the *caller's* to hold still: their identity is in this list.
   //
-  // The drag reads its payload at `dragstart` rather than closing over one, so a tile handed a
-  // different card without remounting — which is how this wall works, a slot at a time —
-  // carries the card it is drawing now.
+  // `card` is a dependency, and that is what keeps a tile's drag honest. This wall hands a
+  // slot a different card without remounting it, and both registrations below close over the
+  // `card` of the render that made them — the payload thunk defers the *call* to `dragstart`,
+  // it cannot reach a card this closure was never built with. A new card is therefore a new
+  // `attach`, which React detaches and re-runs: the old registration comes down and the new
+  // one goes on over the card the tile is drawing now. Drop `card` from the deps and every
+  // scrolled-onto tile drags whatever it drew first.
   const attach = useCallback(
     (element: HTMLElement | null) => {
       const detach = tileRef?.(card, element);
