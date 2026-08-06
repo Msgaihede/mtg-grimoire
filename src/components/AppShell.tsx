@@ -46,6 +46,20 @@ const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
 export const DROP_RING = "ring-2 ring-accent";
 
 /**
+ * And which of the ringed pair the card is actually over.
+ *
+ * A wash of the same gold rather than the sidebar's hover surface, for two reasons. `:hover`
+ * does not update during a native drag — the pointer is holding something — so this has to be
+ * drawn from the drop target's own `onDragEnter`; and the entry a card is dropped on is very
+ * often the **active** one (the Decks entry, with its editor open, is where a panel tile goes),
+ * whose surface is already `bg-bg` and whose label is gold. A second surface colour would have
+ * been invisible there, and the `text-text` this used to carry took the gold label *off* the
+ * active entry — emphasis subtracted at the moment it was wanted. One token, additive, and it
+ * fights nothing: `tailwind-merge` replaces the surface and leaves every colour of type alone.
+ */
+export const DROP_OVER = "bg-accent/10";
+
+/**
  * The window: sidebar, ribbon, and whatever view the store points at.
  *
  * Owns the sync status because everything that needs it lives here — the ribbon's summary
@@ -220,10 +234,7 @@ function NavItem({
             ? "bg-bg text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
             : "text-dim hover:bg-bg/60 hover:text-text",
           eligible && DROP_RING,
-          // The sidebar's own hover surface, because `:hover` does not update during a native
-          // drag — the pointer is holding something, so the browser stops answering that
-          // question and the entry under it would otherwise look like every other one.
-          over && "bg-bg text-text",
+          over && DROP_OVER,
         )}
       >
         <Icon className="size-4 shrink-0" aria-hidden="true" />

@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { readDragData, type DragPayload } from "@/features/decks/dnd";
-import { deckDetailKey } from "@/features/decks/useDeck";
-import { ipc, ipcError, type DeckDetail } from "@/lib/ipc";
-import { queryClient } from "@/lib/query";
+import { useDeck } from "@/features/decks/useDeck";
+import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -18,7 +17,7 @@ import { useAppStore } from "@/lib/store";
 export const REPORT_MS = 4000;
 
 /** What the Decks entry says while it cannot take a card, on the one gesture that asks. */
-export const NO_OPEN_DECK = "Open a deck to drop cards into it";
+const NO_OPEN_DECK = "Open a deck to drop cards into it";
 
 /** The two sidebar entries a card can be let go on. The collection is deliberately not one:
  *  `collection_add` carries a finish, a condition and a language that a drop cannot answer,
@@ -48,64 +47,51 @@ export interface SidebarDrop {
  * differs is the write, not the acceptance: a deck row dropped on Wishlist is a wish for that
  * printing, exactly as a search tile is.
  *
- * The mutations are defined here rather than reached for from `useDeck`, and the module's own
- * `queryClient` is passed to both rather than taken from a provider. Two reasons, and they are
- * the shell's, not this hook's: `AppShell` renders in its own tests with no provider around it
- * (`useSyncInvalidation` made the same call for the same reason), and a mutation observer here
- * is a mutation observer the deck editor cannot see — TanStack shares a query's cache between
- * observers and a mutation's state with nobody. That second one is why the deck write
- * invalidates `["decks"]` **on its refusal too**: a press against a deck another view has
- * deleted answers `GONE`, and the editor's own refused-write family (`DeckEditor`'s `lastOfAny`)
- * would never hear about it. `useDeck`'s `swapPrinting` carries the same rule for the same
- * reason, from the card pane.
+ * **The deck write is `useDeck`'s, mounted whole, exactly as {@link useSwapFromPane} mounts it
+ * for the card pane** — the second surface outside the editor to reach a deck write, and the
+ * same answer for the same reasons. The query it brings along is the `["decks", "detail", id]`
+ * the editor is already reading (a deck can only be open with an editor mounted, and TanStack
+ * shares a query's cache between observers), so it costs no `deck_get` and hands back the
+ * deck's *name* for the sentence below. And the refusal rule that carries a GONE from here back
+ * to the editor's columns lives on the mutation's single definition rather than on this call
+ * site: two definitions would be two places to keep one rule.
+ *
+ * What this surface owns is the **reporting** — which is why the sentences are attached as
+ * per-call callbacks on `mutate` rather than folded into the definition. A drop reports where
+ * the reader dropped it; the write and its refusal rule belong to the deck.
+ *
+ * `null` mounts an idle mutation and a query that asks for nothing, the shape the gallery's
+ * `useDeck(null)` already has.
  */
 export function useSidebarDrops() {
   const openDeckId = useAppStore((s) => s.openDeckId);
+  const queryClient = useQueryClient();
+  const deck = useDeck(openDeckId);
   /** A card is in the air somewhere in the window — what raises the ring. */
   const [dragging, setDragging] = useState(false);
   /** The one sentence the sidebar is saying, and which entry is saying it. One at a time,
    *  because one drop happens at a time. */
   const [report, setReport] = useState<{ at: SidebarTargetId; text: string } | null>(null);
 
-  const addToDeck = useMutation(
-    {
-      // `main`, and one copy: the docked panel's Add button's write. A sidebar entry is a
-      // destination rather than a form, and the deck's own columns are where a reader who
-      // means the sideboard drops a card.
-      mutationFn: ({ deckId, cardId }: { deckId: number; cardId: string; deckName: string }) =>
-        ipc.deckAddCard(deckId, cardId, "main", 1),
-      onSuccess: (_change, { deckName }) => {
-        // `allocate_deck` runs inside the add's transaction, so every `ownedQuantity` in the
-        // open deck may have moved — the whole root, exactly as the editor's writes take.
-        void queryClient.invalidateQueries({ queryKey: ["decks"] });
-        setReport({ at: "decks", text: `Added to ${deckName}.` });
-      },
-      onError: (error) => {
-        void queryClient.invalidateQueries({ queryKey: ["decks"] });
-        setReport({ at: "decks", text: ipcError(error) });
-      },
+  const addWish = useMutation({
+    // The printing that was dragged, pinned — the reader was looking at *this* one — and no
+    // finish, which is the wishlist's own default and the only honest answer a drop has.
+    //
+    // Defined here where the deck's write is borrowed, because there is nothing to borrow: the
+    // wishlist's own view owns a stepper and a removal, and the quick-add's is inside the
+    // popup that asks for a finish. This is the first write that adds a wish from a gesture.
+    mutationFn: (cardId: string) => ipc.wishlistAdd({ cardId, quantity: 1 }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      // A result row draws `wishlisted`, so the heart on every printing of this card has
+      // just changed. No `["collection"]`: a wish moves no copies.
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      setReport({ at: "wishlist", text: "Added to wishlist." });
     },
-    queryClient,
-  );
-
-  const addWish = useMutation(
-    {
-      // The printing that was dragged, pinned — the reader was looking at *this* one — and no
-      // finish, which is the wishlist's own default and the only honest answer a drop has.
-      mutationFn: (cardId: string) => ipc.wishlistAdd({ cardId, quantity: 1 }),
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-        // A result row draws `wishlisted`, so the heart on every printing of this card has
-        // just changed. No `["collection"]`: a wish moves no copies.
-        void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
-        setReport({ at: "wishlist", text: "Added to wishlist." });
-      },
-      // No invalidation on the way out, where the deck's write has one: a refused wish wrote
-      // nothing and deleted nothing, so there is no list on screen that has gone wrong.
-      onError: (error) => setReport({ at: "wishlist", text: ipcError(error) }),
-    },
-    queryClient,
-  );
+    // No invalidation on the way out, where the deck's write has one: a refused wish wrote
+    // nothing and deleted nothing, so there is no list on screen that has gone wrong.
+    onError: (error) => setReport({ at: "wishlist", text: ipcError(error) }),
+  });
 
   // A card in the air anywhere in the window, and the last sentence taken down as the next one
   // is picked up. `onDrop` fires for a cancelled drag as well as a completed one — the platform
@@ -132,25 +118,31 @@ export function useSidebarDrops() {
     return () => clearTimeout(timer);
   }, [report]);
 
-  const writeToDeck = addToDeck.mutate;
+  const writeToDeck = deck.addCard.mutate;
+  // Whatever the shared read last answered. `useSwapFromPane` reads `deckGone` off the same
+  // query for the same reason: with an editor open there is always an answer here.
+  const deckName = deck.deck?.name;
   const dropOnDecks = useCallback(
     (payload: DragPayload) => {
       // Unreachable: the entry refuses the drop with no deck open. A fence rather than a path,
-      // and the alternative is `deck_add_card` addressed to deck `null`.
+      // and the alternative is `deck_add_card` addressed to deck `null` (which `opened` throws
+      // on, into a mutation state nothing here draws).
       if (openDeckId === null) return;
-      writeToDeck({
-        deckId: openDeckId,
-        cardId: payload.cardId,
-        // Read out of the editor's own cached deck, at the moment it is needed rather than
-        // watched: a deck can only be open with its editor mounted, so the read that filled
-        // this has already happened. The fallback is the sliver where it has not — the drop
-        // still writes, and the sentence says what it can.
-        deckName:
-          queryClient.getQueryData<DeckDetail | null>(deckDetailKey(openDeckId))?.deck.name ??
-          "the open deck",
-      });
+      writeToDeck(
+        // `main`, and one copy: the docked panel's Add button's write. A sidebar entry is a
+        // destination rather than a form, and the deck's own columns are where a reader who
+        // means the sideboard drops a card.
+        { cardId: payload.cardId, zone: "main", quantity: 1 },
+        {
+          // The fallback is the sliver where the editor's read has not landed yet — the drop
+          // still writes, and the sentence says what it can.
+          onSuccess: () =>
+            setReport({ at: "decks", text: `Added to ${deckName ?? "the open deck"}.` }),
+          onError: (error) => setReport({ at: "decks", text: ipcError(error) }),
+        },
+      );
     },
-    [openDeckId, writeToDeck],
+    [openDeckId, writeToDeck, deckName],
   );
 
   const writeWish = addWish.mutate;
@@ -159,12 +151,13 @@ export function useSidebarDrops() {
     [writeWish],
   );
 
+  const noDeck = openDeckId === null;
   return {
     /** True while a card this app dragged is in the air — what puts the ring up. */
     dragging,
     decks: {
-      eligible: openDeckId !== null,
-      inertReason: NO_OPEN_DECK,
+      eligible: !noDeck,
+      inertReason: noDeck ? NO_OPEN_DECK : null,
       report: report?.at === "decks" ? report.text : null,
       onDrop: dropOnDecks,
     } satisfies SidebarDrop,

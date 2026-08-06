@@ -87,8 +87,10 @@ export interface Sync {
  * as soon as that promise settles, instead of waiting for the poll timer.
  *
  * Plain hooks rather than TanStack Query: this is one endpoint with a bespoke merge rule
- * and an adaptive interval, and keeping it out of the query cache means `AppShell` needs
- * no provider to be rendered or tested.
+ * and an adaptive interval, and neither is what a query cache is for. (It also used to mean
+ * `AppShell` needed no provider at all; that stopped being true when the sidebar's nav
+ * entries became drop targets and started writing to a deck and the wishlist. This hook is
+ * unchanged either way — the reason above is the one that was load-bearing.)
  */
 export function useSync(): Sync {
   const [status, setStatus] = useState<SyncStatus | null>(null);

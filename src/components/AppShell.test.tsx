@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, useRef, type ReactElement } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckDetail, SyncOutcome, SyncStatus } from "@/lib/ipc";
@@ -11,9 +12,11 @@ const onSyncProgress = vi.hoisted(() => vi.fn());
 // the reconcile event on the way up. Mocked because a `.catch` cannot catch the
 // synchronous `TypeError` of calling `undefined`.
 const onCollectionReconciled = vi.hoisted(() => vi.fn());
-/** The two writes a card dropped on the sidebar means. */
+/** The two writes a card dropped on the sidebar means, and the read that names the open
+ *  deck — the sidebar borrows `useDeck`, so the shell asks for a deck like the editor does. */
 const deckAddCard = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+const deckGet = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -24,16 +27,29 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     searchCards: vi.fn(),
     deckAddCard,
     wishlistAdd,
+    deckGet,
   },
 }));
 
-import { AppShell, DROP_RING } from "./AppShell";
+import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
 import { REPORT_MS } from "./useSidebarDrops";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
-import { deckDetailKey } from "@/features/decks/useDeck";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { startDrag } from "@/test-drag";
+
+/**
+ * The shell, under the app's own query client.
+ *
+ * It used to render bare, and the two hooks that avoid `useQueryClient` say so as their
+ * reason. It cannot any more: the sidebar's Decks entry borrows `useDeck`'s write and the
+ * read that names the deck, which is a provider's job — and `App` has always wrapped the shell
+ * in exactly this client, so this is what the shell really renders in. The *module's* client
+ * rather than a fresh one per test, so a query seeded here is the one the sidebar reads and
+ * `invalidate` below is the spy it fires.
+ */
+const render = (ui: ReactElement) =>
+  renderBare(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 
 const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   cardCount: 116_568,
@@ -60,11 +76,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/**
- * The shell reaches for the module's own client (`useSyncInvalidation`'s reason: it renders
- * here with no provider around it), so this is the cache the sidebar's drops write through —
- * spied once, cleared per test, rather than re-wrapped each time.
- */
+/** The cache every write here settles through, spied once and cleared per test rather than
+ *  re-wrapped in each one. */
 const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
 beforeEach(() => {
@@ -79,6 +92,7 @@ beforeEach(() => {
   onCollectionReconciled.mockReset().mockResolvedValue(() => {});
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  deckGet.mockReset().mockResolvedValue(null);
 });
 
 it("renders nav and refresh button", async () => {
@@ -322,13 +336,21 @@ describe("the sidebar's drop targets", () => {
   const report = (label: string) =>
     within(entry(label).parentElement as HTMLElement).getByRole("status");
 
-  /** Only the name is read out of it, and only to say which deck a card landed in. */
+  /**
+   * A deck open in the editor, as the sidebar sees it: the store's id, and the detail the
+   * editor's own `deck_get` has already put in the cache.
+   *
+   * Seeded rather than only mocked, and the key is spelled out rather than imported: the
+   * sidebar shares `["decks", "detail", id]` with the editor, and a test that writes it by
+   * hand is a test that would notice the day the two stopped meaning the same thing. Fresh
+   * data (the client's `staleTime` is 30 s) so the name is there on the first render — no
+   * `deck_get` needed, exactly as with an editor already up. Only the name is read.
+   */
   const openDeck = (id: number, name: string) => {
+    const detail = { deck: { id, name }, cards: [] } as unknown as DeckDetail;
     useAppStore.setState({ openDeckId: id });
-    queryClient.setQueryData(deckDetailKey(id), {
-      deck: { id, name },
-      cards: [],
-    } as unknown as DeckDetail);
+    queryClient.setQueryData(["decks", "detail", id], detail);
+    deckGet.mockResolvedValue(detail);
   };
 
   it("rings the entries a card can land on, and stands the ring down when the drag is cancelled", async () => {
@@ -345,6 +367,32 @@ describe("the sidebar's drop targets", () => {
 
     expect(entry("Decks")).not.toHaveClass("ring-accent");
     expect(entry("Wishlist")).not.toHaveClass("ring-accent");
+  });
+
+  /** Which of the ringed pair is about to take the card. Drawn from the drop target's own
+   *  enter and leave, because `:hover` does not update while the pointer is holding something. */
+  it("marks the entry the card is actually over, and unmarks it on the way out", async () => {
+    const held = await pickUp();
+    const wishlist = entry("Wishlist");
+
+    await held.over(wishlist);
+    expect(wishlist).toHaveClass(DROP_OVER);
+
+    await held.leave();
+    expect(wishlist).not.toHaveClass(DROP_OVER);
+    await held.cancel();
+  });
+
+  /** The docked panel's tiles carry their own kind, and they are the drag that reaches the
+   *  Decks entry most often: the panel is the one card surface an open editor coexists with. */
+  it("takes the docked panel's own payload", async () => {
+    openDeck(7, "Burn");
+    const held = await pickUp({ kind: "search-card", cardId: "c-bolt", name: "Lightning Bolt" });
+
+    await held.over(entry("Decks"));
+    await held.drop();
+
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", "main", 1));
   });
 
   it("leaves Decks inert while no deck is open, and says why", async () => {

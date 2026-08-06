@@ -50,8 +50,10 @@ function ActiveView() {
  * The whole app.
  *
  * `QueryClientProvider` is here rather than in `main.tsx` so that any test can render
- * `<App />` and get the real caching behaviour; `AppShell` deliberately needs no
- * provider of its own (see `useSync`).
+ * `<App />` and get the real caching behaviour — and it is above `AppShell` rather than
+ * inside the view, because the shell writes to the cache too now: the sidebar's Decks and
+ * Wishlist entries are drop targets, and the deck one borrows the editor's own write
+ * (`useSidebarDrops`).
  *
  * The card pane is docked *beside* the view rather than drawn over it: the list it came
  * from stays live, scrollable and clickable, so opening a second card is one click rather

@@ -29,15 +29,6 @@ function opened(id: number | null): number {
 }
 
 /**
- * Where one deck's detail is cached — one spelling, every side of the lookup.
- *
- * Exported because the editor is not the only reader: the sidebar's drop reads the open
- * deck's *name* out of this cache to say where a card landed (`useSidebarDrops`), and a key
- * written out a second time is a key that can drift from this one silently.
- */
-export const deckDetailKey = (id: number | null) => ["decks", "detail", id];
-
-/**
  * One deck, everything in it, and every write that changes what is in it.
  *
  * **One query, not three.** The editor, the mana curve and the legality panel all read
@@ -52,7 +43,7 @@ export const deckDetailKey = (id: number | null) => ["decks", "detail", id];
 export function useDeck(id: number | null) {
   const queryClient = useQueryClient();
 
-  const detailKey = deckDetailKey(id);
+  const detailKey = ["decks", "detail", id];
 
   const query = useQuery({
     queryKey: detailKey,
@@ -119,11 +110,26 @@ export function useDeck(id: number | null) {
    * **Not the stepper's** — see {@link useDeck}'s `setQuantity`. This one reads `cards` to
    * denormalize the printing onto the row it inserts, so it refuses a card the database does
    * not have.
+   *
+   * **`["decks"]` again when it is refused**, which it shares with `swapPrinting` below and for
+   * that rule's reason: this definition has a second call site outside the editor. The sidebar's
+   * Decks entry is a drop target from any view (`useSidebarDrops`), and TanStack shares a
+   * query's cache between observers and a mutation's state with nobody — so a press made there
+   * lands in *that* observer's error state and the editor's refused-write family
+   * (`DeckEditor`'s `lastOfAny`) stays idle. Every refusal here is either a busy database or a
+   * deck that has been deleted (`touch_deck` answers GONE), and the second must not leave the
+   * zone columns painting a deck that is not there. The refetch reaches the editor whoever
+   * pressed, because `["decks"]` is a prefix of the detail key it is reading.
+   *
+   * It costs the editor's *own* refused adds a second, forced re-read — `lastOfAny` fires one
+   * too. Task 4 accepted exactly that for `swapPrinting`: a refusal is rare, and a dead deck
+   * left painted is not a cost that trades against it.
    */
   const addCard = useMutation({
     mutationFn: ({ cardId, zone, quantity }: Slot & { quantity: number }) =>
       ipc.deckAddCard(opened(id), cardId, zone, quantity),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 
   /**

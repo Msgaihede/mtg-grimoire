@@ -62,9 +62,11 @@ function invalidateAll(): void {
  *
  * Takes the progress event as a **prop** rather than calling `useSyncProgress` itself:
  * that hook is one `listen` registration per call and `AppShell` is deliberately its only
- * caller. It uses the module's `queryClient` rather than `useQueryClient` for the same
- * reason `useSync` avoids the cache entirely — `AppShell` renders in its own tests with no
- * provider around it.
+ * caller. It uses the module's `queryClient` rather than `useQueryClient`, which was once
+ * because the shell rendered under no provider at all; since the sidebar's drop targets
+ * landed it renders under one, and the two are **the same object** — `App` provides this
+ * client and the shell's tests wrap it in this client. Left as the direct import because
+ * what fires it is an event listener rather than a render.
  */
 export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
   // The *phase*, not the event: `sync:progress` lands a new object every batch of an
