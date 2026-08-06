@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RarityGem } from "@/components/RarityGem";
-import { CARD_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
+import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
+import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
 
@@ -250,16 +251,6 @@ export function CardGrid<T extends GridCard>({
 }
 
 /**
- * What a tile is doing about its image.
- *
- * There is no separate loading state: the empty 5:7 frame *is* the placeholder, and it is
- * already on screen: the art draws into it when the bytes arrive. A shimmer over 40 of
- * these would be the only animation on the page, in the one view whose whole argument is
- * that the art is the loudest thing in it.
- */
-type TileState = "showing" | "waiting" | "failed";
-
-/**
  * One card, as art.
  *
  * The chrome is a caption and a focus ring. The rarity is a 6px gem — the only colour in
@@ -283,44 +274,13 @@ function Tile<T extends GridCard>({
   action?: (card: T) => ReactNode;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
 }) {
-  const [state, setState] = useState<TileState>("showing");
-  const [attempt, setAttempt] = useState(0);
-  const [shown, setShown] = useState(card.id);
   const mark = badge?.(card);
 
-  // This component belongs to a *slot* in the grid, not to a card, so a new search hands
-  // it a different card without remounting it. Resetting during render is React's own
-  // answer to that: an effect would paint one frame of the last card's failure over the
-  // new card's art.
-  if (shown !== card.id) {
-    setShown(card.id);
-    setState("showing");
-    setAttempt(0);
-  }
-
-  // The self-healing half of the rate limit. A 429 in the image fetcher makes every
-  // uncached tile fail fast with a 503 + `Retry-After`, and an `<img>` that errors once
-  // stays broken for the session — so the tile comes back on its own, twice, on a
-  // doubling delay that starts no sooner than the floor the protocol clamps its own
-  // penalty to and is dithered so a screenful of them does not return in one tick.
-  //
-  // Twice, because a lockout longer than the floor swallows the first attempt whole: at
-  // `Retry-After: 60` the tile comes back at ~30 s, meets a gate that is still shut, and
-  // a single-shot schedule would leave it on "No image" over a lockout that ended half a
-  // minute later. One timer per tile at a time either way. After the second the tile
-  // waits to be asked: scrolling it out of view and back is a remount, which is a reader
-  // saying "now".
-  useEffect(() => {
-    if (state !== "waiting") return;
-    const next = attempt + 1;
-    const timer = setTimeout(() => {
-      setAttempt(next);
-      setState("showing");
-    }, imageRetryDelayMs(next));
-    return () => clearTimeout(timer);
-  }, [state, attempt]);
-
-  const url = cardImageUrl(card.id, 0, "grid");
+  // The self-healing half of the rate limit, and the reset that goes with it: this component
+  // belongs to a *slot* in the grid rather than to a card, so a new search hands it a
+  // different card without remounting it, and the last card's failure must not be the new
+  // card's. Both live in the hook — see it for why a failed image comes back twice.
+  const image = useImageRetry(cardImageUrl(card.id, 0, "grid"));
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -357,15 +317,12 @@ function Tile<T extends GridCard>({
             )}
             style={{ aspectRatio: CARD_ASPECT }}
           >
-            {state === "showing" ? (
+            {image.src ? (
               <img
                 // The name, not "card image": this string is what a screen reader announces
                 // and what shows when a fetch fails, and both readers want the card.
                 alt={card.name}
-                // The retry is a different URL so nothing between here and the handler can
-                // answer it from whatever it made of the failure. The query string is not
-                // part of the path the protocol parses, so it changes nothing else.
-                src={attempt === 0 ? url : `${url}?retry=${attempt}`}
+                src={image.src}
                 // 117 k results is 117 k requests if every mounted tile fetches eagerly. The
                 // virtualizer bounds the DOM; this bounds what the DOM asks for.
                 loading="lazy"
@@ -377,7 +334,7 @@ function Tile<T extends GridCard>({
                 // handed the tile and cannot reach this. Nothing is lost: an `mtgimg:` URL
                 // means nothing outside this window.
                 draggable={false}
-                onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
+                onError={image.onError}
                 className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
               />
             ) : (
@@ -387,7 +344,7 @@ function Tile<T extends GridCard>({
               <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
                 <span className="line-clamp-3 text-xs">{card.name}</span>
                 <span className="text-[0.7rem] text-dim">
-                  {state === "waiting" ? "Retrying…" : "No image"}
+                  {image.retrying ? "Retrying…" : "No image"}
                 </span>
               </span>
             )}

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Archive, ArchiveRestore, ChevronRight, Copy, Plus, Trash2 } from "lucide-react";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { ART_ASPECT, cardImageUrl, imageRetryDelayMs, IMAGE_RETRY_LIMIT } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { useDecks, type Decks } from "./useDecks";
 import { useFormatSpecs } from "./useFormatSpecs";
@@ -411,61 +412,32 @@ function DeckTile({
 /**
  * What a cover is doing about its image — `CardGrid`'s `Tile`, in the one shape a deck needs.
  *
- * Not shared with it, because the two disagree about what a failure *looks* like: a card tile
- * falls back to the card's own name inside the frame, while a deck tile already has its name
- * in the caption underneath and needs the frame to say what happened instead. What is shared
- * is the schedule (`imageRetryDelayMs`) and the reason for it: an `<img>` that errors once
- * stays broken for the session, and a 429 in the fetcher fails every uncached image fast with
- * a 503 — so the frame comes back on its own, twice, on a dithered doubling delay that never
- * starts sooner than the floor the protocol clamps its own penalty to. Without this a rate
- * limit left a gallery of silent grey rectangles that only a restart could fill.
+ * The frame is its own, because the two disagree about what a failure *looks* like: a card
+ * tile falls back to the card's own name inside the frame, while a deck tile already has its
+ * name in the caption underneath and needs the frame to say what happened instead — and it has
+ * a third thing to say, "No cover", which is not a failure at all. What is shared is
+ * {@link useImageRetry}: the schedule, and the reason for it. A deck that changes its cover
+ * hands this component a different id without remounting it, which is exactly the reset the
+ * hook does — latent until Task 12's "Set as cover", and a divergence here would bite there.
  */
 function Cover({ cardId }: { cardId: string | null }) {
-  const [state, setState] = useState<"showing" | "waiting" | "failed">("showing");
-  const [attempt, setAttempt] = useState(0);
-  const [shown, setShown] = useState(cardId);
-
-  // The other half of `CardGrid`'s pattern, and the half that is easy to leave behind because
-  // nothing today needs it: this component belongs to a *tile*, not to a printing, so a deck
-  // that changes its cover hands it a different id without remounting it. Without the reset,
-  // the new art would inherit the old one's failure — a frame stuck on "No image" over a
-  // picture that is perfectly fetchable. Reset during render is React's own answer to it; an
-  // effect would paint one frame of the last cover's failure over the new cover's art. Latent
-  // until Task 12's "Set as cover", which is exactly when a divergence here would bite.
-  if (shown !== cardId) {
-    setShown(cardId);
-    setState("showing");
-    setAttempt(0);
-  }
-
-  useEffect(() => {
-    if (state !== "waiting") return;
-    const next = attempt + 1;
-    const timer = setTimeout(() => {
-      setAttempt(next);
-      setState("showing");
-    }, imageRetryDelayMs(next));
-    return () => clearTimeout(timer);
-  }, [state, attempt]);
-
   const url = cardId ? cardImageUrl(cardId, 0, "art") : null;
+  const image = useImageRetry(url);
 
   return (
     <span
       className="grid w-full place-items-center overflow-hidden rounded-lg bg-surface"
       style={{ aspectRatio: ART_ASPECT }}
     >
-      {url && state === "showing" ? (
+      {image.src ? (
         <img
           // Decorative: the deck's name is in the caption two lines down, and an `alt` here
           // would announce the tile twice.
           alt=""
-          // The retry is a different URL so nothing between here and the handler can answer
-          // it from whatever it made of the failure.
-          src={attempt === 0 ? url : `${url}?retry=${attempt}`}
+          src={image.src}
           loading="lazy"
           decoding="async"
-          onError={() => setState(attempt < IMAGE_RETRY_LIMIT ? "waiting" : "failed")}
+          onError={image.onError}
           className={cn(
             "size-full object-cover transition-transform duration-150",
             "group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100",
@@ -477,7 +449,7 @@ function Cover({ cardId }: { cardId: string | null }) {
         // not arrive", which are two different things to do something about. Out of the
         // accessible name, which is the deck.
         <span aria-hidden="true" className="text-[0.7rem] text-dim">
-          {!url ? "No cover" : state === "waiting" ? "Retrying…" : "No image"}
+          {!url ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}
     </span>
