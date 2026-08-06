@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 
@@ -582,6 +582,16 @@ it("says a refused swap in the pane, and the deck behind it goes with it", async
   expect(
     await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
   ).toBeInTheDocument();
+
+  // **And the caret is still somewhere.** This refusal is a deleted deck, so the re-read it
+  // triggers turns every offer off — including the button the reader pressed, which by then has
+  // taken the caret back and is unmounted with it. The pane is where the sentence they are
+  // reading lives, so the pane takes the caret: Escape still closes what is in front of them
+  // and the next Tab does not restart from the top of the app.
+  await waitFor(() =>
+    expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus(),
+  );
+  expect(within(pane).getByRole("alert")).toBeInTheDocument();
 });
 
 /**
@@ -639,6 +649,19 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
   deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 3 });
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
   searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  // **The printing the swap moves to is a card this pane has never read.** Held open, so the
+  // replacing pane spends the whole assertion below in the state it really mounts in: no
+  // `card.data`, and therefore no art, no facts and no printings list. Whatever says what the
+  // write did has to be outside all of that — the announcement is a change *inside a mounted
+  // region*, and a region that first appears with its sentence already in it announces nothing.
+  let arrive!: (card: CardDetail) => void;
+  cardDetail.mockImplementation((id: string) =>
+    id === "c1"
+      ? Promise.resolve(BOLT_DETAIL)
+      : new Promise<CardDetail>((resolve) => {
+          arrive = resolve;
+        }),
+  );
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: "Decks" }));
   await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
@@ -646,12 +669,25 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
   await userEvent.click(screen.getAllByRole("button", { name: "Lightning Bolt" })[0]);
 
   const pane = await screen.findByRole("complementary", { name: /card details/i });
+  // The region exists before there is anything to say — on a pane whose card has arrived and
+  // whose reader has done nothing. That is the half of the shape a text assertion cannot see.
+  expect(within(pane).getByRole("status")).toBeEmptyDOMElement();
+
   await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
 
-  // Said in the pane that replaced the one the press was made in, on the row that is now the
-  // deck's — a live region drawn empty of this sentence on its first commit and filled one
-  // commit later, which is the only shape a screen reader announces.
-  expect(await screen.findByText(/folded into one row of 3 in Main deck/i)).toBeInTheDocument();
+  const swapped = await screen.findByRole("complementary", { name: /card details/i });
+  expect(within(swapped).getByRole("status")).toHaveTextContent(
+    "Folded into one row of 3 in Main deck.",
+  );
+  // …while the card itself is still on its way, which is what pins the region to the pane's
+  // shell: everything below the heading is drawn behind `card.data`.
+  expect(within(swapped).getByRole("heading", { level: 2 })).toHaveTextContent("Loading…");
+  expect(within(swapped).queryByText(/printings/i)).not.toBeInTheDocument();
+
+  act(() => arrive(BOLT_DETAIL));
+  // And the deck's mark is plain text again once the list is back: the sentence belongs to the
+  // write, not to the row.
+  expect(await within(swapped).findByText("This deck uses this printing")).toBeInTheDocument();
 
   // What a browser does to a control that disables itself and jsdom does not: the caret is on
   // `<body>` by the time the pane is re-keyed.

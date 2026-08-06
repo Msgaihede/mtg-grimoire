@@ -114,7 +114,16 @@ export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
  */
 export const DECK_CARD_ATTR = "data-deck-card";
 
-/** The value of {@link DECK_CARD_ATTR} for one slot — one spelling, both sides of the lookup. */
+/**
+ * The value of {@link DECK_CARD_ATTR} for one slot — one spelling, both sides of the lookup.
+ *
+ * **No deck id, because one editor is mounted at a time**: `openDeckId` is a single id, and
+ * `setOpenDeckId` clears `paneDeckContext` in the same write — so every marked control on the
+ * page belongs to the deck the context names, and the pane's document-wide `querySelector` is
+ * deck-scoped by construction. The day two editors can be on screen at once, this gains a
+ * `deckId` and the pane's lookup passes it: zone and card alone would then match a slot in a
+ * deck the reader was not working in.
+ */
 export function deckCardSlot(zone: DeckZone, cardId: string): string {
   return `${zone}:${cardId}`;
 }

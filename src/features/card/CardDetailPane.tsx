@@ -64,7 +64,9 @@ let handover: { cardId: string; report: string | null } | null = null;
  * from a deck row closes and the control it was opened from has been replaced.
  *
  * The card ids this interpolates are Scryfall UUIDs and the zones are a five-value enum, so
- * there is nothing here a quoted attribute selector can be broken by.
+ * there is nothing here a quoted attribute selector can be broken by. The search is
+ * document-wide and does not name a deck, which is safe for as long as one editor is mounted at
+ * a time — see {@link deckCardSlot}, which is where that assumption is written down.
  */
 function deckControlFor(row: PaneDeckContext | null): HTMLElement | null {
   if (!row) return null;
@@ -99,9 +101,6 @@ interface SwapOffer {
    * explaining that down with the buttons it explains.
    */
   gone: boolean;
-  /** What the swap that opened *this* pane did, when it did something worth saying — a fold.
-   *  It reaches here through {@link handover}, because the write re-keyed the pane. */
-  report: string | null;
   onUse: (printingId: string) => void;
 }
 
@@ -179,10 +178,12 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     // read by whichever card the reader opened next.
     handover = null;
     // **The second commit is the feature here, not a cost to be optimised away.** This sentence
-    // goes into a live region (the mark on the deck's row), and a region that appears together
-    // with its text announces nothing — it has to be mounted first and change afterwards, which
-    // is exactly what a state write from a mount effect does. Reading the handover during render
-    // instead would fill the region on its first commit and silence it.
+    // goes into the live region in the shell above — mounted and empty on this pane's *first*
+    // commit, whatever the card query is doing — and a region that appears together with its
+    // text announces nothing. It has to be mounted first and change afterwards, which is
+    // exactly what a state write from a mount effect is. Reading the handover during render
+    // instead would fill the region on commit one and silence it; so would drawing the region
+    // anywhere behind `card.data`, which after a re-key is a fetch away (see the region).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (passed?.cardId === cardId) setReport(passed.report);
     const active = document.activeElement as HTMLElement | null;
@@ -261,6 +262,25 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     [deckRow, swapping, startSwap, openCardFromDeck],
   );
 
+  // **The caret, one step after the refusal took it back.**
+  //
+  // A refused swap is usually a deck that has been deleted: the button re-enables itself and
+  // takes the caret (see `DeckLine`), then the `onError` re-read lands, `deckGone` turns true,
+  // and every button in the list — including the one now holding the caret — is unmounted. That
+  // drops it to `<body>` with the refusal still on screen, which is the same stranding the
+  // hand-back exists to prevent, one commit later. The pane is where that sentence lives, so
+  // the pane takes the caret: Escape still closes what the reader is reading, and Tab carries
+  // on from here rather than from the top of the app.
+  //
+  // Only out of `<body>`, like every other hand-back in this file — a reader who has moved on
+  // owns where they are — and only where there is a refusal to read.
+  const refusedSwap = swap.isError;
+  useEffect(() => {
+    if (deckGone && refusedSwap && document.activeElement === document.body) {
+      paneRef.current?.focus();
+    }
+  }, [deckGone, refusedSwap]);
+
   const offer: SwapOffer | null = deckRow && {
     row: deckRow,
     pendingId: swapping ? (swap.variables?.toCardId ?? null) : null,
@@ -269,7 +289,6 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
         ? { printingId: swap.variables.toCardId, reason: ipcError(swap.error) }
         : null,
     gone: deckGone,
-    report,
     onUse: usePrinting,
   };
 
@@ -320,6 +339,26 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
           <X className="size-4" aria-hidden="true" />
         </button>
       </div>
+
+      {/* What the write that opened this pane did — and the pane's **live region**, which is
+          why it is out here in the shell rather than beside the mark it is about.
+
+          A region has to be mounted *before* its text arrives or nothing announces it (this
+          app's own rule, kept the same way by `SearchPage`, `WishlistPage` and
+          `AddToCollection`: mounted for the life of the surface, empty until there is something
+          to say). Everything below this point is behind `card.data`, and a swap re-keys the
+          pane onto a printing whose detail has not been fetched yet — so a region drawn down
+          there would first appear several commits later with its sentence already inside it,
+          which announces nothing. Here it exists on the first commit of every pane, and the
+          mount effect fills it on the second.
+
+          `sr-only` while empty rather than hidden: `display: none` takes a region out of the
+          accessibility tree, and a region that has to be put back is a region that was never
+          mounted. Absolutely positioned, so an empty one costs no space in this `space-y-4`
+          column either. */}
+      <p role="status" className={cn("text-xs text-dim", !report && "sr-only")}>
+        {report}
+      </p>
 
       {card.isError && (
         <p role="alert" className="text-sm text-destructive">
@@ -764,18 +803,11 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
         // dim the rest of the row's facts are set in: it is a fact about the deck, not a
         // control, and dressing it as one that cannot be pressed would be worse than saying it.
         //
-        // **And it is the pane's live region**, which is why it is `role="status"` for a
-        // sentence that mostly never changes. A swap re-keys this whole pane, so a report
-        // rendered by the pane that made the write goes with it — but the pane that *replaces*
-        // it draws this line on its first commit and the mount effect fills in what the write
-        // did one commit later, which is a change inside a mounted region and therefore the
-        // one shape a screen reader announces. (A region that appears together with its text
-        // announces nothing — `DeckSearchPanel`'s note, and the reason this is not a fresh
-        // element beside the mark.)
-        <p role="status" className="text-right text-[0.7rem] text-dim">
-          This deck uses this printing
-          {swap.report && <> — {swap.report}</>}
-        </p>
+        // **Static, and not the pane's live region.** What a swap *did* — a fold — is said in
+        // the shell (see the region under the heading): this list is drawn behind `card.data`,
+        // and after a re-key that data is a fetch away, so a region here would first appear with
+        // its sentence already in it and announce nothing.
+        <p className="text-right text-[0.7rem] text-dim">This deck uses this printing</p>
       ) : (
         <button
           ref={buttonRef}
