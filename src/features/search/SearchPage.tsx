@@ -4,6 +4,7 @@ import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import type { DragPayload } from "@/features/decks/dnd";
 import { parseFinishes } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
@@ -34,6 +35,23 @@ const HEADER_HEIGHT = 36;
  */
 const GRID =
   "grid grid-cols-[minmax(0,2fr)_8rem_minmax(0,1fr)_6rem_6rem_2.5rem] items-center gap-3";
+
+/**
+ * What a tile carries when it is dragged: the printing it draws, and nothing about this view.
+ *
+ * At module scope because it must hold still — the wall re-registers a tile's drag when this
+ * changes identity, and a fresh arrow per render would do that on every scrolled row (see
+ * `CardGrid`'s `dragPayload`).
+ *
+ * The tiles only. The table beside them is the view for *comparing* — five columns of facts
+ * and a price — and a row there is read rather than picked up; the drag sources spec §1 names
+ * are the wall's tiles, the two lists that are inventories, and the pane's printings.
+ */
+const tileDrag = (card: CardSummary): DragPayload => ({
+  kind: "card",
+  cardId: card.id,
+  name: card.name,
+});
 
 /**
  * Keyboard focus on a row, in the shape the rest of the app uses — an outline, never a
@@ -332,6 +350,10 @@ function Results({
             listKey={searchKey}
             selectedId={selectedCardId}
             onSelect={selectCard}
+            // Spec §1's first drag source: a tile is a printing the reader can carry to a
+            // deck's zone or to the sidebar. The click paths beside it — the quick-add below,
+            // the pane the art opens — are unchanged; this is speed, not capability.
+            dragPayload={tileDrag}
             // Spec §7: "'owned' badges appear in search once a wish is fulfilled." Drawn
             // unconditionally because the badge is its own guard — on a browse of the whole
             // database almost every tile has nothing to say, and says nothing.

@@ -3,7 +3,10 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { readDragData } from "@/features/decks/dnd";
 import type { CardDetail, CardFace, Printing, PrintingsResponse } from "@/lib/ipc";
+import { startDrag } from "@/test-drag";
 
 const detail: CardDetail = {
   id: "p1",
@@ -471,6 +474,43 @@ describe("CardDetailPane", () => {
   });
 
   /**
+   * A printings row is *that printing*, and can be carried off the list — spec §1's fourth
+   * source, and the only one where the reader picks a piece of cardboard rather than a card.
+   *
+   * Two rows, two payloads: the id is the row's own and the name is the card's, because a
+   * `Printing` has no name of its own and every row of this list is the same card. A
+   * registration that closed over the pane's card instead would drag ISD 51 from every row,
+   * which is the failure the `draggable="true"` attribute cannot see.
+   */
+  it("carries each printing off its own row", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(
+      page([printing(), printing({ id: "p2", setCode: "2ed", collectorNumber: "162" })]),
+    );
+
+    const { container } = wrap("p1");
+    // A row's line is set, number *and* year, so it is matched loosely — the exact string
+    // "ISD · 51" belongs to the card's own heading above the list.
+    await screen.findByText(/2ED · 162/);
+
+    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    expect(rows).toHaveLength(2);
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    for (const row of rows) {
+      const held = await startDrag(row);
+      await held.cancel();
+    }
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "p1", name: detail.name },
+      { kind: "card", cardId: "p2", name: detail.name },
+    ]);
+  });
+
+  /**
    * The printings list is a second request, and it can fail on its own — a lock, an ingest
    * mid-swap. The card in front of the reader must stay on screen when it does.
    */
@@ -570,6 +610,35 @@ describe("the printings list, opened from a deck row", () => {
       zone: "main",
       cardId: "p2",
     });
+  });
+
+  /**
+   * **A press on "Use this printing" is a press on the button.**
+   *
+   * The row is the drag handle now, and Chromium starts a drag from the nearest draggable
+   * *ancestor* of whatever was pressed — so without the mark, a press here that travelled five
+   * pixels would carry the printing off instead of swapping the deck's row to it, and the
+   * click would never be delivered. This is the one control this list grew after the drag did,
+   * which is exactly the case `cardDraggable`'s marked exclusion exists for.
+   */
+  it("does not drag the row when the press landed on its swap button", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    fromDeckRow();
+
+    wrap("p1");
+    const use = await screen.findByRole("button", { name: /^Use this printing/ });
+    const row = rowOf(use);
+
+    const held = await startDrag(row, { pressOn: use });
+    expect(held.started).toBe(false);
+    await held.cancel();
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
+
+    // And the row itself still is one: the guard is a control's press, not a row's.
+    const again = await startDrag(row, { pressOn: within(row).getByText(/M10 · 146/) });
+    expect(again.started).toBe(true);
+    await again.cancel();
   });
 
   /**

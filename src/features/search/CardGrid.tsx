@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RarityGem } from "@/components/RarityGem";
+import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -96,6 +97,7 @@ export function CardGrid<T extends GridCard>({
   badge,
   action,
   tileRef,
+  dragPayload,
   minTileWidth = TILE_MIN_WIDTH,
 }: {
   rows: T[];
@@ -129,6 +131,24 @@ export function CardGrid<T extends GridCard>({
    * as it did, and the deck editor's search panel is the only caller.
    */
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
+  /**
+   * What a tile carries when it is dragged — and, by being absent, that it cannot be.
+   *
+   * The wall draws the search results *and* the collection, and only the search's tiles are
+   * printings a deck can be built from: a collection tile is an *entry*, whose finish and
+   * condition a drop cannot answer. So this is a prop rather than a behaviour, and a wall
+   * given none registers no drag at all.
+   *
+   * Hold it still (module scope, or a `useCallback`): React detaches and re-runs a callback
+   * ref whose identity changed, so a fresh arrow on every render would tear the registration
+   * down and rebuild it on every scrolled row — and a source that unregisters mid-drag is a
+   * drop that never arrives.
+   *
+   * {@link tileRef} is the lower-level seam beside it, for the one caller that registers its
+   * own drag (the deck editor's docked panel, whose tiles carry a `"search-card"` because they
+   * are inside the editor). Passing both is not wrong — they compose — but nothing needs to.
+   */
+  dragPayload?: (card: T) => DragPayload;
   /**
    * Narrowest a tile may get here, overriding {@link TILE_MIN_WIDTH}.
    *
@@ -241,6 +261,7 @@ export function CardGrid<T extends GridCard>({
                 badge={badge}
                 action={action}
                 tileRef={tileRef}
+                dragPayload={dragPayload}
               />
             ))}
           </div>
@@ -265,6 +286,7 @@ function Tile<T extends GridCard>({
   badge,
   action,
   tileRef,
+  dragPayload,
 }: {
   card: T;
   width: number;
@@ -273,6 +295,7 @@ function Tile<T extends GridCard>({
   badge?: (card: T) => ReactNode;
   action?: (card: T) => ReactNode;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
+  dragPayload?: (card: T) => DragPayload;
 }) {
   const mark = badge?.(card);
 
@@ -284,10 +307,23 @@ function Tile<T extends GridCard>({
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
-  // every render of a tile, and this wall re-renders on every scrolled row.
+  // every render of a tile, and this wall re-renders on every scrolled row. Which is also why
+  // both slots below are the *caller's* to hold still: their identity is in this list.
+  //
+  // The drag reads its payload at `dragstart` rather than closing over one, so a tile handed a
+  // different card without remounting — which is how this wall works, a slot at a time —
+  // carries the card it is drawing now.
   const attach = useCallback(
-    (element: HTMLElement | null) => tileRef?.(card, element),
-    [tileRef, card],
+    (element: HTMLElement | null) => {
+      const detach = tileRef?.(card, element);
+      if (!element || !dragPayload) return detach;
+      const stop = cardDraggable({ element, payload: () => dragPayload(card) });
+      return () => {
+        stop();
+        detach?.();
+      };
+    },
+    [tileRef, dragPayload, card],
   );
 
   return (

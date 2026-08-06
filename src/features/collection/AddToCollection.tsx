@@ -89,6 +89,14 @@ export function AddToCollectionButton({
   return (
     <span
       ref={rootRef}
+      // **A press in here is a press, never a drag of what this sits on.** Three of the four
+      // surfaces this appears on are drag sources now (a search tile, a printings row), and
+      // Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed —
+      // so without the mark a press on the "+" that travelled five pixels would carry the card
+      // off and never open this popup at all. Marked here rather than at each call site
+      // because it is this control's own fact, which is what `dnd.ts`'s rule asks for: anything
+      // that owns its own press marks itself.
+      data-no-drag=""
       // `open` last, so an open popup outlives the hover that revealed its button.
       className={cn("relative inline-flex", className, open && "opacity-100")}
       // Closing on focus leaving covers the click-outside case as well, and does it without

@@ -2,9 +2,12 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { readDragData } from "@/features/decks/dnd";
 import type { WishlistQuery, WishRow } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
+import { startDrag } from "@/test-drag";
 
 const wishlistList = vi.hoisted(() => vi.fn());
 const wishlistSetQuantity = vi.hoisted(() => vi.fn());
@@ -436,5 +439,59 @@ describe("WishlistPage", () => {
     await userEvent.click(await screen.findByText("Ancestral Recall"));
 
     expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * A pinned wish is a printing, and can be carried off the list — spec §1's third source.
+   *
+   * The same rule as opening one, for the same reason: a wish with no `card_id` is for the
+   * *card*, and there is no printing to carry. A drag that started from one would arrive
+   * somewhere carrying an empty id, which addresses every row and no row (`dnd.ts`).
+   */
+  it("drags a pinned wish and leaves an any-printing wish alone", async () => {
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    const { container } = wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Lightning Bolt");
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(rows[0], { pressOn: screen.getByText("Lightning Bolt") });
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "c1", name: "Lightning Bolt" },
+    ]);
+  });
+
+  /**
+   * **A press on the row's removal is a press on the removal.**
+   *
+   * The row is the drag handle, and Chromium starts a drag from the nearest draggable
+   * *ancestor* of what was pressed — so without the mark, a press on the bin that travelled
+   * five pixels would drag the wish and never deliver the click. `cardDraggable` reads where
+   * the press landed, which is why this presses one place and drags from another.
+   */
+  it("does not drag a wish when the press landed on its removal", async () => {
+    const { container } = wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    const row = container.querySelector('[draggable="true"]')!;
+
+    const held = await startDrag(row, {
+      pressOn: screen.getByRole("button", {
+        name: /^Remove Lightning Bolt \(LEA 161, Foil\) from your wishlist/,
+      }),
+    });
+    expect(held.started).toBe(false);
+    await held.cancel();
+
+    // And the row itself still is one: the guard is a control's press, not a row's.
+    const again = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    expect(again.started).toBe(true);
+    await again.cancel();
   });
 });

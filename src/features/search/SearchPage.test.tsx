@@ -2,8 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { readDragData } from "@/features/decks/dnd";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
+import { startDrag } from "@/test-drag";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the page and asks for the set list on the way up, so the
@@ -725,6 +728,59 @@ describe("the result layout toggle", () => {
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAccessibleName(
       "Lightning Bolt",
     );
+  });
+
+  /**
+   * A tile is a printing you can carry somewhere — spec §1's first source.
+   *
+   * The wall is generic, so the payload is built *here*, from the search row: what a tile
+   * carries is the card it draws, and the wall's own tests pin that a caller who says nothing
+   * gets no drag at all. This asks the drag itself rather than the `draggable="true"`
+   * attribute, because a registration that closed over the wrong card would still set it.
+   */
+  it("carries the card a tile draws when the tile is dragged", async () => {
+    const { container } = wrap(<SearchPage />);
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]).toContainElement(art);
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(tiles[0]);
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "1", name: "Lightning Bolt" },
+    ]);
+  });
+
+  /**
+   * The tile's one control keeps its press.
+   *
+   * Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed, so
+   * a press on the quick-add that travels five pixels would drag the tile and never deliver
+   * the click — the popup would simply not open. The mark is the control's own
+   * (`AddToCollectionButton`), which is why this holds on the printings list too. The art
+   * beside it is a button as well and is deliberately still the drag handle: the exclusion is
+   * marked, never guessed from the tag.
+   */
+  it("does not drag a tile when the press landed on its quick-add", async () => {
+    const { container } = wrap(<SearchPage />);
+    const add = await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ });
+    const tile = container.querySelector('[draggable="true"]')!;
+
+    const held = await startDrag(tile, { pressOn: add });
+    expect(held.started).toBe(false);
+    await held.cancel();
+
+    const again = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    expect(again.started).toBe(true);
+    await again.cancel();
   });
 
   it("says which layout is showing", async () => {

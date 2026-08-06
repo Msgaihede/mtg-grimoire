@@ -4,18 +4,27 @@ import type { DeckZone } from "@/lib/ipc";
 /**
  * What a drag is carrying, and the only shape a drop target here will act on.
  *
- * Two kinds, because there are two things a drop can mean: a printing that is not in the deck
- * yet (`deck_add_card`, which folds into whatever the zone already holds) and a row that is
- * (`deck_move_card`, which takes every copy with it). A target reads the kind rather than
- * guessing from what is on screen, so the search panel and a zone column can never be
- * mistaken for each other.
+ * Three kinds, because there are three things a drop can mean: a printing that is not in the
+ * deck yet (`deck_add_card`, which folds into whatever the zone already holds), a row that is
+ * (`deck_move_card`, which takes every copy with it), and a card picked up **anywhere else in
+ * the app** — a search tile, a collection row, a wish, a printings row. A target reads the
+ * kind rather than guessing from what is on screen, so the search panel and a zone column can
+ * never be mistaken for each other.
+ *
+ * `"card"` and `"search-card"` mean the same thing to a zone (one copy, added) and are two
+ * kinds all the same: the panel's tile is *inside* the editor and the other four surfaces are
+ * not, and the day a target wants to know which wall a card came from — the sidebar's own
+ * entries are the first — the answer has to be in the payload rather than deduced from where
+ * the pointer happens to be.
  *
  * Every drag has a click path from Tasks 12–13 — the panel's Add button, the row menu's "Move
- * to", the stepper down to zero. This is speed, not capability.
+ * to", the stepper down to zero, and the quick-add on every surface that carries a `"card"`.
+ * This is speed, not capability.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string }
-  | { kind: "deck-card"; cardId: string; name: string; fromZone: DeckZone };
+  | { kind: "deck-card"; cardId: string; name: string; fromZone: DeckZone }
+  | { kind: "card"; cardId: string; name: string };
 
 /** Where a payload was let go: one of the deck's zones, or the tray that takes cards out. */
 export type DropTarget = { kind: "zone"; zone: DeckZone } | { kind: "remove" };
@@ -34,7 +43,12 @@ export type DeckWrite =
   | { write: "remove"; cardId: string; zone: DeckZone };
 
 /**
- * The mark that says a payload is a deck drag's, and its key.
+ * The mark that says a payload is one of this app's card drags, and its key.
+ *
+ * Named for the deck editor, where the contract was written and where every drop target still
+ * lives; it is the app's card-drag mark now that four surfaces outside the editor carry one,
+ * and the *string* is a fence rather than a description — renaming it would be a rename for
+ * nothing.
  *
  * A drop target is handed whatever the drag is carrying, and the type it is handed is
  * `Record<string, unknown>` — the library's store is untyped by construction, because every
@@ -186,7 +200,7 @@ export function readDragData(data: Record<string, unknown>): DragPayload | null 
   if (data[MARK_KEY] !== MARK) return null;
   const { kind, cardId, name, fromZone } = data;
   if (!isId(cardId) || typeof name !== "string") return null;
-  if (kind === "search-card") return { kind, cardId, name };
+  if (kind === "search-card" || kind === "card") return { kind, cardId, name };
   if (kind === "deck-card" && isZone(fromZone)) return { kind, cardId, name, fromZone };
   return null;
 }
@@ -200,14 +214,17 @@ export function readDragData(data: Record<string, unknown>): DragPayload | null 
  */
 export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite | null {
   if (target.kind === "remove") {
-    // Nothing to remove: a search result is a printing in the database, not a row in this
-    // deck. The tray is only drawn for a deck-card drag for the same reason.
+    // Nothing to remove: a search result — or a card from any other wall — is a printing in
+    // the database, not a row in this deck. The tray is only drawn for a deck-card drag for
+    // the same reason.
     if (payload.kind !== "deck-card") return null;
     return { write: "remove", cardId: payload.cardId, zone: payload.fromZone };
   }
-  if (payload.kind === "search-card") {
+  if (payload.kind === "search-card" || payload.kind === "card") {
     // One copy, exactly as the panel's Add button sends — and `deck_add_card` folds, so
-    // dropping the same card twice is two copies rather than a refusal.
+    // dropping the same card twice is two copies rather than a refusal. The two kinds are one
+    // write here: where a printing was picked up does not change what putting it in a zone
+    // means.
     return { write: "add", cardId: payload.cardId, zone: target.zone };
   }
   // Back where it came from is not a move: it would touch the deck, reallocate and bump

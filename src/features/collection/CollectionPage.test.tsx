@@ -2,9 +2,12 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { readDragData } from "@/features/decks/dnd";
 import type { CollectionQuery, CollectionRow, CollectionSummary } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
+import { startDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
@@ -244,6 +247,63 @@ describe("CollectionPage", () => {
     );
     // Three copies at $400.50 — the value column is arithmetic over the number that moved.
     expect(screen.getByText("$1,201.50")).toBeInTheDocument();
+  });
+
+  /**
+   * A row is the printing it lists, and can be carried off it — spec §1's second source.
+   *
+   * What it carries is the *card*, not the entry: a deck names a printing, and the finish and
+   * condition that make this row an entry are the collection's own business (which is also
+   * why the collection is never a drop *target*). This asks the drag rather than the
+   * `draggable="true"` attribute, because a registration that closed over the wrong row would
+   * still set it.
+   */
+  it("carries the row's printing when the row is dragged", async () => {
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Lightning Bolt");
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(rows[0], { pressOn: screen.getByText("Lightning Bolt") });
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "c1", name: "Lightning Bolt" },
+    ]);
+  });
+
+  /**
+   * **A press on the stepper is a press on the stepper.**
+   *
+   * The whole row is the drag handle and the row is full of controls, so this is the failure
+   * that costs a reader their counts: Chromium starts a drag from the nearest draggable
+   * *ancestor* of whatever was pressed, and the drag library excludes nothing of its own — so
+   * without the mark, a press on `−` that travels five pixels drags the row and the press is
+   * never delivered as a click. `cardDraggable` reads where the *press* landed, which is why
+   * this presses one place and drags from another, exactly as the platform does.
+   */
+  it("does not drag a row when the press landed on its stepper", async () => {
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const row = container.querySelector('[draggable="true"]')!;
+
+    const held = await startDrag(row, {
+      pressOn: screen.getByRole("button", {
+        name: "Decrease Quantity of Lightning Bolt (Foil, NM)",
+      }),
+    });
+    expect(held.started).toBe(false);
+    await held.cancel();
+
+    // And the row itself still is one: the guard is a control's press, not a row's.
+    const again = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    expect(again.started).toBe(true);
+    await again.cancel();
   });
 
   /**

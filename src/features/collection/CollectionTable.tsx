@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type ComponentProps } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Trash2 } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { cardDraggable } from "@/features/decks/dnd";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { finishLabel } from "@/lib/finish";
@@ -50,6 +51,44 @@ const ROW_FOCUS =
 /** The grade spelled out, for the same reason `finishLabel` exists. */
 function conditionLabel(raw: string): string {
   return CONDITION_LABEL[raw as Condition] ?? raw;
+}
+
+/**
+ * A row that is also the card it lists — spec §1's second drag source.
+ *
+ * What it carries is the **card**, never the entry: a deck names a printing, and the finish
+ * and the condition that make this row an entry are exactly what a drop cannot answer. (Which
+ * is the same reason the collection is not a drop *target*.)
+ *
+ * A component rather than a callback ref in the map, because the registration has to hold
+ * still: React detaches and re-runs a ref whose identity changed, and this list re-renders on
+ * every scrolled row — a source that unregisters mid-drag is a drop that never arrives. So the
+ * effect re-runs only when what the row would carry has changed.
+ *
+ * A wrapper rather than a whole row component: everything else about a row is the table's, and
+ * the props ride through untouched. The wishlist keeps its own copy of this, for its own
+ * reason — its `cardId` is nullable.
+ */
+function DraggableRow({
+  cardId,
+  name,
+  children,
+  ...rest
+}: { cardId: string; name: string | null } & ComponentProps<"div">) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    // An orphaned entry has no name — `cards` does not know this printing any more — and an
+    // empty one is what the payload contract allows for exactly that (`dnd.ts`: a name may be
+    // empty, an id may not).
+    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name: name ?? "" }) });
+  }, [cardId, name]);
+  return (
+    <div ref={ref} {...rest}>
+      {children}
+    </div>
+  );
 }
 
 /**
@@ -192,8 +231,10 @@ export function CollectionTable({
           return (
             // Keyed by row position rather than by entry id: two pages fetched either side
             // of a write can carry one entry twice, and a duplicate key drops a row.
-            <div
+            <DraggableRow
               key={v.key}
+              cardId={row.cardId}
+              name={row.name}
               role="row"
               aria-rowindex={v.index + 2}
               // A row opens the card, from the mouse and from the keyboard both.
@@ -303,9 +344,15 @@ export function CollectionTable({
                   those lands here too: without stopping them, correcting a count would also
                   open the card, and typing `12` into the box would scroll the list a
                   screenful. Those two keys and no others — a blanket `stopPropagation` also
-                  took Escape away from the card pane, which listens on `window`. */}
+                  took Escape away from the card pane, which listens on `window`.
+
+                  `data-no-drag` is the other half of the same thought, now that the row is a
+                  drag handle: without the mark a press on `−` that travels five pixels is a
+                  drag of the whole row with the press never delivered (`cardDraggable`). Every
+                  control added in here needs it. */}
               <span
                 role="cell"
+                data-no-drag=""
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={stopRowActivationKeys}
               >
@@ -335,6 +382,7 @@ export function CollectionTable({
 
               <span
                 role="cell"
+                data-no-drag=""
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={stopRowActivationKeys}
               >
@@ -362,7 +410,7 @@ export function CollectionTable({
                   </button>
                 )}
               </span>
-            </div>
+            </DraggableRow>
           );
         })}
       </div>

@@ -4,7 +4,7 @@ import { FlipHorizontal2, X } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
+import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { ZONE_LABEL } from "@/features/decks/ZoneColumn";
 import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
@@ -735,8 +735,33 @@ function PrintingRow({
   /** The row's half of the list's one hover preview — see {@link usePrintingDwell}. */
   dwell: DwellRowProps;
 }) {
+  const rowRef = useRef<HTMLLIElement>(null);
+
+  // The row is the printing, and it can be carried off the list — spec §1's fourth drag
+  // source, and the only one where the reader is choosing a *piece of cardboard* rather than a
+  // card: every row here is the same card, and the id is what tells them apart.
+  //
+  // The name is the card's, because a `Printing` has none of its own. Re-registered only when
+  // what the row would carry changes, rather than on every render: this pane re-renders on
+  // every hover in the list (the dwell is state), and a source that unregisters mid-drag is a
+  // drop that never arrives.
+  //
+  // The dwell's own `onDragStart` above takes the hover preview down as this starts — wired
+  // where the preview lives, so it was already right on the day these rows grew a drag.
+  const printingId = printing.id;
+  const cardName = card.name;
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!element) return;
+    return cardDraggable({
+      element,
+      payload: () => ({ kind: "card", cardId: printingId, name: cardName }),
+    });
+  }, [printingId, cardName]);
+
   return (
     <li
+      ref={rowRef}
       {...dwell}
       className={cn(
         "group rounded-md px-2 py-1 text-xs",
@@ -861,6 +886,11 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
         <button
           ref={buttonRef}
           type="button"
+          // The row is a drag handle, and Chromium starts a drag from the nearest draggable
+          // *ancestor* of whatever was pressed — so without the mark a press here that
+          // travelled five pixels would carry the printing off and never deliver the click
+          // (`cardDraggable`). The quick-add above marks itself; this one is the row's own.
+          data-no-drag=""
           // `disabled` while any swap is in flight — this is the half-second case, which is
           // what `disabled` is for in this app (`DeckStats`' two kinds of no). Every row, not
           // only the pressed one: they all send the same `from` printing, and the write in

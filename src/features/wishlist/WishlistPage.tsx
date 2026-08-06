@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Trash2 } from "lucide-react";
@@ -8,6 +8,7 @@ import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { cardDraggable } from "@/features/decks/dnd";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { finishLabel } from "@/lib/finish";
 import { ipc, ipcError, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
@@ -87,6 +88,37 @@ function wishLabel(row: WishRow): string {
 /** Copies still to find. Never negative: a wish over-covered is covered, not owed. */
 function missingOf(row: WishRow): number {
   return Math.max(0, row.quantity - row.ownedQuantity);
+}
+
+/**
+ * A row that is also the printing it wants — spec §1's third drag source.
+ *
+ * **Pinned wishes only**, which is the same rule that decides whether a row opens the card: a
+ * wish with no `card_id` is for the *card*, and there is no printing to carry. A drag started
+ * from one would arrive somewhere carrying an empty id, which addresses every row and no row
+ * (`dnd.ts`) — so it never starts, and the row is a row.
+ *
+ * A component rather than a callback ref in the map, because the registration has to hold
+ * still: React detaches and re-runs a ref whose identity changed, and this list re-renders on
+ * every scrolled row — a source that unregisters mid-drag is a drop that never arrives.
+ */
+function DraggableRow({
+  cardId,
+  name,
+  children,
+  ...rest
+}: { cardId: string | null; name: string } & ComponentProps<"div">) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !cardId) return;
+    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name }) });
+  }, [cardId, name]);
+  return (
+    <div ref={ref} {...rest}>
+      {children}
+    </div>
+  );
 }
 
 /**
@@ -568,8 +600,10 @@ function WishlistTable({
           return (
             // Keyed by row position rather than by wish id: two pages fetched either side of a
             // write can carry one wish twice, and a duplicate key drops a row.
-            <div
+            <DraggableRow
               key={v.key}
+              cardId={opens}
+              name={row.name}
               role="row"
               aria-rowindex={v.index + 2}
               tabIndex={opens ? 0 : undefined}
@@ -678,8 +712,12 @@ function WishlistTable({
                   those lands here too: without stopping them, correcting a count would also
                   open the card, and typing `12` into the box would scroll the list a
                   screenful. Those two keys and no others — a blanket `stopPropagation` also
-                  took Escape away from the card pane, which listens on `window`. */}
-              <span role="cell" onClick={stop} onKeyDown={stopRowActivationKeys}>
+                  took Escape away from the card pane, which listens on `window`.
+
+                  `data-no-drag` is the other half of the same thought, now that a pinned row
+                  is a drag handle: without the mark a press on `−` that travels five pixels is
+                  a drag of the whole wish with the press never delivered (`cardDraggable`). */}
+              <span role="cell" data-no-drag="" onClick={stop} onKeyDown={stopRowActivationKeys}>
                 <QuantityStepper
                   size="sm"
                   value={row.quantity}
@@ -708,7 +746,7 @@ function WishlistTable({
                 )}
               </span>
 
-              <span role="cell" onClick={stop} onKeyDown={stopRowActivationKeys}>
+              <span role="cell" data-no-drag="" onClick={stop} onKeyDown={stopRowActivationKeys}>
                 {/* Always offered, where the collection's appears only on an emptied row. The
                     two lists mean opposite things by deletion: losing a collection entry loses
                     a record of something owned, and crossing a line off a shopping list is
@@ -729,7 +767,7 @@ function WishlistTable({
                   <Trash2 className="size-3.5" aria-hidden="true" />
                 </button>
               </span>
-            </div>
+            </DraggableRow>
           );
         })}
       </div>

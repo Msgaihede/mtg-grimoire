@@ -25,12 +25,16 @@ const ROW: DragPayload = {
   name: "Lightning Bolt",
   fromZone: "main",
 };
+/** The printing every other surface in the app carries: a search tile, a collection row, a
+ *  wish, a printings row. No zone, because none of them is inside a deck. */
+const CARD: DragPayload = { kind: "card", cardId: "c-bolt", name: "Lightning Bolt" };
 
 describe("dragData / readDragData", () => {
-  /** The round trip, both ways a drag can start. */
+  /** The round trip, every way a drag can start. */
   it("reads back exactly what was put in", () => {
     expect(readDragData(dragData(SEARCH))).toEqual(SEARCH);
     expect(readDragData(dragData(ROW))).toEqual(ROW);
+    expect(readDragData(dragData(CARD))).toEqual(CARD);
   });
 
   /**
@@ -47,6 +51,9 @@ describe("dragData / readDragData", () => {
     expect(
       readDragData({ kind: "deck-card", cardId: "c-bolt", name: "Bolt", fromZone: "main" }),
     ).toBeNull();
+    // The plainest of the three, and therefore the likeliest thing another feature's drag
+    // would happen to carry: a card id and a name.
+    expect(readDragData({ kind: "card", cardId: "c-bolt", name: "Bolt" })).toBeNull();
   });
 
   /** A marked payload whose fields are wrong is still refused: the mark says where a drag came
@@ -89,6 +96,29 @@ describe("dropWrite", () => {
       cardId: "c-bolt",
       zone: "side",
     });
+  });
+
+  /**
+   * A card from anywhere else in the app lands exactly as a panel tile does.
+   *
+   * The zone columns are the editor's, and the four surfaces that carry a `"card"` — the
+   * search wall, the collection table, the wishlist, the pane's printings list — are not; but
+   * a printing is a printing, and "one copy into the zone it was dropped on" is the same
+   * write whichever wall it was picked up from. Two kinds and one rule, because the *source*
+   * is what differs and the meaning is not.
+   */
+  it("adds one copy when a card from any other surface lands in a zone", () => {
+    expect(dropWrite(CARD, { kind: "zone", zone: "main" })).toEqual({
+      write: "add",
+      cardId: "c-bolt",
+      zone: "main",
+    });
+  });
+
+  /** And the tray refuses it for the reason it refuses a search result: there is no row in
+   *  this deck to take out. */
+  it("refuses a card from another surface dropped on the tray", () => {
+    expect(dropWrite(CARD, { kind: "remove" })).toBeNull();
   });
 
   /** The row's drag: every copy moves, which is what `deck_move_card` does and what the row

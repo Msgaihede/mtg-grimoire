@@ -2,9 +2,12 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { readDragData } from "@/features/decks/dnd";
 import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS } from "@/lib/images";
 import type { CardSummary, WishInput } from "@/lib/ipc";
+import { startDrag } from "@/test-drag";
 
 // The tiles carry a quick-add now, and a wish written from one is a real `invoke` — which
 // in jsdom is a rejected promise about a missing Tauri runtime rather than a call anything
@@ -131,6 +134,52 @@ describe("CardGrid", () => {
 
     expect(seen).toEqual([["aaa", "DIV"]]);
     expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("draggable", "false");
+  });
+
+  /**
+   * A wall of cards is a drag source only where its caller says what a tile carries.
+   *
+   * Two halves of one contract, and the silent one is the first: the same wall draws the
+   * search results *and* the collection, and only the search's tiles are printings a deck can
+   * be built from — a collection tile is an *entry*, whose finish and condition a drop cannot
+   * answer (spec §1's judgment call, from the other end). So the payload is a prop and a wall
+   * given none registers nothing at all.
+   */
+  it("drags a tile only where the caller says what it carries", async () => {
+    const inert = render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    expect(inert.container.querySelector('[draggable="true"]')).toBeNull();
+    inert.unmount();
+
+    const { container } = render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        dragPayload={(c) => ({ kind: "card", cardId: c.id, name: c.name })}
+      />,
+    );
+
+    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]).toContainElement(screen.getByAltText("Lightning Bolt"));
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(tiles[0]);
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "aaa", name: "Lightning Bolt" },
+    ]);
   });
 
   it("opens the card that was clicked", async () => {
