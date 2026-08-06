@@ -32,6 +32,20 @@ pub const DEFAULT_FORMAT: &str = "casual";
 /// What an adjustment says when the deck it names is not there.
 pub const GONE: &str = "That deck is not there any more.";
 
+/// What [`swap_printing`] says when it is asked to change a printing to itself. The pane
+/// hides the action on the row the deck already uses, so reaching this is a double-click or
+/// a list that went stale — either way there is nothing to write.
+pub const SAME_PRINTING: &str = "That is already this printing.";
+
+/// What [`swap_printing`] says when the printing it was pointed at is not in `cards`.
+///
+/// Deliberately **not** [`printing_of`]'s sentence: the printing was clicked out of a live
+/// printings list a moment ago, so "no card with that id" is not news to the user — the news
+/// is that `cards` was dropped and rebuilt underneath the open pane, which is the one thing
+/// that can make a printing they are looking at stop existing (see CLAUDE.md's swap rule).
+const PRINTING_GONE: &str = "That printing is not in the card database any more — a sync \
+     replaced it while the card was open. Reopen the card for the printings it has now.";
+
 /// One new deck, as the "New deck" dialog sends it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -125,23 +139,30 @@ fn valid_format<'a>(conn: &Connection, key: &'a str) -> Result<&'a str, String> 
     })
 }
 
+/// `set_code`, `collector_number`, `lang`, `name` — what a zone write copies onto its row.
+type Printing = (String, String, String, String);
+
 /// The printing and the name, as the deck row will remember them.
 ///
 /// The name is what `collection::printing_of` does not read and the wishlist does: a
 /// collection row is a thing the user can hold, but a deck list is *read*, and a line that
 /// can only say `e7f8…` once the id stops resolving is not a deck list.
-fn printing_of(
-    conn: &Connection,
-    card_id: &str,
-) -> Result<(String, String, String, String), String> {
+fn printing_of(conn: &Connection, card_id: &str) -> Result<Printing, String> {
+    printing_row(conn, card_id)?
+        .ok_or_else(|| format!("no card with the id `{card_id}` is in the card database"))
+}
+
+/// The same read, with "not there" left to the caller — one SQL statement, two sentences.
+/// [`add_card`] is told an id it was handed does not resolve; [`swap_printing`] knows more
+/// than that (see [`PRINTING_GONE`]) and says it.
+fn printing_row(conn: &Connection, card_id: &str) -> Result<Option<Printing>, String> {
     conn.query_row(
         "SELECT set_code, collector_number, lang, name FROM cards WHERE id = ?1",
         params![card_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )
     .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| format!("no card with the id `{card_id}` is in the card database"))
+    .map_err(|e| e.to_string())
 }
 
 /// Move the deck's `updated_at` — and, in the same statement, learn whether the deck is
@@ -528,6 +549,115 @@ pub fn move_card(
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// What a swap answers: where the copies ended up, and whether they had company.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapResult {
+    /// The target zone already held that printing, so the two rows became one. The UI says
+    /// so, because a deck list that silently loses a line reads like a bug.
+    pub folded: bool,
+    /// The quantity of the row the copies now live in — the **sum**, when `folded`.
+    pub quantity: i64,
+}
+
+/// Swap a deck card to another printing of the same card: same zone, same copies, folding
+/// into whatever that zone already holds of the printing swapped to.
+///
+/// The card pane's "Use this printing", and the one zone write whose identity comes from a
+/// **fresh `cards` lookup** rather than from the row being changed ([`move_card`]'s comment
+/// is the other half of that thought). The reason is the direction of travel: a move keeps a
+/// printing the user already chose, while a swap is the user choosing a new one — off a list
+/// that was read out of `cards` a second ago. So an id that does not resolve is not an
+/// orphan to be preserved, it is a sync that raced the click ([`PRINTING_GONE`]).
+///
+/// `needs_review` is deliberately **not** carried across. The flag says the row's printing
+/// left the card database, and a swap onto a printing that is in it is exactly the cure —
+/// the new row is written clean. A fold leaves the target row's flag alone, [`add_card`]'s
+/// rule and the reconciler's.
+///
+/// One transaction, for the reason [`update_deck`]'s is one: mid-swap the copies are in
+/// neither row, or in both, and neither is a state a reader may see.
+pub fn swap_printing(
+    conn: &Connection,
+    deck_id: i64,
+    from_card_id: &str,
+    to_card_id: &str,
+    zone: &str,
+) -> Result<SwapResult, String> {
+    let zone = valid_zone(zone)?;
+    // Before the transaction, so a no-op does not move `updated_at` and resort the gallery.
+    if from_card_id == to_card_id {
+        return Err(SAME_PRINTING.to_owned());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    touch_deck(&tx, deck_id)?;
+
+    let quantity: i64 = tx
+        .query_row(
+            "SELECT quantity FROM deck_cards
+              WHERE deck_id = ?1 AND card_id = ?2 AND zone = ?3",
+            params![deck_id, from_card_id, zone],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        // [`set_card_quantity`]'s asymmetry: a swap adjusts a row, and a row that is not in
+        // that zone is a stale editor. Putting a card into a zone is [`add_card`].
+        .ok_or_else(|| card_gone(zone))?;
+
+    let (set_code, collector_number, lang, name) =
+        printing_row(&tx, to_card_id)?.ok_or_else(|| PRINTING_GONE.to_owned())?;
+
+    // [`add_card`]'s insert, grain and all — the same statement, because "put these copies
+    // in that zone" is the same write whether they came from a search or from another row.
+    let sql = format!(
+        "INSERT INTO deck_cards
+            (deck_id, card_id, set_code, collector_number, lang, name, zone, quantity,
+             created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8, unixepoch(), unixepoch())
+         ON CONFLICT({grain}) DO UPDATE SET
+            quantity = deck_cards.quantity + excluded.quantity,
+            updated_at = unixepoch()
+         RETURNING quantity",
+        grain = crate::schema::DECK_CARD_GRAIN
+    );
+    let landed: i64 = tx
+        .query_row(
+            &sql,
+            params![
+                deck_id,
+                to_card_id,
+                set_code,
+                collector_number,
+                lang,
+                name,
+                zone,
+                quantity
+            ],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM deck_cards WHERE deck_id = ?1 AND card_id = ?2 AND zone = ?3",
+        params![deck_id, from_card_id, zone],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // The deck wants a different printing than it did a statement ago, and the allocator
+    // takes the exact printing first — so the copies it reserves can change even though the
+    // count did not.
+    allocate_deck(&tx, deck_id)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(SwapResult {
+        // `deck_cards.quantity` carries `CHECK (quantity > 0)`, so a row that was already
+        // there contributed at least one copy: the landed total is strictly greater than
+        // what was moved exactly when the insert folded. No second read needed to know it.
+        folded: landed > quantity,
+        quantity: landed,
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1282,6 +1412,26 @@ pub async fn deck_move_card(
     .map_err(unfinished)?
 }
 
+/// The card pane's "Use this printing". `deckId` like every other zone write's, because
+/// `decks.id` is an integer everywhere it is written.
+#[tauri::command]
+pub async fn deck_swap_printing(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    from_card_id: String,
+    to_card_id: String,
+    zone: String,
+) -> Result<SwapResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| {
+            swap_printing(c, deck_id, &from_card_id, &to_card_id, &zone)
+        })
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1541,6 +1691,246 @@ mod tests {
             ("maybe", 5, "Lightning Bolt", "lea"),
             "an orphaned row still moves, still counted and still sayable"
         );
+    }
+
+    /// The zone rows of one deck, in a fixed order, as every swap assertion reads them.
+    fn zone_rows(conn: &Connection, deck_id: i64) -> Vec<(String, String, i64)> {
+        conn.prepare(
+            "SELECT card_id, zone, quantity FROM deck_cards
+              WHERE deck_id = ?1 ORDER BY zone, card_id",
+        )
+        .unwrap()
+        .query_map(params![deck_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// A clock a rollback can be seen against. `decks.updated_at` is whole seconds, so a
+    /// touch inside the same second as the setup would be invisible — every "wrote nothing"
+    /// assertion here pins it to a value no `unixepoch()` will ever produce twice.
+    const UNMOVED: i64 = 1000;
+
+    fn stop_the_clock(conn: &Connection, deck_id: i64) {
+        conn.execute(
+            "UPDATE decks SET updated_at = ?2 WHERE id = ?1",
+            params![deck_id, UNMOVED],
+        )
+        .unwrap();
+    }
+
+    fn touched_at(conn: &Connection, deck_id: i64) -> i64 {
+        read_deck(conn, deck_id).unwrap().unwrap().updated_at
+    }
+
+    /// The pane's "Use this printing": the copies move to the other printing's row, the row
+    /// is denormalized from the printing swapped **to**, and the claims follow — a deck that
+    /// now wants the M10 Bolt reserves the M10 Bolt.
+    #[test]
+    fn a_swap_moves_the_quantity_to_the_new_printing_row() {
+        let conn = seeded();
+        let lea = own(&conn, "bolt-lea", 3);
+        let m10 = own(&conn, "bolt-m10", 3);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(lea, 3)],
+            "the allocator takes the exact printing first, so the claim is the Alpha row"
+        );
+
+        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap();
+
+        assert_eq!((swapped.folded, swapped.quantity), (false, 3));
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("bolt-m10".to_owned(), "main".to_owned(), 3)],
+            "one row: the old one is deleted, never left at zero"
+        );
+        let (set, cn, lang, name): (String, String, String, String) = conn
+            .query_row(
+                "SELECT set_code, collector_number, lang, name FROM deck_cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (set.as_str(), cn.as_str(), lang.as_str(), name.as_str()),
+            ("m10", "146", "en", "Lightning Bolt"),
+            "the printing and the name come from the `cards` row swapped TO"
+        );
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(m10, 3)],
+            "and the claims followed: the exact printing is a different copy now"
+        );
+
+        // Any zone the schema knows, the scratchpad included — choosing a printing is
+        // exactly what a maybe pile is for, and it still reserves nothing.
+        add_card(&conn, deck.id, "serra-lea", "maybe", 1).unwrap();
+        swap_printing(&conn, deck.id, "serra-lea", "serra-8ed", "maybe").unwrap();
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![
+                ("bolt-m10".to_owned(), "main".to_owned(), 3),
+                ("serra-8ed".to_owned(), "maybe".to_owned(), 1),
+            ],
+        );
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(m10, 3)],
+            "a maybe swap claims nothing, before or after"
+        );
+    }
+
+    /// Two printings of one card in one zone is one row, because the grain says so — the
+    /// same fold [`add_card`] and [`move_card`] do, reported so the UI can say "folded".
+    #[test]
+    fn a_swap_onto_an_existing_row_folds_quantities_on_the_grain() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        add_card(&conn, deck.id, "bolt-m10", "main", 2).unwrap();
+        // The same printing in another zone: `zone` is in the grain, so this row is not in
+        // the swap's way and must not collect the copies.
+        add_card(&conn, deck.id, "bolt-m10", "side", 1).unwrap();
+
+        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap();
+
+        assert_eq!(
+            (swapped.folded, swapped.quantity),
+            (true, 5),
+            "three into two, and the answer says it folded"
+        );
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![
+                ("bolt-m10".to_owned(), "main".to_owned(), 5),
+                ("bolt-m10".to_owned(), "side".to_owned(), 1),
+            ],
+        );
+    }
+
+    /// Swapping a printing to itself is not an edit: the pane hides the action on the row the
+    /// deck already uses, so reaching here is a double-click or a stale list.
+    #[test]
+    fn a_swap_refuses_the_same_printing_and_writes_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        stop_the_clock(&conn, deck.id);
+
+        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-lea", "main").unwrap_err();
+
+        assert!(err.contains("already"), "{err}");
+        assert_eq!(
+            touched_at(&conn, deck.id),
+            UNMOVED,
+            "a no-op is not an edit — the gallery does not resort for it"
+        );
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("bolt-lea".to_owned(), "main".to_owned(), 3)]
+        );
+    }
+
+    /// The [`card_gone`] asymmetry: a swap adjusts a row, and a row that is not in that zone
+    /// is a stale editor rather than an invitation to create one.
+    #[test]
+    fn a_swap_of_a_missing_row_says_which_zone_it_looked_in() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        stop_the_clock(&conn, deck.id);
+
+        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "side").unwrap_err();
+
+        assert!(err.contains("side"), "the refusal names the zone: {err}");
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("bolt-lea".to_owned(), "main".to_owned(), 3)],
+            "the main-deck row is not what was asked about and is not touched"
+        );
+        assert_eq!(
+            touched_at(&conn, deck.id),
+            UNMOVED,
+            "and the GONE gate's touch rolled back with the rest"
+        );
+    }
+
+    /// The printing was clicked out of a *live* printings list, so its absence from `cards`
+    /// means one thing: a sync swapped the table out from under the open pane.
+    #[test]
+    fn a_swap_to_a_printing_the_card_database_lost_blames_the_sync() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-m10'", [])
+            .unwrap();
+        stop_the_clock(&conn, deck.id);
+
+        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap_err();
+
+        assert!(err.contains("sync"), "{err}");
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("bolt-lea".to_owned(), "main".to_owned(), 3)],
+            "the copies stay where they are rather than moving to an id that resolves to \
+             nothing"
+        );
+        assert_eq!(touched_at(&conn, deck.id), UNMOVED);
+    }
+
+    #[test]
+    fn a_swap_on_a_deleted_deck_answers_gone() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        delete_deck(&conn, deck.id).unwrap();
+
+        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap_err();
+
+        assert_eq!(err, GONE, "the same sentence every other zone write gives");
+    }
+
+    /// The insert, the delete and the reallocation are one write. Failure injected at the
+    /// last of the three — the state in between is a deck holding the copies in *neither*
+    /// row, and it is not a state anyone can read.
+    #[test]
+    fn a_swap_is_one_transaction() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 3);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add_card(&conn, deck.id, "bolt-lea", "main", 3).unwrap();
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 3)]);
+        stop_the_clock(&conn, deck.id);
+
+        conn.execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON deck_allocations
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap_err();
+
+        assert!(err.contains("boom"), "{err}");
+        assert_eq!(
+            zone_rows(&conn, deck.id),
+            vec![("bolt-lea".to_owned(), "main".to_owned(), 3)],
+            "the row the copies came from is still there, and the row they went to is not"
+        );
+        assert_eq!(touched_at(&conn, deck.id), UNMOVED, "the touch rolled back");
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(entry, 3)],
+            "and the claims the rebuild deleted are back"
+        );
+
+        // Nothing was stranded: with the failure gone the same swap goes through.
+        conn.execute_batch("DROP TRIGGER boom;").unwrap();
+        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", "main").unwrap();
+        assert_eq!((swapped.folded, swapped.quantity), (false, 3));
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 3)]);
     }
 
     #[test]
