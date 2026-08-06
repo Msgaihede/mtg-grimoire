@@ -6,7 +6,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { DROP_LINE_ATTR } from "./DropIndicator";
 import { card, resetRowIds } from "./validation/fixtures";
-import { STACK_OVERLAP } from "./VisualCard";
+import { STACK_MAX_WIDTH, STACK_OVERLAP, UNDER_PLATE } from "./VisualCard";
 import { groupCards, shouldFlipUp, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
 
 /** Every callback the column reports through, so a test only names the one it is about. */
@@ -492,6 +492,43 @@ describe("ZoneColumn as cards", () => {
     );
   });
 
+  /**
+   * A column of cards is as wide as a card, and only in this view: measured in the running
+   * window, the main column at 1280 with the pane closed is 621px, which drew a 596 × 834px
+   * poster and turned a 44-card deck into six screens of scrolling. The cap is a fact about
+   * the *view*, so the column carries it and the editor's layout is left alone.
+   */
+  it("caps its width at a card in this view, and not in the other", () => {
+    const { rerender, props } = visual([card({ name: "Lightning Bolt" })]);
+    const column = () => screen.getByRole("region", { name: /^Main deck/ });
+
+    expect(column()).toHaveClass(STACK_MAX_WIDTH);
+
+    rerender(<ZoneColumn {...props} view="compact" />);
+    expect(column()).not.toHaveClass(STACK_MAX_WIDTH);
+  });
+
+  /**
+   * **A menu on a card hangs off the card's title strip, not off the card.** A row is 40px and
+   * a card is 323px, so anchoring to the card's own bottom edge put the menu 300px below the
+   * strip the reader pressed — measured in the running window, on a card at the foot of the
+   * column, where flipping was *worse* than not flipping.
+   *
+   * Which way it opens is arithmetic this cannot see (`shouldFlipUp` has its own tests): every
+   * rectangle in jsdom is zero, so the menu always fits below and the unflipped anchor is the
+   * deterministic half — which is the half these two classes differ in.
+   */
+  it("hangs a menu off the card's title strip rather than off the whole row", () => {
+    const { rerender, props } = visual([card({ name: "Lightning Bolt" })], {
+      openMenuCardId: "c-Lightning Bolt",
+    });
+    const menu = () => screen.getByRole("dialog", { name: /lightning bolt/i });
+
+    expect(menu()).toHaveClass(UNDER_PLATE);
+
+    rerender(<ZoneColumn {...props} view="compact" />);
+    expect(menu()).toHaveClass("top-1");
+  });
 });
 
 /**

@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CARD_ASPECT } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { IMAGE_RETRY_LIMIT } from "@/lib/useImageRetry";
 import { NOT_A_DRAG } from "./dnd";
 import { card, resetRowIds } from "./validation/fixtures";
-import { STACK_OVERLAP, VisualCard } from "./VisualCard";
+import { PLATE, STACK_OVERLAP, TITLE_BAND, UNDER_PLATE, VisualCard } from "./VisualCard";
 import { ZONE_LABEL } from "./ZoneColumn";
 
 /** One card in a list, because that is the only place an `<li>` means anything. */
@@ -139,11 +140,17 @@ describe("VisualCard", () => {
 
     // The bar the two of them sit on, found from one of them: the stepper and the trigger are
     // its only children, and it is the thing that is revealed.
-    const controls = screen.getByRole("button", { name: "More actions for Lightning Bolt" })
-      .parentElement;
+    const controls = screen.getByRole("button", {
+      name: "More actions for Lightning Bolt",
+    }).parentElement;
     expect(controls).toHaveClass("opacity-0", "group-hover:opacity-100");
     expect(controls).toHaveClass("group-focus-within:opacity-100");
-    expect(controls).toContainElement(screen.getByLabelText("Copies of Lightning Bolt in Main deck"));
+    expect(controls).toContainElement(
+      screen.getByLabelText("Copies of Lightning Bolt in Main deck"),
+    );
+    // And they sit directly under the plate rather than at the card's foot, which at this
+    // editor's height is below the fold on a card whose title strip is the visible part.
+    expect(controls).toHaveClass(UNDER_PLATE);
   });
 
   it("steps the quantity from the card", async () => {
@@ -151,7 +158,10 @@ describe("VisualCard", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /increase copies/i }));
 
-    expect(onSetQuantity).toHaveBeenCalledWith(expect.objectContaining({ name: "Lightning Bolt" }), 5);
+    expect(onSetQuantity).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Lightning Bolt" }),
+      5,
+    );
   });
 
   /**
@@ -223,6 +233,66 @@ describe("VisualCard", () => {
     expect(row.className).toMatch(/\bhover:z-\d/);
     expect(row.className).toMatch(/\bfocus-within:z-\d/);
     expect(row.className).not.toMatch(/scale|translate|transition/);
+  });
+
+  /**
+   * **The plate's words are the listitem's, not the button's.**
+   *
+   * The card front is a `button` with an `aria-label`, and ARIA prunes a button's descendants
+   * from the accessibility tree: everything drawn *inside* it is replaced by that one label.
+   * So a plate drawn in there would carry the cost's `sr-only` mana tokens and the "You own n
+   * of m" line in the markup and in nothing that reads it — this view silently announcing a
+   * bare name where the compact row announces both, which is the failure a component test is
+   * for, because nothing on screen changes. The plate is a sibling overlay instead.
+   */
+  it("keeps the plate's words out of the card front, where ARIA would prune them", () => {
+    draw(card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 3 }));
+
+    const row = screen.getByRole("listitem");
+    const front = screen.getByRole("button", { name: "Lightning Bolt" });
+    // `ManaText` draws each symbol as a font `::before` on an empty `<i>`, so the `sr-only`
+    // token beside it is the *whole* of what a screen reader has of the printed cost.
+    const token = screen.getByText("R");
+    const owned = screen.getByText("You own 3 of 4");
+
+    for (const words of [token, owned]) {
+      expect(row).toContainElement(words);
+      expect(front).not.toContainElement(words);
+    }
+
+    // Drawn over the front rather than in it, and taking not one press of it: the card is
+    // still one control, and the top 12% of it still opens the card.
+    const plate = screen.getByText("Lightning Bolt").parentElement;
+    expect(plate?.parentElement).toBe(row);
+    expect(plate).toHaveClass("pointer-events-none");
+  });
+
+  /**
+   * The strip at the top of a card is four class strings hand-derived from three numbers —
+   * Tailwind reads this file as text, so a class assembled at runtime is a utility the build
+   * never emits and the literals have to be written out. This is what keeps them in step:
+   * retune the band or the bar and the arithmetic here fails, rather than the plate shipping
+   * with the controls printed through it or the pile taking the wrong bite out of each card.
+   */
+  it("derives the strip's geometry from the numbers it is documented by", () => {
+    // The control bar's height, in rem — `h-9` is nine quarter-rems, and the sentence under
+    // the bar is offset by exactly this. Both halves are checked below rather than typed.
+    const bar = 2.25;
+    // The overlap: the card's own aspect, less the band that has to stay visible.
+    const [w, h] = CARD_ASPECT.split("/").map(Number);
+    const overlap = `-mt-[${((h / w) * (1 - TITLE_BAND) * 100).toFixed(1)}%]`;
+
+    draw(card({ needsReview: "This printing left the card database." }), { stacked: true });
+    const controls = screen.getByRole("button", { name: /more actions/i }).parentElement;
+
+    expect(screen.getByText("Lightning Bolt").parentElement).toHaveClass(`h-[${PLATE}%]`);
+    expect(controls).toHaveClass(`top-[${PLATE}%]`, `h-${bar * 4}`);
+    expect(UNDER_PLATE).toBe(`top-[${PLATE}%]`);
+    expect(screen.getByText(/left the card database/)).toHaveClass(
+      `top-[calc(${PLATE}%+${bar}rem)]`,
+    );
+    expect(screen.getByRole("listitem")).toHaveClass(overlap);
+    expect(STACK_OVERLAP).toBe(overlap);
   });
 
   /** The one deck fact a picture cannot carry: the copies this deck wants against the copies

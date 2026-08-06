@@ -668,11 +668,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           )}
 
           {/* The two controls that decide how the deck reads, together at the end of the
-              header: how it is drawn, and how it is bucketed. */}
+              header: how it is drawn, and how it is bucketed.
+
+              **Not a chip.** It wore `filterChipState(false)` first, which is the exact paint
+              of the two `aria-pressed` chips beside it in their *off* state — an action
+              dressed as a state, and one that can never light up, so "Show as cards" read as a
+              filter that was switched off rather than as a thing to press. It is the same
+              control the format `<select>` at the head of this row is: a filled surface in the
+              filter row's height and focus, which is this app's own clothes for "a control
+              here that is not a chip". `hover:text-text` because it is a button and answers a
+              pointer; the select does not, because a select does not need to. */}
           <button
             type="button"
             onClick={() => setView(OTHER_VIEW[view].view)}
-            className={cn(FILTER_CONTROL, FILTER_FOCUS, "ml-auto px-3", filterChipState(false))}
+            className={cn(
+              FILTER_CONTROL,
+              FILTER_FOCUS,
+              "ml-auto border-border bg-surface px-3 text-dim hover:text-text",
+            )}
           >
             {OTHER_VIEW[view].label}
           </button>

@@ -16,8 +16,8 @@ import { cardDraggable } from "./dnd";
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
- * How tall the title plate is, as a fraction of the card — and therefore where the card's own
- * printed name ends.
+ * How tall the title plate is, as a **percentage of the card** — and therefore where the
+ * card's own printed name ends.
  *
  * **Measured in the running window** (2026-08-06, a 231 × 323px card): the printed name sits
  * 22–30px from the card's top edge and its box ends by 34px, which is 10.5%. A plate shorter
@@ -29,11 +29,23 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  * It cannot cover *every* treatment — a borderless Secret Lair prints its name where it likes —
  * and a plate sized for those would eat the illustration on the ordinary ones. So the rule is
  * the ordinary card, and the exotic one shows a sliver of its own lettering.
+ *
+ * **This number, and three class strings hand-derived from it.** Tailwind reads class names
+ * out of this file as *text*, so `h-[12%]`, `top-[12%]` and the `calc()` under them are
+ * written out rather than templated from here — a class assembled at runtime is a utility the
+ * build never emits at all. The three co-vary with this number and with each other, and
+ * `VisualCard.test.tsx`'s "derives the strip's geometry from the numbers it is documented by"
+ * re-derives every one of them: a literal that drifts fails a test rather than shipping a
+ * plate with the controls printed through it.
  */
+export const PLATE = 12;
+
+/** The plate itself. Hand-derived from {@link PLATE}; read that note before changing it. */
 const PLATE_HEIGHT = "h-[12%]";
 
 /**
- * Where the controls sit: directly under the plate, as the same 12%.
+ * Where the controls sit: directly under the plate, at the same {@link PLATE} percent — a
+ * second class hand-derived from that one number.
  *
  * **Not at the foot of the card**, which is where they were drawn first and where the search
  * grid's tiles put theirs. A card is 323px tall and the zone scroller at a 1280 × 800 window
@@ -53,6 +65,11 @@ export const UNDER_PLATE = "top-[12%]";
  * which is what `py-1` around a small stepper already came to. The reconciler's sentence on an
  * orphaned card sits under **both** — drawn at `top-[12%]` it was printed straight through the
  * stepper the moment the card was hovered, which is two sentences in one rectangle.
+ *
+ * So {@link UNDER_CONTROLS} is the third hand-derived class: {@link PLATE} percent plus this
+ * bar's own height, written out for the reason {@link PLATE} gives, and re-derived by the same
+ * test. The `2.25rem` in it **is** the `9` here — change one and the sentence lands on the
+ * stepper again.
  */
 const CONTROL_BAR = "h-9";
 const UNDER_CONTROLS = "top-[calc(12%+2.25rem)]";
@@ -87,8 +104,12 @@ export const TITLE_BAND = 0.19;
  * A percentage margin resolves against the containing block's **width** (CSS 2.1 §8.3) — even
  * a vertical one — which is the whole reason this can be a class rather than a measured
  * number: the column is fluid, nothing here observes its width, and the overlap follows it
- * exactly at every size. Writing it as a fraction of the *height* is what does not work, and
- * is why this constant is derived rather than typed.
+ * exactly at every size. Writing it as a fraction of the *height* is what does not work.
+ *
+ * The `113.4` is hand-derived from {@link TITLE_BAND} and {@link CARD_ASPECT} for
+ * {@link PLATE}'s reason — Tailwind reads this file as text — and the same test does that
+ * arithmetic again, so retuning the band without retyping this class fails rather than
+ * quietly drawing a pile with the wrong bite out of it.
  */
 export const STACK_OVERLAP = "-mt-[113.4%]";
 
@@ -169,7 +190,9 @@ export function VisualCard({
   // A printing that has left the card database has no art anywhere — `cards` has no row for
   // it, so the protocol would answer a placeholder for a card nobody can look up. Nothing is
   // asked for, which is also what `useImageRetry` is told, so no schedule runs over it.
-  const image = useImageRetry(card.needsReview === null ? cardImageUrl(card.cardId, 0, "grid") : null);
+  const image = useImageRetry(
+    card.needsReview === null ? cardImageUrl(card.cardId, 0, "grid") : null,
+  );
 
   // The allocator never claims a copy for the scratchpad, so every `maybe` row reads 0 owned
   // by construction. A mark there would report a shortage the reader does not have.
@@ -210,9 +233,12 @@ export function VisualCard({
       <button
         type="button"
         // The card *is* the control — one press, the card front, like the search grid's tile.
-        // Named by the card and nothing else: the plate below carries a count and a cost, and
-        // sixty buttons called "×4 Lightning Bolt {R}" are sixty names to listen past. The
-        // visible name is inside the label, which is what keeps voice control working.
+        // Named by the card and nothing else: sixty buttons called "×4 Lightning Bolt {R}" are
+        // sixty names to listen past, and the visible name is inside the label, which is what
+        // keeps voice control working. The count, the cost and the shortfall are on the plate,
+        // which is a **sibling** of this button rather than a child — an `aria-label` here
+        // prunes everything inside, so a plate drawn in here would be a plate nothing reads.
+        // See the plate's own note.
         aria-label={card.name}
         onClick={() => onSelect(card.cardId)}
         className={cn(
@@ -246,49 +272,63 @@ export function VisualCard({
             {card.needsReview !== null ? "" : image.retrying ? "Retrying…" : "No image"}
           </span>
         )}
-
-        {/* The title plate: the deck list, drawn on the card, in the place the card prints the
-            same two facts.
-            **Opaque, not the gallery's `bg-bg/85`.** A corner chip sits on *art*, where 15% of
-            what is under it is texture; this sits on the card's own **name**, and anything less
-            than opaque ghosted the printed one straight through the plate covering it — every
-            card in the column reading as its own name twice, in two typefaces, one of them
-            half-erased. Measured at 3× in the running window (2026-08-06): visible at 85%,
-            still legible at 95%. So the plate is the app's own felt, and what says it sits on a
-            card is the slice of illustration under it rather than the card showing through it.
-            The count leads, because a deck list line is "4 Lightning Bolt" and a stack of them
-            puts every number in one column to read down. It is absent at one copy: a wall of
-            "×1" down a Commander deck is 99 things to read past. */}
-        <span
-          className={cn(
-            "absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-t-lg bg-bg",
-            PLATE_HEIGHT,
-            "px-1.5 text-xs leading-tight",
-          )}
-        >
-          {card.quantity > 1 && (
-            <span className="shrink-0 font-mono tabular-nums text-dim">×{card.quantity}</span>
-          )}
-          <span className="min-w-0 flex-1 truncate">{card.name}</span>
-          <ManaText source={card.manaCost} className="shrink-0" />
-          {/* The one deck fact no picture carries, drawn only where it says something: the
-              copies this deck reserved against the copies it wants. Sixty green ticks would be
-              sixty things to read past on the way to the three that matter. */}
-          {short && (
-            <span
-              className="shrink-0 font-mono tabular-nums text-dim"
-              title={`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`}
-            >
-              <span aria-hidden="true">
-                {card.ownedQuantity}/{card.quantity}
-              </span>
-              <span className="sr-only">
-                You own {card.ownedQuantity} of {card.quantity}
-              </span>
-            </span>
-          )}
-        </span>
       </button>
+
+      {/* The title plate: the deck list, drawn on the card, in the place the card prints the
+          same two facts.
+
+          **A sibling of the card front, never a child of it — and that is an accessibility
+          rule, not a layout one.** The front is a `button` with an `aria-label`, and ARIA
+          prunes a button's descendants from the accessibility tree: a plate drawn inside it
+          would take the cost's `sr-only` mana tokens and the "You own n of m" line out of the
+          tree altogether, so this view would silently announce a bare card name where the
+          compact row announces both — markup that claims to carry a fact and does not.
+          Out here they are the listitem's own words again. The label stays the name and
+          nothing else: sixty buttons called "×4 Lightning Bolt {R} 3/4" are sixty names to
+          listen past, and the visible name is inside the label, which is what keeps voice
+          control working. `pointer-events-none` is what keeps the front one press — the plate
+          covers the top {@link PLATE}% of it and every click goes straight through, the same
+          arrangement the reconciler's sentence below already uses. It costs the shortfall's
+          native tooltip, which is why the sentence there is `sr-only` text rather than a
+          `title` nothing can hover.
+
+          **Opaque, not the gallery's `bg-bg/85`.** A corner chip sits on *art*, where 15% of
+          what is under it is texture; this sits on the card's own **name**, and anything less
+          than opaque ghosted the printed one straight through the plate covering it — every
+          card in the column reading as its own name twice, in two typefaces, one of them
+          half-erased. Measured at 3× in the running window (2026-08-06): visible at 85%,
+          still legible at 95%. So the plate is the app's own felt, and what says it sits on a
+          card is the slice of illustration under it rather than the card showing through it.
+          The count leads, because a deck list line is "4 Lightning Bolt" and a stack of them
+          puts every number in one column to read down. It is absent at one copy: a wall of
+          "×1" down a Commander deck is 99 things to read past. */}
+      <span
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 flex items-center gap-1.5",
+          "rounded-t-lg bg-bg",
+          PLATE_HEIGHT,
+          "px-1.5 text-xs leading-tight",
+        )}
+      >
+        {card.quantity > 1 && (
+          <span className="shrink-0 font-mono tabular-nums text-dim">×{card.quantity}</span>
+        )}
+        <span className="min-w-0 flex-1 truncate">{card.name}</span>
+        <ManaText source={card.manaCost} className="shrink-0" />
+        {/* The one deck fact no picture carries, drawn only where it says something: the
+            copies this deck reserved against the copies it wants. Sixty green ticks would be
+            sixty things to read past on the way to the three that matter. */}
+        {short && (
+          <span className="shrink-0 font-mono tabular-nums text-dim">
+            <span aria-hidden="true">
+              {card.ownedQuantity}/{card.quantity}
+            </span>
+            <span className="sr-only">
+              You own {card.ownedQuantity} of {card.quantity}
+            </span>
+          </span>
+        )}
+      </span>
 
       {card.needsReview && (
         // A sentence, not a flag: the reconciler wrote what happened, and the card is listed
