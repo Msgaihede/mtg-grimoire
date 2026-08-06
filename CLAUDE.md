@@ -48,7 +48,15 @@ watches only one reports a clean console it never looked at).
   with an explicit `size 1280 800`.
 - **`drag <source> <target>`** is a real Chromium drag (`Input.setInterceptDrags` +
   `Input.dragIntercepted` + `Input.dispatchDragEvent`), with `--press <css>`, `--from x,y`,
-  `--cancel` and `--probe <expr>` for reading the page mid-flight. **It cleans up after
+  `--cancel` and `--probe <expr>` for reading the page mid-flight. **Interception bypasses
+  the OS drag loop, so a green `drag` pass proves nothing about a real hand on a real mouse**
+  — measured 2026-08-06: every HTML5 drag in the shipped window showed the blocked cursor
+  while every intercepted pass stayed green, because Tauri's `dragDropEnabled` default had
+  WRY's own OLE drop target swallowing `dragover`/`drop` for its file-drop API.
+  `"dragDropEnabled": false` in `tauri.conf.json` is load-bearing; re-enabling it kills all
+  in-app drag-and-drop on Windows, invisibly to this harness. The config is embedded at
+  **compile time** — editing it needs a Rust rebuild (`touch src-tauri/src/main.rs`), not
+  just a dev-server restart. **It cleans up after
   itself, including after a drag that never started** — which is the case worth naming,
   because that is the one that has already pressed the mouse button. A dying run otherwise
   leaves the browser's drag controller holding a press with interception on, and pdnd's
@@ -346,16 +354,18 @@ belong to the sync, and a hand-written row in either makes every later measureme
   Main deck."). It refuses same-printing, a missing from-row (naming the zone), a raced sync
   (the to-printing has left `cards`), and a **different oracle card** — the guard is inside the
   transaction, because "swap this printing" must never become "swap this card".
-- **The visual deck builder is a per-session toggle, not a setting** (`useState` in
-  `DeckEditor`, default visual). Its geometry is three hand-derived numbers in `VisualCard.tsx`
-  — `PLATE = 12` (% of card height: the printed name box ends at 10.5%), `TITLE_BAND = 0.19`
-  (what a stacked card leaves showing) and `STACK_OVERLAP = "-mt-[113.4%]"` (= `CARD_ASPECT ×
-  (1 − TITLE_BAND)`, a percentage margin resolving against *width*, which is what makes the
-  stack fluid). Tailwind reads class names as text, so those literals cannot be templated; a
-  test re-derives every one. Measured live at 1280: a 231 × 323px card showing a 61px band and
-  a 39px plate. **The title plate is a `pointer-events-none` sibling of the card front, never
-  a child** — the front is a `button` with an `aria-label`, and ARIA prunes a button's
-  descendants, so a plate inside it would announce nothing.
+- **The deck is rows, one view only** (2026-08-06: the stacked-card visual mode and its
+  toggle were removed on the user's direction — full card faces at column width were huge,
+  and its `STACK_MAX_WIDTH` cap was why zone columns would not take the editor's width). Each
+  row carries the printing's **`art` crop** (626×457) as an `aria-hidden`, `alt=""`,
+  `draggable={false}` thumbnail sharing the stepper's grid cell — a fourth grid column's gap
+  made the 221px squeezed column scroll sideways, and a hidden flex child charges nothing.
+  Below 17rem of *column* (a container query on the zone scroller: the 1280px window with the
+  card pane docked) the picture yields and the row is the dense text row; orphans are fed
+  `null` and never fetch. **A printings row in the card pane is clickable to view that
+  printing** — `store.viewPrinting` sets `selectedCardId` *without* clearing
+  `paneDeckContext`, so the swap offers survive browsing; `setSelectedCardId` there instead
+  silently kills the affordance at its one moment of use.
 - **Four card surfaces outside the editor are drag sources, all through the one
   `cardDraggable`**, and the payload they all carry is `{ kind: "card"; cardId; name }` —
   search tiles, collection *table* rows (the collection's **card** mode is not one: only the
