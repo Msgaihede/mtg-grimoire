@@ -73,7 +73,8 @@ watches only one reports a clean console it never looked at).
   enter — a hover command that silently does nothing on its second run), and **its probe is
   read twice in the one session**, on arrival and again after `--rest`, because that pair is
   what a dwell looks like from outside. A dwell measured from the *last* move undercounts by
-  up to one approach step: the enter that arms the timer is one move earlier.
+  up to **~32 ms**: the approach is three steps 16 ms apart and the enter that arms the timer
+  can land on the first of them.
 - **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
   fault.** Reload with the recorder attached and read the entries that arrive after.
 
@@ -324,10 +325,15 @@ belong to the sync, and a hand-written row in either makes every later measureme
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
-- **Every deck write goes through a `useDeck` mutation, and `DeckEditor`'s `newest([...])`
-  counts six of them** — add, set-quantity, move, remove, missing-to-wishlist, swap-printing.
-  A refused write re-reads the deck through whichever of the six answered last, so a sibling's
-  GONE is what turns the columns into the gone paragraph. Two surfaces outside the editor
+- **A write to what is *in* a deck goes through a `useDeck` mutation, and `DeckEditor`'s
+  `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
+  add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
+  mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
+  removes a deck row. The deck *row* is a different hook — the gallery's `useDecks` owns create,
+  update, remove and duplicate, and `useDeck.update` is that same `deck_update` narrowed to the
+  open deck, which is how the Built toggle is one of the six. A refused write re-reads the deck
+  through whichever of the six answered last, so a sibling's GONE is what turns the columns
+  into the gone paragraph. Two surfaces outside the editor
   borrow a mutation whole rather than defining one — `useSwapFromPane` (the card pane) and
   `useSidebarDrops` (the sidebar's Decks entry) — and **the refusal rule lives on the single
   definition in `useDeck.ts`**, never on a call site: two definitions would be two places to
@@ -350,10 +356,11 @@ belong to the sync, and a hand-written row in either makes every later measureme
   a 39px plate. **The title plate is a `pointer-events-none` sibling of the card front, never
   a child** — the front is a `button` with an `aria-label`, and ARIA prunes a button's
   descendants, so a plate inside it would announce nothing.
-- **Every card surface in the app is a drag source, through the one `cardDraggable`**, and the
-  payload they all carry is `{ kind: "card"; cardId; name }` — search tiles, collection *table*
-  rows, **pinned** wishes only (an any-printing wish names no printing to drag), and the card
-  pane's printings rows. A zone treats `"card"` exactly as the panel's `"search-card"`: add
+- **Four card surfaces outside the editor are drag sources, all through the one
+  `cardDraggable`**, and the payload they all carry is `{ kind: "card"; cardId; name }` —
+  search tiles, collection *table* rows (the collection's **card** mode is not one: only the
+  search wall is handed `CardGrid`'s `dragPayload`), **pinned** wishes only (an any-printing
+  wish names no printing to drag), and the card pane's printings rows. A zone treats `"card"` exactly as the panel's `"search-card"`: add
   one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
   it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
   deck open, which — because `setActiveView` clears `openDeckId` — is *every* drag started

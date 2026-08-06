@@ -24,8 +24,10 @@ import type { DeckZone } from "@/lib/ipc";
  * button that does it (its quick-add writes the collection or the wishlist, and "Use this
  * printing" *replaces* a row the deck already has). A deck row let go on Wishlist is not the
  * exception — that one has a longer click path through the pane's quick-add in wishlist mode.
- * So this gesture is the one place the drag layer is the only way in; if that stops being
- * acceptable, the answer is a button in the pane, not a rule here.
+ * So this gesture is the one route with no click equivalent **on the surface it starts from**
+ * — the deck is not closed to the keyboard, because the docked panel's Add takes any printing
+ * that panel's own search can reach. If that detour stops being acceptable, the answer is a
+ * button in the pane, not a rule here.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string }

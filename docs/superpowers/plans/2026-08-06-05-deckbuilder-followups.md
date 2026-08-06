@@ -1,6 +1,6 @@
 # Deckbuilder Follow-ups Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** The four user-approved follow-ups from `docs/superpowers/specs/2026-08-06-deckbuilder-followups-design.md`: the visual (card-image) deck builder, universal card drag with sidebar drop targets, click-to-swap printings, and the 250 ms printing hover preview.
 

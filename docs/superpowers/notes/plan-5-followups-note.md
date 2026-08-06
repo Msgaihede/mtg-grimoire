@@ -224,8 +224,8 @@ couple to the app client's `staleTime: 30_000` (commented in the test).
 
 **The preview.** A background refetch that replaces the printings list drops a resting preview
 until the pointer moves. It does not re-measure on a window resize while open, and it re-arms
-when a popup closes under a still pointer. `cdp.mjs`'s `--rest 0` is swallowed by the `||`
-default. `[aria-haspopup]` also matches `="false"`, which fails safe (a suppressed dwell). The
+when a popup closes under a still pointer. `[aria-haspopup]` also matches `="false"`, which
+fails safe (a suppressed dwell). The
 `anchor.isConnected` branch is near-unreachable and untested.
 
 **The drag layer.** `CardGrid.tsx:148-149` says `dragPayload` and `tileRef` "compose" — they do
