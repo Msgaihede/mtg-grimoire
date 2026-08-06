@@ -604,7 +604,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 deck_min INTEGER NOT NULL,
                 deck_max INTEGER,             -- NULL = no maximum
                 max_copies INTEGER,           -- NULL = unlimited (casual, limited)
-                sideboard_max INTEGER,        -- 0 = no sideboard; NULL = uncapped (limited)
+                sideboard_max INTEGER,        -- 0 = no sideboard; NULL = uncapped (casual, limited)
                 singleton INTEGER NOT NULL DEFAULT 0,
                 requires_commander INTEGER NOT NULL DEFAULT 0,
                 -- Which eligibility rule the TS engine applies. Data, not code:

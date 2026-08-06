@@ -590,8 +590,16 @@ export interface DeckRow {
   coverArtist: string | null;
   isBuilt: boolean;
   archived: boolean;
-  /** main + commander + companion copies — what "a 60-card deck" means in a caption. The
-   *  sideboard and the maybe pile are deliberately not in it. */
+  /**
+   * main + commander copies — what "a 60-card deck" means in a caption, and the **same zones
+   * the validation engine sizes a deck by**: `SIZE_ZONES` in
+   * `features/decks/validation/engine.ts`. One definition, so a tile and the format check
+   * beside it never answer the same question with two numbers.
+   *
+   * The sideboard, the maybe pile and the companion are deliberately not in it — a companion
+   * is played beside the deck rather than in it, and EDH's is "effectively a 101st card",
+   * which is exactly the card a "100-card deck" caption must not count.
+   */
   cardCount: number;
   /** Unix seconds. The gallery's sort key, and every zone write moves it — including a
    *  removal that found nothing to remove. */

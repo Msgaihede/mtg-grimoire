@@ -151,10 +151,13 @@ export interface ValidationPanelProps {
  * in the copy as well as in the code: `estimateBracket` emits no issue, and a number that
  * cannot make a deck illegal must not be drawn as though it could.
  *
- * The panel is the editor's `"inner"` Escape rung — one press closes it and the card pane
- * behind the view keeps its own — and it is the *same* piece of state as the row menus, so two
- * `"inner"` layers can never be open at once (`useDismissOnEscape` orders exactly two rungs;
- * `DecksPage`'s `Panel` union is the same arrangement, for the same reason).
+ * The panel is an `"inner"` Escape rung — one press closes it and the card pane behind the
+ * view keeps its own — and it is the *same* piece of state as the row menus, so those two can
+ * never be open at once (`useDismissOnEscape` orders exactly two rungs; `DecksPage`'s `Panel`
+ * union is the same arrangement, for the same reason). The screen carries a **third** `"inner"`
+ * peer that no union covers — the set filter in the docked search panel (`SetCombobox`) — and
+ * that one is held apart by focus and click mechanics instead: see `DeckEditor`'s `Layer` doc
+ * for both directions and for the one case the mechanics do not cover.
  */
 export function ValidationPanel({
   cards,
@@ -185,6 +188,10 @@ export function ValidationPanel({
   // menus' — only because the two are one piece of state up there: `Layer` is a union, so at
   // most one of the two registrations is ever `enabled`, and `useDismissOnEscape` orders
   // exactly two rungs (a capture-phase one and a bubble-phase one), never two peers.
+  //
+  // The set filter in the docked search panel registers the same rung and is *not* in that
+  // union; the `onBlur` boundary below is what keeps it from being a third peer, since opening
+  // one takes the caret out of the other. `DeckEditor`'s `Layer` doc has the whole arrangement.
   useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
 
   const count = issues.length;
@@ -375,7 +382,9 @@ function Bracket({ estimate }: { estimate: ReturnType<typeof estimateBracket> })
     <div className="mt-3 border-t border-border pt-2">
       {/* One text run: a headline fact split across styled spans is a sentence nothing —
           screen reader, test, or reader skimming — puts back together. */}
-      <p className="font-medium tabular-nums">
+      {/* Geist Mono for the counts, as everywhere else data is counted (the direction doc; the
+          chip above and `DeckStats`'s figures are the in-file precedents). */}
+      <p className="font-mono font-medium tabular-nums">
         Bracket ~{estimate.bracket} · {estimate.gameChangers} game changer
         {estimate.gameChangers === 1 ? "" : "s"}
       </p>

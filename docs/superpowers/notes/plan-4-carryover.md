@@ -299,7 +299,18 @@ points at the ledger rather than re-litigating it.
 7. **Read CLAUDE.md's "Hard rules — decks" section first.** The three FKs and why exactly
    three, the zones enum, `format_specs`-is-data, deck price = the blob's nonfoil `usd`, and
    the pre-warm/sweep memberships are all things an importer would otherwise re-derive wrongly.
-8. **Seed smoke fixtures into user tables only.** `cards` and `sync_meta` belong to the sync,
+8. **Cap parsed quantities at the importer's boundary — nothing downstream will.** The
+   importer is the first surface that feeds a *parsed number* into a quantity path, and there
+   is no ceiling anywhere behind it: `collection::valid_quantity` (collection.rs:222) refuses
+   only negatives, `deck_add_card` folds by adding, and `missing_to_wishlist` sums the
+   shortfall with a bare `entry.1 += short` (deck.rs:1066) — an `i64` overflow,
+   which is a **panic in a debug build** and a wrapped total in release. A hand-edited or
+   crafted `.txt`/`.dek` line (`99999999999999999999 Lightning Bolt`) is the whole attack
+   surface, and it costs one bounded parse to close. Validate the integer where the line is
+   read, with a limit a deck can actually mean, and refuse the line in words — the same
+   discipline `valid_zone`/`valid_finish` apply. Do **not** push the check into the Rust write
+   path: the boundary is the parser, and TS owns import parsing (see item 2).
+9. **Seed smoke fixtures into user tables only.** `cards` and `sync_meta` belong to the sync,
    and a hand-written row in either makes every later measurement a fiction. To exercise a
    merge, delete the `card_migrations` bookkeeping row and force a Refresh; to exercise an
    orphan flag, you need the day's real ingest.

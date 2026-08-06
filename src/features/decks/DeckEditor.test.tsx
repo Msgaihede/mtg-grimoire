@@ -786,6 +786,45 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
   });
 
+  /**
+   * The **third** `"inner"` peer on this screen, and the one no state union covers: the set
+   * filter inside the docked search panel owns its own Escape rung (`SetCombobox`). What keeps
+   * it exclusive with the editor's own two is focus and click mechanics — every one of the
+   * three closes on focus-out — so it is pinned here in the assembled editor, both ways round
+   * for both of the editor's layers. Neither direction is a structural guarantee, and a test is
+   * the only thing that would notice one of them being dropped.
+   */
+  it("never has the set filter and one of the editor's own layers open at once", async () => {
+    await open();
+    const setFilter = () => screen.getByRole("button", { name: "Set" });
+    const filterOpen = () => screen.queryByRole("combobox", { name: "Search sets" });
+
+    // Row menu, then the set filter: taking the caret out of the menu closes it.
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
+    await userEvent.click(setFilter());
+
+    expect(filterOpen()).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // ...and back the other way: opening the menu takes the set filter down.
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
+
+    expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
+    expect(filterOpen()).not.toBeInTheDocument();
+
+    // The format check is the union's other half, and it behaves the same way both ways.
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(setFilter());
+
+    expect(filterOpen()).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+
+    expect(screen.getByRole("dialog", { name: "Modern check" })).toBeInTheDocument();
+    expect(filterOpen()).not.toBeInTheDocument();
+  });
+
   /** The one write in this task, end to end: what the deck is short of becomes wishes, and the
    *  strip says how many in words. */
   it("sends what the deck is missing to the wishlist", async () => {
@@ -856,6 +895,21 @@ describe("DeckEditor", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
     );
+
+    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+  });
+
+  /**
+   * And the fifth: `missing_to_wishlist` reads the deck before it writes anything and answers
+   * the same `GONE`, so the stats strip's button belongs in the family for the family's reason
+   * — no refused deck write may leave a dead deck painted.
+   */
+  it("re-reads the deck when the wishlist write is refused", async () => {
+    deckMissingToWishlist.mockRejectedValue("That deck is not there any more.");
+    deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
   });

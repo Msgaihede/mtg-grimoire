@@ -670,6 +670,13 @@ function RowMenu({
       // worked*, before the answer arrives. Task 11's binding pattern; pinned by the
       // `focusOut(…, { relatedTarget: null })` tests in both suites.
       //
+      // It costs one residual case, kept deliberately. This blur is also how the menu stays
+      // exclusive with the docked search panel's set filter — the editor's third `"inner"`
+      // Escape peer, which no state union covers (`DeckEditor`'s `Layer` doc) — and a *refused*
+      // menu action leaves the menu open with the caret already on `<body>`. Opening the set
+      // filter from there blurs nothing, so both are open and one Escape closes both. Cheaper
+      // than the alternative, which is a menu that vanishes as though the write had worked.
+      //
       // And **not to the trigger**, which is how the trigger stays a toggle: a press on it
       // blurs this panel first, so closing here would take the menu down and the press would
       // then open it again — a control that can only ever open. `NewDeck`'s boundary is the

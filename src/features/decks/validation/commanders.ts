@@ -198,7 +198,8 @@ export function identityOf(card: CardFacts): ReadonlySet<string> {
  * it is measured against would make that rule unfalsifiable; and a card that is neither — a
  * creature somebody dropped into the zone — has an eligibility error of its own rather than a
  * say in what the deck may contain. A partner pair contributes both identities, which is the
- * same union `oathbreakerZoneIssues` holds each signature spell to.
+ * same union `oathbreakerZoneIssues` holds each signature spell to — and in the oathbreaker
+ * zone that union is this app's permissive reading rather than a rule (see `unionIdentity`).
  */
 export function commanderIdentity(zone: CardFacts[], spec: FormatSpec): ReadonlySet<string> | null {
   const definers = spec.commanderRule === "oathbreaker" ? zone.filter(isPlaneswalkerCard) : zone;
@@ -206,7 +207,18 @@ export function commanderIdentity(zone: CardFacts[], spec: FormatSpec): Readonly
   return unionIdentity(definers);
 }
 
-/** CR 702.124c: two commanders make one identity, and it is the union of theirs. */
+/**
+ * Several definers, one identity: the union of theirs.
+ *
+ * In the **commander** zone that is a citation — CR 702.124c, two partners make one identity —
+ * and in the **oathbreaker** zone it is not. Oathbreaker is not a CR format, and its own rule
+ * is per-oathbreaker: each signature spell must fit inside *the oathbreaker it was chosen for*.
+ * A zone-level check has no spell→walker assignment to read (the zone is a list of cards; which
+ * spell belongs to which walker is nowhere in the data), so this app takes the union
+ * deliberately — the permissive reading, which under-reports rather than inventing a pairing
+ * and refusing a deck over it. 702.124c is the analogy the shape is borrowed from, not the
+ * rule being enforced.
+ */
 function unionIdentity(cards: CardFacts[]): Set<string> {
   const union = new Set<string>();
   for (const card of cards) for (const colour of identityOf(card)) union.add(colour);
@@ -755,20 +767,33 @@ function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationI
       ),
     );
   } else if (spells.length > spellCap) {
+    // The sentence quotes the **cap**, never `walkers.length`. Above two oathbreakers the two
+    // numbers come apart, and a per-walker denominator then reads "you have 3 for 3
+    // oathbreakers" — a sentence stating a rule its own numbers keep. The count error just
+    // above has already said there are too many oathbreakers; this one says how many signature
+    // spells the zone can hold whatever that count turns out to be.
     issues.push(
       error(
         "commander-count",
         spellCap === 1
           ? `${format} decks have one signature spell; you have ${spells.length}.`
-          : `${format} decks have one signature spell for each oathbreaker; you have ` +
-              `${spells.length} for ${walkers.length} oathbreakers.`,
+          : `${format} decks have one signature spell for each oathbreaker and at most two ` +
+              `oathbreakers, so at most two; you have ${spells.length}.`,
       ),
     );
   }
 
-  // The one place a command-zone card is measured against another one — and with partners it
-  // is measured against the **combined** identity (702.124c), the same union the deck is held
-  // to. Outside the walker-count branches on purpose: two oathbreakers must not switch it off.
+  // The one place a command-zone card is measured against another one — and with a partner pair
+  // it is measured against the **combined** identity, the same union the deck is held to.
+  //
+  // That union is this app's deliberate reading, not the format's rule. Oathbreaker asks each
+  // signature spell to fit inside *its own* oathbreaker; a zone-level check has no
+  // spell→walker assignment to read, so holding both spells to both identities is the
+  // permissive answer — it lets a Sultai spell through beside a Dimir and a Simic oathbreaker
+  // rather than guessing which one it was chosen for and refusing a legal deck. It
+  // under-reports and never invents. (CR 702.124c is the analogy — see `unionIdentity`.)
+  //
+  // Outside the walker-count branches on purpose: two oathbreakers must not switch it off.
   if (walkers.length > 0) {
     const oathbreakers = unionIdentity(walkers);
     const possessive = walkers.length > 1 ? "oathbreakers'" : "oathbreaker's";

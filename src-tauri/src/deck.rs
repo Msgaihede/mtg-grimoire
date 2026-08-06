@@ -69,7 +69,13 @@ pub struct DeckRow {
     pub cover_artist: Option<String>,
     pub is_built: bool,
     pub archived: bool,
-    /// main + commander + companion copies — what "a 60-card deck" means in a caption.
+    /// main + commander copies — what "a 60-card deck" means in a caption, and **the same
+    /// zones the validation engine sizes a deck by** (`SIZE_ZONES` in `engine.ts`). One
+    /// definition, because a tile that says 101 beside a panel that says "exactly 100 incl
+    /// cmdr; you have 100" is two answers to one question. The sideboard, the maybe pile and
+    /// the companion are all deliberately out of it: a companion is not in the deck it is
+    /// played beside — where a format gives it a home it is a sideboard slot (CR 100.4a), and
+    /// EDH's is "effectively a 101st card", which is exactly the card this count must not add.
     pub card_count: i64,
     pub updated_at: i64,
 }
@@ -164,11 +170,14 @@ fn card_gone(zone: &str) -> String {
 /// Every column of a [`DeckRow`], from the one query shape the list and the single read
 /// share. Both LEFT JOINs are load-bearing: a vanished cover printing or a format key the
 /// specs no longer carry must never hide a deck from its owner.
+///
+/// The zone list in the subquery is [`DeckRow::card_count`]'s definition, and it is the
+/// engine's `SIZE_ZONES` (`main` + `commander`) verbatim — see that field's doc.
 const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
             d.cover_card_id, c.artist, d.is_built, d.archived,
             coalesce((SELECT sum(quantity) FROM deck_cards
                        WHERE deck_id = d.id
-                         AND zone IN ('main','commander','companion')), 0),
+                         AND zone IN ('main','commander')), 0),
             d.updated_at
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1595,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn list_decks_counts_main_commander_companion_and_reads_the_cover_artist() {
+    fn list_decks_counts_main_and_commander_and_reads_the_cover_artist() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Bolt Tribal", "commander")).unwrap();
         add_card(&conn, deck.id, "bolt-lea", "main", 2).unwrap();
@@ -1633,9 +1642,13 @@ mod tests {
         );
         assert_eq!(decks[0].id, deck.id, "archived decks sort last");
         assert!(decks[1].archived);
+        // The gallery's number and the validation panel's are one definition — the engine's
+        // `SIZE_ZONES`, which is `main` + `commander` and nothing else. A companion is the
+        // reason this is pinned: EDH calls one "effectively a 101st card", so counting it here
+        // would put 101 on the tile of a deck the panel had just called exactly 100.
         assert_eq!(
-            decks[0].card_count, 4,
-            "2 main + 1 commander + 1 companion; the side and maybe piles are not the deck"
+            decks[0].card_count, 3,
+            "2 main + 1 commander; the companion, side and maybe piles are not the deck"
         );
         assert_eq!(decks[0].format_name.as_deref(), Some("Commander"));
         assert_eq!(decks[0].cover_artist.as_deref(), Some("Christopher Rush"));

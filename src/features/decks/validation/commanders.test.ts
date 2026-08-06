@@ -991,8 +991,29 @@ describe("the oathbreaker zone", () => {
       severity: "error",
       code: "commander-count",
       message:
-        "Oathbreaker decks have one signature spell for each oathbreaker; you have 3 for 2 oathbreakers.",
+        "Oathbreaker decks have one signature spell for each oathbreaker and at most two " +
+        "oathbreakers, so at most two; you have 3.",
     });
+  });
+
+  /**
+   * Above two oathbreakers the per-walker denominator and the cap come apart, and a sentence
+   * that quoted the walker count would read "you have 3 for 3 oathbreakers" — a rule stated in
+   * numbers that keep it. The zone gets *both* errors, and each has to be true on its own: one
+   * says there are too many oathbreakers, the other says how many signature spells the zone can
+   * hold at all.
+   */
+  it("says something true about the spells when there are more oathbreakers than the format allows", () => {
+    const issues = zone(TEVESH_SZAT, JESKA_THRICE_REBORN, NAHIRI, DARK_RITUAL, BOLT_IN_ZONE, {
+      ...DARK_RITUAL,
+      cardId: "c-Dark Ritual 2",
+    }).filter((i) => i.code === "commander-count");
+
+    expect(issues.map((i) => i.message)).toEqual([
+      "Oathbreaker decks have at most two oathbreakers, and only with a partner ability; you have 3.",
+      "Oathbreaker decks have one signature spell for each oathbreaker and at most two " +
+        "oathbreakers, so at most two; you have 3.",
+    ]);
   });
 
   /** The same CR 702.124 machinery as the commander zone, so an unpartnered second
@@ -1010,8 +1031,12 @@ describe("the oathbreaker zone", () => {
 
   /**
    * The identity check is **outside** the walker-count branches on purpose: with two
-   * oathbreakers it is the combined identity (702.124c) that each signature spell has to fit
-   * inside, and switching the rule off for partner decks is the failure that hides.
+   * oathbreakers it is the combined identity that each signature spell has to fit inside, and
+   * switching the rule off for partner decks is the failure that hides.
+   *
+   * The combining is this app's permissive reading, not the format's rule — Oathbreaker pairs
+   * each spell with its own oathbreaker and a zone-level check has no such assignment to read
+   * (`unionIdentity`). What is pinned here is that the check still *runs* for a pair.
    */
   it("holds each signature spell to the combined identity of a partner pair", () => {
     expect(zone(TEVESH_SZAT, JESKA_THRICE_REBORN, PATH_TO_EXILE)).toContainEqual({

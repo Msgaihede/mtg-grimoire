@@ -84,8 +84,7 @@ const GROUPINGS: { id: GroupBy; label: string }[] = [
 ];
 
 /**
- * The one dismissible layer this editor can have open, and there is deliberately only ever
- * one.
+ * The dismissible layers this editor *owns*, and it deliberately holds at most one.
  *
  * `useDismissOnEscape` orders exactly two rungs — one capture-phase `"inner"` layer and one
  * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
@@ -93,6 +92,22 @@ const GROUPINGS: { id: GroupBy; label: string }[] = [
  * `"inner"`, so they are modelled as *one* piece of state: "never two" is then structural
  * rather than remembered, and at most one of the two Escape registrations is ever enabled.
  * `DecksPage`'s `Panel` is the same arrangement, for the same reason.
+ *
+ * **There is a third `"inner"` peer on this screen, and it is not in this union**: the set
+ * filter inside the docked search panel (`SetCombobox.tsx:95`, reached through `FilterBar`).
+ * It is a whole layer of somebody else's, so the union cannot model it — what keeps it apart
+ * from these two is **focus and click mechanics, not structure**. Opening it takes the caret
+ * out of whichever of these is up, and both of them close on focus-out; opening either of
+ * these takes the caret out of the combobox, which closes on focus-out and on a mousedown
+ * outside its root. Pinned both ways by `DeckEditor.test.tsx`'s
+ * "never has the set filter and one of the editor's own layers open at once".
+ *
+ * Mechanics are weaker than structure, and one case survives: `RowMenu`'s `onBlur` skips
+ * closing while the write it started is in flight (`ZoneColumn.tsx`, Task 11's binding
+ * pattern), so a *refused* menu action leaves the menu open with the caret on `<body>` — and
+ * opening the set filter from there has nothing to blur, so both are open and one Escape
+ * closes both. Known, accepted, and cheap next to the alternative: dropping that guard would
+ * take a menu down as though its refused write had worked.
  */
 type Layer = { kind: "menu"; zone: DeckZone; cardId: string } | { kind: "check" } | null;
 
@@ -286,12 +301,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
   //
-  // **All four writes, banner or no banner.** `add_card` calls `touch_deck` like the rest, so a
-  // press in the docked panel answers the same sentence — and without it here the panel would
-  // report a deck that is gone while the zone columns beside it went on painting it, with every
-  // further press failing the same way and nothing on screen explaining why.
+  // **All five writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
+  // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
+  // panel or on the stats strip reaches the same sentence — and without them here that surface
+  // would report a deck that is gone while the zone columns beside it went on painting it, with
+  // every further press failing the same way and nothing on screen explaining why. The family
+  // is the point: no refused deck write may leave a dead deck painted.
   const refetch = deck.query.refetch;
-  const lastOfAny = newest([...writes, deck.addCard]);
+  const lastOfAny = newest([...writes, deck.addCard, deck.missingToWishlist]);
   const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;
   useEffect(() => {
     if (failedAt) void refetch();
