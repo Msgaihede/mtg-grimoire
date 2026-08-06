@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { DeckCard } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
+import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { DROP_LINE_ATTR } from "./DropIndicator";
 import { card, resetRowIds } from "./validation/fixtures";
 import { STACK_MAX_WIDTH, STACK_OVERLAP, UNDER_PLATE } from "./VisualCard";
@@ -275,6 +276,28 @@ describe("ZoneColumn", () => {
     await userEvent.click(screen.getByText("LEA · 161"));
 
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveFocus();
+  });
+
+  /**
+   * **And the caret can be handed back to this row after the row is gone.**
+   *
+   * The other half of the hand-back above, for the case the stashed element cannot answer: a
+   * swap deletes the row the pane was opened from — the new printing's row is a different React
+   * key — so the pane finds the *slot* instead, `document.querySelector` over the attribute
+   * every deck control draws (`CardDetailPane`'s `deckControlFor`, `dnd.ts`'s
+   * {@link deckCardSlot}). Both views owe it one, and only the card view's is exercised end to
+   * end — `App.test.tsx` opens the editor in its default view. Without this the attribute could
+   * be deleted from the dense row with the whole suite green, and every reader who pressed
+   * "Show as list" would lose the caret to `<body>` on the Escape after a swap.
+   */
+  it("marks the row with the slot the card pane hands the caret back to", () => {
+    const row = card({ name: "Lightning Bolt" });
+    draw([row]);
+
+    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAttribute(
+      DECK_CARD_ATTR,
+      deckCardSlot("main", row.cardId),
+    );
   });
 
   /**

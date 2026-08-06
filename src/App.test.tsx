@@ -703,3 +703,49 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
   // press was made from, which the swap deleted along with its row.
   await waitFor(() => expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveFocus());
 });
+
+/**
+ * The same hand-back with the deck drawn as a **list**, because the editor has two views and
+ * the test above only ever draws one.
+ *
+ * The pane finds its way home through an attribute on whichever control stands for the slot
+ * (`DECK_CARD_ATTR`), and the card and the row are two different controls in two different
+ * files — so "the visual card carries it" is not evidence that the dense row does. Deleting it
+ * from `ZoneColumn`'s row left every suite green until this existed; `ZoneColumn.test.tsx` pins
+ * the attribute itself, and this is the press-to-caret path it is there for.
+ *
+ * One row and no fold: what is being asked is where the caret lands, and the announcement is
+ * the other test's subject.
+ */
+it("hands the caret back to the deck's row when the deck is drawn as a list", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet
+    .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] })
+    .mockResolvedValue({ deck: BURN, cards: [SWAPPED_BOLT] });
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  // The editor's docked search panel finds nothing: a result named after the card already in
+  // the deck would be a second button by that name, and the deck's row is addressed by it.
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+  await userEvent.click(screen.getByRole("button", { name: "Show as list" }));
+
+  await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+  const pane = await screen.findByRole("complementary", { name: /card details/i });
+  await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
+
+  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", "main");
+  // The row the swap rebuilt, on the printing the deck now holds — a *row*, so it is read by
+  // its set and number rather than by the art the other view draws.
+  await waitFor(() => expect(screen.getByText("M10 · 146")).toBeInTheDocument());
+
+  // What a browser does to a control that disables itself for a write, and jsdom does not.
+  (document.activeElement as HTMLElement).blur();
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveFocus());
+});
