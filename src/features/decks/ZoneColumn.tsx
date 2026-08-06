@@ -15,6 +15,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
+import { shouldFlipUp } from "@/lib/shouldFlipUp";
 import { cn } from "@/lib/utils";
 import {
   cardDraggable,
@@ -122,32 +123,11 @@ type MenuAnchor = keyof typeof MENU_ANCHOR;
 /**
  * Which way a row's menu opens — down from the row's top edge, or up from its bottom.
  *
- * Pure, because the thing it decides cannot be seen in jsdom: every rectangle there is zero,
- * so a component test of the flip would pass over any arithmetic at all. The column's
- * scroller clips (`overflow-y-auto` inside `overflow-hidden`) and there is nothing below it
- * to scroll to, so a menu opened on a row near the foot of a column is simply cut in half.
- *
- * Down wins ties: it is where the reader is looking, and flipping a menu that fits would move
- * it for nothing.
+ * The arithmetic moved to `@/lib/shouldFlipUp` when the card pane's printing preview needed
+ * the same answer about a different scroller (`useImageRetry`'s extraction, for its reason).
+ * Re-exported from here so the callers below, and the tests beside this file, read unchanged.
  */
-export function shouldFlipUp({
-  rowTop,
-  rowBottom,
-  menuHeight,
-  viewTop,
-  viewBottom,
-}: {
-  rowTop: number;
-  rowBottom: number;
-  menuHeight: number;
-  viewTop: number;
-  viewBottom: number;
-}): boolean {
-  const fitsBelow = rowTop + menuHeight <= viewBottom;
-  const fitsAbove = rowBottom - menuHeight >= viewTop;
-  // Neither fits — a menu taller than the column it is in — so it opens the way it reads.
-  return !fitsBelow && fitsAbove;
-}
+export { shouldFlipUp };
 
 /**
  * The bucket one card belongs to.
