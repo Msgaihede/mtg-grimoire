@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckCard, type DeckDetail, type DeckPatch, type DeckZone } from "@/lib/ipc";
+import type { PaneDeckContext } from "@/lib/store";
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
  *  and the editor's `useMemo`s key off it. */
@@ -187,6 +188,18 @@ export function useDeck(id: number | null) {
    * `["decks"]` like every zone write, for the same reason: `allocate_deck` runs inside the
    * swap's transaction, and the allocator takes the exact printing first — so the copies this
    * deck reserves can change even though its counts did not.
+   *
+   * **And `["decks"]` again when it is refused, which no other write here does.** The reason is
+   * where this one is pressed: the control is on the card pane's printings rows, and the pane
+   * is a *sibling* of the editor under `App`, so it mounts its own observer through
+   * {@link useSwapFromPane}. TanStack shares a query's cache between observers and a mutation's
+   * state with nobody — two `useMutation` calls on this definition are two error states — so
+   * the editor's copy stays idle however the pane's ends, and the editor's refused-write family
+   * (`DeckEditor`'s `lastOfAny`) cannot see the failure at all. Every refusal here is either a
+   * busy database or a deck that has been deleted (`touch_deck` answers GONE), and the second
+   * one must not leave the zone columns painting a deck that is not there. Invalidating on the
+   * way out is that family's rule, moved onto the one definition every observer shares: the
+   * refetch reaches the editor whoever pressed the button.
    */
   const swapPrinting = useMutation({
     mutationFn: ({
@@ -199,6 +212,7 @@ export function useDeck(id: number | null) {
       zone: DeckZone;
     }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, zone),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 
   /**
@@ -244,3 +258,24 @@ export function useDeck(id: number | null) {
 
 /** The whole of what the editor consumes, named so the view and the hook agree. */
 export type Deck = ReturnType<typeof useDeck>;
+
+/**
+ * The printing swap, for the surface that presses it: the card pane's printings rows.
+ *
+ * The pane is not inside the editor — it is docked beside whatever view is up — so it cannot
+ * be handed the editor's `Deck`. What it has instead is the store's {@link PaneDeckContext},
+ * which names the deck row the open card came from, and this turns that into the one write it
+ * offers. `null` — a card opened from anywhere but a deck row — mounts an idle mutation and a
+ * query that asks for nothing, exactly as the gallery's `useDeck(null)` does.
+ *
+ * **The whole hook, deliberately, rather than a mutation defined here.** The query it brings
+ * along is the same `["decks", "detail", id]` the editor is already reading, and TanStack
+ * shares a query's cache between observers — so with an editor open this costs no `deck_get`
+ * at all (the app's `staleTime` is 30 s), and with the context set from a deck the reader is
+ * looking at there is always an editor open. A second definition of the mutation would cost
+ * more than the query does: the refusal rule that carries a pane-fired GONE back to the editor
+ * lives on the definition, and two definitions are two places to keep it.
+ */
+export function useSwapFromPane(context: PaneDeckContext | null) {
+  return useDeck(context?.deckId ?? null).swapPrinting;
+}

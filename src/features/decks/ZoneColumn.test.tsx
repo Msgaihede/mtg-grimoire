@@ -277,12 +277,19 @@ describe("ZoneColumn", () => {
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveFocus();
   });
 
-  /** The row opens the card; the controls on it do their own job and nothing else. */
+  /**
+   * The row opens the card; the controls on it do their own job and nothing else.
+   *
+   * **With the zone it was opened from**, which is not decoration: the pane the click opens
+   * offers to swap this row's printing, and a swap is addressed by the slot — deck, zone,
+   * printing. The same card sits in the main deck and the sideboard often enough that the
+   * column has to say which one the reader pressed.
+   */
   it("opens the card from the row, and not from the stepper", async () => {
     const { onSelect } = draw([card({ name: "Lightning Bolt" })]);
 
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
-    expect(onSelect).toHaveBeenCalledWith("c-Lightning Bolt");
+    expect(onSelect).toHaveBeenCalledWith("c-Lightning Bolt", "main");
 
     onSelect.mockClear();
     await userEvent.click(screen.getByRole("button", { name: /increase copies/i }));

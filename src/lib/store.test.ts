@@ -96,6 +96,75 @@ describe("the open deck", () => {
 });
 
 /**
+ * Which deck row the open card came from — the whole of what the pane's "Use this printing"
+ * needs, and the one piece of app state that is about *two* views at once.
+ *
+ * The clearing is what these are really about: a context that outlived the card it was set
+ * for would offer to rewrite a deck row from a card opened out of the collection.
+ */
+describe("the deck row a card was opened from", () => {
+  it("opens the card and remembers the row in one write", () => {
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      deckId: 4,
+      zone: "main",
+      cardId: "p1",
+    });
+  });
+
+  /**
+   * The one that has to be structural rather than remembered: every other surface that opens
+   * a card — a search tile, a collection row, a wishlist row, the docked panel's tiles, the
+   * validation panel — goes through `setSelectedCardId`, and each of them opens a card that is
+   * *not* the deck row the last context named.
+   */
+  it("forgets the row when a card is opened from anywhere else", () => {
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    useAppStore.getState().setSelectedCardId("p2");
+
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /** The pane closes through the same setter, so the context goes with it. */
+  it("forgets the row when the pane closes", () => {
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    useAppStore.getState().setSelectedCardId(null);
+
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /** Leaving Decks closes the card; a context left behind would be about a pane that is gone. */
+  it("forgets the row when the reader leaves the view", () => {
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    useAppStore.getState().setActiveView("collection");
+
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * And when the editor closes under it. The affordance belongs to the editor that is open:
+   * pressing it with the gallery on screen would write to a deck the reader cannot see, and
+   * the refused-write family that answers for it is the editor's.
+   */
+  it("forgets the row when the editor closes", () => {
+    useAppStore.setState({ openDeckId: 4 });
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+
+    useAppStore.getState().setOpenDeckId(null);
+
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+    // The card itself stays: the pane belongs to the reader, not to the editor behind it.
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+  });
+});
+
+/**
  * Two layouts, two settings. The search is for looking at cards and opens on the art; the
  * collection is usually for counting them and opens on the table. A reader who switches one
  * to compare prices has said nothing about the other, and one shared toggle would make that

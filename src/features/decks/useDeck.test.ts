@@ -22,7 +22,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { useDeck } from "./useDeck";
+import { useDeck, useSwapFromPane } from "./useDeck";
 
 const DECK: DeckRow = {
   id: 4,
@@ -239,5 +239,69 @@ describe("useDeck", () => {
     // printing of every card the deck was short of, and a search behind this is visibly wrong
     // rather than stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+});
+
+/**
+ * The swap pressed from the card pane, which is the only place it is pressed from.
+ *
+ * The pane is a **sibling** of the deck editor under `App`, so this mounts a second observer
+ * on the same mutation definition — and that is the whole reason the definition carries an
+ * `onError` the other five writes do not need. See `useDeck`'s `swapPrinting`.
+ */
+describe("useSwapFromPane", () => {
+  /** No context is a card opened from anywhere but a deck row: nothing to ask for, and — like
+   *  the gallery mounting `useDeck(null)` — nothing asked. */
+  it("asks for nothing when the card was not opened from a deck", () => {
+    const { result } = renderHook(() => useSwapFromPane(null), { wrapper });
+
+    expect(deckGet).not.toHaveBeenCalled();
+    expect(result.current.isIdle).toBe(true);
+  });
+
+  /** The context's deck, all the way to the command — `decks.id` is an INTEGER key and the
+   *  mirror takes a number. */
+  it("swaps the context's deck row for the printing that was pressed", async () => {
+    const { result } = renderHook(
+      () => useSwapFromPane({ deckId: 4, zone: "side", cardId: "p1" }),
+      { wrapper },
+    );
+
+    const answer = await result.current.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      zone: "side",
+    });
+
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", "side");
+    expect(answer).toEqual({ folded: false, quantity: 4 });
+  });
+
+  /**
+   * **The refused swap re-reads the deck**, and this is the mechanism the editor behind the
+   * pane depends on.
+   *
+   * TanStack shares a query's *cache* between observers and shares a mutation's **state** with
+   * nobody: the editor's `useDeck(4).swapPrinting` and this one are two `useMutation` calls, so
+   * the editor's copy stays idle however this one ends. Its refused-write family — six writes,
+   * one effect, one re-read — therefore cannot see this failure, and a deck deleted under the
+   * reader would leave the zone columns painting a deck that is gone while the pane says why.
+   * The invalidation is that family's rule, moved onto the definition every observer shares.
+   */
+  it("re-reads the deck when a swap is refused, whichever observer pressed it", async () => {
+    deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
+    const { result } = renderHook(
+      () => useSwapFromPane({ deckId: 4, zone: "main", cardId: "p1" }),
+      {
+        wrapper,
+      },
+    );
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(
+      result.current.mutateAsync({ fromCardId: "p1", toCardId: "p2", zone: "main" }),
+    ).rejects.toBe("That deck is not there any more.");
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
   });
 });

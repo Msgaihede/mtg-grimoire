@@ -246,7 +246,15 @@ export interface ZoneColumnProps {
   onSetQuantity: (card: DeckCard, quantity: number) => void;
   onMove: (card: DeckCard, to: DeckZone) => void;
   onSetCover: (card: DeckCard) => void;
-  onSelect: (cardId: string) => void;
+  /**
+   * Open this card in the pane, from **this slot**.
+   *
+   * The zone travels with the id because the pane the click opens offers to swap the row's
+   * printing, and every deck write is addressed by the slot rather than by a row id — the same
+   * card sits in the main deck and the sideboard often enough that "which one was pressed" is
+   * not derivable from the card.
+   */
+  onSelect: (cardId: string, zone: DeckZone) => void;
   /**
    * A card was dropped on this column, and this is the write it means — computed here rather
    * than reported raw, because the column is what knows its own zone and `dropWrite` is the
@@ -473,7 +481,8 @@ function CardRow({
   menu: ReactNode;
   onOpenMenu: (card: DeckCard, trigger: HTMLButtonElement) => void;
   onSetQuantity: (card: DeckCard, quantity: number) => void;
-  onSelect: (cardId: string) => void;
+  /** The slot, not just the card — see {@link ZoneColumnProps.onSelect}. */
+  onSelect: (cardId: string, zone: DeckZone) => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLButtonElement>(null);
@@ -519,7 +528,7 @@ function CardRow({
       // and whose next Tab restarts from the top of the app. Measured in the running window.
       onClick={() => {
         nameRef.current?.focus();
-        onSelect(card.cardId);
+        onSelect(card.cardId, zone);
       }}
     >
       {/* The stepper writes straight through: a deck editor is where quantities are

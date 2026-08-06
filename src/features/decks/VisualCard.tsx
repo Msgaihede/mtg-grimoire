@@ -154,7 +154,9 @@ export interface VisualCardProps {
   menu: ReactNode;
   onOpenMenu: (card: DeckCard, trigger: HTMLButtonElement) => void;
   onSetQuantity: (card: DeckCard, quantity: number) => void;
-  onSelect: (cardId: string) => void;
+  /** The pane this opens offers to swap the row's printing, and a swap is addressed by the
+   *  slot — so the zone travels with the card id. */
+  onSelect: (cardId: string, zone: DeckZone) => void;
 }
 
 /**
@@ -240,7 +242,7 @@ export function VisualCard({
         // prunes everything inside, so a plate drawn in here would be a plate nothing reads.
         // See the plate's own note.
         aria-label={card.name}
-        onClick={() => onSelect(card.cardId)}
+        onClick={() => onSelect(card.cardId, zone)}
         className={cn(
           "relative block w-full overflow-hidden rounded-lg bg-surface text-left",
           // Not a real card any more, and the frame says so before the sentence under it is

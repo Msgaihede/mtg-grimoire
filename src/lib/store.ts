@@ -1,7 +1,26 @@
 import { create } from "zustand";
+import type { DeckZone } from "@/lib/ipc";
 
 /** The five top-level destinations in the sidebar. */
 export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
+
+/**
+ * The deck row the open card was opened *from* — which is the whole of what the card pane
+ * needs to offer "Use this printing", and nothing more.
+ *
+ * A slot, addressed the way every deck write addresses one: the deck, the zone, and the
+ * printing that is in it. Not a `deck_cards.id`, for `useDeck`'s reason — a stale row id is
+ * the difference between rewriting the slot the reader is looking at and rewriting one
+ * somebody else already refilled.
+ */
+export interface PaneDeckContext {
+  /** `decks.id` is an INTEGER primary key, so this is a number all the way to the command. */
+  deckId: number;
+  zone: DeckZone;
+  /** The printing the deck holds in that slot — the swap's `from`, and normally the card the
+   *  pane is showing. */
+  cardId: string;
+}
 
 /** How the search results are laid out. */
 export type SearchView = "table" | "grid";
@@ -18,6 +37,26 @@ interface AppState {
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
+  /**
+   * The deck row the open card came from, or `null` — which is every card opened from
+   * anywhere else, and every card at all when no pane is open.
+   *
+   * It is here rather than in the pane because it is written by one view (the deck editor's
+   * zone columns) and read by another (the card pane docked beside them), and the two are
+   * siblings under `App` with nothing between them but this store.
+   */
+  paneDeckContext: PaneDeckContext | null;
+  /**
+   * Open a card **as a deck row** — the one write that sets a context, and the only way to
+   * set one.
+   *
+   * One action rather than a pair of setters, and that is the whole design: `setSelectedCardId`
+   * clears the context (see there), so "every other way of opening a card leaves no context"
+   * is structural rather than a rule six call sites have to remember. Two writers use this —
+   * a click on a card in a zone column, and a swap that succeeded, which re-anchors the pane
+   * onto the printing the deck now holds in the same slot.
+   */
+  openCardFromDeck: (context: PaneDeckContext) => void;
   /**
    * The deck the editor is open on, or `null` when Decks is showing its gallery.
    *
@@ -58,7 +97,13 @@ export const useAppStore = create<AppState>((set) => ({
   // the Decks view, so a deck left open through a trip to Settings would be waiting behind
   // the sidebar with the gallery it was opened from nowhere in sight.
   setActiveView: (activeView) =>
-    set({ activeView, selectedCardId: null, openDeckId: null, returnToDeckId: null }),
+    set({
+      activeView,
+      selectedCardId: null,
+      paneDeckContext: null,
+      openDeckId: null,
+      returnToDeckId: null,
+    }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   searchView: "grid",
@@ -68,15 +113,29 @@ export const useAppStore = create<AppState>((set) => ({
   collectionView: "table",
   setCollectionView: (collectionView) => set({ collectionView }),
   selectedCardId: null,
-  setSelectedCardId: (selectedCardId) => set({ selectedCardId }),
+  // **And forgets which deck row the last card came from.** Every surface in the app that
+  // opens a card goes through here — search tiles, collection rows, wishlist rows, the docked
+  // panel's tiles, the validation panel's card names, and the pane's own close — and every one
+  // of them opens something that is *not* the deck row the context named. Clearing it here is
+  // what makes that true by construction instead of by six call sites remembering to say so;
+  // the one surface that does mean it says so through `openCardFromDeck`.
+  setSelectedCardId: (selectedCardId) => set({ selectedCardId, paneDeckContext: null }),
+  paneDeckContext: null,
+  openCardFromDeck: (paneDeckContext) =>
+    set({ selectedCardId: paneDeckContext.cardId, paneDeckContext }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.
   openDeckId: null,
   // Closing an editor remembers which deck it was, so the gallery it returns to can put the
   // caret back on that tile. Opening one leaves the note alone: it is consumed on arrival.
+  // Closing or opening an editor also drops the deck row the card pane was anchored to: the
+  // affordance it carries writes to a deck the reader can see, and with the gallery on screen
+  // there is no editor to answer for the write or to re-read after a refusal. The card itself
+  // stays open — the pane belongs to the reader, not to the view behind it.
   setOpenDeckId: (openDeckId) =>
     set((s) => ({
       openDeckId,
+      paneDeckContext: null,
       returnToDeckId: openDeckId === null ? s.openDeckId : s.returnToDeckId,
     })),
   returnToDeckId: null,

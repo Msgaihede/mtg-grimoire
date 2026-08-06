@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -34,30 +34,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-/**
- * The mutations this editor mounted, kept where a test can reach them.
- *
- * For exactly one of them, and it says which: `swapPrinting` has **no control in this view**
- * — the card pane's printings rows press it — while the mutation itself is mounted here,
- * because this is the component whose refused-write family it belongs to. Wrapped rather than
- * replaced: `useDeck` runs for real, its answer is handed straight back, and the only thing
- * this adds is a handle on the object the editor is itself holding. A sibling component
- * calling `useDeck(4)` would not do: two `useMutation` calls are two observers, and the one
- * the editor watches is the one that has to be made to fail.
- */
-const mounted = vi.hoisted(() => ({ deck: null as unknown as Deck }));
-vi.mock("./useDeck", async (importOriginal) => {
-  const real = await importOriginal<typeof import("./useDeck")>();
-  function useDeck(id: number | null) {
-    const deck = real.useDeck(id);
-    mounted.deck = deck;
-    return deck;
-  }
-  return { ...real, useDeck };
-});
-
 import { DeckEditor } from "./DeckEditor";
-import type { Deck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
 const DECK: DeckRow = {
@@ -448,18 +425,53 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("region", { name: /^Main deck/ })).toHaveFocus();
   });
 
-  /** A row opens the card in the pane the app already docks; the stepper on it does not. */
-  it("opens the card from a row, and not from its stepper", async () => {
+  /**
+   * A row opens the card in the pane the app already docks; the stepper on it does not.
+   *
+   * **And it says which slot the card came out of.** The pane offers to swap that slot's
+   * printing, which is a write addressed by deck, zone and card — so a click here is the one
+   * place in the app that writes a `paneDeckContext`, and the zone is half of what it carries.
+   */
+  it("opens the card from a row, as a row of this deck", async () => {
     await open();
 
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
     expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      deckId: 4,
+      zone: "main",
+      cardId: "c-Lightning Bolt",
+    });
 
-    useAppStore.setState({ selectedCardId: null });
+    useAppStore.setState({ selectedCardId: null, paneDeckContext: null });
     await userEvent.click(
       screen.getByRole("button", { name: /increase copies of lightning bolt/i }),
     );
     expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * The other card surface in this view, and the one that must *not* leave a deck context: a
+   * tile in the docked panel is a card the deck does not have, so the pane it opens has no slot
+   * to offer to rewrite. It goes through `setSelectedCardId`, which clears the context in the
+   * same write — the property this asserts is the store's, and this is where it can be seen
+   * happening between two surfaces one screen apart.
+   */
+  it("opens a panel tile as a card and not as a row of this deck", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    expect(useAppStore.getState().paneDeckContext).not.toBeNull();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Goblin Guide/ }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("s-Goblin Guide");
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
   });
 
   /** The click path a move needs before drag exists — and the one it keeps afterwards. */
@@ -972,31 +984,20 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * And the sixth, which is the one with no button in this view: the printing swap is pressed
-   * on the **card pane's** printings rows, and the pane is a sibling of this editor rather
-   * than part of it.
+   * The sixth write of the family has no button in this view at all — the printing swap is
+   * pressed on the **card pane's** printings rows, and the pane is a sibling of this editor
+   * rather than part of it — so it is tested where the two components meet: `App.test.tsx`'s
+   * "says a refused swap in the pane, and the deck behind it goes with it".
    *
-   * It is in the family for the family's reason — `swap_printing` opens with `touch_deck` like
-   * every other zone write, so a swap onto a deck that has been deleted answers the same
-   * sentence, and an editor that went on painting the deck behind that refusal would be the
-   * dead-deck-still-painted case exactly. Driven through the mutation the editor mounted
-   * (see `mounted`), because the affordance that will start it is Task 5's.
+   * It cannot honestly be tested from here. Task 4 drove it through a wrapper around `useDeck`
+   * that handed the test the editor's own mutation object, because the affordance did not exist
+   * yet; with the affordance built, that seam would be testing a press no reader can make. And
+   * the mechanism turned out not to be this file's `newest` list either: two `useMutation` call
+   * sites share no state, so what carries a pane-fired refusal back to these columns is the
+   * `onError` invalidation on the mutation's single definition (`useDeck.ts`). The entry in
+   * `lastOfAny` below stays as the belt to that braces, for the day a control in this view
+   * fires the same write.
    */
-  it("re-reads the deck when a printing swap is refused", async () => {
-    deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
-    deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
-
-    await open();
-    act(() => {
-      mounted.deck.swapPrinting.mutate({
-        fromCardId: "c-Lightning Bolt",
-        toCardId: "p-m10",
-        zone: "main",
-      });
-    });
-
-    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
-  });
 
   /** A refused write is said in the app's own words, where the reader is looking. */
   it("says so when a write is refused", async () => {

@@ -1,5 +1,5 @@
 import { StrictMode, useState } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -73,14 +73,26 @@ const printings = [printing()];
 
 const cardDetail = vi.fn();
 const cardPrintings = vi.fn();
+/**
+ * The two deck commands the pane can reach, and it reaches them only when the card was opened
+ * from a deck row: the swap its printings rows offer, and the deck read that comes with the
+ * hook the swap is mounted from (`useSwapFromPane` takes the whole of `useDeck`, whose query
+ * the editor is normally already sharing).
+ */
+const deckGet = vi.fn();
+const deckSwapPrinting = vi.fn();
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
     cardDetail: (id: string) => cardDetail(id),
     cardPrintings: (o: string) => cardPrintings(o),
+    deckGet: (id: number) => deckGet(id),
+    deckSwapPrinting: (deckId: number, from: string, to: string, zone: string) =>
+      deckSwapPrinting(deckId, from, to, zone),
   },
 }));
 import { CardDetailPane } from "./CardDetailPane";
+import { useAppStore } from "@/lib/store";
 
 function wrap(cardId: string, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -138,6 +150,9 @@ const face = (over: Partial<CardFace>): CardFace => ({
 beforeEach(() => {
   cardDetail.mockReset();
   cardPrintings.mockReset();
+  deckGet.mockReset().mockResolvedValue(null);
+  deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  useAppStore.setState(useAppStore.getInitialState());
 });
 
 describe("CardDetailPane", () => {
@@ -461,5 +476,192 @@ describe("CardDetailPane", () => {
       await screen.findByText("Delver of Secrets // Insectile Aberration"),
     ).toBeInTheDocument();
     expect(await screen.findByText(/could not read the other printings/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * "Use this printing" — the printings list read as a way to *change* the deck rather than only
+ * to look at it (spec §2).
+ *
+ * The affordance exists only when the card was opened from a deck row, because only then is
+ * there a slot to rewrite. Everywhere else the same list is what it always was.
+ */
+describe("the printings list, opened from a deck row", () => {
+  const SWAPPABLE = [printing(), printing({ id: "p2", setCode: "m10", collectorNumber: "146" })];
+
+  /** The store's one context write, as the deck editor's zone columns make it. */
+  function fromDeckRow(cardId = "p1") {
+    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId });
+  }
+
+  /** The row a printing is drawn in — where its own action and its own refusal belong. */
+  const rowOf = (control: HTMLElement) => control.closest("li") as HTMLElement;
+
+  const useIt = () =>
+    screen.getByRole("button", { name: "Use this printing (M10 146) in Main deck" });
+
+  /**
+   * A card opened from a search tile, the collection or the wishlist has no deck row behind it,
+   * and a swap needs one — so the list keeps every bit of its old behaviour and adds nothing.
+   */
+  it("offers no swap when the card was not opened from a deck", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+
+    wrap("p1");
+
+    expect(await screen.findByText("ISD · 51")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use this printing/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/this deck uses this printing/i)).not.toBeInTheDocument();
+    // And no deck is read for a pane that has no deck behind it.
+    expect(deckGet).not.toHaveBeenCalled();
+  });
+
+  /**
+   * With a row behind it, every printing offers itself — except the one the deck already holds,
+   * which says so instead. Two states in one column down the list, so the answer to "which one
+   * is in my deck" is read rather than deduced from which row has no button.
+   */
+  it("marks the printing the deck holds and offers every other one", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    fromDeckRow();
+
+    wrap("p1");
+
+    expect(await screen.findByText("This deck uses this printing")).toBeInTheDocument();
+    // On the deck's own row, and on no other.
+    expect(rowOf(screen.getByText("This deck uses this printing"))).toHaveTextContent("ISD · 51");
+    expect(screen.getAllByRole("button", { name: /^Use this printing/ })).toHaveLength(1);
+    expect(rowOf(useIt())).toHaveTextContent("M10 · 146");
+  });
+
+  /**
+   * The write itself: the slot the pane was opened from, and the printing that was pressed.
+   *
+   * And then the pane **re-anchors**. The reader asked for the deck to use this printing, so
+   * the card in front of them becomes it — art, prices, set and all — and the mark moves onto
+   * the row they pressed. Leaving the pane on the old printing would show the card the deck no
+   * longer has, with the row they just filled sitting under a button offering to fill it again.
+   */
+  it("swaps the deck's row to the printing that was pressed, and follows it", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    fromDeckRow();
+
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: /^Use this printing/ }));
+
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", "main");
+    await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("p2"));
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      deckId: 4,
+      zone: "main",
+      cardId: "p2",
+    });
+  });
+
+  /**
+   * A refusal is said **beside the row that was pressed**, which is where the reader is looking
+   * — the docked search panel's add says its own refusals the same way, and for the same reason
+   * a banner at the top of the pane would not: forty rows, one of them refused, and nothing on
+   * screen to say which.
+   *
+   * And the context does not move: the deck still holds the printing it held, so the mark stays
+   * where it was and the pane goes on showing the card it was showing.
+   */
+  it("says why beside the row it was pressed on, and leaves the deck row where it was", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
+    fromDeckRow();
+
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: /^Use this printing/ }));
+
+    const refusal = await screen.findByRole("alert");
+    expect(refusal).toHaveTextContent(
+      "Could not use this printing — That deck is not there any more.",
+    );
+    expect(rowOf(refusal)).toHaveTextContent("M10 · 146");
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      deckId: 4,
+      zone: "main",
+      cardId: "p1",
+    });
+    // The mark has not moved either: the deck holds what it held.
+    expect(rowOf(screen.getByText("This deck uses this printing"))).toHaveTextContent("ISD · 51");
+  });
+
+  /**
+   * One press is one swap, however many times it is pressed.
+   *
+   * The guard is not only about double-clicks: while a swap is in flight every *other* row's
+   * button is disabled too, because they would all be sent the same `from` printing — the one
+   * the write in flight is in the middle of moving. The second write would be refused by the
+   * backend for a row that no longer exists, which is a true sentence about a press the reader
+   * should never have been allowed to make.
+   */
+  it("presses once, however many times it is pressed", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    deckSwapPrinting.mockReturnValue(new Promise(() => {}));
+    fromDeckRow();
+
+    wrap("p1");
+    const button = await screen.findByRole("button", { name: /^Use this printing/ });
+    await userEvent.click(button);
+    await userEvent.click(button);
+
+    expect(deckSwapPrinting).toHaveBeenCalledTimes(1);
+    expect(useIt()).toBeDisabled();
+    // It says what it is doing while it does it, in the same words as the button it replaces.
+    expect(useIt()).toHaveTextContent("Swapping…");
+  });
+
+  /**
+   * The disabled-on-press hazard, in the shape it takes **inside a dismissible layer**: a
+   * browser blurs a control that disables itself with no `relatedTarget` at all, so the caret
+   * lands on `<body>` — and this button is inside the card pane, whose Escape hand-back is the
+   * app's most-repaired piece of focus plumbing. A reader who pressed a row, was refused, and
+   * pressed Escape would be closing the pane from nowhere, with the sentence they had not
+   * finished reading going with it.
+   *
+   * So the button takes the caret back when the write settles, and only from `<body>` — a
+   * reader who has moved on in the meantime owns where they are. `DeckStats`' send button is
+   * the same guard outside a layer; this is the one the pane needs.
+   */
+  it("takes the caret back after the swap it disabled itself for", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    let refuse!: (reason: string) => void;
+    deckSwapPrinting.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        refuse = reject;
+      }),
+    );
+    fromDeckRow();
+
+    wrap("p1");
+    const button = await screen.findByRole("button", { name: /^Use this printing/ });
+    await userEvent.click(button);
+
+    // What a browser does to a focused control that becomes disabled and jsdom does not: blurs
+    // it with no `relatedTarget` at all, leaving the caret on `<body>`. jsdom will not blur a
+    // control that is already disabled — `blur()` returns early on an element that is not a
+    // focusable area — so the caret is walked off it through the pane, which is where the DOM
+    // ends up either way, and the event a real blur would carry is delivered on top. Without
+    // this the test passes over a missing hand-back, because the caret never left.
+    const pane = screen.getByRole("complementary", { name: /card details/i });
+    pane.focus();
+    pane.blur();
+    fireEvent.focusOut(button, { relatedTarget: null });
+    expect(document.body).toHaveFocus();
+
+    refuse("The database is busy with a sync — try again in a moment.");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
+    await waitFor(() => expect(useIt()).toHaveFocus());
   });
 });

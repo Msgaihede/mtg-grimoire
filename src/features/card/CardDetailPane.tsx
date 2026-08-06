@@ -4,10 +4,13 @@ import { FlipHorizontal2, X } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { useSwapFromPane } from "@/features/decks/useDeck";
+import { ZONE_LABEL } from "@/features/decks/ZoneColumn";
 import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { faceCount, groupByIllustration, legalityChips } from "./printings";
@@ -32,6 +35,26 @@ const STATUS_CLASS: Record<string, string> = {
   restricted: "border-border text-dim",
   banned: "border-destructive/40 text-destructive",
 };
+
+/**
+ * What a printings row needs to offer "Use this printing", or `null` on a pane that was not
+ * opened from a deck row.
+ *
+ * One object rather than four props threaded through two components, and it is the *whole*
+ * condition: a row draws the action if and only if this is here. Spec §2 scopes the swap to
+ * decks — the collection's printing identity carries finish and condition, and a swap there
+ * would invent facts the same way a drop onto it would.
+ */
+interface SwapOffer {
+  /** The deck slot the pane was opened from — the swap's `deck`, `zone` and `from`. */
+  row: PaneDeckContext;
+  /** The printing whose swap is in flight, or `null`. Every row is inert while one is: they
+   *  would all be sent the same `from` printing, which that write is in the middle of moving. */
+  pendingId: string | null;
+  /** The printing whose swap was refused, and the sentence to say beside it. */
+  refused: { printingId: string; reason: string } | null;
+  onUse: (printingId: string) => void;
+}
 
 /**
  * One printing, in full: the card itself, every printing of the same oracle card grouped
@@ -103,6 +126,51 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     queryKey: ["card", cardId],
     queryFn: () => ipc.cardDetail(cardId),
   });
+
+  /**
+   * The deck row this card was opened from, and the swap it makes possible.
+   *
+   * The pane is a sibling of the deck editor rather than part of it, so what joins them is the
+   * store on one side (`openCardFromDeck`, written by a zone column's click) and a shared query
+   * cache on the other ({@link useSwapFromPane} mounts the editor's own `["decks", "detail"]`
+   * read, so this costs no `deck_get` while an editor is up). With no context this is an idle
+   * mutation over a query that asks for nothing.
+   */
+  const deckRow = useAppStore((s) => s.paneDeckContext);
+  const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  const swap = useSwapFromPane(deckRow);
+
+  const swapping = swap.isPending;
+  const startSwap = swap.mutate;
+  const usePrinting = useCallback(
+    (toCardId: string) => {
+      // One swap at a time. The buttons disable themselves on the press, so this is the press
+      // that arrives before that paint — and it is not a double-click guard alone: every row's
+      // button sends the *same* `from` printing, and the write in flight is in the middle of
+      // moving it, so a second press would be refused for a row that no longer exists.
+      if (!deckRow || swapping) return;
+      startSwap(
+        { fromCardId: deckRow.cardId, toCardId, zone: deckRow.zone },
+        {
+          // The pane follows the deck. The reader asked for this printing to be the one in the
+          // deck, so it becomes the card in front of them — and the mark moves onto the row
+          // they pressed, in one store write, because `openCardFromDeck` is both.
+          onSuccess: () => openCardFromDeck({ ...deckRow, cardId: toCardId }),
+        },
+      );
+    },
+    [deckRow, swapping, startSwap, openCardFromDeck],
+  );
+
+  const offer: SwapOffer | null = deckRow && {
+    row: deckRow,
+    pendingId: swapping ? (swap.variables?.toCardId ?? null) : null,
+    refused:
+      swap.isError && swap.variables
+        ? { printingId: swap.variables.toCardId, reason: ipcError(swap.error) }
+        : null,
+    onUse: usePrinting,
+  };
 
   const oracleId = card.data?.oracleId ?? null;
   const printings = useQuery({
@@ -176,6 +244,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
             total={printings.data?.total ?? 0}
             loading={printings.isPending && oracleId !== null}
             error={printings.isError ? ipcError(printings.error) : null}
+            swap={offer}
           />
           {/* Not decoration and not optional: Scryfall requires the artist and the source
               to be identifiable in the same interface that shows the art. The artist is
@@ -389,6 +458,9 @@ function Legalities({ card }: { card: CardDetail }) {
  * It is also the fastest way in the app to record "I have the Alpha one": every row adds
  * its own printing, which is why the whole card is passed rather than only its id — a wish
  * and an entry both need the name and the oracle id, and neither is on a `Printing`.
+ *
+ * And, when the card was opened from a deck row, the fastest way to *change* which printing a
+ * deck is built from: see {@link SwapOffer}.
  */
 function Printings({
   card,
@@ -396,12 +468,14 @@ function Printings({
   total,
   loading,
   error,
+  swap,
 }: {
   card: CardDetail;
   items: Printing[];
   total: number;
   loading: boolean;
   error: string | null;
+  swap: SwapOffer | null;
 }) {
   const headingId = useId();
   // A card with no `oracleId` never asked for printings, so it has no list to fail at
@@ -447,7 +521,13 @@ function Printings({
           </p>
           <ul className="space-y-0.5">
             {group.printings.map((p) => (
-              <PrintingRow key={p.id} printing={p} card={card} current={p.id === card.id} />
+              <PrintingRow
+                key={p.id}
+                printing={p}
+                card={card}
+                current={p.id === card.id}
+                swap={swap}
+              />
             ))}
           </ul>
         </div>
@@ -460,54 +540,145 @@ function PrintingRow({
   printing,
   card,
   current,
+  swap,
 }: {
   printing: Printing;
   card: CardDetail;
   current: boolean;
+  swap: SwapOffer | null;
 }) {
   return (
     <li
       className={cn(
-        // `items-center` rather than baseline now that the row ends in a control: a 24px
-        // button hung off a baseline sits a third of its height below the prices it lines
-        // up with. `group` is what reveals that button on hover.
-        "group flex items-center gap-2 rounded-md px-2 py-1 text-xs",
+        "group rounded-md px-2 py-1 text-xs",
         // The one printing this pane is about. A gold hairline down its edge rather than a
         // fill: gold means "here" everywhere else in the app, and a filled row in a list of
         // forty would be the brightest thing under the art.
         current ? "border-l-2 border-accent bg-bg pl-1.5 text-text" : "text-dim",
       )}
     >
-      <RarityGem rarity={printing.rarity} className="shrink-0" />
-      <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
-        {printing.setCode.toUpperCase()} · {printing.collectorNumber}
-        {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
-      </span>
-      {printing.lang !== "en" && <LangBadge lang={printing.lang} />}
-      {/* Per finish, from the blob — never one number standing for both. */}
-      {parseFinishes(printing.finishes).map((f) => (
-        <span key={f} className="shrink-0 font-mono tabular-nums">
-          {FINISH_MARK[f] && (
-            <abbr title={FINISH_LABEL[f]} className="mr-0.5 text-[0.65rem] text-dim no-underline">
-              {FINISH_MARK[f]}
-            </abbr>
-          )}
-          {usdPrice(finishPrice(printing.prices, f))}
+      {/* The facts, on one line. `items-center` rather than baseline because the line ends in
+          a control: a 24px button hung off a baseline sits a third of its height below the
+          prices it lines up with. */}
+      <div className="flex items-center gap-2">
+        <RarityGem rarity={printing.rarity} className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
+          {printing.setCode.toUpperCase()} · {printing.collectorNumber}
+          {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
         </span>
-      ))}
-      {/* This row's printing, not the pane's card: the set and the collector number are the
-          row's own, and so are the finishes it may be owned in. */}
-      <AddToCollectionButton
-        className={REVEAL_ON_HOVER}
-        target={{
-          cardId: printing.id,
-          name: card.name,
-          setCode: printing.setCode,
-          collectorNumber: printing.collectorNumber,
-          oracleId: card.oracleId,
-          finishes: parseFinishes(printing.finishes),
-        }}
-      />
+        {printing.lang !== "en" && <LangBadge lang={printing.lang} />}
+        {/* Per finish, from the blob — never one number standing for both. */}
+        {parseFinishes(printing.finishes).map((f) => (
+          <span key={f} className="shrink-0 font-mono tabular-nums">
+            {FINISH_MARK[f] && (
+              <abbr title={FINISH_LABEL[f]} className="mr-0.5 text-[0.65rem] text-dim no-underline">
+                {FINISH_MARK[f]}
+              </abbr>
+            )}
+            {usdPrice(finishPrice(printing.prices, f))}
+          </span>
+        ))}
+        {/* This row's printing, not the pane's card: the set and the collector number are the
+            row's own, and so are the finishes it may be owned in. */}
+        <AddToCollectionButton
+          className={REVEAL_ON_HOVER}
+          target={{
+            cardId: printing.id,
+            name: card.name,
+            setCode: printing.setCode,
+            collectorNumber: printing.collectorNumber,
+            oracleId: card.oracleId,
+            finishes: parseFinishes(printing.finishes),
+          }}
+        />
+      </div>
+
+      {swap && <DeckLine printing={printing} swap={swap} />}
     </li>
+  );
+}
+
+/**
+ * What this printing is to the open deck row: the one it holds, or one press away from it.
+ *
+ * **A line of its own under the row's facts**, not a control squeezed onto the end of them. The
+ * pane is 384px wide and the facts already spend it — rarity, set, number, year, language, a
+ * price per finish, the quick-add — so a button on that line would take its width out of the
+ * set name, which is what the reader is choosing a printing *by*. Underneath, the two states
+ * read down the list as one column: every row says either "this is the one" or "use this one",
+ * and a refusal has somewhere to land in the reader's own line of sight.
+ *
+ * **Visible rather than revealed on hover** (spec §2), unlike the quick-add above it: the
+ * add is one of forty identical offers a reader may never want, while this list — opened from
+ * a deck row — is being read *in order to* pick one.
+ */
+function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const pending = swap.pendingId === printing.id;
+  const refused = swap.refused?.printingId === printing.id ? swap.refused.reason : null;
+  const wasPending = useRef(false);
+
+  // The disabled-on-press hazard, in the shape it takes **inside a dismissible layer**: a
+  // browser blurs a control that disables itself, with no `relatedTarget` at all, so the caret
+  // lands on `<body>` — and this button is in the card pane, whose Escape hands the caret back
+  // to whatever opened it. A reader who pressed a row, read a refusal and then pressed Escape
+  // would be closing the pane from nowhere. The button is still here when the write settles, so
+  // it takes the caret back — and only from `<body>`, because a reader who has moved on in the
+  // meantime owns where they are. `DeckStats`' send button is the same guard outside a layer.
+  useEffect(() => {
+    if (wasPending.current && !pending && document.activeElement === document.body) {
+      buttonRef.current?.focus();
+    }
+    wasPending.current = pending;
+  }, [pending]);
+
+  return (
+    // `pt-0.5` and not a pixel more: the row's own padding is what separates one printing from
+    // the next (4px + 4px + the list's 2px), so an action line hung further off its own facts
+    // than that reads as belonging to the row *below* it. Measured in the running window at
+    // 1280 × 800 against a 62-printing list.
+    <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 pt-0.5">
+      {refused && (
+        // Beside the row that was pressed, which is where the reader is looking — the docked
+        // search panel's add says its refusals the same way. A banner at the top of the pane
+        // would be one sentence for forty rows, with nothing on screen saying which.
+        <p
+          role="alert"
+          className="min-w-0 flex-1 text-left text-[0.7rem] leading-tight text-destructive"
+        >
+          Could not use this printing — {refused}
+        </p>
+      )}
+      {swap.row.cardId === printing.id ? (
+        // The deck's own printing says so rather than offering itself. Static text, in the
+        // dim the rest of the row's facts are set in: it is a fact about the deck, not a
+        // control, and dressing it as one that cannot be pressed would be worse than saying it.
+        <p className="text-[0.7rem] text-dim">This deck uses this printing</p>
+      ) : (
+        <button
+          ref={buttonRef}
+          type="button"
+          // `disabled` while any swap is in flight — this is the half-second case, which is
+          // what `disabled` is for in this app (`DeckStats`' two kinds of no). Every row, not
+          // only the pressed one: they all send the same `from` printing, and the write in
+          // flight is moving it.
+          disabled={swap.pendingId !== null}
+          onClick={() => swap.onUse(printing.id)}
+          // Forty rows, forty buttons, one visible label: the set and the collector number are
+          // what tell them apart, and the zone is what says which slot is being rewritten — the
+          // same printing can sit in the main deck and the sideboard. The visible words lead, so
+          // voice control still reaches it by what is written on it.
+          aria-label={`Use this printing (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${ZONE_LABEL[swap.row.zone]}`}
+          className={cn(
+            "shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-dim",
+            "transition-colors duration-150 hover:text-text disabled:opacity-50",
+            "motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          {pending ? "Swapping…" : "Use this printing"}
+        </button>
+      )}
+    </div>
   );
 }

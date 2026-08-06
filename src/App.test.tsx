@@ -11,6 +11,7 @@ const collectionSummary = vi.hoisted(() => vi.fn());
 const wishlistList = vi.hoisted(() => vi.fn());
 const deckList = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
+const deckSwapPrinting = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -47,12 +48,24 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckList,
     // And the editor the gallery opens onto, which is the same view with a deck picked.
     deckGet,
+    // The one deck write with no control in the editor: it is pressed on the card pane's
+    // printings rows, which is a *different component*, and this file is where the two meet.
+    deckSwapPrinting,
     formatSpecs: vi.fn().mockResolvedValue([]),
   },
 }));
 
 import App from "./App";
-import type { CardDetail, CardSummary, CollectionRow, DeckRow, WishRow } from "@/lib/ipc";
+import { card } from "@/features/decks/validation/fixtures";
+import type {
+  CardDetail,
+  CardSummary,
+  CollectionRow,
+  DeckCard,
+  DeckRow,
+  Printing,
+  WishRow,
+} from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 
@@ -88,6 +101,52 @@ const BOLT: CardSummary = {
   finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
+};
+
+/**
+ * The same card as a row of the deck, and as the two printings the pane lists for it — the
+ * fixtures the printing swap needs, which is the one flow that spans both views.
+ *
+ * `cardId` is the search fixture's `c1`, so the deck row, the pane's card and the first
+ * printing are all one printing, as they are when a reader clicks a card in a deck.
+ */
+const DECK_BOLT: DeckCard = card({ name: "Lightning Bolt", cardId: "c1", quantity: 1 });
+/** What the deck holds after the swap: the same row, on the other printing. */
+const SWAPPED_BOLT: DeckCard = card({
+  name: "Lightning Bolt",
+  cardId: "c2",
+  setCode: "m10",
+  collectorNumber: "146",
+  quantity: 1,
+});
+
+const ALPHA: Printing = {
+  id: "c1",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "161",
+  releasedAt: "1993-08-05",
+  rarity: "common",
+  illustrationId: "art-a",
+  artist: "Christopher Rush",
+  lang: "en",
+  finishes: '["nonfoil"]',
+  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  promo: false,
+  fullArt: false,
+  frameEffects: null,
+  borderColor: "black",
+  layout: "normal",
+};
+
+const M10: Printing = {
+  ...ALPHA,
+  id: "c2",
+  setCode: "m10",
+  setName: "Magic 2010",
+  collectorNumber: "146",
+  releasedAt: "2009-07-17",
+  prices: '{"usd":"1.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
 };
 
 /** The same card as a collection row, for the Escape-from-a-stepper test below. */
@@ -196,6 +255,7 @@ beforeEach(() => {
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
   deckList.mockReset().mockResolvedValue([]);
   deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [] });
+  deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 1 });
   collectionSummary.mockReset().mockResolvedValue({
     totalCards: 3,
     uniqueCards: 2,
@@ -431,4 +491,87 @@ it("closes the card on Escape from inside a wishlist row's controls", async () =
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
+/**
+ * "Use this printing", end to end — and this is the only file it *can* be tested in.
+ *
+ * The control is on the card pane's printings rows and everything it changes is in the deck
+ * editor, and the two are siblings under this component with nothing between them but the
+ * store and a query cache. Neither one's own suite can see the other: the pane's tests mock a
+ * deck read that no editor is drawing, and the editor's tests have no pane to press.
+ */
+it("swaps a deck row's printing from the card pane, and follows the deck onto it", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet
+    .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] })
+    .mockResolvedValue({ deck: BURN, cards: [SWAPPED_BOLT] });
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  // The editor's docked search panel finds nothing: a result named after the card already in
+  // the deck would be a second button by that name, and the deck's card is addressed by it.
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+
+  // Out of the deck, into the pane: the click that writes the context.
+  await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+  const pane = await screen.findByRole("complementary", { name: /card details/i });
+  await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
+
+  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", "main");
+
+  // The deck redraws on the printing it now holds — the card in the column is the M10 art.
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Lightning Bolt" }).querySelector("img"),
+    ).toHaveAttribute("src", expect.stringContaining("/grid/c2/0")),
+  );
+  // And the pane has followed it: the mark is on the row that was pressed, and the row that
+  // had it is offering itself again.
+  const marked = await screen.findByText("This deck uses this printing");
+  expect(marked.closest("li")).toHaveTextContent("M10 · 146");
+  expect(
+    screen.getByRole("button", { name: "Use this printing (LEA 161) in Main deck" }),
+  ).toBeInTheDocument();
+});
+
+/**
+ * The refused half of the same wire, which is two sentences in two components at once.
+ *
+ * `swap_printing` opens with `touch_deck` like every other zone write, so a deck deleted from
+ * another window answers GONE — and the pane says so beside the row that was pressed while the
+ * editor behind it stops painting a deck that is not there. The two are joined by the
+ * mutation's own `onError` invalidation (`useDeck`), because TanStack shares a mutation's state
+ * with no other observer: the editor's copy of this write never hears about the failure, and
+ * without that invalidation the zone columns would go on drawing a deleted deck under a pane
+ * explaining that it is gone.
+ *
+ * The two sentences are deliberately worded apart — "That deck" is the backend's refusal,
+ * "This deck" is the editor's own re-read — so this test can tell which surface said what.
+ */
+it("says a refused swap in the pane, and the deck behind it goes with it", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] }).mockResolvedValue(null);
+  deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  // The editor's docked search panel finds nothing: a result named after the card already in
+  // the deck would be a second button by that name, and the deck's card is addressed by it.
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+  await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+
+  const pane = await screen.findByRole("complementary", { name: /card details/i });
+  await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
+
+  expect(await within(pane).findByRole("alert")).toHaveTextContent(
+    "Could not use this printing — That deck is not there any more.",
+  );
+  expect(
+    await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
+  ).toBeInTheDocument();
 });

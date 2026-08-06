@@ -141,6 +141,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const { specs, formatSpecFor } = useFormatSpecs();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
+  const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
   /**
@@ -435,6 +436,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const setQuantity = useCallback(
     (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.zone, quantity),
     [setQuantityAt],
+  );
+
+  /**
+   * Open a card in the pane **as a deck row** — the only write of `paneDeckContext` in the app,
+   * and the reason a zone column reports the zone alongside the card.
+   *
+   * What it buys is on the other side of the app: the pane's printings list gains "Use this
+   * printing", which rewrites *this* slot. Everything else that opens a card — the docked
+   * panel's tiles, the validation panel's names, the three other views — goes through
+   * `setSelectedCardId`, which clears the context in the same write (see the store), so a card
+   * that is not a row of this deck can never be shown as one.
+   */
+  const openCard = useCallback(
+    (cardId: string, zone: DeckZone) => openCardFromDeck({ deckId, zone, cardId }),
+    [deckId, openCardFromDeck],
   );
 
   const move = useCallback(
@@ -786,7 +802,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   onSetQuantity={setQuantity}
                   onMove={move}
                   onSetCover={setCover}
-                  onSelect={setSelectedCardId}
+                  onSelect={openCard}
                   onDropCard={applyDrop}
                   // `max-h-full` is what makes a column scroll rather than the editor: in a
                   // *wrapping* flex row, `align-items: stretch` stretches an item to its line's
@@ -840,7 +856,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   onSetQuantity={setQuantity}
                   onMove={move}
                   onSetCover={setCover}
-                  onSelect={setSelectedCardId}
+                  onSelect={openCard}
                   onDropCard={applyDrop}
                   className={cn("mt-2 max-h-64", ZONE_WIDTH.maybe)}
                 />

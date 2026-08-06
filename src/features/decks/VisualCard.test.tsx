@@ -120,13 +120,17 @@ describe("VisualCard", () => {
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
   });
 
-  /** The card front is one control: pressing it opens the card in the pane the app docks. */
-  it("opens the card from the card", async () => {
+  /**
+   * The card front is one control: pressing it opens the card in the pane the app docks —
+   * and says which zone it was pressed in, because the pane offers to swap this slot's
+   * printing and a slot is a deck, a zone and a card. The compact row reports the same pair.
+   */
+  it("opens the card from the card, naming the zone it is in", async () => {
     const { onSelect } = draw(card({ name: "Lightning Bolt" }));
 
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
 
-    expect(onSelect).toHaveBeenCalledWith("c-Lightning Bolt");
+    expect(onSelect).toHaveBeenCalledWith("c-Lightning Bolt", "main");
   });
 
   /**
