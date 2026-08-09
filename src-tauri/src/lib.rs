@@ -108,6 +108,25 @@ async fn update_open_release_page(
         .map_err(|e| format!("could not open the release page: {e}"))
 }
 
+/// Where update checks are sent.
+///
+/// Always `api.github.com` in a shipped build — the override below is compiled out entirely,
+/// so a release binary has no way to be pointed at another host whatever its environment
+/// says. That is the whole reason for the `cfg`: this exists so a **debug** build can be
+/// aimed at a local release fixture and made to download, verify, swap and relaunch for
+/// real, which is the one part of the updater no test can reach. Nothing else can honestly
+/// prove the portable swap works.
+fn update_api_base() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(base) = std::env::var("MTG_GRIMOIRE_UPDATE_API") {
+        if !base.is_empty() {
+            eprintln!("update checks pointed at {base} (debug build only)");
+            return base;
+        }
+    }
+    update::GITHUB_API.to_owned()
+}
+
 /// Bring the running instance forward when a second launch is refused.
 ///
 /// Without this, double-clicking the exe a second time looks like nothing happened —
@@ -129,8 +148,9 @@ pub fn run() {
     // starts too early simply vanishes — and the user is left looking at the old version
     // with nothing to say why. See `update::await_predecessor`.
     let exe = std::env::current_exe().unwrap_or_default();
-    if std::env::args().any(|a| a == update::AWAIT_FLAG) {
-        update::await_predecessor(&exe);
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == update::AWAIT_FLAG) {
+        update::await_predecessor(&exe, update::predecessor_pid(args));
     }
 
     tauri::Builder::default()
@@ -215,7 +235,7 @@ pub fn run() {
 
             // Decided once here — `Updater::new` probes whether it can write beside the exe
             // — so a status poll never re-answers a question that cannot change.
-            let updater = Arc::new(update::Updater::new(update::GITHUB_API.to_owned(), exe));
+            let updater = Arc::new(update::Updater::new(update_api_base(), exe));
             app.manage(updater.clone());
 
             // Launch is never blocked on the network: the window comes up immediately
