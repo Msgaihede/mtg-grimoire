@@ -7,10 +7,17 @@
  */
 import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
-import { makeDb, readHandlers } from "./db";
+import { allHandlers, makeDb, readHandlers, writeHandlers } from "./db";
 import type { FakeDeck, FakeDeckCard, FakeEntry, FakeWish } from "./db";
 import { CARDS, type FakeCard } from "./cards";
-import type { CardSummary, CollectionPage, DeckDetail, WishlistPage } from "@/lib/ipc";
+import type {
+  CardSummary,
+  CollectionPage,
+  DeckDetail,
+  EntryChange,
+  EntryInput,
+  WishlistPage,
+} from "@/lib/ipc";
 
 const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
 /** The second Bolt printing — `2x2 117`, uncommon. Used wherever "a different printing of
@@ -509,5 +516,564 @@ describe("the tables that are not tables", () => {
     expect(
       readHandlers(makeDb({ fault: "imageFailures" })).sync_status().imageStoreFailures,
     ).toBeGreaterThan(0);
+  });
+});
+
+/* ------------------------------------------------------------------ the writes ------- */
+
+/** The two Lightning Bolt printings the swap tests pair off. */
+const [BOLT_A, BOLT_B] = CARDS.filter((c) => c.oracleId === BOLT.oracleId);
+
+describe("zero is not one thing", () => {
+  it("keeps the collection row and says removed: false", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 3 })] });
+    const change = writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 });
+    expect(change).toMatchObject({ quantity: 0, removed: false });
+    expect(db.collectionEntries).toHaveLength(1);
+  });
+
+  it("keeps the condition, the price paid and the tags on the row it emptied", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, quantity: 3, condition: "LP", purchasePrice: 12, tags: '["cube"]' }),
+      ],
+    });
+    writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 });
+    expect(db.collectionEntries[0]).toMatchObject({
+      condition: "LP",
+      purchasePrice: 12,
+      tags: '["cube"]',
+      // A tradelist bigger than the pile it comes from is not a promise anyone can keep.
+      tradelistQuantity: 0,
+    });
+  });
+
+  it("removes the wish, because a wish for none of something is not a wish", () => {
+    const db = makeDb({ wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 2 })] });
+    const change = writeHandlers(db).wishlist_set_quantity({ id: 1, quantity: 0 });
+    expect(change).toMatchObject({ removed: true });
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  it("removes the deck row, siding with the wishlist", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 })],
+    });
+    writeHandlers(db).deck_set_card_quantity({
+      deckId: 1,
+      cardId: BOLT.id,
+      zone: "main",
+      quantity: 0,
+    });
+    expect(db.deckCards).toHaveLength(0);
+  });
+
+  it("refuses below zero in all three, and a refused write changes nothing", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, quantity: 3 })],
+      wishlistEntries: [wish({ id: 1, quantity: 2 })],
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, quantity: 4 })],
+    });
+    const w = writeHandlers(db);
+    for (const call of [
+      () => w.collection_set_quantity({ id: 1, quantity: -1 }),
+      () => w.wishlist_set_quantity({ id: 1, quantity: -1 }),
+      () => w.deck_set_card_quantity({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: -1 }),
+    ]) {
+      expect(call).toThrow(/not a quantity/);
+    }
+    expect(db.collectionEntries[0].quantity).toBe(3);
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(4);
+  });
+});
+
+describe("the collection grain", () => {
+  const add = (over: Partial<EntryInput> = {}): { entry: EntryInput } => ({
+    entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1, ...over },
+  });
+
+  it("folds a second add of the same grain into the row that is already there", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const first = w.collection_add(add({ quantity: 2, purchasePrice: 10 }));
+    const second = w.collection_add(add({ quantity: 3, purchasePrice: 99 }));
+    expect(first.id).toBe(second.id);
+    expect(second.quantity).toBe(5);
+    expect(db.collectionEntries).toHaveLength(1);
+    // "One more of these", not "and here is what I paid this time": the first writer's
+    // price stays.
+    expect(db.collectionEntries[0].purchasePrice).toBe(10);
+  });
+
+  it("makes a copy that differs in any term of the grain a second row", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.collection_add(add());
+    w.collection_add(add({ finish: "foil" }));
+    w.collection_add(add({ finish: "foil", condition: "LP" }));
+    w.collection_add(add({ finish: "foil", signed: true }));
+    w.collection_add(add({ finish: "foil", serialNumber: "042/500" }));
+    expect(db.collectionEntries).toHaveLength(5);
+  });
+
+  it("is one row for one slab however its JSON was spelled", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const first = w.collection_add(
+      add({ grading: '{"company":"PSA","grade":10,"cert":"12345678"}' }),
+    );
+    const again = w.collection_add(
+      add({ grading: '{ "cert": "12345678", "grade": "10", "company": "PSA" }' }),
+    );
+    expect(again.id).toBe(first.id);
+    // An absent cert and an explicit null are the same slab, and neither is the certified one.
+    const bare = w.collection_add(add({ grading: '{"company":"PSA","grade":10}' }));
+    const nullCert = w.collection_add(add({ grading: '{"grade":10,"cert":null,"company":"PSA"}' }));
+    expect(nullCert.id).toBe(bare.id);
+    expect(bare.id).not.toBe(first.id);
+    expect(db.collectionEntries.map((e) => e.grading)).toEqual([
+      '{"company":"PSA","grade":"10","cert":"12345678"}',
+      '{"company":"PSA","grade":"10"}',
+    ]);
+  });
+
+  it("refuses a grading that is not one, in a sentence naming the shape", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    for (const bad of [
+      "not json at all",
+      '{"company":"PSA"}',
+      '{"grade":10}',
+      '{"company":"PSA","grade":10,"subgrades":{"centering":9}}',
+      '["PSA", 10]',
+    ]) {
+      expect(() => w.collection_add(add({ grading: bad }))).toThrow(/is not a grading/);
+    }
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  it("denormalizes the printing, and refuses a card the database does not have", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.collection_add({ entry: { cardId: BOLT_B.id, finish: "nonfoil", quantity: 1 } });
+    expect(db.collectionEntries[0]).toMatchObject({
+      setCode: BOLT_B.setCode,
+      collectorNumber: BOLT_B.collectorNumber,
+      lang: BOLT_B.lang,
+    });
+    expect(() =>
+      w.collection_add({ entry: { cardId: "no-such-card", finish: "nonfoil", quantity: 1 } }),
+    ).toThrow(/no card with the id/);
+  });
+
+  it("refuses an add of zero rather than conjuring a row out of nothing", () => {
+    const db = makeDb();
+    expect(() => writeHandlers(db).collection_add(add({ quantity: 0 }))).toThrow(/at least one/);
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  it("tells an edit that lands on an occupied grain what to do instead", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const nonfoil = w.collection_add(add());
+    w.collection_add(add({ finish: "foil" }));
+    expect(() => w.collection_update({ id: nonfoil.id, patch: { finish: "foil" } })).toThrow(
+      /change its quantity instead/,
+    );
+    expect(db.collectionEntries[0].finish).toBe("nonfoil");
+  });
+
+  it("removes only through collection_remove", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, quantity: 0 })] });
+    expect(writeHandlers(db).collection_remove({ id: 1 })).toMatchObject({ removed: true });
+    expect(db.collectionEntries).toHaveLength(0);
+    // A stale id is a success: the caller wanted that row gone, and it is gone.
+    expect(writeHandlers(db).collection_remove({ id: 1 }).removed).toBe(true);
+  });
+});
+
+describe("the wishlist write", () => {
+  it("makes a pinned wish and an any-printing wish two different wishes", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const any = w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 4 } });
+    const pinned = w.wishlist_add({ wish: { cardId: BOLT.id, quantity: 1 } });
+    expect(any.id).not.toBe(pinned.id);
+    // An any-printing wish pins nothing but its name.
+    expect(db.wishlistEntries.find((x) => x.id === any.id)).toMatchObject({
+      cardId: null,
+      setCode: null,
+      collectorNumber: null,
+      lang: null,
+      name: BOLT.name,
+    });
+    expect(db.wishlistEntries.find((x) => x.id === pinned.id)!.setCode).toBe(BOLT.setCode);
+  });
+
+  it("raises the quantity rather than making a second line", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const first = w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 1 } });
+    const second = w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 3 } });
+    expect([second.id, second.quantity]).toEqual([first.id, 4]);
+    expect(db.wishlistEntries).toHaveLength(1);
+  });
+
+  it("refuses a wish that names neither a card nor an oracle card", () => {
+    const db = makeDb();
+    expect(() => writeHandlers(db).wishlist_add({ wish: { oracleId: "  ", quantity: 1 } })).toThrow(
+      /either a card or an oracle id/,
+    );
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+});
+
+describe("the deck grain (deck, card, zone)", () => {
+  it("sums a repeat add into one row", () => {
+    const db = makeDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 });
+    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 3 });
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(5);
+  });
+
+  it("makes the same printing in two zones two rows", () => {
+    const db = makeDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 1 });
+    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "side", quantity: 1 });
+    expect(db.deckCards).toHaveLength(2);
+  });
+
+  it("refuses to add a card the database does not have, or none of one", () => {
+    const db = makeDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    expect(() =>
+      w.deck_add_card({ deckId: 1, cardId: "no-such-card", zone: "main", quantity: 1 }),
+    ).toThrow(/no card with the id/);
+    expect(() =>
+      w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 0 }),
+    ).toThrow(/at least one/);
+    expect(db.deckCards).toHaveLength(0);
+  });
+
+  it("folds a swap onto a printing the zone already holds, and says so", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, zone: "main", quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, zone: "main", quantity: 1 }),
+      ],
+    });
+    const result = writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      zone: "main",
+    });
+    expect(result).toEqual({ folded: true, quantity: 3 });
+    expect(db.deckCards).toHaveLength(1);
+  });
+
+  it("refuses a swap to a different oracle card", () => {
+    const other = CARDS.find((c) => c.oracleId !== BOLT.oracleId)!;
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, zone: "main", quantity: 1 })],
+    });
+    expect(() =>
+      writeHandlers(db).deck_swap_printing({
+        deckId: 1,
+        fromCardId: BOLT.id,
+        toCardId: other.id,
+        zone: "main",
+      }),
+    ).toThrow(/not another printing of/);
+    expect(db.deckCards[0].cardId).toBe(BOLT.id);
+  });
+
+  it("rescues an orphaned row, which is the one pair that cannot be compared", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({
+          id: 1,
+          deckId: 1,
+          cardId: "no-such-card",
+          zone: "main",
+          quantity: 3,
+          needsReview: "Scryfall removed this printing from its database.",
+        }),
+      ],
+    });
+    const result = writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: "no-such-card",
+      toCardId: BOLT.id,
+      zone: "main",
+    });
+    expect(result).toEqual({ folded: false, quantity: 3 });
+    // The swap is the cure, so the new row is written clean.
+    expect(db.deckCards[0]).toMatchObject({ cardId: BOLT.id, needsReview: null });
+  });
+
+  it("refuses a swap to the printing the deck already plays", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1, updatedAt: 100 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, zone: "main" })],
+    });
+    expect(() =>
+      writeHandlers(db).deck_swap_printing({
+        deckId: 1,
+        fromCardId: BOLT.id,
+        toCardId: BOLT.id,
+        zone: "main",
+      }),
+    ).toThrow(/already this printing/);
+    // A no-op must not move `updatedAt` and resort the gallery.
+    expect(db.decks[0].updatedAt).toBe(100);
+  });
+
+  it("moves every copy into the zone the target holds, folding", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, zone: "maybe", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT.id, zone: "main", quantity: 1 }),
+      ],
+    });
+    writeHandlers(db).deck_move_card({ deckId: 1, cardId: BOLT.id, from: "maybe", to: "main" });
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0]).toMatchObject({ zone: "main", quantity: 3 });
+  });
+
+  it("lands a move into an empty zone on a new row id, not the one it came from", () => {
+    // `INSERT … SELECT` then `DELETE`, so the copies land on a fresh rowid — and row id is
+    // what the allocator breaks ties on within a zone, so the moved row queues behind the
+    // rows that were already there rather than where it used to sit.
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, zone: "maybe", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_B.id, zone: "main", quantity: 1 }),
+      ],
+    });
+    writeHandlers(db).deck_move_card({ deckId: 1, cardId: BOLT.id, from: "maybe", to: "main" });
+    const moved = db.deckCards.find((dc) => dc.cardId === BOLT.id)!;
+    expect(moved.zone).toBe("main");
+    expect(moved.id).toBeGreaterThan(2);
+  });
+});
+
+describe("what a zone write does to the deck row", () => {
+  it("bumps updatedAt even on a removal that found nothing to remove", () => {
+    const db = makeDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
+    const change = writeHandlers(db).deck_set_card_quantity({
+      deckId: 1,
+      cardId: BOLT.id,
+      zone: "main",
+      quantity: 0,
+    });
+    expect(change).toMatchObject({ id: 0, quantity: 0, removed: true });
+    expect(db.decks[0].updatedAt).toBeGreaterThan(100);
+  });
+
+  it("leaves it alone when the write was refused", () => {
+    const db = makeDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
+    const w = writeHandlers(db);
+    expect(() =>
+      w.deck_set_card_quantity({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 }),
+    ).toThrow(/not in this deck's main zone/);
+    expect(() =>
+      w.deck_move_card({ deckId: 1, cardId: BOLT.id, from: "main", to: "side" }),
+    ).toThrow(/not in this deck's main zone/);
+    expect(db.decks[0].updatedAt).toBe(100);
+  });
+
+  it("answers GONE for a deck that is not there", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).deck_set_card_quantity({
+        deckId: 9,
+        cardId: BOLT.id,
+        zone: "main",
+        quantity: 1,
+      }),
+    ).toThrow(/not there any more/);
+  });
+});
+
+describe("the deck row itself", () => {
+  it("names a new deck, defaults a blank format to casual and refuses an unknown one", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    expect(w.deck_create({ deck: { name: "Burn", formatKey: "" } }).formatKey).toBe("casual");
+    expect(() => w.deck_create({ deck: { name: "  ", formatKey: "modern" } })).toThrow(
+      /needs a name/,
+    );
+    expect(() => w.deck_create({ deck: { name: "Burn", formatKey: "nonsense" } })).toThrow(
+      /not a format this app knows/,
+    );
+    expect(db.decks).toHaveLength(1);
+  });
+
+  it("deletes the deck's cards with it", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckCards: [deckCard({ id: 1, deckId: 1 }), deckCard({ id: 2, deckId: 2 })],
+    });
+    writeHandlers(db).deck_delete({ id: 1 });
+    expect(db.decks.map((d) => d.id)).toEqual([2]);
+    expect(db.deckCards.map((dc) => dc.deckId)).toEqual([2]);
+  });
+
+  it("copies the cards but never isBuilt and never archived — a copy is a draft", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1, name: "Burn", isBuilt: true, archived: true })],
+      deckCards: [deckCard({ id: 1, deckId: 1, quantity: 4 })],
+    });
+    const copy = writeHandlers(db).deck_duplicate({ id: 1 });
+    expect(copy).toMatchObject({ name: "Burn (copy)", isBuilt: false, archived: false });
+    expect(db.deckCards.filter((dc) => dc.deckId === copy.id)).toHaveLength(1);
+    expect(db.deckCards.find((dc) => dc.deckId === copy.id)!.quantity).toBe(4);
+  });
+
+  it("leaves absent patch fields alone", () => {
+    const db = makeDb({ decks: [deck({ id: 1, name: "Burn", description: "fast" })] });
+    const row = writeHandlers(db).deck_update({ id: 1, patch: { isBuilt: true } });
+    expect(row).toMatchObject({ name: "Burn", description: "fast", isBuilt: true });
+  });
+});
+
+describe("missing to the wishlist", () => {
+  it("counts wishes, not rows: one card short in two zones is one wish for the sum", () => {
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT_A.id, zone: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_B.id, zone: "side", quantity: 1 }),
+        // The scratchpad is not a shopping list.
+        deckCard({ id: 3, cardId: BOLT_A.id, zone: "maybe", quantity: 9 }),
+      ],
+    });
+    expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0]).toMatchObject({ oracleId: BOLT.oracleId, quantity: 3 });
+  });
+
+  it("subtracts what the deck already holds, and pressing twice raises the line", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 1 })],
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, zone: "main", quantity: 4 })],
+    });
+    const w = writeHandlers(db);
+    expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
+    expect(db.wishlistEntries[0].quantity).toBe(3);
+    expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0].quantity).toBe(6);
+  });
+
+  it("shops for nothing when the deck is covered", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 4 })],
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, zone: "main", quantity: 4 })],
+    });
+    expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1 })).toBe(0);
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+});
+
+describe("the busy fault", () => {
+  it("refuses a write in words and leaves the row alone", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 3 })],
+      fault: "busy",
+    });
+    expect(() => writeHandlers(db).collection_set_quantity({ id: 1, quantity: 5 })).toThrow(
+      /busy/i,
+    );
+    expect(db.collectionEntries[0].quantity).toBe(3);
+  });
+
+  it("refuses every write there is, and no read", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1 })],
+      wishlistEntries: [wish({ id: 1 })],
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1 })],
+      fault: "busy",
+    });
+    const w = writeHandlers(db);
+    // Every command in the table except `sync_run`, which does not take the write lock.
+    const args: Record<string, unknown> = {
+      id: 1,
+      deckId: 1,
+      cardId: BOLT.id,
+      zone: "main",
+      from: "main",
+      to: "side",
+      fromCardId: BOLT.id,
+      toCardId: BOLT_B.id,
+      quantity: 1,
+      entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      wish: { cardId: BOLT.id, quantity: 1 },
+      deck: { name: "Burn", formatKey: "modern" },
+      patch: {},
+    };
+    // 17 writes in the table, `sync_run` excluded: it does not take the write lock.
+    const names = Object.keys(w).filter((n) => n !== "sync_run");
+    expect(names).toHaveLength(16);
+    for (const name of names) {
+      expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
+        /busy/i,
+      );
+    }
+    // Reads answer through every second of a sync, because they take `db_read`.
+    expect(readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } }).total).toBe(1);
+  });
+});
+
+describe("the whole command table", () => {
+  it("dispatches the writes under the names and argument names ipc.ts sends", async () => {
+    resetCommands();
+    const db = makeDb({ decks: [deck({ id: 1 })] });
+    registerCommands(allHandlers(db));
+    await expect(
+      invoke<EntryChange>("deck_add_card", {
+        deckId: 1,
+        cardId: BOLT.id,
+        zone: "main",
+        quantity: 2,
+      }),
+    ).resolves.toMatchObject({ quantity: 2 });
+    await expect(
+      invoke<EntryChange>("collection_add", {
+        entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      }),
+    ).resolves.toMatchObject({ quantity: 1, removed: false });
+    // A read taken after a write sees it: the two tables close over one store.
+    await expect(invoke<DeckDetail>("deck_get", { id: 1 })).resolves.toMatchObject({
+      cards: [{ cardId: BOLT.id, quantity: 2, ownedQuantity: 1 }],
+    });
+    // `deck_missing_to_wishlist` takes `deckId` where its four neighbours take `id` — the
+    // odd one out, and Tauri matches by name.
+    await expect(invoke<number>("deck_missing_to_wishlist", { id: 1 })).rejects.toThrow();
+  });
+
+  it("answers a sync run without touching the store", () => {
+    const db = makeDb();
+    expect(writeHandlers(db).sync_run()).toEqual({
+      updated: false,
+      cardCount: 43,
+      updatedAt: null,
+    });
+    expect(() => writeHandlers(makeDb({ fault: "syncError" })).sync_run()).toThrow(/rate limited/);
   });
 });

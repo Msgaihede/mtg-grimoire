@@ -29,7 +29,8 @@
  *    or `missing_to_wishlist`, and the read only *attributes* what was stored. There is no
  *    allocations table here, so both halves happen at read time; see `allocate` below for
  *    what that changes — the split between built decks follows deck id here and write order
- *    in the app.
+ *    in the app. **No write calls an allocator**, and there is only one allocator in this
+ *    file; {@link writeHandlers} lists the three consequences.
  * 3. **`list_sets` is derived from the cards**, because there is no `sets` table in the
  *    fixture. The real one reads every set Scryfall knows, so it can answer a set with no
  *    printings at all; this one cannot produce a set with no rows, only one whose rows are
@@ -51,6 +52,18 @@
  * 7. **String order is UTF-16 code units** (`cmp` below), which is SQLite's default `BINARY`
  *    collation over the ASCII names this fixture holds — never `localeCompare`, which sorts
  *    `"a"` before `"B"` and would reorder every list here.
+ * 8. **A write's `updated_at` is one second past the newest row in the store**, where SQLite
+ *    writes `unixepoch()`. See {@link stamp}: the gallery sorts on that column, so a write has
+ *    to raise it, and a wall clock in a fixture seeded at a fixed instant would sometimes lower
+ *    it instead. The consequence is that these timestamps are ordering and nothing else — no
+ *    story may render one as a date, and nothing does.
+ * 9. **A deck's format is validated against `SPECS`' 12 rows**, not `format_specs`' 25
+ *    ({@link validFormat}). So `deck_create`/`deck_update` refuse 13 formats the app accepts —
+ *    `premodern` among them — which is simplification 3's shape applied to a write: a narrower
+ *    table gives a narrower answer.
+ * 10. **Every refusal is its Rust sentence verbatim, with one exception.** A story renders
+ *    these, so they are copied rather than paraphrased; the parenthetical *why* inside
+ *    {@link canonicalGrading}'s refusal is this parser's wording, because serde's could not be.
  *
  * Deliberately *not* on that list: `everUncommon`, `power`/`toughness`, `priceUsd` and
  * `isPaper` are **read off their columns**. They are facts the generator took from the full
@@ -72,11 +85,19 @@ import type {
   CollectionQuery,
   CollectionRow,
   DeckCard,
+  DeckInput,
+  DeckPatch,
   DeckRow,
   DeckZone,
+  EntryChange,
+  EntryInput,
+  EntryPatch,
   Printing,
   SearchRequest,
   SetSummary,
+  SwapResult,
+  SyncOutcome,
+  WishInput,
   WishRow,
   WishlistQuery,
 } from "@/lib/ipc";
@@ -181,7 +202,8 @@ export interface FakeDeckCard {
  * `imageFailures` are the two things `SyncStatus` reports that no other surface shows.
  * `busy` is `collection::BUSY` — **and no read here honours it**, deliberately: writes take
  * `AppState.db` and can be refused, reads go through `db_read` and answer through every
- * second of a sync. Task 5's writes are what read it.
+ * second of a sync. {@link writeHandlers} is what reads it, all 16 of its writes but
+ * `sync_run`, which does not take that lock.
  */
 export type Fault = "busy" | "syncError" | "imageFailures" | "gone";
 
@@ -551,8 +573,8 @@ function toCollectionRow(e: FakeEntry, card: FakeCard | null): CollectionRow {
 /** `collection::FINISHES`/`CONDITIONS` — a filter value outside the enum is dropped rather
  *  than matched, because it can only come from a stale payload and would empty the list
  *  with no explanation. */
-const FINISHES = ["nonfoil", "foil", "etched"];
-const CONDITIONS = ["NM", "LP", "MP", "HP", "DMG"];
+const FINISHES: FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
+const CONDITIONS: FakeEntry["condition"][] = ["NM", "LP", "MP", "HP", "DMG"];
 
 function inList(value: string, picked: string[] | undefined, allowed: string[]): boolean {
   if (!picked) return true;
@@ -586,7 +608,7 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
  * `ORDER BY released_at DESC, id ASC LIMIT 1` — a printing rather than *the* printing, which
  * is what makes a set filter over an any-printing wish a loose question with a loose answer.
  */
-function wishCard(db: FakeDb, w: FakeWish): FakeCard | null {
+function wishCard(db: FakeDb, w: Pick<FakeWish, "cardId" | "oracleId">): FakeCard | null {
   if (w.cardId !== null) return cardById(db, w.cardId);
   if (w.oracleId === null) return null;
   return (
@@ -907,8 +929,15 @@ function pageLimit(limit: number, fallback: number, max: number): number {
 /** What `SyncStatus` answers. Fixed values, because a story fixture with a moving clock is a
  *  story fixture that renders differently every second. */
 const SYNC_DATA_DIR = "D:\\Storybook\\data";
-/** 2026-08-09T09:00:00Z, as unix seconds in a string — the column's own type. */
-const SYNC_LAST_CHECK_AT = "1786266000";
+/**
+ * 2026-08-09T09:00:00Z as unix seconds — the fixture's "now".
+ *
+ * One literal for two jobs: the sync's last check, and the floor {@link stamp} measures a
+ * write's `updated_at` from. Two literals for one instant would be two things to drift.
+ */
+const CLOCK_BASE = 1_786_266_000;
+/** As a string, which is the column's own type (`sync_meta` is all text). */
+const SYNC_LAST_CHECK_AT = String(CLOCK_BASE);
 /** Scryfall regenerates `default_cards` in a 21:00–21:45 UTC window, so the ingested file is
  *  from the evening before the check above. */
 const SYNC_BULK_UPDATED_AT = "2026-08-08T21:16:00.000Z";
@@ -1193,4 +1222,850 @@ export function readHandlers(db: FakeDb) {
     /** The same, answering how many images were **queued** — zero, since nothing was. */
     prewarm_collection: () => 0,
   } satisfies Record<string, CommandHandler>;
+}
+
+/* ------------------------------------------------------------------ the writes ------- */
+
+/**
+ * `collection::BUSY`, verbatim.
+ *
+ * Every write here opens by reading `db.fault` for it, and no read does: writes take
+ * `AppState.db` through `db::lock_for` and can be refused, reads go through `db_read` and
+ * answer through every second of a sync. `sync_run` is the one command in
+ * {@link writeHandlers} that does *not* check it — it does not take that lock, it is the
+ * thing that holds it.
+ */
+const BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
+/** `collection::GONE` — what an *adjustment* says when the row it names is not there. */
+const ENTRY_GONE = "That collection entry is not there any more.";
+/** `wishlist::set_wish_quantity`'s twin of the above. */
+const WISH_GONE = "That wishlist entry is not there any more.";
+/** `deck::GONE`. */
+const DECK_GONE = "That deck is not there any more.";
+/** `collection::ZERO_ADD` — one sentence for two tables, because it is one rule. */
+const ZERO_ADD = "Adding a card needs a quantity of at least one.";
+/** `deck::SAME_PRINTING`. */
+const SAME_PRINTING = "That is already this printing.";
+/** `deck::PRINTING_GONE`. Deliberately not `printing_of`'s sentence: the printing was
+ *  clicked out of a live list a moment ago, so the news is the sync, not the id. */
+const PRINTING_GONE =
+  "That printing is not in the card database any more — a sync replaced it while the card " +
+  "was open. Reopen the card for the printings it has now.";
+/** `collection::friendly` — the one database error that is a user's problem rather than a
+ *  bug, in the app's voice rather than the index's name. */
+const GRAIN_TAKEN =
+  "You already have an entry for that printing at that finish and condition — change its " +
+  "quantity instead, or give this one a different condition.";
+/** `schema::DECK_ZONES`, in the order `deck::valid_zone` lists them in its refusal — which
+ *  is **not** {@link ZONE_PRIORITY}, the allocator's permutation of the same five. */
+const ZONES: DeckZone[] = ["main", "side", "commander", "companion", "maybe"];
+/** `deck::DEFAULT_FORMAT` — `decks.format_key`'s own DDL default, so a blank key means here
+ *  exactly what it means in SQL. */
+const DEFAULT_FORMAT = "casual";
+/** `collection::Grading`'s three fields, in **declaration order**: the canonical text is
+ *  serialised in this order and `grading` enters the grain as raw text. */
+const GRADING_FIELDS = ["company", "grade", "cert"];
+
+/**
+ * A write's `updated_at`, which SQLite writes as `unixepoch()`.
+ *
+ * One second after the newest row in the store rather than the wall clock, and the choice is
+ * forced: the gallery sorts by `decks.updated_at DESC`, so a write has to raise it or the
+ * edit does not surface — while `Date.now()` in a fixture whose seeds are fixed at
+ * {@link CLOCK_BASE} would sometimes land *below* them and sort a just-edited deck to the
+ * bottom. Derived from the store it is monotonic by construction and deterministic: the same
+ * seed and the same clicks give the same numbers every run. `deck_cards` is not scanned
+ * because {@link FakeDeckCard} has no `updated_at` — nothing reads one.
+ */
+function stamp(db: FakeDb): number {
+  let newest = CLOCK_BASE;
+  for (const e of db.collectionEntries) newest = Math.max(newest, e.updatedAt);
+  for (const w of db.wishlistEntries) newest = Math.max(newest, w.updatedAt);
+  for (const d of db.decks) newest = Math.max(newest, d.updatedAt);
+  return newest + 1;
+}
+
+/** `INTEGER PRIMARY KEY`'s default rowid: one past the largest, and 1 for an empty table. */
+function nextId(rows: { id: number }[]): number {
+  return rows.reduce((n, r) => Math.max(n, r.id), 0) + 1;
+}
+
+/** A refusal in the app's voice. A Rust command's error is a bare string; `core.ts`'s
+ *  `invoke` documents why a handler models one by throwing an `Error` around it. */
+function refuse(message: string): Error {
+  return new Error(message);
+}
+
+function refuseIfBusy(db: FakeDb): void {
+  if (db.fault === "busy") throw refuse(BUSY);
+}
+
+/** `collection::valid_quantity`. **Zero is allowed here** — what zero *means* is each
+ *  table's own answer, and all three refuse below it in these words. */
+function validQuantity(n: number, what: string): number {
+  if (n >= 0) return n;
+  throw refuse(`${n} is not a quantity. A ${what} cannot be less than zero.`);
+}
+
+function validFinish(finish: string): FakeEntry["finish"] {
+  const found = FINISHES.find((f) => f === finish);
+  if (found) return found;
+  throw refuse(`\`${finish}\` is not a finish. Use one of: ${FINISHES.join(", ")}.`);
+}
+
+/** `collection::valid_condition` — an absent condition is `NM`, what an unmarked card is
+ *  assumed to be, rather than an error. */
+function validCondition(condition: string | undefined): FakeEntry["condition"] {
+  const c = condition ?? "NM";
+  const found = CONDITIONS.find((x) => x === c);
+  if (found) return found;
+  throw refuse(`\`${c}\` is not a condition. Use one of: ${CONDITIONS.join(", ")}.`);
+}
+
+function validZone(zone: string): DeckZone {
+  const found = ZONES.find((z) => z === zone);
+  if (found) return found;
+  throw refuse(`\`${zone}\` is not a deck zone. Use one of: ${ZONES.join(", ")}.`);
+}
+
+function validName(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed !== "") return trimmed;
+  throw refuse("A deck needs a name.");
+}
+
+/**
+ * `deck::valid_format`, over {@link SPECS} rather than the `format_specs` table.
+ *
+ * **A narrower table, so a narrower answer**: `fixtures.ts` carries 12 of the 25 seeded rows
+ * (the read's `format_specs_list` says so), and this refuses the other 13 — `premodern` is a
+ * format the app knows and a story cannot make a deck in. Blank is the DDL's own default and
+ * is not checked against the table at all, exactly as the Rust returns early for it.
+ */
+function validFormat(key: string): string {
+  const trimmed = key.trim();
+  if (trimmed === "") return DEFAULT_FORMAT;
+  if (SPECS[trimmed]) return trimmed;
+  throw refuse(`\`${trimmed}\` is not a format this app knows. Pick one from the format list.`);
+}
+
+/**
+ * `collection::canonical_grading`: the column's text, or nothing at all.
+ *
+ * `grading` is compared **byte for byte** by {@link collectionGrain}, so
+ * `{"company":"PSA","grade":10}` and `{"grade":10,"company":"PSA"}` would be two rows for one
+ * slab — the same physical card forking on every edit, with no constraint anywhere to catch
+ * it. Parsing and re-serialising in {@link GRADING_FIELDS} order is what makes that
+ * impossible rather than merely discouraged. Blank is `null` rather than an error (an empty
+ * field on a form means "no slab"), an unknown key is refused rather than dropped, and a
+ * grade arrives as both `10` and `"9"` in real data, so scalars are normalised to text.
+ *
+ * The refusal names the shape it wants. Its parenthetical `why` is this parser's wording and
+ * not serde's — the only part of the sentence that could not be copied.
+ */
+function canonicalGrading(grading: string | undefined): string | null {
+  const text = (grading ?? "").trim();
+  if (text === "") return null;
+  const no = (why: string) =>
+    refuse(
+      `\`${text}\` is not a grading (${why}). It needs a company and a grade, and may have a ` +
+        `cert — like {"company":"PSA","grade":"10","cert":"12345678"}.`,
+    );
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (e) {
+    throw no(e instanceof Error ? e.message : "it is not JSON");
+  }
+  // An array is refused outright, for the reason the Rust goes through a `Value` first: a
+  // struct also reads itself from a *sequence*, so `["PSA", 10]` would otherwise be a second
+  // spelling of one slab. Spec §6 fixes the shape at an object.
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw no("it is not a JSON object");
+  }
+  const slab = value as Record<string, unknown>;
+  for (const key of Object.keys(slab)) {
+    if (!GRADING_FIELDS.includes(key)) throw no(`unknown field \`${key}\``);
+  }
+  const scalar = (key: string): string | null => {
+    const v = slab[key];
+    if (v === undefined || v === null) return null;
+    if (typeof v === "string") return v.trim();
+    if (typeof v === "number") return String(v);
+    throw no(`\`${key}\` is neither a string nor a number`);
+  };
+  const company = scalar("company");
+  const grade = scalar("grade");
+  if (company === null) throw no("missing field `company`");
+  if (grade === null) throw no("missing field `grade`");
+  const cert = scalar("cert");
+  // `skip_serializing_if = "Option::is_none"`: an absent cert and an explicit null are the
+  // same slab and must not be two rows. So is an empty one.
+  return JSON.stringify(
+    cert === null || cert === "" ? { company, grade } : { company, grade, cert },
+  );
+}
+
+/** `schema::COLLECTION_GRAIN` as a key. The `coalesce(…, '')`s are load-bearing there and
+ *  are `?? ""` here: NULLs in a UNIQUE index are distinct, so a nullable term left bare
+ *  would stop enforcing anything the moment it was empty. */
+function collectionGrain(e: FakeEntry): string {
+  return JSON.stringify([
+    e.cardId,
+    e.finish,
+    e.condition,
+    e.lang,
+    e.altered,
+    e.signed,
+    e.proxy,
+    e.misprint,
+    e.serialNumber ?? "",
+    e.grading ?? "",
+  ]);
+}
+
+/** `schema::WISHLIST_GRAIN`: an oracle card, optionally pinned to one printing and one
+ *  finish. */
+function wishGrain(w: FakeWish): string {
+  return JSON.stringify([w.oracleId ?? "", w.cardId ?? "", w.preferredFinish ?? ""]);
+}
+
+/** `schema::DECK_CARD_GRAIN`. All three columns are NOT NULL, so there is nothing to
+ *  coalesce — and `zone` is *in* it because the same printing in `main` and in `maybe` is
+ *  two intentions rather than one row that moved. */
+function deckCardAt(db: FakeDb, deckId: number, cardId: string, zone: DeckZone) {
+  return db.deckCards.find(
+    (dc) => dc.deckId === deckId && dc.cardId === cardId && dc.zone === zone,
+  );
+}
+
+/** `collection::printing_of` — the printing as the entry will remember it. */
+function requireCard(db: FakeDb, cardId: string): FakeCard {
+  const card = cardById(db, cardId);
+  if (!card) throw refuse(`no card with the id \`${cardId}\` is in the card database`);
+  return card;
+}
+
+/**
+ * `deck::touch_deck`'s first half: the deck, or [`DECK_GONE`].
+ *
+ * The bump is deliberately *not* here. `touch_deck` is one UPDATE inside a transaction that
+ * several paths below abandon — a `move_card` that found nothing, a `swap_printing` refused
+ * for a different oracle card — and a rolled-back transaction takes the bump with it. So the
+ * gallery does not resort on a refused write, and every handler stamps at the point its Rust
+ * twin commits. The one place that looks like an exception and is not: `set_card_quantity`'s
+ * zero path commits whether or not it deleted a row, so a removal that found nothing to
+ * remove *does* move `updated_at`.
+ */
+function requireDeck(db: FakeDb, deckId: number): FakeDeck {
+  const deck = db.decks.find((d) => d.id === deckId);
+  if (!deck) throw refuse(DECK_GONE);
+  return deck;
+}
+
+/** `deck::card_gone`. */
+function cardGone(zone: DeckZone): string {
+  return `That card is not in this deck's ${zone} zone any more.`;
+}
+
+/**
+ * `wishlist::add_wish`, as a function rather than only a handler.
+ *
+ * `deck::missing_to_wishlist` writes **through** this for the reason the Rust does: the
+ * grain, the name lookup and the fold all live here, and a second write path would be a
+ * second set of rules to keep in step. Clicking "send missing to wishlist" twice therefore
+ * raises one line rather than making two, which is this function's contract and not that
+ * one's.
+ */
+function addWish(db: FakeDb, input: WishInput): EntryChange {
+  if (input.preferredFinish !== undefined) validFinish(input.preferredFinish);
+  // A quantity below one is read as one rather than refused: this is the only add in the app
+  // that does that, and it is `add_wish`'s own rule.
+  const quantity = input.quantity <= 0 ? 1 : input.quantity;
+  // Trimmed, and blank read as absent, **before** anything asks whether an id is there. A
+  // wish arriving with `oracleId: ""` from a cleared form field would otherwise pass every
+  // guard and land on the grain `('','','')`, which every other blank-id wish folds into —
+  // one row silently accumulating unrelated cards' quantities.
+  const cardId = nonblank(input.cardId);
+  const sentOracleId = nonblank(input.oracleId);
+  const sentName = nonblank(input.name);
+  if (cardId === null && sentOracleId === null) {
+    throw refuse("a wish needs either a card or an oracle id");
+  }
+  const printing = cardId === null ? null : cardById(db, cardId);
+  if (cardId !== null && printing === null) {
+    throw refuse("no card with that id is in the card database");
+  }
+  // The printing's own oracle id can be blank too — `cards.oracle_id` is nullable, and a row
+  // carrying `''` would fold on the grain just the same.
+  const oracleId = sentOracleId ?? nonblank(printing?.oracleId);
+  // A wish made from an oracle card alone takes its name from *a* printing of it — any of
+  // them, because `cards.name` is the oracle name on every printing — and must be given one
+  // when `cards` has none. A shopping list that cannot say what it is shopping for is not a
+  // list. Same ordering as the list's own LEFT JOIN, so the name and the printing the row
+  // prices from are the same card.
+  const named =
+    sentName ?? printing?.name ?? wishCard(db, { oracleId, cardId: null })?.name ?? null;
+  if (named === null) throw refuse("a wish needs a card name");
+
+  const row: FakeWish = {
+    id: 0,
+    cardId,
+    oracleId,
+    name: named,
+    // Only a *pinned* wish copies a printing onto the row: an any-printing wish is
+    // deliberately not for one, so its three printing columns stay null.
+    setCode: printing?.setCode ?? null,
+    collectorNumber: printing?.collectorNumber ?? null,
+    lang: printing?.lang ?? null,
+    quantity,
+    preferredFinish: input.preferredFinish ?? null,
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+  const existing = db.wishlistEntries.find((w) => wishGrain(w) === wishGrain(row));
+  if (existing) {
+    existing.quantity += quantity;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.wishlistEntries);
+  db.wishlistEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/** `wishlist::remove_wish`. An id that resolves to nothing is a success: the caller wanted
+ *  that row gone, and it is gone. */
+function removeWish(db: FakeDb, id: number): EntryChange {
+  db.wishlistEntries = db.wishlistEntries.filter((w) => w.id !== id);
+  return { id, quantity: 0, removed: true };
+}
+
+/**
+ * Every write command, bound to the same store {@link readHandlers} answers from.
+ *
+ * The return type is inferred and `satisfies`-checked for the reason `readHandlers`' is:
+ * `CommandHandler`'s parameter is `never`, so a value of that type dispatches but never
+ * *calls*, and the tests call these directly.
+ *
+ * Three things the app does that are absent here, all for one reason — **there is no
+ * `deck_allocations` table**, because this fake allocates at read time (simplification 2):
+ *
+ * 1. `deck::allocate_deck` is not called by any write. Every zone write, the Built toggle and
+ *    `missing_to_wishlist` run it in the app; here the numbers are recomputed by `deck_get`,
+ *    so a write that would have reallocated simply leaves the next read to. There is exactly
+ *    one allocator in this file and it is `allocate`.
+ * 2. `deck_update`'s `isBuilt` still changes what every *other* deck can see, but it does so
+ *    by changing what the next read's one pass computes rather than by rewriting rows.
+ * 3. `deck_delete`'s cascade reaches `deck_cards` and nothing else. The v5 DDL cascades to
+ *    `deck_allocations` too; there is nothing here to cascade to.
+ */
+export function writeHandlers(db: FakeDb) {
+  return {
+    /** `collection::add_entry` — the quick-add, folding into the row that already holds this
+     *  grain. */
+    collection_add: (args: { entry: EntryInput }): EntryChange => {
+      refuseIfBusy(db);
+      const input = args.entry;
+      const finish = validFinish(input.finish);
+      const condition = validCondition(input.condition);
+      // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
+      // conjure a row out of a card the user never said they had. Zero is a state a row is
+      // moved to, never one it is created in.
+      if (input.quantity <= 0) throw refuse(ZERO_ADD);
+      const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+      const grading = canonicalGrading(input.grading);
+      const card = requireCard(db, input.cardId);
+
+      const row: FakeEntry = {
+        id: 0,
+        cardId: input.cardId,
+        finish,
+        condition,
+        quantity: input.quantity,
+        // A tradelist bigger than the pile it is drawn from is not a promise anyone can
+        // keep, and the importer is the caller that will send one.
+        tradelistQuantity: Math.min(tradelist, input.quantity),
+        // Read from `cards` at write time and never from the caller: letting a caller supply
+        // these would let a caller disagree with the card it named.
+        lang: card.lang,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        purchasePrice: input.purchasePrice ?? null,
+        purchaseCurrency: input.purchaseCurrency ?? null,
+        acquiredAt: input.acquiredAt ?? null,
+        acquisitionSource: input.acquisitionSource ?? null,
+        serialNumber: input.serialNumber ?? null,
+        altered: input.altered ?? false,
+        signed: input.signed ?? false,
+        proxy: input.proxy ?? false,
+        misprint: input.misprint ?? false,
+        grading,
+        conditionOriginal: input.conditionOriginal ?? null,
+        // The column's own `DEFAULT '[]'`: a tags string is never null.
+        tags: input.tags ?? "[]",
+        notes: input.notes ?? null,
+        needsReview: null,
+        updatedAt: stamp(db),
+      };
+
+      const existing = db.collectionEntries.find(
+        (e) => collectionGrain(e) === collectionGrain(row),
+      );
+      if (existing) {
+        // The quantities add; everything else is first-writer-wins. A second add of a card
+        // you already own is "one more of these", not "and here is what I paid this time".
+        // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
+        // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
+        // provenance of the condition already there, which a later add cannot retroactively
+        // change. The entry editor is where both change.
+        existing.quantity += row.quantity;
+        existing.tradelistQuantity = Math.min(
+          existing.tradelistQuantity + tradelist,
+          existing.quantity,
+        );
+        existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+        existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+        existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+        existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+        existing.notes = existing.notes ?? row.notes;
+        existing.updatedAt = row.updatedAt;
+        return { id: existing.id, quantity: existing.quantity, removed: false };
+      }
+      row.id = nextId(db.collectionEntries);
+      db.collectionEntries.push(row);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /** `collection::set_quantity` — the stepper. **Zero keeps the row**, with its condition,
+     *  its purchase price and its acquisition story. Deleting is `collection_remove` and only
+     *  ever `collection_remove`. */
+    collection_set_quantity: (args: { id: number; quantity: number }): EntryChange => {
+      refuseIfBusy(db);
+      validQuantity(args.quantity, "collection quantity");
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (!row) throw refuse(ENTRY_GONE);
+      row.quantity = args.quantity;
+      // At zero copies there is nothing to offer.
+      row.tradelistQuantity = Math.min(row.tradelistQuantity, args.quantity);
+      row.updatedAt = stamp(db);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /** `collection::update_entry`. Absent fields are left alone (`coalesce(?n, column)`),
+     *  which is what makes this usable from a form that only sends what it changed — and a
+     *  `quantity` of zero is applied like any other, because nothing typed into an edit form
+     *  should delete the row being edited. */
+    collection_update: (args: { id: number; patch: EntryPatch }): EntryChange => {
+      refuseIfBusy(db);
+      const patch = args.patch;
+      if (patch.finish !== undefined) validFinish(patch.finish);
+      if (patch.condition !== undefined) validCondition(patch.condition);
+      if (patch.quantity !== undefined) validQuantity(patch.quantity, "collection quantity");
+      if (patch.tradelistQuantity !== undefined) {
+        validQuantity(patch.tradelistQuantity, "tradelist quantity");
+      }
+      // Blank grading is a silent no-op, not a clear: `coalesce(NULL, grading)` leaves the
+      // column. An entry editor that offers to remove a grading has nothing to do it with.
+      const grading = canonicalGrading(patch.grading);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (!row) throw refuse(ENTRY_GONE);
+
+      const quantity = patch.quantity ?? row.quantity;
+      const next: FakeEntry = {
+        ...row,
+        finish: patch.finish ?? row.finish,
+        condition: patch.condition ?? row.condition,
+        conditionOriginal: patch.conditionOriginal ?? row.conditionOriginal,
+        quantity,
+        tradelistQuantity: Math.min(patch.tradelistQuantity ?? row.tradelistQuantity, quantity),
+        purchasePrice: patch.purchasePrice ?? row.purchasePrice,
+        purchaseCurrency: patch.purchaseCurrency ?? row.purchaseCurrency,
+        acquiredAt: patch.acquiredAt ?? row.acquiredAt,
+        acquisitionSource: patch.acquisitionSource ?? row.acquisitionSource,
+        serialNumber: patch.serialNumber ?? row.serialNumber,
+        altered: patch.altered ?? row.altered,
+        signed: patch.signed ?? row.signed,
+        proxy: patch.proxy ?? row.proxy,
+        misprint: patch.misprint ?? row.misprint,
+        grading: grading ?? row.grading,
+        tags: patch.tags ?? row.tags,
+        notes: patch.notes ?? row.notes,
+        updatedAt: stamp(db),
+      };
+      // The one edit that cannot just be applied — SQLite would answer "UNIQUE constraint
+      // failed: index 'idx_collection_grain'", which names an implementation detail and no
+      // way forward. `collection::friendly` is the app talking instead.
+      const key = collectionGrain(next);
+      if (db.collectionEntries.some((e) => e.id !== row.id && collectionGrain(e) === key)) {
+        throw refuse(GRAIN_TAKEN);
+      }
+      Object.assign(row, next);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /** `collection::remove_entry` — the **only** thing in the collection that deletes. An id
+     *  that resolves to nothing is a success: a delete that finds nothing already has what it
+     *  wanted, and telling a stale list otherwise is an error dialog over a success. */
+    collection_remove: (args: { id: number }): EntryChange => {
+      refuseIfBusy(db);
+      db.collectionEntries = db.collectionEntries.filter((e) => e.id !== args.id);
+      return { id: args.id, quantity: 0, removed: true };
+    },
+
+    /** `wishlist::add_wish`. */
+    wishlist_add: (args: { wish: WishInput }): EntryChange => {
+      refuseIfBusy(db);
+      return addWish(db, args.wish);
+    },
+
+    /** `wishlist::set_wish_quantity`. **Zero removes the row** — the collection's opposite,
+     *  because `wishlist_entries` carries `CHECK (quantity > 0)` and a wish holds nothing
+     *  worth keeping once it is emptied. */
+    wishlist_set_quantity: (args: { id: number; quantity: number }): EntryChange => {
+      refuseIfBusy(db);
+      validQuantity(args.quantity, "wishlist quantity");
+      if (args.quantity === 0) return removeWish(db, args.id);
+      const row = db.wishlistEntries.find((w) => w.id === args.id);
+      if (!row) throw refuse(WISH_GONE);
+      row.quantity = args.quantity;
+      row.updatedAt = stamp(db);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /** `wishlist::remove_wish`. */
+    wishlist_remove: (args: { id: number }): EntryChange => {
+      refuseIfBusy(db);
+      return removeWish(db, args.id);
+    },
+
+    /** `deck::create_deck`. */
+    deck_create: (args: { deck: DeckInput }): DeckRow => {
+      refuseIfBusy(db);
+      const row: FakeDeck = {
+        id: nextId(db.decks),
+        name: validName(args.deck.name),
+        formatKey: validFormat(args.deck.formatKey),
+        description: args.deck.description ?? null,
+        coverCardId: null,
+        isBuilt: false,
+        archived: false,
+        updatedAt: stamp(db),
+      };
+      db.decks.push(row);
+      return toDeckRow(db, row);
+    },
+
+    /**
+     * `deck::update_deck` — rename, re-format, cover, build and archive all arrive here.
+     *
+     * `coalesce(?n, column)`, so absent means "leave it" and there is no field that *clears*
+     * one: `description: ""` writes an empty string rather than a NULL, and `coverCardId`
+     * cannot be unset. Sending `isBuilt` reallocates in the app; here the next `deck_get`
+     * does that work, so the flag is all this has to write.
+     */
+    deck_update: (args: { id: number; patch: DeckPatch }): DeckRow => {
+      refuseIfBusy(db);
+      const patch = args.patch;
+      const name = patch.name === undefined ? undefined : validName(patch.name);
+      const formatKey = patch.formatKey === undefined ? undefined : validFormat(patch.formatKey);
+      const deck = requireDeck(db, args.id);
+      deck.name = name ?? deck.name;
+      deck.formatKey = formatKey ?? deck.formatKey;
+      deck.description = patch.description ?? deck.description;
+      deck.coverCardId = patch.coverCardId ?? deck.coverCardId;
+      deck.isBuilt = patch.isBuilt ?? deck.isBuilt;
+      deck.archived = patch.archived ?? deck.archived;
+      deck.updatedAt = stamp(db);
+      return toDeckRow(db, deck);
+    },
+
+    /** `deck::delete_deck`. **This one really deletes** — the deck and its cards, by cascade.
+     *  Archiving is the soft path, and it is what a gallery's "remove" should reach for. */
+    deck_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      db.decks = db.decks.filter((d) => d.id !== args.id);
+      db.deckCards = db.deckCards.filter((dc) => dc.deckId !== args.id);
+    },
+
+    /** `deck::duplicate_deck` — the cards come across, never `isBuilt` and never `archived`.
+     *  A copy is a **draft**: it has reserved nothing, it is not sleeved up on a table, and it
+     *  is not something the user filed away. */
+    deck_duplicate: (args: { id: number }): DeckRow => {
+      refuseIfBusy(db);
+      const source = requireDeck(db, args.id);
+      const copy: FakeDeck = {
+        ...source,
+        id: nextId(db.decks),
+        name: `${source.name} (copy)`,
+        isBuilt: false,
+        archived: false,
+        updatedAt: stamp(db),
+      };
+      db.decks.push(copy);
+      // `needsReview` travels with the row: the sentence says this printing left the card
+      // database, which is just as true of the copy.
+      for (const dc of db.deckCards.filter((row) => row.deckId === source.id)) {
+        db.deckCards.push({ ...dc, id: nextId(db.deckCards), deckId: copy.id });
+      }
+      return toDeckRow(db, copy);
+    },
+
+    /**
+     * `deck::add_card` — the drag-in and the click-to-add, folding on the grain.
+     *
+     * It reads `cards` to denormalize the printing **and the name** onto the row, so it
+     * refuses a card the database does not have: an orphaned deck row can be stepped and
+     * moved but never re-added. The name is here for the wishlist's reason — a deck list that
+     * cannot say what an orphaned row *is* is not a list.
+     */
+    deck_add_card: (args: {
+      deckId: number;
+      cardId: string;
+      zone: DeckZone;
+      quantity: number;
+    }): EntryChange => {
+      refuseIfBusy(db);
+      const zone = validZone(args.zone);
+      if (args.quantity <= 0) throw refuse(ZERO_ADD);
+      const card = requireCard(db, args.cardId);
+      const deck = requireDeck(db, args.deckId);
+      const existing = deckCardAt(db, args.deckId, args.cardId, zone);
+      deck.updatedAt = stamp(db);
+      if (existing) {
+        existing.quantity += args.quantity;
+        return { id: existing.id, quantity: existing.quantity, removed: false };
+      }
+      const row: FakeDeckCard = {
+        id: nextId(db.deckCards),
+        deckId: args.deckId,
+        cardId: args.cardId,
+        zone,
+        quantity: args.quantity,
+        name: card.name,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        lang: card.lang,
+        needsReview: null,
+      };
+      db.deckCards.push(row);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `deck::set_card_quantity` — the stepper, and the write that works on a row whose
+     * printing has left the card database. **Zero removes the row.**
+     *
+     * The wishlist's asymmetry rather than the collection's: a zone slot holds an intention
+     * and nothing else, and an intention stepped down to none of is withdrawn. A slot the
+     * caller wanted empty and that is already empty answers `removed: true` with `id: 0` —
+     * and still moves the deck's `updatedAt`, because that path commits.
+     */
+    deck_set_card_quantity: (args: {
+      deckId: number;
+      cardId: string;
+      zone: DeckZone;
+      quantity: number;
+    }): EntryChange => {
+      refuseIfBusy(db);
+      const zone = validZone(args.zone);
+      validQuantity(args.quantity, "deck quantity");
+      const deck = requireDeck(db, args.deckId);
+      const row = deckCardAt(db, args.deckId, args.cardId, zone);
+      if (args.quantity === 0) {
+        db.deckCards = db.deckCards.filter((dc) => dc !== row);
+        deck.updatedAt = stamp(db);
+        return { id: row?.id ?? 0, quantity: 0, removed: true };
+      }
+      // The `GONE` asymmetry: an *adjustment* to a row that is not there could not do what it
+      // was asked. Putting a card into a zone is `deck_add_card`.
+      if (!row) throw refuse(cardGone(zone));
+      row.quantity = args.quantity;
+      deck.updatedAt = stamp(db);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `deck::move_card` — every copy from one zone to another, folding into what the target
+     * already holds.
+     *
+     * The identity travels **from the moved row**, never from a fresh `cards` lookup: a deck
+     * whose printing left the card database is exactly the deck whose maybe pile someone is
+     * tidying, and a move that needed the id to resolve would refuse the one row that most
+     * needs moving.
+     */
+    deck_move_card: (args: {
+      deckId: number;
+      cardId: string;
+      from: DeckZone;
+      to: DeckZone;
+    }): void => {
+      refuseIfBusy(db);
+      const from = validZone(args.from);
+      const to = validZone(args.to);
+      // Before the deck is even looked up, exactly as the Rust returns before its transaction.
+      if (from === to) return;
+      const deck = requireDeck(db, args.deckId);
+      const row = deckCardAt(db, args.deckId, args.cardId, from);
+      if (!row) throw refuse(cardGone(from));
+      const target = deckCardAt(db, args.deckId, args.cardId, to);
+      if (target) {
+        // `needs_review` is left alone where the target row already exists, and comes across
+        // with a row that lands in an empty zone — the fold's rule, and the reconciler's.
+        target.quantity += row.quantity;
+      } else {
+        // A **new row**, not the old one re-zoned: the statement is `INSERT … SELECT` followed
+        // by a `DELETE`, so the copies land on a fresh rowid. Worth reproducing rather than
+        // mutating `zone` in place, because row id is the allocator's tie-break within a zone
+        // (`zoneRank`, then `id`) — a moved row sorts *after* the rows already there, and
+        // mutating would have left it sorting where it used to be.
+        db.deckCards.push({ ...row, id: nextId(db.deckCards), zone: to });
+      }
+      db.deckCards = db.deckCards.filter((dc) => dc !== row);
+      deck.updatedAt = stamp(db);
+    },
+
+    /**
+     * `deck::swap_printing` — the card pane's "Use this printing".
+     *
+     * The one zone write whose identity comes from a **fresh `cards` lookup** rather than
+     * from the row being changed: a move keeps a printing the reader already chose, a swap
+     * *is* the reader choosing a new one, off a list read out of `cards` a moment ago. So a
+     * `toCardId` that does not resolve is a sync that raced the click, not an orphan to
+     * preserve.
+     *
+     * "Another printing of the same card" is **enforced**, because nothing below would
+     * enforce it: the insert carries the quantity onto whatever id it is handed, so a caller
+     * that paired the wrong two would turn four Bolts into four Black Lotuses at the same
+     * count, silently. The pair that cannot be compared is allowed through — a `from`
+     * printing that has left `cards` has no oracle id, and refusing on "cannot tell" would
+     * fence the copies onto a dead printing, which is the one row this command most needs to
+     * be able to move. (A null on the **to** side skips the comparison too. That is a fence
+     * around a nullable column rather than a card anyone can reach: no live row is null.)
+     *
+     * `needsReview` is deliberately not carried across — the flag says the row's printing
+     * left the card database, and a swap onto one that is in it is exactly the cure.
+     */
+    deck_swap_printing: (args: {
+      deckId: number;
+      fromCardId: string;
+      toCardId: string;
+      zone: DeckZone;
+    }): SwapResult => {
+      refuseIfBusy(db);
+      const zone = validZone(args.zone);
+      // Before anything else, so a no-op does not move `updatedAt` and resort the gallery.
+      if (args.fromCardId === args.toCardId) throw refuse(SAME_PRINTING);
+      const deck = requireDeck(db, args.deckId);
+      const row = deckCardAt(db, args.deckId, args.fromCardId, zone);
+      if (!row) throw refuse(cardGone(zone));
+      const to = cardById(db, args.toCardId);
+      if (!to) throw refuse(PRINTING_GONE);
+      const fromOracle = cardById(db, args.fromCardId)?.oracleId ?? null;
+      if (fromOracle !== null && to.oracleId !== null && fromOracle !== to.oracleId) {
+        // Named as the deck lists the one it holds and as `cards` has the target now, which
+        // is what the reader is looking at on each side of the press.
+        throw refuse(
+          `\`${to.name}\` is not another printing of \`${row.name}\`. Swapping a printing ` +
+            `changes which printing of a card this deck plays, never which card it plays.`,
+        );
+      }
+      const quantity = row.quantity;
+      const target = deckCardAt(db, args.deckId, args.toCardId, zone);
+      let landed: number;
+      if (target) {
+        target.quantity += quantity;
+        landed = target.quantity;
+      } else {
+        // `add_card`'s insert, which means a **new row** — and then the old one is deleted.
+        // Same reason `move_card` above pushes rather than mutating: the rowid is what the
+        // allocator breaks ties on.
+        db.deckCards.push({
+          id: nextId(db.deckCards),
+          deckId: args.deckId,
+          cardId: args.toCardId,
+          zone,
+          quantity,
+          name: to.name,
+          setCode: to.setCode,
+          collectorNumber: to.collectorNumber,
+          lang: to.lang,
+          needsReview: null,
+        });
+        landed = quantity;
+      }
+      db.deckCards = db.deckCards.filter((dc) => dc !== row);
+      deck.updatedAt = stamp(db);
+      // `CHECK (quantity > 0)` means a row that was already there contributed at least one
+      // copy, so the landed total is strictly greater than what moved exactly when it folded.
+      return { folded: landed > quantity, quantity: landed };
+    },
+
+    /**
+     * `deck::missing_to_wishlist` — everything this deck is short of, onto the wishlist.
+     *
+     * Answers how many **wishes were touched**, one per oracle card: the same card short in
+     * two zones is one wish for the sum, and pressing twice raises a line rather than making a
+     * second one. Always an **any-printing** wish — a shopping list is not a printing
+     * preference, and the copy that fills the hole is whichever one turns up.
+     *
+     * It reallocates before counting, and here that is `deck_get`: the read is where this
+     * fake allocates, so asking it *is* the reallocate-then-read the Rust spells out in two
+     * calls. `maybe` is skipped (a card the user has not decided to play is not one they need
+     * to buy) and so is an orphan, which has neither an oracle card nor a printing to wish
+     * for and is already carrying a sentence that says so.
+     */
+    deck_missing_to_wishlist: (args: { deckId: number }): number => {
+      refuseIfBusy(db);
+      const detail = readHandlers(db).deck_get({ id: args.deckId });
+      if (!detail) throw refuse(DECK_GONE);
+      const missing = new Map<string, { name: string; quantity: number }>();
+      for (const row of detail.cards) {
+        if (row.zone === MAYBE || row.oracleId === null) continue;
+        const short = row.quantity - row.ownedQuantity;
+        if (short <= 0) continue;
+        const found = missing.get(row.oracleId) ?? { name: row.name, quantity: 0 };
+        found.quantity += short;
+        missing.set(row.oracleId, found);
+      }
+      // A `BTreeMap` in the Rust, so the wishes are written in oracle-id order — which is
+      // what decides their row ids, and therefore the wishlist's `added` sort.
+      for (const oracleId of [...missing.keys()].sort(cmp)) {
+        const want = missing.get(oracleId)!;
+        // The deck row's own name: the one name an orphan-safe row always has, and the same
+        // name the deck list shows for it.
+        addWish(db, { oracleId, name: want.name, quantity: want.quantity });
+      }
+      return missing.size;
+    },
+
+    /**
+     * `lib::sync_run`, answering the 304 path — the answer most runs get.
+     *
+     * Nothing here downloads anything, so a run changes nothing and says so; `updatedAt` is
+     * `null` because `sync::unchanged` sets it that way, and a caller can never mistake stale
+     * metadata for freshly ingested data. `force` is accepted and ignored: there is no
+     * throttle to skip.
+     *
+     * **The one command in this table that does not honour `busy`**, because it does not take
+     * the write lock — it is the thing that holds it. Under `syncError` it throws the sentence
+     * `sync_status` reports, which is the only way a story reaches a failed Refresh.
+     */
+    sync_run: (): SyncOutcome => {
+      if (db.fault === "syncError") throw refuse(SYNC_ERROR);
+      return { updated: false, cardCount: db.cards.length, updatedAt: null };
+    },
+  } satisfies Record<string, CommandHandler>;
+}
+
+/**
+ * Reads ∪ writes: the whole command table, which is what a story registers.
+ *
+ * Both halves close over the one `db`, so a write is visible to the next read — the property
+ * that makes a story clickable rather than a snapshot.
+ */
+export function allHandlers(db: FakeDb) {
+  return { ...readHandlers(db), ...writeHandlers(db) };
 }
