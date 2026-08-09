@@ -224,6 +224,14 @@ export function SetCombobox({
             // share one, and a shared layer is resolved by document order — where the
             // header, coming after this filter row, painted a grey band across the picker.
             LAYER.popup,
+            // **Pinned to the trigger's right edge, not its left.** This control sits at the
+            // end of a wrapping filter row, so with the default `left: auto` — the static
+            // position, i.e. the trigger's left edge — 288px of listbox opened 174px past
+            // the window at 1280 (measured). Nothing clips it, so the *page* scrolled
+            // sideways to reveal it: the whole app slid left, sidebar and all, the moment
+            // the picker's own `scrollIntoView` ran. `AddToCollection`'s `align="end"` is
+            // the same decision for the same reason.
+            "right-0",
           )}
         >
           <input

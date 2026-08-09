@@ -105,8 +105,19 @@ async function evaluate(cdp, expression) {
   return r.result.value;
 }
 
+/**
+ * Chromium's modifier bitmask, as `Input.dispatch*Event` takes it: Alt 1, Ctrl 2, Meta 4,
+ * **Shift 8**.
+ *
+ * Only Shift is wired up, and it is here because a multi-key table sort is built by holding
+ * it down. `dispatchEvent({shiftKey: true})` out of `eval` proves nothing about that — it
+ * skips the browser's own input pipeline, which is where the modifier state a real hand
+ * produces actually comes from.
+ */
+const SHIFT = 8;
+
 /** A real user gesture, not `el.click()`: React's synthetic events and `:active` want one. */
-async function clickSelector(cdp, selector) {
+async function clickSelector(cdp, selector, modifiers = 0) {
   const box = await evaluate(
     cdp,
     `(() => {
@@ -125,6 +136,7 @@ async function clickSelector(cdp, selector) {
       y: box.y,
       button: "left",
       clickCount: 1,
+      modifiers,
     });
   }
   return box;
@@ -153,7 +165,12 @@ const boxOf = (selector) => `(() => {
 })()`;
 
 async function main() {
-  const [cmd, ...args] = process.argv.slice(2);
+  const [cmd, ...argv] = process.argv.slice(2);
+  // `--shift` on `click`, `text` and `press`, because a multi-key sort is built with it held
+  // down and there is no other way to say so through this script. Stripped before the
+  // positional arguments are read, so it can be written anywhere after the command.
+  const modifiers = argv.includes("--shift") ? SHIFT : 0;
+  const args = argv.filter((a) => a !== "--shift");
   const cdp = await connect();
   try {
     switch (cmd) {
@@ -162,7 +179,7 @@ async function main() {
         break;
 
       case "click":
-        await clickSelector(cdp, args[0]);
+        await clickSelector(cdp, args[0], modifiers);
         console.log("clicked");
         break;
 
@@ -184,7 +201,7 @@ async function main() {
           })()`,
         );
         if (!sel) throw new Error(`nothing on screen reads "${args[0]}"`);
-        await clickSelector(cdp, sel);
+        await clickSelector(cdp, sel, modifiers);
         await evaluate(
           cdp,
           `document.querySelector("[data-cdp-hit]")?.removeAttribute("data-cdp-hit")`,
@@ -242,8 +259,15 @@ async function main() {
           );
           if (!focused) throw new Error(`nothing focusable matches ${args[1]}`);
         }
-        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...k });
-        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k, text: undefined });
+        // `--shift` lands on the *click Chromium synthesises*, which is the keyboard half of
+        // an additive press: one `onClick` handler reading `e.shiftKey` serves both hands.
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...k, modifiers });
+        await cdp.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          ...k,
+          text: undefined,
+          modifiers,
+        });
         console.log("pressed");
         break;
       }
@@ -615,6 +639,7 @@ async function main() {
         console.error(
           "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|size|media|shot|console> " +
             "[args]\n" +
+            "  --shift on click/text/press holds Shift down for that gesture\n" +
             "  the app must be running with --remote-debugging-port=9222",
         );
         process.exitCode = 2;
