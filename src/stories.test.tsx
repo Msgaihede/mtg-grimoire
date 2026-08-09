@@ -15,18 +15,26 @@ import preview from "../.storybook/preview";
  * is asking.
  *
  * `vi.mock` rather than an alias in `vite.config.ts`, because Vitest's `resolve.alias` is
- * shared by all 60 test files and three of these specifiers are ones the app's own tests are
+ * shared by all 60 test files, and both of these specifiers are ones the app's own tests are
  * entitled to see unmocked. Hoisted above the imports by Vitest's transform, so the position
  * here is for reading, not for ordering.
  *
- * Keep this list in step with `.storybook/main.ts`'s — with **one deliberate omission**.
- * `main.ts` also aliases `@/lib/images` to `.storybook/fake/images.ts`, and that one cannot be
- * expressed here: the fake begins `export * from "../../src/lib/images"`, and a relative path
- * to the very file being mocked. Vite's alias matches the *specifier*, so the fake's own
- * import escapes it; `vi.mock` matches the *resolved id*, so it does not, and the factory ends
- * up importing what it is replacing. Measured 2026-08-09: the run hangs, no output, no
- * timeout. Nothing is lost by leaving it out — the fake's sole override is `cardImageUrl`,
- * which swaps a `mtgimg://` URL for a synthetic data URI, and jsdom loads neither.
+ * Keep this list in step with `.storybook/main.ts`'s — with **one deliberate omission**, which
+ * is worth reading in full before adding it back. `main.ts` has a third alias,
+ * `@/lib/images` → `.storybook/fake/images.ts`, and it cannot be written as a `vi.mock` here.
+ * `vite.config.ts` aliases `@` to `/src`, so `vi.mock("@/lib/images")` resolves to
+ * `src/lib/images.ts`; the fake's first line is `export * from "../../src/lib/images"`, which
+ * resolves to that same file. A Vite alias matches the *specifier* as written, so the fake's
+ * relative import walks past it untouched — `vi.mock` matches the *resolved id*, so it does
+ * not, and the mock factory ends up importing the very module it stands in for.
+ *
+ * **The symptom is a hang, not an error.** Measured 2026-08-09: `vitest run` on this file
+ * printed no output, failed no test, hit no timeout, and was killed at 300 s. If someone adds
+ * that third mock and the suite goes silent, this paragraph is the answer.
+ *
+ * Nothing is lost by leaving it out. The fake's only override is `cardImageUrl`, which swaps an
+ * `mtgimg://` URL for a synthetic data URI, and jsdom loads neither — so a play asserts that an
+ * image is *present*, never what its `src` says.
  */
 vi.mock("@tauri-apps/api/core", () => import("../.storybook/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
@@ -133,11 +141,12 @@ for (const { file, plays } of SCANNED) {
   describe(file, () => {
     for (const [name, story] of plays) {
       it(`${name} plays`, async () => {
-        // Deliberately no `setProjectAnnotations` anywhere in this file, so `preview.tsx`'s
-        // `FakeWorld` decorator and its three CSS imports stay out of jsdom — every story with
-        // a play today is props-only and asks the fake backend nothing. The first story that
-        // needs the fake world will fail here, loudly, and the fix is to install the project
-        // annotations rather than to quietly drop the story from a list.
+        // Runs with the project annotations installed above, so `preview.tsx`'s `FakeWorld`
+        // decorator is in place and every story here — props-only or backend-driven — gets the
+        // `QueryClientProvider` and a freshly seeded fake world. The props-only ones neither
+        // need it nor notice it. A new story needs no edit to this file: write it, give it a
+        // `play`, and the glob finds it. A failure here is therefore the story disagreeing with
+        // the DOM it renders, never this file missing its wiring.
         await story.run();
       });
     }
