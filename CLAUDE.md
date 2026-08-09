@@ -51,11 +51,30 @@ Scryfall as the only external dependency.
   it off the run fails at the very last step — after parsing every commit, resolving the
   version and pushing the release branch — with "GitHub Actions is not permitted to create or
   approve pull requests". Everything looks healthy right up until it doesn't.
+- **Every release PR opens in `action_required` and must be approved before CI runs.** This
+  is the same recursion guard as above wearing its other face: a `pull_request` run from a
+  `GITHUB_TOKEN`-authored PR is queued but *not started*. The run shows `action_required`
+  with **zero jobs**, which reads like a broken workflow and is not. So a release is: PR
+  opens → `gh api -X POST repos/…/actions/runs/<id>/approve` (or the Approve button) →
+  `ci-ok` passes → merge. Handing release-please a PAT or App token would remove the click
+  at the cost of a stored credential; for one maintainer the click is the better trade.
+- **Tags are plain `v0.2.0`, and that needs `include-component-in-tag: false`.** Setting
+  `package-name` gives release-please a *component*, and the default is to put it in the
+  tag — the first release landed as `mtg-collection-tracker-v0.2.0` before this was set.
+  `pull-request-title-pattern` drops it from the PR title for the same reason. Both `gh`
+  steps in `release.yml` read the action's `tag_name` **output** rather than a literal, so
+  they were unaffected; anything that hardcodes `v${version}` would not be.
 - Artifacts per release: NSIS `-setup.exe`, `.msi`, a **portable `.zip`** (the bare
   `mtg-collection-tracker.exe` — `productName` does **not** rename the binary in Tauri v2, it
   only names the bundles — which runs from any folder and keeps `data/` beside itself, the
-  behaviour no Program Files install can reach), plus `.deb` and `.AppImage`. Windows bundle
-  filenames carry `productName` verbatim, spaces and all.
+  behaviour no Program Files install can reach), plus `.deb` and `.AppImage`. The bundler
+  names files from `productName` **with its spaces**, but GitHub rewrites spaces to dots on
+  upload, so the published asset is `MTG.Collection.Tracker_0.2.0_x64-setup.exe` — match on
+  the dotted form when scripting against a release, never on the local bundle name.
+- **A portable copy exits silently if any other instance is running** —
+  `tauri-plugin-single-instance` gives it exit code 0, no window and no stderr, and a dev
+  build from `target/debug` counts. Measured 2026-08-09 while verifying the v0.2.0 zip: the
+  first attempt looked like a broken build and was a live dev instance.
 - `--bundles` is pinned per platform. Not because RPM needs `rpmbuild` — it does not, Tauri
   builds RPMs in-process with the pure-Rust `rpm` crate — but because shipping one is a
   choice. AppImage is the bundle with external needs: it downloads `linuxdeploy` and wants

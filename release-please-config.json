@@ -3,6 +3,8 @@
   "bump-minor-pre-major": true,
   "draft": true,
   "force-tag-creation": true,
+  "include-component-in-tag": false,
+  "pull-request-title-pattern": "chore${scope}: release ${version}",
   "packages": {
     ".": {
       "release-type": "node",
