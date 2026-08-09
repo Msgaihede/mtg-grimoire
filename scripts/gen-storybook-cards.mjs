@@ -43,16 +43,17 @@ const outPath = resolve(repoRoot, ".storybook/fake/cards.ts");
 const SELECTIONS = [
   // --- Lightning Bolt: four printings of one oracle card, for the printings list and the
   // printing swap. Each differs in the field that list is *read* by.
-  ["Lightning Bolt", "lea", "161", "en", "The printings list's oldest row: common, black border, nonfoil only, and the four-figure end of a common card's price range."],
+  ["Lightning Bolt", "lea", "161", "en", "The printings list's oldest row: common, black border, nonfoil only, and `usd` 620.00 — a three-figure price on a card printed at common."],
   ["Lightning Bolt", "2x2", "117", "en", "The same card at a different rarity — a printings list that showed one gem for the card rather than one per row would look right here and be wrong."],
   ["Lightning Bolt", "sld", "1638", "en", "Borderless, full-art, `frameEffects` set: the three fields a printings row is *distinguished* by, all at once."],
   ["Lightning Bolt", "sta", "105", "ja", "`lang` is not always `en`. Every language is listed in a printings list, and a row that assumes English silently mislabels this one."],
 
-  // --- Black Lotus: the expensive end, and the digital printing a paper list must drop.
-  ["Black Lotus", "lea", "232", "en", "Four figures, and `banned` in nearly every format — the price formatter's widest number and the legality panel's longest red column."],
-  ["Black Lotus", "vma", "4", "en", "`digital: true` **and** rarity `bonus`, which has no colour token: the paper-only filter has something to hide, and `RarityGem` has its uncoloured branch."],
+  // --- Black Lotus: `banned` almost everywhere, and the digital printing a paper list drops.
+  ["Black Lotus", "lea", "232", "en", "**No dollar price at all**: `usd`, `usd_foil` and `usd_etched` are all null, so `card_row`'s fallback chain resolves `priceUsd` to null while `eur` reads 38 719.86. A card nobody can quote in USD is not a bug and a `—` is the right answer; it is also the legality panel's longest red column."],
+  ["Black Lotus", "vma", "4", "en", "`isPaper: false` (with `digital: true`) **and** rarity `bonus`, which has no colour token: the paper-only filter has something to hide — and it hides it by `isPaper`, not by `digital` — and `RarityGem` has its uncoloured branch."],
 
-  ["Ancestral Recall", "lea", "47", "en", "`restricted` in vintage — the `max_one` restricted semantic, which is a different rule from `banned` and must not render as one."],
+  ["Ancestral Recall", "lea", "47", "en", "`restricted` in vintage — the `max_one` restricted semantic, which is a different rule from `banned` and must not render as one. Its `usd` is null too."],
+  ["Ancestral Recall", "2ed", "48", "en", "**`usd` 4 999.95** — the four-figure price the formatter's widest column has to hold, and the only one in this corpus. Paired with the `lea` row above on purpose: one oracle card, two printings, one priced in dollars and one not, so a printings list shows both states at once."],
 
   // --- Lands and basics.
   ["Forest", "unf", "239", "en", "A full-art basic: unlimited copies in a singleton deck, and `fullArt: true`."],
@@ -102,7 +103,7 @@ const SELECTIONS = [
   ["Llanowar Elves", "dom", "168", "en", "Green, common, a 1/1 body: the ordinary creature every P/T column is sized for."],
   ["Jace, the Mind Sculptor", "wwk", "31", "en", "A planeswalker: mythic, four loyalty abilities, 362 characters of oracle text (measured 2026-08-09) — the long end of the same box."],
   ["Ragavan, Nimble Pilferer", "mh2", "138", "en", "Mythic at one mana, with five of the six price keys filled — only `usd_etched` is null, because it has no etched printing. The row a price column reads with almost nothing missing."],
-  ["A-Vivi Ornitier", "fin", "A-248", "en", "An Alchemy rebalance: `digital: true`, so the search's `paperOnly` default has a second thing to hide and the two are not one set's quirk."],
+  ["A-Vivi Ornitier", "fin", "A-248", "en", "An Alchemy rebalance: `isPaper: false`, so the search's `paperOnly` default has a second thing to hide and the two are not one set's quirk. Also the second printing whose oracle card the printings list must therefore return nothing extra for."],
 ];
 
 /**
@@ -152,9 +153,10 @@ const SELECT = `
   SELECT c.id, c.oracle_id, c.name, c.set_code, c.set_name, c.collector_number, c.lang,
          c.rarity, c.layout, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
          c.colors, c.color_identity, c.power, c.toughness,
-         c.legalities, c.prices, c.finishes, c.faces,
+         c.legalities, c.prices, c.price_usd, c.finishes, c.faces,
          c.artist, c.illustration_id, c.released_at, c.image_status,
-         c.promo, c.full_art, c.frame_effects, c.border_color, c.game_changer, c.digital,
+         c.promo, c.full_art, c.frame_effects, c.border_color, c.game_changer,
+         c.is_paper, c.digital,
          CAST(c.raw AS BLOB) AS raw,
          EXISTS(SELECT 1 FROM cards u
                  WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
@@ -210,6 +212,7 @@ function toFakeCard(r, label) {
     toughness: r.toughness,
     legalities: r.legalities,
     prices: r.prices,
+    priceUsd: r.price_usd,
     finishes: r.finishes,
     faces: trimFaces(r.faces),
     artist: r.artist,
@@ -222,6 +225,7 @@ function toFakeCard(r, label) {
     borderColor: r.border_color,
     gameChanger: r.game_changer === 1,
     everUncommon: r.ever_uncommon === 1,
+    isPaper: r.is_paper === 1,
     digital: r.digital === 1,
     artCropUrl: uris.art_crop ?? null,
     normalUrl: uris.normal ?? null,
@@ -293,8 +297,22 @@ export interface FakeCard {
   /** JSON object of 23 keys — measured, not assumed, and it grows with the formats. */
   legalities: string;
   /** JSON object: \`usd\`, \`usd_foil\`, \`usd_etched\`, \`eur\`, \`eur_foil\`, \`tix\`. Decimal
-   *  **strings**, because that is what Scryfall publishes and what \`prices.ts\` parses. */
+   *  **strings**, because that is what Scryfall publishes and what \`prices.ts\` parses.
+   *  A **finish's** price is a lookup in here and nowhere else. */
   prices: string;
+  /**
+   * The \`cards.price_usd\` column — the number a search result shows, and the *only* source
+   * \`CardSummary.priceUsd\` has (\`search.rs\` selects this column; it does not touch
+   * {@link FakeCard.prices}).
+   *
+   * It is a **display and sort fallback chain**, not a finish's price: \`card_row.rs\` fills it
+   * \`usd\` → \`usd_foil\` → \`usd_etched\`, so on a foil-only printing it quotes the foil. Never
+   * sum it — a collection row prices through the blob above, by the finish it holds.
+   *
+   * \`null\` when all three keys are null, which is a real state rather than a gap: Black Lotus
+   * \`lea\` and Ancestral Recall \`lea\` both have it, priced in euros and in nothing else.
+   */
+  priceUsd: number | null;
   /** JSON array: \`["nonfoil","foil"]\`. */
   finishes: string;
   /**
@@ -318,7 +336,25 @@ export interface FakeCard {
   /** Printed at uncommon on **some** printing of this oracle card — Pauper Commander
    *  eligibility, which is a fact about the card and never about the printing shown. */
   everUncommon: boolean;
-  /** Digital-only. The search's \`paperOnly\` default hides these. */
+  /**
+   * **The column every paper filter actually keys on**, and the one a fake backend must
+   * implement against: \`filters.rs\` emits \`is_paper = 1\` for \`paperOnly\`, and \`card.rs\`'s
+   * \`PRINTINGS_WHERE\` is \`oracle_id = ?1 AND is_paper = 1\`. Neither reads
+   * {@link FakeCard.digital}.
+   *
+   * Derived from Scryfall's \`games\` array (\`games.contains("paper")\`), so it is not the
+   * negation of \`digital\` by construction — it merely is one today: measured 2026-08-09,
+   * 107 337 rows are \`is_paper = 1, digital = 0\` and 9 357 are the reverse, with **0** rows
+   * where the two agree. Filter on this one anyway; the equivalence is an observation about
+   * one bulk file, not a rule.
+   */
+  isPaper: boolean;
+  /**
+   * Scryfall's \`digital\` flag: this printing exists only on MTGO or Arena.
+   *
+   * Carried because it is a fact about the printing and a badge can say so — **not** because
+   * anything filters on it. See {@link FakeCard.isPaper} for what does.
+   */
   digital: boolean;
   /** Real Scryfall \`art_crop\` URL, used only under the "Live" art toolbar global — no image
    *  bytes are committed to this repository. \`null\` for a printing with no art anywhere. */
@@ -356,6 +392,7 @@ for (const { card } of rows) {
   console.log(
     `  ${card.name} [${card.setCode} ${card.collectorNumber} ${card.lang}] ` +
       `${card.rarity} ${card.layout} mv=${card.cmc} cost=${card.manaCost ?? "-"} ` +
+      `usd=${card.priceUsd ?? "-"} paper=${card.isPaper} ` +
       `pt=${card.power ?? "-"}/${card.toughness ?? "-"} fin=${card.finishes} ` +
       `gc=${card.gameChanger} eu=${card.everUncommon} dig=${card.digital} ` +
       `img=${card.imageStatus} art=${card.artCropUrl === null ? "none" : "yes"}`,
