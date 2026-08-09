@@ -511,7 +511,8 @@ export interface WishlistQuery extends CardFilters {
    *  reconciler walks this table too, so this is {@link CollectionQuery.needsReview}'s
    *  question asked of the other list. */
   needsReview?: boolean;
-  sort?: "name" | "added" | "quantity" | "price";
+  /** How to order the list, first column deciding. Empty or absent is name order. */
+  sort?: SortSpec<WishlistSortKey>;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;

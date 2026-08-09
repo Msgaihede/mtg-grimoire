@@ -74,6 +74,15 @@ const lastQuery = () =>
   wishlistList.mock.calls[wishlistList.mock.calls.length - 1][0] as WishlistQuery;
 
 /**
+ * The filter bar's sort control.
+ *
+ * By role and exact name, because every sortable column header carries a `title` reading
+ * "Sort by …" — and `getByLabelText` falls back to `title`, so a loose `/sort/i` matches the
+ * whole header row as well.
+ */
+const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
+
+/**
  * The header's money figures, scoped — a two-row wishlist prints the same dollar amount in
  * the total and in the row it came from, and an unscoped query cannot tell the sum from a
  * term. Two of them since the header started mirroring the collection's, which prices in both
@@ -411,14 +420,50 @@ describe("WishlistPage", () => {
     await screen.findByText("Lightning Bolt");
 
     await userEvent.type(screen.getByLabelText(/search your wishlist/i), "bolt");
-    await userEvent.selectOptions(screen.getByLabelText(/sort/i), "price");
+    await userEvent.selectOptions(sortSelect(), "price");
 
     await waitFor(() => {
       const q = lastQuery();
       expect(q.text).toBe("bolt");
-      expect(q.sort).toBe("price");
+      // The select sets one term, and the direction is the column's own first — "Highest
+      // price" is the label, so descending is what it means.
+      expect(q.sort).toEqual([{ key: "price", dir: "desc" }]);
       expect(q.limit).toBe(100);
     });
+  });
+
+  /**
+   * The select and the headers are one state seen from two ends — and the Printing column
+   * is the one header in this app that is not a control at all: an any-printing wish names
+   * no set, so there is nothing to sort by.
+   */
+  it("drives one sort from the headers and the select together, and leaves Printing alone", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByRole("columnheader", { name: /^Printing/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Printing/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Wanted" }));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
+    expect(sortSelect()).toHaveValue("quantity");
+
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("button", { name: /^Cost/ }));
+    await user.keyboard("{/Shift}");
+    await waitFor(() =>
+      expect(lastQuery().sort).toEqual([
+        { key: "quantity", dir: "desc" },
+        { key: "cost", dir: "desc" },
+      ]),
+    );
+
+    // Cost alone is an order the select has no option for — it offers the *unit* price.
+    await user.click(screen.getByRole("button", { name: /^Cost/ }));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "cost", dir: "desc" }]));
+    expect(sortSelect()).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
   });
 
   /** Opening a card from a wish is how the reader checks what they are about to buy. */
