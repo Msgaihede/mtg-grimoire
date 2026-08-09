@@ -932,10 +932,12 @@ const SYNC_DATA_DIR = "D:\\Storybook\\data";
 /**
  * 2026-08-09T09:00:00Z as unix seconds — the fixture's "now".
  *
- * One literal for two jobs: the sync's last check, and the floor {@link stamp} measures a
- * write's `updated_at` from. Two literals for one instant would be two things to drift.
+ * One literal for three jobs now: the sync's last check, the floor {@link stamp} measures a
+ * write's `updated_at` from, and the instant `seeds.ts` dates every seeded row at. Two
+ * literals for one instant would be two things to drift — which is why it is exported rather
+ * than copied, even though nothing outside this file reads a timestamp as a date.
  */
-const CLOCK_BASE = 1_786_266_000;
+export const CLOCK_BASE = 1_786_266_000;
 /** As a string, which is the column's own type (`sync_meta` is all text). */
 const SYNC_LAST_CHECK_AT = String(CLOCK_BASE);
 /** Scryfall regenerates `default_cards` in a 21:00–21:45 UTC window, so the ingested file is
