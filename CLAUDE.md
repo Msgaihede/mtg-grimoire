@@ -1,4 +1,4 @@
-# MTG Collection Tracker
+# MTG Grimoire
 
 Portable Windows desktop app for tracking a Magic: The Gathering collection.
 Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage,
@@ -60,17 +60,22 @@ Scryfall as the only external dependency.
   at the cost of a stored credential; for one maintainer the click is the better trade.
 - **Tags are plain `v0.2.0`, and that needs `include-component-in-tag: false`.** Setting
   `package-name` gives release-please a *component*, and the default is to put it in the
-  tag — the first release landed as `mtg-collection-tracker-v0.2.0` before this was set.
+  tag — the first release landed as `mtg-collection-tracker-v0.2.0` (the app's former name)
+  before this was set.
   `pull-request-title-pattern` drops it from the PR title for the same reason. Both `gh`
   steps in `release.yml` read the action's `tag_name` **output** rather than a literal, so
   they were unaffected; anything that hardcodes `v${version}` would not be.
 - Artifacts per release: NSIS `-setup.exe`, `.msi`, a **portable `.zip`** (the bare
-  `mtg-collection-tracker.exe` — `productName` does **not** rename the binary in Tauri v2, it
-  only names the bundles — which runs from any folder and keeps `data/` beside itself, the
-  behaviour no Program Files install can reach), plus `.deb` and `.AppImage`. The bundler
+  `mtg-grimoire.exe` — `productName` does **not** rename the binary in Tauri v2, it
+  only names the bundles, so the exe is the lowercase **Cargo package name** — which runs
+  from any folder and keeps `data/` beside itself, the behaviour no Program Files install
+  can reach), plus `.deb` and `.AppImage`. The bundler
   names files from `productName` **with its spaces**, but GitHub rewrites spaces to dots on
-  upload, so the published asset is `MTG.Collection.Tracker_0.2.0_x64-setup.exe` — match on
-  the dotted form when scripting against a release, never on the local bundle name.
+  upload — measured on v0.2.0, which published as
+  `MTG.Collection.Tracker_0.2.0_x64-setup.exe`. Under `MTG Grimoire` that same rule gives
+  `MTG.Grimoire_<version>_x64-setup.exe` (derived, not yet measured — no release has shipped
+  under the new name). Match on the dotted form when scripting against a release, never on
+  the local bundle name.
 - **A portable copy exits silently if any other instance is running** —
   `tauri-plugin-single-instance` gives it exit code 0, no window and no stderr, and a dev
   build from `target/debug` counts. Measured 2026-08-09 while verifying the v0.2.0 zip: the
@@ -170,10 +175,16 @@ the user's, and it is never committed. Seed **user tables only**: `cards` and `s
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
 ## Data & sync (measured against the live Scryfall API, 2026-08-04/05)
-- Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtgcollection.tracker/data`.
+- Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
   `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
   folder to force a clean first-run sync. All three locations are gitignored.
+  **The fallback's folder name is the Tauri `identifier`, and the rename changed it** —
+  `com.mtgcollection.tracker` → `com.mtggrimoire.app`. A machine that ran the v0.2.0
+  *installer* still has the old folder and its database; nothing migrates it, deliberately
+  (portable copies keep `data/` beside the exe and are untouched). So "my collection is
+  gone" after upgrading an installed 0.2.0 has exactly one cause and one fix: copy the old
+  folder across.
 - A sync yields ~116.6 k cards / ~1 050 sets from a 77 MB download. **Timings, measured
   2026-08-05 over three live forced syncs (debug build):** `checking` <1 s · `downloading`
   ~2.5 s · `ingesting` **~81 s** · `reclaiming` ~6 s · `sets` ~5 s — **92–99 s end to end**.

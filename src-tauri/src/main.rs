@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    mtg_collection_tracker_lib::run()
+    mtg_grimoire_lib::run()
 }

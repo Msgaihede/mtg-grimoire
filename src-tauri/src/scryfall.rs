@@ -32,8 +32,16 @@ use std::path::Path;
 
 /// Sent on every request. Scryfall requires an accurate, app-specific UA and says
 /// plainly: "Do not allow HTTP libraries to choose the header for you."
-pub const USER_AGENT: &str =
-    "MTGCollectionTracker/0.1 (https://github.com/markusseerup/mtg-collection)";
+///
+/// The version comes from Cargo rather than a literal, because a hand-written one goes
+/// stale silently and this one had: it still said `0.1` at 0.2.0. "Accurate" is the whole
+/// requirement, so the two halves that can drift — version and repository — are the two
+/// this line does not spell out by hand.
+pub const USER_AGENT: &str = concat!(
+    "MTGGrimoire/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/Msgaihede/mtg-grimoire)"
+);
 
 /// The `Accept` value Scryfall's own documentation offers as an example.
 const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";

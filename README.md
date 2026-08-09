@@ -1,4 +1,4 @@
-# MTG Collection Tracker
+# MTG Grimoire
 
 Portable desktop app for tracking a Magic: The Gathering collection — Tauri 2 + React 19.
 
