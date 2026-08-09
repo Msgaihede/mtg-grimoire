@@ -28,18 +28,34 @@
  *    `deck::allocate_deck` writes `deck_allocations` rows on a zone write, the Built toggle
  *    or `missing_to_wishlist`, and the read only *attributes* what was stored. There is no
  *    allocations table here, so both halves happen at read time; see `allocate` below for
- *    what that changes and what it does not.
+ *    what that changes — the split between built decks follows deck id here and write order
+ *    in the app.
  * 3. **`list_sets` is derived from the cards**, because there is no `sets` table in the
  *    fixture. The real one reads every set Scryfall knows, so it can answer a set with no
  *    printings at all; this one cannot produce a set with no rows, only one whose rows are
- *    all digital.
- * 4. **`collection_list`'s `sort: "added"` orders by row id**, because `FakeEntry` carries no
- *    `created_at`. `e.created_at DESC, e.id DESC` is what `collection.rs` writes; `id DESC`
- *    is its tiebreaker and is monotonic with insertion order in a hand-seeded fixture.
+ *    all digital. Its `setType` is therefore always `null` — `FakeCard` has no `set_type`
+ *    column, and nothing renders one.
+ * 4. **Both lists' `sort: "added"` orders by row id** — `collection_list`'s and
+ *    `wishlist_list`'s — because neither row type carries a `created_at`.
+ *    `created_at DESC, id DESC` is what `collection.rs` and `wishlist.rs` write; `id DESC` is
+ *    that sort's own tiebreaker and is monotonic with insertion order in a hand-seeded
+ *    fixture.
  * 5. **Prices come out of the blob with `Number`**, where SQLite writes
  *    `CAST(json_extract(…) AS REAL)`. The two differ only on a value that is neither a
  *    decimal string nor null (SQLite answers `0.0`, this answers `null`), which the blobs
  *    Scryfall publishes do not contain.
+ * 6. **No `fill_unknown_power_toughness` pass.** `deck::get_deck` gunzips `raw` to recover a
+ *    P/T the `cards` columns are missing; the generator read a *synced* database, so the
+ *    columns are already filled — measured over `CARDS` 2026-08-09, 0 of 43 rows lack a P/T
+ *    that their type line says they could have.
+ * 7. **String order is UTF-16 code units** (`cmp` below), which is SQLite's default `BINARY`
+ *    collation over the ASCII names this fixture holds — never `localeCompare`, which sorts
+ *    `"a"` before `"B"` and would reorder every list here.
+ *
+ * Deliberately *not* on that list: `everUncommon`, `power`/`toughness`, `priceUsd` and
+ * `isPaper` are **read off their columns**. They are facts the generator took from the full
+ * 116 k-row corpus, and re-deriving any of them over a 43-row fixture would answer a question
+ * about the fixture while looking like an answer about the card.
  *
  * Nothing here is `async`: these are synchronous functions, and the fake `invoke` in
  * `core.ts` is what makes a command a promise. That keeps `db.test.ts` free of `await` on
@@ -287,8 +303,11 @@ const MANA_VALUE_OPEN_ENDED = 8;
  * row): `json_extract(NULL,…) IN (…)`, `NULL = 'rare'`, `NULL IN (1.0)`, `NULL >= 8.0` and
  * `NULL = 1` are every one of them NULL, so format, rarity, mana value and `paperOnly` drop
  * an orphan — but the colour filter is written as *exclusions*, and
- * `instr(coalesce(NULL,''),'W') = 0` is **true**, so an orphan passes it. `card.rs`'s
- * summary that "an orphan simply fails them" is one filter out of date; this follows the SQL.
+ * `instr(coalesce(NULL,''),'W') = 0` is **true**, so an orphan passes it — as does the `"C"`
+ * branch, whose `color_identity IS NULL` arm says so outright. `push_card_filters`' own doc
+ * (`filters.rs`, above the `rows` parameter) summarises the four card-only filters as ones an
+ * orphan "simply fails"; that is right for format, rarity and mana value and one filter out
+ * of date for colour. This follows the SQL.
  */
 function matchesCardFilters(
   card: FakeCard | null,
@@ -689,33 +708,39 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
  *
  * Availability is `entry.quantity` minus the claims of **other built** decks — the whole of
  * what `is_built` means. A deck is never blocked by its own claims, which is why the real one
- * deletes them before counting and why `exclude` is passed here.
+ * deletes them before counting.
  *
- * **What allocating on read changes.** In the app those other decks' claims are *stored*
- * rows, written when each deck was last touched, so two built decks sharing a card can each
- * hold a claim made when the other's was different (`DeckCard.ownedQuantity` says so in its
- * own doc). Here they are recomputed, in deck-id order against one running pool, so they are
- * consistent with each other in a way the app does not promise. A story about *stale* claims
- * is therefore the one thing this cannot stage.
+ * **One id-ordered pass over every built deck, the one being read included**, against a
+ * single running pool; a built deck then reads the turn it took, and a draft plans with
+ * whatever that pass left. Including it is not a detail — allocating the read's own deck
+ * *last*, from the leftovers of every other built deck, is a bug that hides behind a
+ * plausible number: with one copy and two built decks each wanting it, reading deck 1 lets
+ * deck 2 take it and reading deck 2 lets deck 1 take it, so **both read 0 and nobody holds
+ * the copy**. Measured before the fix at 2 copies across 3 built decks: 0, 0, 0.
+ *
+ * **What allocating on read changes.** In the app these claims are *stored* rows, written
+ * whenever each deck was last touched, so the split between two built decks follows **write
+ * order** and they can together hold more copies than the collection has — each claim made
+ * when the other's was different, which `DeckCard.ownedQuantity` warns about in its own doc.
+ * Here one pass decides it, so the split follows **deck id** and the claims never overlap.
+ * A story about stale or overlapping cross-deck claims is what this cannot stage.
  */
 function allocate(db: FakeDb, deckId: number): Map<number, number> {
   if (!db.decks.some((d) => d.id === deckId)) return new Map();
 
-  // Claims already held by the other built decks, computed in id order so the result does
-  // not depend on the order `decks` was seeded in.
   const claimed = new Map<number, number>();
-  for (const other of [...db.decks]
-    .filter((d) => d.isBuilt && d.id !== deckId)
-    .sort((a, b) => a.id - b.id)) {
-    for (const [entryId, n] of allocateAgainst(db, other.id, claimed)) {
-      claimed.set(entryId, (claimed.get(entryId) ?? 0) + n);
-    }
+  let mine: Map<number, number> | null = null;
+  // Id order, so the split does not depend on the order `decks` was seeded in.
+  for (const built of db.decks.filter((d) => d.isBuilt).sort((a, b) => a.id - b.id)) {
+    const taken = allocateAgainst(db, built.id, claimed);
+    if (built.id === deckId) mine = taken;
+    for (const [entryId, n] of taken) claimed.set(entryId, (claimed.get(entryId) ?? 0) + n);
   }
-  return allocateAgainst(db, deckId, claimed);
+  return mine ?? allocateAgainst(db, deckId, claimed);
 }
 
-/** The greedy walk itself, against an availability baseline. Split out only so the
- *  other-built-decks pass above can reuse it without recursing back into itself. */
+/** The greedy walk itself, against an availability baseline. Split out so the pass above can
+ *  run it once per built deck without recursing back into itself. */
 function allocateAgainst(
   db: FakeDb,
   deckId: number,
@@ -844,11 +869,14 @@ function toDeckCard(db: FakeDb, dc: FakeDeckCard, ownedQuantity: number): DeckCa
     rarity: card?.rarity ?? null,
     faces: card?.faces ?? null,
     gameChanger: card?.gameChanger ?? null,
-    // Printed at uncommon on **any** printing of this oracle card — computed, not read, and
-    // `false` for an orphan, because nothing is known about a card that is not there.
-    everUncommon:
-      card !== null &&
-      db.cards.some((c) => c.oracleId === card.oracleId && c.rarity === "uncommon"),
+    // Printed at uncommon on **any** printing of this oracle card, which is Pauper Commander
+    // eligibility. Read off the column, never recomputed over `db.cards`: the generator took
+    // it from the full 116 k-row corpus, and re-deriving it would make a fact about the
+    // *card* into a fact about the 43-row fixture. Delver of Secrets is the row that proves
+    // it — `everUncommon: true`, and the only Delver printing here is the `isd` common, so a
+    // recomputation answers `false` and a legal commander renders ineligible. `false` for an
+    // orphan, because nothing is known about a card that is not there.
+    everUncommon: card?.everUncommon ?? false,
     // The nonfoil `usd` key: a deck names a printing, not a finish, and nonfoil is the
     // cheapest way to satisfy it. Never the `price_usd` column.
     unitPriceUsd: priceKey(card, "usd"),
