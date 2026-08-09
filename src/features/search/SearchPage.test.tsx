@@ -84,6 +84,14 @@ function wrap(ui: ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+/**
+ * The set picker's disclosure button.
+ *
+ * Named by its expanded state because the *column header* is a button named "Set" too, now
+ * that the table sorts by its headers — and only a disclosure has an expanded state.
+ */
+const setPicker = () => screen.getByRole("button", { name: "Set", expanded: false });
+
 /** The `text` of every request the page has sent, oldest first. */
 const requestedTexts = () => searchCards.mock.calls.map((c) => (c[0] as SearchRequest).text);
 
@@ -243,7 +251,7 @@ describe("SearchPage", () => {
       ),
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(setPicker());
     await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
 
     // Both at once: a second filter must narrow the first rather than replace it.
@@ -261,7 +269,7 @@ describe("SearchPage", () => {
     await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
     await userEvent.click(screen.getByRole("button", { name: "Blue" }));
     await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
-    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(setPicker());
     await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
     await userEvent.type(screen.getByPlaceholderText(/search cards/i), "bolt");
 
@@ -350,11 +358,98 @@ describe("SearchPage", () => {
     await screen.findByText("Lightning Bolt");
     const header = screen.getByRole("columnheader", { name: /^Price/ });
 
-    expect(header).toHaveAttribute("title", "Prices as of the last card-data sync.");
+    // On the button, because the button fills the header cell — a `title` on the cell is a
+    // tooltip nothing can reach. And beside the sort hint rather than instead of it: a
+    // sortable price column has two things to say and may drop neither.
+    expect(screen.getByRole("button", { name: /^Price/ })).toHaveAttribute(
+      "title",
+      "Prices as of the last card-data sync.\nSort by Price — Shift-click to add to the sort",
+    );
     // And in the accessible name, because a tooltip is not an answer for anyone who is not
     // holding a mouse over the right four pixels. It still *starts* with "Price", so the
     // column is still addressable by the word on screen.
     expect(header).toHaveAccessibleName("Price. Prices as of the last card-data sync.");
+  });
+
+  it("sends nothing about sorting until a header is pressed", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(lastRequest().sort).toBeUndefined();
+  });
+
+  it("asks the backend for the column a pressed header names", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+
+    // Descending first: "highest first" is what pressing a money column means.
+    await userEvent.click(screen.getByRole("button", { name: "Price" }));
+    await waitFor(() => expect(lastRequest().sort).toEqual([{ key: "price", dir: "desc" }]));
+
+    // Second press reverses it; the third takes the sort off altogether, which is how a
+    // reader who sorted by accident gets back to the view's own order.
+    await userEvent.click(screen.getByRole("button", { name: "Price" }));
+    await waitFor(() => expect(lastRequest().sort).toEqual([{ key: "price", dir: "asc" }]));
+    await userEvent.click(screen.getByRole("button", { name: "Price" }));
+    await waitFor(() => expect(lastRequest().sort).toBeUndefined());
+  });
+
+  /**
+   * The whole point of the feature, and the thing one sort key cannot express: dearest
+   * *within* each rarity.
+   */
+  it("builds a two-key sort from a shifted press, keeping the first key first", async () => {
+    // A bound instance, because a held modifier is *its* state: the bare `userEvent.click`
+    // makes a fresh one per call, so the Shift pressed by one call is not down for the next
+    // and the additive press silently becomes an ordinary one.
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Rarity" }));
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("button", { name: /^Price/ }));
+    await user.keyboard("{/Shift}");
+
+    await waitFor(() =>
+      expect(lastRequest().sort).toEqual([
+        { key: "rarity", dir: "asc" },
+        { key: "price", dir: "desc" },
+      ]),
+    );
+
+    // And both columns say so, with their place in the order.
+    expect(screen.getByRole("columnheader", { name: "Rarity" })).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    expect(screen.getByRole("columnheader", { name: /^Price/ })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    expect(screen.getByRole("button", { name: "Rarity, sort priority 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Price, sort priority 2" })).toBeInTheDocument();
+  });
+
+  /**
+   * A sort is not a filter: it is not counted by the Reset all badge and is not cleared by
+   * it. Clearing what you are looking at should not throw away the order you read it in.
+   */
+  it("keeps the sort through Reset all, and does not count it as a filter", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("button", { name: "Name" }));
+    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "bolt");
+    await waitFor(() => expect(lastRequest().text).toBe("bolt"));
+
+    const reset = screen.getByRole("button", { name: /reset all/i });
+    expect(reset).toHaveTextContent("1");
+    await userEvent.click(reset);
+
+    await waitFor(() => {
+      expect(lastRequest().text).toBeUndefined();
+      expect(lastRequest().sort).toEqual([{ key: "name", dir: "asc" }]);
+    });
   });
 
   it("counts the matches, and says `+` when the backend stopped counting", async () => {

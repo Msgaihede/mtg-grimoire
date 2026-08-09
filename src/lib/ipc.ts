@@ -24,6 +24,41 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
 import type { ImageVariant } from "./images";
+import type { SortSpec } from "./sort";
+
+/**
+ * The search table's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`;
+ * a key that is not there is dropped at the far end, which is a header that does nothing.
+ */
+export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price";
+
+/**
+ * The collection's sortable columns.
+ *
+ * `value` and `price` are two questions about the one Value column: `value` is what the row
+ * is worth (unit × copies — the figure the cell prints, and what its header sorts by), and
+ * `price` what one copy costs. `added` has no column at all. Both of the latter are
+ * reachable only from the filter bar's select. Mirrors `COLLECTION_SORTS` in
+ * `src-tauri/src/collection.rs`.
+ */
+export type CollectionSortKey =
+  | "name"
+  | "set"
+  | "finish"
+  | "quantity"
+  | "value"
+  | "price"
+  | "added";
+
+/**
+ * The wishlist's sortable columns.
+ *
+ * There is no `set`: an any-printing wish names no set, so the Printing column is not
+ * sortable at all. `cost` is what finishing a wish still costs — unit × copies still
+ * missing, which is the figure the Cost cell prints. Mirrors `WISHLIST_SORTS` in
+ * `src-tauri/src/wishlist.rs`.
+ */
+export type WishlistSortKey = "name" | "owned" | "quantity" | "cost" | "price" | "added";
 
 /**
  * A search as the UI asks for it.
@@ -59,7 +94,12 @@ export interface SearchRequest {
    * a wish is filled by copies rather than by paperwork.
    */
   owned?: boolean;
-  sort?: "name" | "released" | "price";
+  /**
+   * How to order the page: columns in priority order, the first deciding and the rest
+   * breaking its ties. Empty or absent is the default — relevance when `text` is set, name
+   * order when it is not.
+   */
+  sort?: SortSpec<SearchSortKey>;
   /** Clamped to 200 by the backend; 0 means "use the default page size". */
   limit: number;
   offset: number;
