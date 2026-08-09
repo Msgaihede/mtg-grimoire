@@ -12,6 +12,7 @@ pub mod reconcile;
 pub mod schema;
 pub mod scryfall;
 pub mod search;
+pub mod sorting;
 pub mod sync;
 pub mod wishlist;
 
