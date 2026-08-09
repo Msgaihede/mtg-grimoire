@@ -910,8 +910,10 @@ pub async fn prefetch_images(
 ///
 /// A pass, not a budget: keys already on disk are never selected, so a collection of ten
 /// thousand cards warms over several sessions and each one starts where the last stopped.
-/// It shares [`MAX_CONCURRENT_FETCHES`] with the grid the reader is using, which is what
-/// keeps a pre-warm from being felt rather than a pacing interval.
+/// What keeps a pass this size from being felt is [`warm`] being **sequential** — it awaits
+/// one key before asking for the next, so it holds one of [`MAX_CONCURRENT_FETCHES`] and
+/// leaves the rest to the grid the reader is actually using. That, rather than the pacing
+/// interval that used to be here, is the thing not to remove.
 pub const MAX_PREWARM: usize = 2_000;
 
 /// The cards the user owns, wants, or has put in a deck, that have no cached image yet.
