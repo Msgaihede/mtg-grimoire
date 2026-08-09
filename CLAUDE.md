@@ -249,10 +249,26 @@ belong to the sync, and a hand-written row in either makes every later measureme
 - A `grid` image averages **59.6 KB**. 600 browsed cards cost ~36 MB, so all 116 k
   printings at `grid` would be ~7 GB — which is why Plan 3's pre-warm is scoped to what
   the user owns rather than to the database.
-- Warm serve **2–3 ms**, cold single image **~127 ms**, cold first screenful **~1.8 s**
-  after the query lands (6 in flight, 100 ms apart).
+- Warm serve **2–3 ms**, cold single image **~127 ms**. A cold screenful of 20 tiles is
+  **80–270 ms** after the query lands — re-measured 2026-08-09, against **2 348–2 676 ms**
+  for the same five searches on the commit before (same machine, same corpus, `data/images`
+  cleared before each run, five identical cold terms plus five never-fetched ones).
+- **Nothing paces an image fetch, and that is deliberate.** The old 100 ms interval was
+  `api.scryfall.com`'s ≤10/s rule charged to `cards.scryfall.io`, which the research doc
+  records as having **no rate limit** — and `is_fetchable` guarantees an image can come from
+  nowhere else. It capped the whole app at 10 images/s, which was most of the 2.4 s above.
+  `MAX_CONCURRENT_FETCHES` (**16**) is now the whole of the pacing and it bounds *this*
+  machine — sockets, worker threads, bodies in flight — not Scryfall's patience. The 429
+  machinery is untouched: `Cache.gate` still carries a penalty deadline, still answers a
+  request inside one at once with the time remaining, and `penalise` still takes the `max`.
+  Measured over ~600 live images across two sessions: **zero** 429s, zero 502/503.
 - A page of search results warms itself: `images::prefetch_images` takes front faces only,
   caps the batch at 100, and is fire-and-forget — it resolves when the work is *queued*.
+  It walks the page **in reading order**. It used to walk backwards so it would not collide
+  with the tiles the grid had just mounted, on the premise that "nothing dedups a fetch that
+  is already in flight" — which Plan 3's single-flight map made false. Colliding at the head
+  is now the *good* case (a wait on a request already going out); walking backwards spent
+  the permits on cards fifty rows below the fold.
 - A printing with no art anywhere (162 of them) is a **200 with an SVG placeholder** at the
   variant's exact dimensions, never a 404 and never a cache row. Only a real failure is an
   error: 502 for a failed fetch, 503 + `Retry-After` for a rate limit.
@@ -280,6 +296,25 @@ belong to the sync, and a hand-written row in either makes every later measureme
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
 - Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- **Card art is drawn with `components/CardImage`, never a bare `<img>`.** It keys the image
+  on its own URL, and that key is the whole component. A browser keeps painting an `<img>`'s
+  last decoded frame until the new `src` decodes, and every card frame here belongs to a
+  *slot* rather than to a card — grid tiles are keyed by position on purpose, a deck cover is
+  handed a new id, the pane reuses its art across a flip — so React hands one element a
+  different card and the picture lags the caption by the length of the fetch. Measured over
+  CDP on the commit before: a search change kept **all 20** tile elements, captions reading
+  "Black Lotus" over Shivan Dragon art for ~2.4 s. After: **0** kept.
+  **This is invisible to the DOM and therefore to the test suite in the obvious place** —
+  setting `src` resets `complete` and `naturalWidth` while the old frame stays painted, so
+  `naturalWidth === 0` is true in both the healthy and the broken case. What a test can see
+  is *element identity*, which is what `CardImage.test.tsx` and the two integration tests
+  assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
+  independently by keying its whole `Preview` on the printing.
+- **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
+  it against "117 k results is 117 k requests", which the virtualiser had already made false
+  — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
+  gate only delayed the pictures about to be looked at. The deck zone columns keep it: they
+  are plain scrollers, where a 100-card list really is 100 mounted rows.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
   phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
