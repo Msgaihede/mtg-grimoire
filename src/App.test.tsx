@@ -52,6 +52,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // printings rows, which is a *different component*, and this file is where the two meet.
     deckSwapPrinting,
     formatSpecs: vi.fn().mockResolvedValue([]),
+    // `App` owns the update state for the ribbon's button and the Settings panel both, so
+    // every test in this file mounts it. Both are mocked for `onSyncProgress`'s reason: the
+    // listener registration is a bare call, and a `vi.fn()` that is not there is a
+    // synchronous `TypeError` inside an effect rather than a rejection anything can catch.
+    updateStatus: vi.fn().mockResolvedValue({
+      currentVersion: "0.2.0",
+      installKind: "portable",
+      available: null,
+      asset: null,
+      lastCheckAt: "1800000000",
+      busy: false,
+      staged: false,
+    }),
+    onUpdateProgress: vi.fn().mockResolvedValue(() => {}),
   },
 }));
 

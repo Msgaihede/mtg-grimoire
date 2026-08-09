@@ -918,6 +918,70 @@ export interface ReconciledEvent {
   flagged: number;
 }
 
+/**
+ * How this copy of the app was installed, which decides what an update can do to it.
+ * Mirrors `update::InstallKind`.
+ *
+ * `other` is an MSI install, any Linux build, or anything unrecognised — it hears about a
+ * new release and is offered the release page, never an in-app install. Nobody has ever run
+ * a Linux build of this app, and an MSI major upgrade is unverified; guessing at either is
+ * how a user ends up with two copies.
+ */
+export type InstallKind = "portable" | "nsis" | "other";
+
+/** One downloadable file on a GitHub release. Mirrors `update::Asset`. */
+export interface UpdateAsset {
+  name: string;
+  url: string;
+  size: number;
+  /**
+   * GitHub's own `sha256:<hex>`, and the whole of this updater's integrity story — there is
+   * no signing keypair behind it. `null` means the release published no checksum, which the
+   * backend treats as un-installable rather than installable-unverified.
+   */
+  digest: string | null;
+}
+
+/** A release newer than the running build. Mirrors `update::ReleaseInfo`. */
+export interface ReleaseInfo {
+  /** `tag_name` without its leading `v` — `0.3.0`. */
+  version: string;
+  tag: string;
+  /** The release body as written. Plain text: this app has no markdown renderer, and half
+   *  rendered markdown reads worse than none. */
+  notes: string;
+  publishedAt: string | null;
+  htmlUrl: string;
+  assets: UpdateAsset[];
+}
+
+/**
+ * What the ribbon polls. Mirrors `update::UpdateStatus`.
+ *
+ * `available` is `null` both for "up to date" and for "never checked" — `lastCheckAt` is
+ * what tells those apart, and a panel that renders "you're up to date" before the first
+ * check has answered is claiming something it does not know.
+ */
+export interface UpdateStatus {
+  currentVersion: string;
+  installKind: InstallKind;
+  available: ReleaseInfo | null;
+  /** The asset this install kind would download, already picked by the backend. `null` when
+   *  there is no update, or when the release carries nothing this install can use. */
+  asset: UpdateAsset | null;
+  /** Unix seconds, as a string — `SyncStatus.lastCheckAt`'s shape. */
+  lastCheckAt: string | null;
+  busy: boolean;
+  /** A verified build is on disk and one restart away. */
+  staged: boolean;
+}
+
+/** Payload of `update:progress`. One phase, and it is "downloading". */
+export interface UpdateProgressEvent {
+  done: number;
+  total: number;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
@@ -1041,6 +1105,23 @@ export const ipc = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   onSyncProgress: (cb: (e: SyncProgressEvent) => void): Promise<UnlistenFn> =>
     listen<SyncProgressEvent>("sync:progress", (evt) => cb(evt.payload)),
+  /** What is already known about a newer release. Reads `app_meta`; makes no network call. */
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /** Ask GitHub. `force` skips the 24 h throttle, which is what the Check now button sends. */
+  updateCheck: (force: boolean) => invoke<UpdateStatus>("update_check", { force }),
+  /**
+   * Download the update, verify it against the release's checksum, and stage it.
+   *
+   * Changes nothing about the running app — it resolves with the window still open and one
+   * more file on disk. Installing is a separate, deliberate call.
+   */
+  updateDownload: () => invoke<UpdateStatus>("update_download"),
+  /** Install what was staged and restart. The window closes moments after this resolves. */
+  updateApply: () => invoke<void>("update_apply"),
+  /** Open the release on github.com — what an install kind that cannot update itself gets. */
+  updateOpenReleasePage: () => invoke<void>("update_open_release_page"),
+  onUpdateProgress: (cb: (e: UpdateProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<UpdateProgressEvent>("update:progress", (evt) => cb(evt.payload)),
   /** A reconcile pass that moved user rows. See {@link ReconciledEvent}. */
   onCollectionReconciled: (cb: (e: ReconciledEvent) => void): Promise<UnlistenFn> =>
     listen<ReconciledEvent>("collection:reconciled", (evt) => cb(evt.payload)),

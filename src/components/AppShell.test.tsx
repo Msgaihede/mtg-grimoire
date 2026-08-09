@@ -33,10 +33,30 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
 import { REPORT_MS } from "./useSidebarDrops";
+import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { startDrag } from "@/test-drag";
+
+/**
+ * The shell's update state, in its resting position: nothing found, nothing running.
+ *
+ * These tests are about the sidebar, the sync and the drop targets, and `App` — not the
+ * shell — is what actually calls `useUpdate`. The ribbon's update button has its own tests
+ * in `Ribbon.test.tsx`, where the interesting values are.
+ */
+const noUpdate: Update = {
+  status: null,
+  progress: null,
+  busy: false,
+  action: "none",
+  error: null,
+  check: vi.fn(),
+  download: vi.fn(),
+  install: vi.fn(),
+  openReleasePage: vi.fn(),
+};
 
 /**
  * The shell, under the app's own query client.
@@ -97,7 +117,7 @@ beforeEach(() => {
 
 it("renders nav and refresh button", async () => {
   render(
-    <AppShell>
+    <AppShell update={noUpdate}>
       <div>content</div>
     </AppShell>,
   );
@@ -115,7 +135,7 @@ it("renders nav and refresh button", async () => {
 
 describe("the status line", () => {
   it("counts the cards and dates the data", async () => {
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     expect(await screen.findByText("116,568 cards · data from 2026-08-03")).toBeInTheDocument();
   });
@@ -123,7 +143,7 @@ describe("the status line", () => {
   it("says the database is empty rather than showing a zero", async () => {
     syncStatus.mockResolvedValue(status({ cardCount: 0, bulkUpdatedAt: null }));
 
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     expect(await screen.findByText("No card data yet")).toBeInTheDocument();
   });
@@ -136,7 +156,7 @@ describe("the status line", () => {
   it("names the live data directory as a tooltip", async () => {
     syncStatus.mockResolvedValue(status({ dataDir: "C:\\Users\\x\\AppData\\Roaming\\mtg\\data" }));
 
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     expect(await screen.findByText(/116,568 cards/)).toHaveAttribute(
       "title",
@@ -149,7 +169,7 @@ describe("the Refresh button", () => {
   it("forces a sync and re-reads the status when the call finishes", async () => {
     const run = deferred<SyncOutcome>();
     syncRun.mockReturnValue(run.promise);
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
     const button = await screen.findByRole("button", { name: /refresh/i });
     await waitFor(() => expect(syncStatus).toHaveBeenCalled());
     const pollsBefore = syncStatus.mock.calls.length;
@@ -178,7 +198,7 @@ describe("the Refresh button", () => {
    */
   it("says so when a Refresh finds nothing new", async () => {
     syncRun.mockResolvedValue({ updated: false, cardCount: 116_568, updatedAt: null });
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     await userEvent.click(await screen.findByRole("button", { name: /refresh/i }));
 
@@ -187,7 +207,7 @@ describe("the Refresh button", () => {
 
   it("stays quiet when the Refresh actually ingested something", async () => {
     syncRun.mockResolvedValue({ updated: true, cardCount: 116_600, updatedAt: null });
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     await userEvent.click(await screen.findByRole("button", { name: /refresh/i }));
 
@@ -198,7 +218,7 @@ describe("the Refresh button", () => {
   it("stays disabled while a sync started elsewhere is running", async () => {
     syncStatus.mockResolvedValue(status({ syncing: true }));
 
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     await waitFor(() => expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled());
     expect(syncRun).not.toHaveBeenCalled();
@@ -208,7 +228,7 @@ describe("the Refresh button", () => {
     syncRun.mockRejectedValue("sync already running");
     // Which is what "already running" means: the run it collided with is still going.
     syncStatus.mockResolvedValueOnce(status()).mockResolvedValue(status({ syncing: true }));
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
     const button = await screen.findByRole("button", { name: /refresh/i });
 
     await userEvent.click(button);
@@ -223,7 +243,7 @@ describe("the Refresh button", () => {
    */
   it("drops a stale rejection once nothing is running any more", async () => {
     syncRun.mockRejectedValue("sync already running");
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
     const button = await screen.findByRole("button", { name: /refresh/i });
 
     await userEvent.click(button);
@@ -236,7 +256,7 @@ describe("the error banner", () => {
   it("shows the failure the last run persisted", async () => {
     syncStatus.mockResolvedValue(status({ lastError: "rate limited by Scryfall" }));
 
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("rate limited by Scryfall");
   });
@@ -260,7 +280,7 @@ describe("the error banner", () => {
       syncing: true,
       imageStoreFailures: 0,
     });
-    render(<AppShell>{null}</AppShell>);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
     const button = await screen.findByRole("button", { name: /refresh/i });
     expect(await screen.findByRole("alert")).toHaveTextContent("rate limited by Scryfall");
 
@@ -281,7 +301,7 @@ it("retries the first run from inside the overlay", async () => {
   syncStatus.mockResolvedValue(
     status({ cardCount: 0, bulkUpdatedAt: null, lastError: "rate limited by Scryfall" }),
   );
-  render(<AppShell>{null}</AppShell>);
+  render(<AppShell update={noUpdate}>{null}</AppShell>);
 
   await userEvent.click(await screen.findByRole("button", { name: /retry/i }));
 
@@ -289,7 +309,7 @@ it("retries the first run from inside the overlay", async () => {
 });
 
 it("switches the active view", async () => {
-  render(<AppShell>{null}</AppShell>);
+  render(<AppShell update={noUpdate}>{null}</AppShell>);
 
   await userEvent.click(screen.getByRole("button", { name: "Decks" }));
 
@@ -324,7 +344,7 @@ describe("the sidebar's drop targets", () => {
   /** The shell with a card in it, and that card in the air. */
   async function pickUp(payload: DragPayload = BOLT) {
     render(
-      <AppShell>
+      <AppShell update={noUpdate}>
         <CardSource payload={payload} />
       </AppShell>,
     );
