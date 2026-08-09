@@ -107,15 +107,27 @@ place a truncated or swapped object is caught, and it must not be skippable.
 3. spawn `mtg-grimoire.exe --await-predecessor`, detached
 4. `app.exit(0)` → the existing `RunEvent::Exit` handler checkpoints the WAL as always
 
-The successor waits **before `tauri::Builder::default()` runs**, and what it waits on needs no
-new dependency and no PID plumbing: **Windows will not delete a running exe image**, so it
-loops on `fs::remove_file("mtg-grimoire.exe.old")`. Success *is* the proof the predecessor is
-gone, and it is the cleanup at the same time. Fifteen seconds, then it proceeds regardless.
+The successor waits **before `tauri::Builder::default()` runs**, on the predecessor's process
+handle: it is launched as `--await-predecessor <pid>` and calls `OpenProcess(SYNCHRONIZE)` +
+`WaitForSingleObject`, capped at fifteen seconds. That needs `windows-sys`, which is already
+in the tree via tauri/tao and so costs no build time.
 
 That wait is the whole reason for the flag. Without it the successor starts while the old
 process still holds the single-instance lock and gets **exit code 0, no window, no stderr** —
-the trap CLAUDE.md already records costing a session, which here would look exactly like a
-corrupt update. Every launch attempts the `.old` delete; only `--await-predecessor` *waits*.
+the trap CLAUDE.md already records costing a session, which here looks exactly like a corrupt
+update.
+
+> **Corrected 2026-08-09, measured.** This design originally waited by *deleting* the renamed
+> image, on the premise that Windows refuses to delete a running executable — making the
+> failed delete the liveness signal and the successful one both proof and cleanup. **That
+> premise is false.** Rust's `fs::remove_file` uses POSIX-semantics deletion on current
+> Windows: the name is unlinked immediately and the file object lives until the last handle
+> closes, so the delete succeeds against a running image. The live pass printed *"the previous
+> version let go after 0 ms"* while the predecessor had 200 ms still to live, and the
+> successor duly vanished. With the process wait it reads **231 ms** and the window comes
+> back. `update::tests::deleting_a_file_that_is_still_open_succeeds_on_windows` pins the false
+> premise so it cannot be reintroduced. The `.old` delete remains, as cleanup only — never as
+> evidence.
 
 ## Applying — NSIS
 
@@ -147,6 +159,10 @@ Two crates: **`sha2`** (verify the digest) and **`zip`**, `default-features = fa
 features = ["deflate"]` — `Compress-Archive` writes plain deflate. The alternative to `zip` is
 publishing a bare `.exe` asset beside the archive, trading a small pure-Rust dependency for a
 second artifact that can silently go stale.
+
+Plus **`windows-sys`** under `[target.'cfg(windows)'.dependencies]`, for `OpenProcess` and
+`WaitForSingleObject` — see the correction above. It is already in the tree at the same
+version, so it adds no build.
 
 **`release.yml` does not change.** The digest is already there, the assets are already there,
 `/releases/latest` already excludes drafts. No signing keypair, no `latest.json` — the CI

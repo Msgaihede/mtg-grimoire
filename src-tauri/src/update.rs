@@ -490,7 +490,13 @@ pub async fn check(
     if !should_check(last, now, force) {
         return Ok(status(state, updater));
     }
-    let Some(_guard) = updater.claim() else {
+    // Named, not `_guard`, because **where it is dropped is load-bearing**: every `Ok` path
+    // below drops it explicitly before building the answer. `status` reports `busy` by
+    // reading this very flag, so a status built while the guard is alive tells the caller
+    // that the operation it is the answer to is still running — and a UI that believes it
+    // disables its own button until the next poll. Measured in the shipped window
+    // 2026-08-09: "Restart to finish" arrived already disabled and stayed that way.
+    let Some(guard) = updater.claim() else {
         return Err("an update check is already running".into());
     };
 
@@ -512,6 +518,7 @@ pub async fn check(
         let _ = set_app_meta(&conn, K_LAST_CHECK_AT, &now.to_string());
         let _ = clear_app_meta(&conn, K_LATEST_SEEN);
         drop(conn);
+        drop(guard);
         return Ok(status(state, updater));
     }
     if code == 403 || code == 429 {
@@ -543,6 +550,8 @@ pub async fn check(
             Err(_) => clear_app_meta(&conn, K_LATEST_SEEN).map_err(|e| e.to_string())?,
         }
     }
+    // Before the answer, never after. See the guard's binding above.
+    drop(guard);
     Ok(status(state, updater))
 }
 
@@ -576,7 +585,10 @@ pub async fn download(
         ));
     }
 
-    let Some(_guard) = updater.claim() else {
+    // Named for the reason `check`'s is: it must be dropped before the answer is built, or
+    // the status this resolves with reports its own download as still running and the panel
+    // disables the button it was about to offer.
+    let Some(guard) = updater.claim() else {
         return Err("an update is already downloading".into());
     };
 
@@ -626,6 +638,7 @@ pub async fn download(
         }
     };
     *crate::sync::lock_plain(&updater.staged) = Some(staged);
+    drop(guard);
     Ok(status(state, updater))
 }
 
@@ -809,42 +822,93 @@ fn swap_and_relaunch(exe: &Path, staged: &Path) -> Result<(), String> {
         ));
     }
 
+    // The successor is handed **this process's id**, because that is the only thing it can
+    // wait on that means what it needs. See `await_predecessor`.
     std::process::Command::new(exe)
         .arg(AWAIT_FLAG)
+        .arg(std::process::id().to_string())
         .spawn()
         .map_err(|e| format!("the update is installed, but it could not be started: {e}"))?;
     Ok(())
 }
 
-/// Wait for the process this build replaced to let go, before anything else initialises.
+/// Block until process `pid` has terminated, or `AWAIT_PREDECESSOR` has passed.
+///
+/// `OpenProcess` failing means it is already gone — the usual case for a process that never
+/// existed, and the correct answer for one that has just exited.
+#[cfg(windows)]
+fn wait_for_process(pid: u32) {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+
+    /// The standard access right that permits waiting on a kernel object.
+    ///
+    /// Written out rather than imported: `windows-sys` re-exports `SYNCHRONIZE` only under
+    /// `Storage::FileSystem`, typed as a *file* access right, which it is not — it is one
+    /// of the standard rights every object type shares, processes included.
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    // SAFETY: `OpenProcess` takes no pointers and returns either null or a handle this
+    // function owns; every path below closes it exactly once.
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return;
+        }
+        let waited = WaitForSingleObject(handle, AWAIT_PREDECESSOR.as_millis() as u32);
+        CloseHandle(handle);
+        if waited != WAIT_OBJECT_0 {
+            eprintln!("update: gave up waiting for process {pid} to exit; starting anyway.");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_process(_pid: u32) {}
+
+/// Wait for the process this build replaced to exit, before anything else initialises.
 ///
 /// The wait is what stops the relaunch dying silently. `tauri-plugin-single-instance` gives
 /// a second instance **exit code 0, no window and no stderr** — so a successor that starts
 /// while its predecessor still holds the lock simply vanishes, and the user is left looking
 /// at the old version with no sign that anything went wrong.
 ///
-/// What it waits *on* needs no process handle and no new dependency: **Windows will not
-/// delete a running exe image**, so the delete failing means the predecessor is alive and
-/// the delete succeeding is both the proof it has gone and the cleanup itself.
+/// **It waits on the predecessor's process handle, and the first version of this did not.**
+/// That one tried to delete the renamed image on the premise that Windows refuses to delete
+/// a running executable, taking the failure as proof the process was alive. It is not true
+/// any more: Rust's `fs::remove_file` uses **POSIX-semantics deletion** on current Windows,
+/// which unlinks the name immediately and lets the file object live until the last handle
+/// closes — so the delete succeeds against a running image. Measured in the shipped window
+/// on 2026-08-09: *"the previous version let go after 0 ms"*, printed while the predecessor
+/// had 200 ms still to live, followed by a successor that vanished exactly as described
+/// above. `WaitForSingleObject` on the process is the only primitive here that means what
+/// this needs, which is why the pid is passed on the command line.
 ///
 /// Called before `tauri::Builder::default()`, because by the time a plugin has initialised
 /// the decision has already been made.
-pub fn await_predecessor(exe: &Path) {
-    let old = sibling(exe, ".old");
-    let deadline = std::time::Instant::now() + AWAIT_PREDECESSOR;
-    loop {
-        if !old.exists() || std::fs::remove_file(&old).is_ok() {
-            return;
-        }
-        if std::time::Instant::now() >= deadline {
-            eprintln!(
-                "the previous version is still running after {}s; starting anyway.",
-                AWAIT_PREDECESSOR.as_secs()
-            );
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
+pub fn await_predecessor(exe: &Path, pid: Option<u32>) {
+    if let Some(pid) = pid {
+        let started = std::time::Instant::now();
+        wait_for_process(pid);
+        eprintln!(
+            "update: the previous version exited after {} ms",
+            started.elapsed().as_millis()
+        );
     }
+    // Cleanup, and only cleanup — never evidence. It runs after the wait because that is
+    // when it can actually succeed at removing the *name*; the bytes go when the last
+    // handle closes either way.
+    let _ = std::fs::remove_file(sibling(exe, ".old"));
+}
+
+/// The pid in `--await-predecessor <pid>`, if the argument carries one.
+///
+/// `None` for a launch with the flag and no id — a hand-run of the successor path — which
+/// waits for nothing and simply cleans up.
+pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
+    let mut args = args.into_iter().skip_while(|a| a != AWAIT_FLAG);
+    args.next()?;
+    args.next()?.parse().ok()
 }
 
 /// Clear what an update left beside the exe: the replaced build, and any staged one that
@@ -1061,12 +1125,66 @@ mod tests {
         assert_eq!(std::fs::read(&exe).unwrap(), b"new build");
         assert_eq!(std::fs::read(&old).unwrap(), b"old build");
 
-        // ...and the successor's wait is also the cleanup.
-        await_predecessor(&exe);
+        // ...and the successor clears the replaced build once it is done waiting.
+        await_predecessor(&exe, None);
         assert!(
             !old.exists(),
             "the replaced build is deleted by the successor"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The successor is told which process to wait for on its command line, and the parse
+    /// has to survive every shape it can arrive in.
+    #[test]
+    fn the_predecessor_pid_is_read_off_the_command_line() {
+        let args = |s: &str| s.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            predecessor_pid(args("mtg-grimoire.exe --await-predecessor 48940")),
+            Some(48940)
+        );
+        // A hand-run of the successor path: the flag with nothing after it waits for
+        // nothing and just cleans up.
+        assert_eq!(
+            predecessor_pid(args("mtg-grimoire.exe --await-predecessor")),
+            None
+        );
+        assert_eq!(predecessor_pid(args("mtg-grimoire.exe")), None);
+        assert_eq!(
+            predecessor_pid(args("mtg-grimoire.exe --await-predecessor notapid")),
+            None
+        );
+    }
+
+    /// **The premise the first version of this wait was built on, pinned as false.**
+    ///
+    /// It assumed Windows refuses to delete a running executable, and read a failed delete
+    /// as "the predecessor is still alive". Rust's `remove_file` uses POSIX-semantics
+    /// deletion on current Windows: the name goes immediately and the file object outlives
+    /// it. So a delete against a running image *succeeds*, and a wait built on it returns
+    /// at once — measured in the shipped window on 2026-08-09 as "let go after 0 ms",
+    /// printed while the predecessor had 200 ms still to live, followed by a successor
+    /// `tauri-plugin-single-instance` killed silently.
+    ///
+    /// A test cannot delete its own running exe, so it pins the shape that misled: a file
+    /// with an open handle still unlinks, and `exists()` agrees immediately.
+    #[cfg(windows)]
+    #[test]
+    fn deleting_a_file_that_is_still_open_succeeds_on_windows() {
+        let dir = std::env::temp_dir().join("mtgtest-update-posix-delete");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("held.bin");
+        std::fs::write(&path, b"in use").unwrap();
+
+        let held = std::fs::File::open(&path).unwrap();
+        assert!(
+            std::fs::remove_file(&path).is_ok(),
+            "an open file still unlinks — a failed delete is not a liveness signal"
+        );
+        assert!(!path.exists());
+        drop(held);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1234,6 +1352,16 @@ mod tests {
         );
         assert!(answered.last_check_at.is_some());
         assert!(!answered.staged);
+        // **The answer must not report itself as still running.** `status` reads the same
+        // `busy` flag the guard holds, so a status built while the guard is alive says the
+        // check that produced it is in flight — and the panel disables every control until
+        // its next poll. Measured in the shipped window on 2026-08-09: the download
+        // succeeded and "Restart to finish" arrived already disabled, which no unit test
+        // saw because they all pass `busy` in by hand.
+        assert!(
+            !answered.busy,
+            "a finished check must not answer that it is still running"
+        );
 
         // ...and it survives without the server: this is what the ribbon reads at launch.
         let cached = status(&state, &updater);
