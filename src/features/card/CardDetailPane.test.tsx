@@ -210,6 +210,52 @@ describe("CardDetailPane", () => {
     expect(screen.queryByText("Creature — Human Wizard")).not.toBeInTheDocument();
   });
 
+  /**
+   * The pane blanks its art while a card it has never opened is fetched, so the obvious path
+   * hides this — but a card already in the query cache is handed over *in the same render*,
+   * with no pending state to unmount the picture. Browsing back to a card you just looked at
+   * is therefore the one path where the pane can be left painting the previous card's art
+   * under the new card's name, and it is also the most common one.
+   */
+  it("never leaves the last card's art on screen when a cached card is reopened", async () => {
+    const bolt: CardDetail = {
+      ...detail,
+      id: "p2",
+      name: "Lightning Bolt",
+      layout: "normal",
+      faces: [
+        {
+          name: "Lightning Bolt",
+          typeLine: "Instant",
+          oracleText: "Deal 3 damage to any target.",
+          manaCost: "{R}",
+          artist: "Christopher Rush",
+        },
+      ],
+    };
+    cardDetail.mockImplementation((id: string) => Promise.resolve(id === "p1" ? detail : bolt));
+    cardPrintings.mockResolvedValue(page(printings));
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const paneFor = (id: string) => (
+      <QueryClientProvider client={qc}>
+        <CardDetailPane cardId={id} onClose={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(paneFor("p1"));
+    await screen.findByAltText(/Delver of Secrets/);
+
+    // Open the other card, then come back. The second visit to `p1` is answered out of the
+    // cache, so the pane never unmounts the picture on the way.
+    rerender(paneFor("p2"));
+    const boltArt = await screen.findByAltText("Lightning Bolt");
+    rerender(paneFor("p1"));
+
+    const delverArt = await screen.findByAltText(/Delver of Secrets/);
+    expect(delverArt).not.toBe(boltArt);
+    expect(boltArt).not.toBeInTheDocument();
+  });
+
   it("prices each finish from its own key", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(printings));

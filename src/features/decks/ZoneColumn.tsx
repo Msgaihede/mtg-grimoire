@@ -13,6 +13,7 @@ import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { CardImage } from "@/components/CardImage";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
@@ -527,10 +528,14 @@ function CardRow({
           className="hidden h-9 w-12 overflow-hidden rounded bg-surface @[17rem]:block"
         >
           {art.src && !art.failed && (
-            <img
+            <CardImage
               src={art.src}
               alt=""
               draggable={false}
+              // Lazy: a deck's zone columns are plain scrollers, not virtualised walls, so a
+              // 100-card list really is 100 mounted rows and the browser's gate is the only
+              // thing bounding what they ask for. (The search wall is the opposite case — see
+              // `CardGrid`.)
               loading="lazy"
               decoding="async"
               onError={art.onError}

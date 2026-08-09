@@ -107,8 +107,10 @@ describe("CardGrid", () => {
     // to be the card's name rather than "card image".
     expect(bolt).toBeInTheDocument();
     expect(bolt).toHaveAttribute("src", expect.stringContaining("/grid/aaa/0"));
-    // Off-screen tiles must not all fetch at once on a 117 k-row browse.
-    expect(bolt).toHaveAttribute("loading", "lazy");
+    // *Not* `loading="lazy"`. The virtualiser already bounds the wall to the rows on screen
+    // plus two, so the browser's own intersection gate has nothing left to save on a 117 k-row
+    // browse — it only delays the two dozen images that are about to be looked at.
+    expect(bolt).not.toHaveAttribute("loading");
   });
 
   /**
@@ -543,6 +545,34 @@ describe("CardGrid", () => {
       "src",
       expect.stringContaining("/grid/ccc/0"),
     );
+  });
+
+  /**
+   * The same slot reuse seen from the other side, and the one a reader actually complains
+   * about: a browser keeps painting an `<img>`'s last decoded frame until the new `src`
+   * decodes, so a wall whose rows are reused shows the *previous* search's art under the new
+   * search's captions for as long as the fetch takes. The art has to leave with the card.
+   */
+  it("never leaves the last card's art in a slot it has handed to another card", () => {
+    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), listKey: "k" };
+    const { rerender } = render(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
+    const before = screen.getByAltText("Lightning Bolt");
+
+    rerender(<CardGrid rows={[card("ccc", "Ancestral Recall")]} {...props} listKey="k2" />);
+
+    expect(screen.getByAltText("Ancestral Recall")).not.toBe(before);
+    expect(before).not.toBeInTheDocument();
+  });
+
+  /** The other half: a wall that replaced its images every render would flicker constantly. */
+  it("keeps a tile's art across a re-render that did not change the card", () => {
+    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), listKey: "k" };
+    const { rerender } = render(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
+    const before = screen.getByAltText("Lightning Bolt");
+
+    rerender(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
+
+    expect(screen.getByAltText("Lightning Bolt")).toBe(before);
   });
 
   /**
