@@ -148,7 +148,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -668,6 +668,26 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch(FORMAT_SPECS_SEED)?;
         // Literal `5`, for the reason v3 writes a literal `3` and v4 a literal `4`.
         tx.execute_batch("PRAGMA user_version = 5;")?;
+        tx.commit()?;
+    }
+    if v < 6 {
+        let tx = conn.unchecked_transaction()?;
+        // One key/value table for state that belongs to the *application* rather than to
+        // the sync — today, when the updater last asked GitHub and which version it saw.
+        //
+        // Deliberately not `sync_meta`, which would have needed no migration at all:
+        // that table belongs to the sync, and a row in it that the sync did not write
+        // makes every later timing and "what the app did on its own" claim a fiction.
+        // The separation is worth one CREATE TABLE.
+        //
+        // Nothing here touches `cards`, so no entry in `CARDS_INDEXES`; nothing here is
+        // indexed by FTS and no rowid is renumbered, so no `cards_fts` rebuild is owed —
+        // the same reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
+        // Literal `6`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 6;")?;
         tx.commit()?;
     }
     Ok(())
