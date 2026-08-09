@@ -44,9 +44,12 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
     // `.storybook` is in scope so the fake backend is covered by the one suite `verify`
-    // runs. `.test.ts` and not `.test.{ts,tsx}`: the fakes are plain modules, and the
-    // narrower glob is also what keeps `*.stories.tsx` — which Storybook collects and
-    // Vitest must not — out of the run.
+    // runs. Stories stay out because **both** globs require a literal `.test.` segment, not
+    // because of the extension — `src/**/*.test.{ts,tsx}` does not match
+    // `src/components/RarityGem.stories.tsx` either, and that file is in the tree.
+    // What the narrower `.test.ts` on the second glob rules out is a
+    // `.storybook/**/*.test.tsx`: the fakes are plain modules, and a test needing JSX is
+    // testing a component, which lives under `src/`.
     include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts"],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No component imports
