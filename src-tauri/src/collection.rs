@@ -814,10 +814,15 @@ const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
         asc: "unit_price_usd ASC NULLS LAST",
         desc: "unit_price_usd DESC NULLS LAST",
     },
+    // The id carries the rest of the answer, and it is not the builder's tiebreak doing it:
+    // `created_at` is whole seconds, so a handful of entries added in one go all share one,
+    // and the appended `e.id ASC` would read them out oldest-first under a heading that
+    // says "Recently added". The duplicate id term the builder then appends is unreachable
+    // and harmless — the same shape `search`'s `ORDER_NAME` has.
     crate::sorting::SortColumn {
         key: "added",
-        asc: "e.created_at ASC",
-        desc: "e.created_at DESC",
+        asc: "e.created_at ASC, e.id ASC",
+        desc: "e.created_at DESC, e.id DESC",
     },
 ];
 

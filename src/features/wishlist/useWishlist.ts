@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { nextOffset } from "@/features/collection/useCollection";
 import { cycleTriState, DEBOUNCE_MS } from "@/features/search/useCardSearch";
-import { ipc, type WishlistQuery } from "@/lib/ipc";
+import { ipc, type WishlistQuery, type WishlistSortKey } from "@/lib/ipc";
+import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this. A wishlist is tens of
@@ -11,16 +12,21 @@ import { ipc, type WishlistQuery } from "@/lib/ipc";
  */
 export const WISHLIST_PAGE_SIZE = 100;
 
-/** The sort key the backend understands. */
-export type WishlistSort = NonNullable<WishlistQuery["sort"]>;
+/** The sort key the backend understands. Re-exported so call sites keep one import. */
+export type WishlistSort = WishlistSortKey;
 
 /**
- * The orders a shopping list is read in.
+ * The orders the filter bar's select offers.
  *
  * Four where the collection has five, and one of them means something different: `quantity`
  * is "most wanted" here, not "most copies", because these are cards the reader does not have
- * yet. There is no `set` order at all — an any-printing wish has no set to sort by, and a
- * list where half the rows sort under the same blank is not an order.
+ * yet. There is still no `set` order — an any-printing wish has no set to sort by, and a
+ * list where half the rows sort under the same blank is not an order. That is also why the
+ * **Printing column is the one header on any of these tables that is not sortable**.
+ *
+ * Two of these have a header to press as well. "Recently added" has no column and cannot
+ * afford one, and "Highest price" is the *unit* price — the Cost column's other question,
+ * where the header sorts by what finishing the wish still costs.
  */
 export const WISHLIST_SORTS = [
   { value: "name", label: "Name" },
@@ -28,6 +34,16 @@ export const WISHLIST_SORTS = [
   { value: "quantity", label: "Most wanted" },
   { value: "price", label: "Highest price" },
 ] as const satisfies readonly { value: WishlistSort; label: string }[];
+
+/** Which direction one press on each column asks for first. */
+const WISHLIST_FIRST_DIR: Record<WishlistSortKey, SortDir> = {
+  name: "asc",
+  owned: "desc",
+  quantity: "desc",
+  cost: "desc",
+  price: "desc",
+  added: "desc",
+};
 
 /** Everything {@link activeFilterCount} counts — every filter the wishlist view offers. */
 export interface WishlistFilterState {
@@ -67,7 +83,9 @@ export function useWishlist() {
   const [text, setText] = useState("");
   const [fulfilled, setFulfilled] = useState<boolean | undefined>(undefined);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
-  const [sort, setSort] = useState<WishlistSort>("name");
+  // Empty is name order — the view's own default, which is what a cleared sort falls back
+  // to. Not a filter, so `resetAll` leaves it alone.
+  const [sort, setSort] = useState<SortSpec<WishlistSortKey>>([]);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -100,13 +118,20 @@ export function useWishlist() {
     debouncedText,
     fulfilled === undefined ? "" : fulfilled ? "fulfilled" : "missing",
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
-    sort,
+    sort.map((t) => `${t.key}:${t.dir}`).join(","),
   ];
 
   const query = useInfiniteQuery({
     queryKey: listKey,
     queryFn: ({ pageParam }) =>
-      ipc.wishlistList({ ...filters, sort, limit: WISHLIST_PAGE_SIZE, offset: pageParam }),
+      ipc.wishlistList({
+        ...filters,
+        // Absent rather than `[]` when nothing is sorted, so an untouched table produces
+        // exactly the payload it always did.
+        sort: sort.length > 0 ? sort : undefined,
+        limit: WISHLIST_PAGE_SIZE,
+        offset: pageParam,
+      }),
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextOffset(pages),
     placeholderData: keepPreviousData,
@@ -133,8 +158,28 @@ export function useWishlist() {
     /** Off → flagged → not flagged → off. The flagged ones first: that is the only reason
      *  anybody presses this, and the complement is where you go once they are dealt with. */
     toggleNeedsReview: () => setNeedsReview((current) => cycleTriState(current, true)),
+    /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
-    setSort,
+    /** One press on a column header. `additive` is Shift being held. */
+    toggleSort: (key: string, additive: boolean) =>
+      setSort((spec) =>
+        applySort(spec, key as WishlistSortKey, {
+          additive,
+          firstDir: WISHLIST_FIRST_DIR[key as WishlistSortKey] ?? "asc",
+        }),
+      ),
+    /** The filter bar's select: one term, replacing whatever was there. */
+    setSortKey: (key: WishlistSortKey) => setSort([{ key, dir: WISHLIST_FIRST_DIR[key] }]),
+    /**
+     * What the select shows — the sort's *first* term when the select offers it, and `""`,
+     * drawn as `Custom…`, when the sort starts from a column it has no option for. See
+     * `useCollection`'s, which is the same rule for the same reason.
+     */
+    sortSelection: (sort.length === 0
+      ? "name"
+      : WISHLIST_SORTS.some((s) => s.value === sort[0].key)
+        ? sort[0].key
+        : "") as WishlistSortKey | "",
     activeCount: activeFilterCount({ text, fulfilled, needsReview }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
      *  reads, not what they are looking at. */
