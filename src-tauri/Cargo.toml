@@ -1,6 +1,6 @@
 [package]
 name = "mtg-collection-tracker"
-version = "0.1.0"
+version = "0.2.0"
 description = "MTG Collection Tracker"
 authors = ["Markus Seerup"]
 edition = "2021"
