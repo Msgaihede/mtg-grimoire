@@ -1,9 +1,22 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
+import storybook from "eslint-plugin-storybook";
 
 export default tseslint.config(
-  { ignores: ["dist/", "src-tauri/", "node_modules/"] },
+  // `storybook-static/` joins `dist/` for the same reason: it is generated output that
+  // `npm run verify` can leave on disk before `lint` runs, and its bundled JS would be
+  // linted as if it were source.
+  //
+  // `.claude/` is where Claude Code parks git **worktrees** — entire second checkouts of
+  // this repository, each with its own `tsconfig.json`. Flat config's default ignores are
+  // only `node_modules/` and `.git/`, so ESLint walks into them, and typescript-eslint then
+  // refuses every file in the *real* `src/` with "multiple candidate TSConfigRootDirs are
+  // present". Measured 2026-08-09: 257 parsing errors with one worktree checked out, 0 with
+  // this line. It is a local-machine artifact — CI never has one — which is exactly why it
+  // has to be ignored here rather than diagnosed again by the next person whose `lint` broke
+  // without them touching any lintable file.
+  { ignores: ["dist/", "storybook-static/", "src-tauri/", "node_modules/", ".claude/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   // `rules-of-hooks` and `exhaustive-deps` are the point: a stale dependency array is the
@@ -29,6 +42,15 @@ export default tseslint.config(
         // a click. `cdp.mjs drag` sleeps between moves for that reason and no other.
         setTimeout: "readonly",
       },
+    },
+  },
+  ...storybook.configs["flat/recommended"],
+  // `.storybook/main.ts` runs in Node, not in the webview — same reason the `scripts`
+  // block above exists.
+  {
+    files: [".storybook/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: { process: "readonly", console: "readonly", setTimeout: "readonly" },
     },
   },
   {

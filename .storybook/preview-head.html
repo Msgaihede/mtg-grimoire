@@ -1,0 +1,6 @@
+<script>
+  // The app is dark-only by design (spec §7). `:root` and `.dark` carry identical
+  // values in index.css; the class exists to switch on Tailwind's `dark:` variant that
+  // shadcn components ship with, never to select a second theme.
+  document.documentElement.classList.add("dark");
+</script>

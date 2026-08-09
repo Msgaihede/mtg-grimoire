@@ -1,8 +1,12 @@
 node_modules/
 dist/
+storybook-static/
 src-tauri/target/
 src-tauri/data/
 data/
 *.local
 .DS_Store
 .superpowers/
+# Claude Code parks git worktrees here: whole second checkouts of this repo. `git add -A`
+# would otherwise try to embed one as a gitlink.
+.claude/worktrees/

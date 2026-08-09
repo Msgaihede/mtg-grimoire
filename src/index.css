@@ -10,6 +10,9 @@
 @import "tailwindcss" source(none);
 @source "../src";
 @source "../index.html";
+/* Storybook decorators and the design-system page carry classes too, and this file runs
+   `source(none)` — an unlisted directory is a silently missing style. */
+@source "../.storybook";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";

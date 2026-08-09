@@ -25,6 +25,12 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"],
+  // The glob is spelled out rather than left as a bare `.storybook` directory entry:
+  // TypeScript expands a bare directory to a wildcard, and its wildcard expansion skips
+  // dot-directories, so the bare form contributes **zero** files. Measured 2026-08-09 with
+  // `tsc --listFiles`: nothing under the bare form, `main.ts` and `preview.tsx` under this
+  // one. The point of the entry is that the Storybook fake backend is type-checked, and the
+  // bare form fails at that silently.
+  "include": ["src", ".storybook/**/*"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
