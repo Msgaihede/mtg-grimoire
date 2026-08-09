@@ -2107,10 +2107,12 @@ mod tests {
         }
 
         // The old gate forced (N-1) × 100 ms = 500 ms on exactly this sequence, whatever the
-        // origin did. The bound is loose because a loopback round trip is not free either;
-        // what it catches is a pacing interval, not a slow machine.
+        // origin did, so **any** bound under 500 ms catches a pacing interval coming back.
+        // Picked at 400 rather than at the 6 ms this actually measures, because the margin
+        // that matters is the one above: a bound tight enough to also fail on a busy CI
+        // runner would be a flaky gate, and a flaky gate teaches people to re-run it.
         assert!(
-            started.elapsed() < Duration::from_millis(250),
+            started.elapsed() < Duration::from_millis(400),
             "{N} sequential fetches took {:?} — something is pacing them apart again",
             started.elapsed()
         );
