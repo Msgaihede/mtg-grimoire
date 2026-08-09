@@ -172,17 +172,35 @@ type Story = StoryObj<typeof meta>;
  * Five rows in a scroller that fits them, so nothing is virtualised away and the geometry is
  * plain: a sticky header, then rows on a 44px pitch.
  *
- * **Every story on this page renders its header and no rows under Vitest**, and it is worth
- * knowing where that comes from rather than meeting it as a puzzle. jsdom lays nothing out, so
- * `@tanstack/react-virtual` measures its scroll container at 0px and computes an empty window;
- * `VirtualTable.test.tsx:14-18` stubs `offsetHeight`/`offsetWidth`/`scrollTo` to get around it,
- * and a story file has no `beforeAll` to put that in — nor any business patching
- * `HTMLElement.prototype` inside a real browser, which is where Storybook renders it. Measured
- * 2026-08-09 with a throwaway spec: this table renders **1** element with `role="row"` under
- * Vitest with no stub, and that one is the header. Every `play` below is therefore about the
- * header or about the table element itself; the rows are Task 17's to look at.
+ * **Rows are visible to a `play` here, and that is not free.** jsdom lays nothing out, so
+ * `@tanstack/react-virtual` would measure this scroller at 0px and render no rows at all;
+ * `src/stories.test.tsx`'s `beforeAll` stubs `offsetHeight`/`offsetWidth`/`scrollTo` for every
+ * play in the repository, which is the same three lines `VirtualTable.test.tsx:14-18` uses. What
+ * it does *not* buy is this app's viewport — 600 × 900 is a number that file chose — so a `play`
+ * asserts the **presence of a named row near the top**, never how many rows are in the DOM.
+ *
+ * `aria-rowindex` counts the header as 1, so the first data row is 2. That is the whole reason
+ * the attribute is written out rather than left to the DOM: a virtualised list's rows are
+ * absolutely positioned and only a window of them exists, so nothing else can tell assistive
+ * tech where in the list it is standing.
  */
-export const FewRows: Story = {};
+export const FewRows: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The top row, found by the one cell that identifies a printing rather than by position:
+    // four of the five rows here are called "Lightning Bolt".
+    const cell = canvas.getByText("LEA · 161");
+    const row = cell.closest('[role="row"]');
+    await expect(row).toHaveAttribute("aria-rowindex", "2");
+    // The Price cell, through `usdPrice` rather than a literal, so this cannot drift the day
+    // the formatter's locale data does.
+    await expect(within(row as HTMLElement).getByText(usdPrice(620))).toBeInTheDocument();
+    // Five cells including the one that draws nothing: the Actions column is `srOnlyHeader`,
+    // not absent, and every row still carries its `role="cell"` wrapper — otherwise a screen
+    // reader walking the row by column would find four cells under five headers.
+    await expect(within(row as HTMLElement).getAllByRole("cell")).toHaveLength(5);
+  },
+};
 
 /**
  * All 43 fixture printings — 43 × 44px of rows plus a 36px header is 1 928px of list against a
@@ -194,7 +212,26 @@ export const FewRows: Story = {};
  * chosen to look like a lot. The app's real lists are thousands of rows, and that is the point
  * of the component; it is not something a fixture can honestly stage.
  */
-export const ManyRows: Story = { args: { rows: ALL, total: ALL.length } };
+export const ManyRows: Story = {
+  args: { rows: ALL, total: ALL.length },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The first row is in the DOM at any viewport, which is what makes this a claim about the
+    // list rather than about the stub's 600px.
+    await expect(canvas.getByText("LEA · 161")).toBeInTheDocument();
+    // Virtualisation itself, as an **inequality** rather than a count: however tall the window
+    // is, a virtualised list holds fewer elements than it has rows. A count here would be a
+    // green assertion that silently re-measures the day anyone touches the stub's numbers, the
+    // row pitch or `overscan`.
+    await expect(canvas.getAllByRole("row").length).toBeLessThan(ALL.length + 1);
+    // And the count assistive tech is given is the *whole* list regardless — 43 rows plus the
+    // header — which is the one number that must not follow the window.
+    await expect(canvas.getByRole("table")).toHaveAttribute(
+      "aria-rowcount",
+      String(ALL.length + 1),
+    );
+  },
+};
 
 /**
  * No rows, and **the table still exists** — header, `aria-rowcount`, the lot.
@@ -250,6 +287,14 @@ export const SortedByName: Story = {
     );
     // One key, so no priority is announced — "1 of 1" is a number that says nothing.
     await expect(canvas.getByRole("button", { name: "Name" })).toBeInTheDocument();
+    // And the rows really are in that order. `A-Vivi Ornitier` sorts above
+    // `Agadeem's Awakening // …` under `BINARY`, because `-` (0x2D) is below `g` (0x67) — the
+    // pair that would come out the other way round under `localeCompare`, which is why neither
+    // this file nor the fake backend uses it.
+    await expect(canvas.getByText("A-Vivi Ornitier").closest('[role="row"]')).toHaveAttribute(
+      "aria-rowindex",
+      "2",
+    );
   },
 };
 
@@ -310,6 +355,13 @@ export const SortedByTwoColumns: Story = {
       "aria-label",
       `Price. ${PRICES_AS_OF}`,
     );
+    // The first row is the dearest **common**, not the dearest card: `rarity` decides and
+    // `price` only breaks its ties, which is the whole difference between a two-key sort and
+    // two separate ones. Alpha Lightning Bolt at $620.00 is a common; the $4 999.95 Ancestral
+    // Recall below it is a rare and sorts into that group instead.
+    const top = canvas.getByText("LEA · 161").closest('[role="row"]');
+    await expect(top).toHaveAttribute("aria-rowindex", "2");
+    await expect(within(top as HTMLElement).getByText(usdPrice(620))).toBeInTheDocument();
   },
 };
 
