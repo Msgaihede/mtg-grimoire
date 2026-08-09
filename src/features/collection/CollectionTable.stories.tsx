@@ -1,8 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
+import { CONDITION_LABEL } from "@/lib/conditions";
 import { finishPrice, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
 import { CollectionTable } from "./CollectionTable";
 
@@ -177,16 +178,44 @@ type Story = StoryObj<typeof meta>;
 /**
  * The ordinary list.
  *
- * **No `play` on this page reaches a row**, and it is worth knowing why rather than meeting it
- * as a puzzle: jsdom lays nothing out, so `@tanstack/react-virtual` measures the scroller at 0px
- * and renders an empty window. `VirtualTable.test.tsx:14-18` stubs
- * `offsetHeight`/`offsetWidth`/`scrollTo` for exactly this, and a story file has no `beforeAll`
- * to put that in — nor any business patching `HTMLElement.prototype` inside the browser
- * Storybook renders in. Measured 2026-08-09 with a throwaway spec: this table renders **1**
- * element with `role="row"` under Vitest with no stub, and that one is the header. So the plays
- * here are about the header and the table element; the rows are Task 17's to look at.
+ * **Rows are visible to a `play` here, and that is not free.** jsdom lays nothing out, so
+ * `@tanstack/react-virtual` would measure the scroller at 0px and render no rows at all;
+ * `src/stories.test.tsx`'s `beforeAll` stubs `offsetHeight`/`offsetWidth`/`scrollTo` for every
+ * play in the repository, which is the same three lines `VirtualTable.test.tsx:14-18` uses. What
+ * it does *not* buy is this app's viewport, so a `play` asserts the **presence of a named row
+ * near the top** and never how many rows are in the DOM.
+ *
+ * The two figures in the Value cell are the arithmetic the header sorts by: the row's total, and
+ * — only where the two are different numbers — what one copy costs, under it. On the
+ * single-copy rows that are most of a collection the second line would be the same price
+ * written twice.
  */
-export const Rows: Story = {};
+export const Rows: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The top row, found by the cell that identifies the printing. `2ED · 48` is the entry's
+    // own denormalised set and number, which is what a collection row is addressed by.
+    const top = canvas.getByText("2ED · 48").closest('[role="row"]');
+    // The header is row 1, so the first entry is 2 — the only thing that can tell assistive
+    // tech where in a virtualised list it is standing.
+    await expect(top).toHaveAttribute("aria-rowindex", "2");
+    await expect(within(top as HTMLElement).getByText("Ancestral Recall")).toBeInTheDocument();
+    // The stepper writes straight through, and it is named for the **entry** rather than the
+    // card: a collection holds a foil and a played nonfoil of one printing as two rows, and two
+    // controls called "Quantity of Ancestral Recall" would be two a screen reader cannot tell
+    // apart.
+    await expect(
+      canvas.getByRole("spinbutton", { name: "Quantity of Ancestral Recall (Nonfoil, NM)" }),
+    ).toBeInTheDocument();
+    // One copy at $4 999.95, so the total is the unit price and the per-copy line is absent.
+    await expect(within(top as HTMLElement).getByText(usdPrice(4999.95))).toBeInTheDocument();
+    await expect(within(top as HTMLElement).queryByText(/ ea$/)).toBeNull();
+    // Urza's Saga is the two-copy row, where the pair *is* two numbers and both are drawn.
+    const two = canvas.getByText("MH2 · 259").closest('[role="row"]');
+    await expect(within(two as HTMLElement).getByText(usdPrice(79.72))).toBeInTheDocument();
+    await expect(within(two as HTMLElement).getByText(`${usdPrice(39.86)} ea`)).toBeInTheDocument();
+  },
+};
 
 /**
  * Nothing owned — and the table draws **no empty state of its own**.
@@ -236,6 +265,29 @@ export const NeedsReview: Story = {
     ],
     total: 4,
   },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const flagged = canvas.getByText("MH2 · 138").closest('[role="row"]');
+    // **Listed and counted**: the flagged row is the first row of the list, not a row moved to
+    // the end and not a row left out. That is the whole of what "a sentence, not a flag" means.
+    await expect(flagged).toHaveAttribute("aria-rowindex", "2");
+    const row = within(flagged as HTMLElement);
+    // The card is still perfectly present behind the sentence.
+    await expect(row.getByText("Ragavan, Nimble Pilferer")).toBeInTheDocument();
+    await expect(row.getByText(usdPrice(42.19))).toBeInTheDocument();
+    // **Six cells, not seven.** The band is drawn *inside* the name's cell rather than beside
+    // it, because a `<p>` among a row's cells is not a cell and what is not a cell is never
+    // announced. Found by its `title`, which is the same sentence: the band's own element also
+    // holds the "Needs review:" prefix, so its text is not the sentence on its own.
+    const cells = row.getAllByRole("cell");
+    await expect(cells).toHaveLength(6);
+    await expect(canvas.getByTitle(UNFOLDABLE).closest('[role="cell"]')).toBe(cells[0]);
+    // The sentence reaches anything that reads text, clip or no clip — the band is one line and
+    // this one is 182 characters, of which the *second* half is what to do about it. The
+    // tooltip is what makes that half reachable by eye; `toHaveTextContent` is what proves it
+    // is reachable at all.
+    await expect(flagged).toHaveTextContent(UNFOLDABLE);
+  },
 };
 
 /**
@@ -272,9 +324,32 @@ export const Orphan: Story = {
         unitPriceEur: null,
         needsReview: MISSING,
       }),
-      ...ROWS.slice(0, 3),
+      // Deliberately **not** `ROWS.slice(0, 3)`, which the other stories use: that slice holds
+      // the healthy Alpha Black Lotus, and two rows reading `LEA · 232` would leave the `play`
+      // below unable to say which one it was looking at.
+      ...ROWS.slice(2, 5),
     ],
     total: 4,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The entry's **own** set and number, which is the whole point: they were copied off the
+    // card at write time, so they are still here on the day the card is not.
+    const orphan = canvas.getByText("LEA · 232").closest('[role="row"]');
+    await expect(orphan).toHaveAttribute("aria-rowindex", "2");
+    const row = within(orphan as HTMLElement);
+    // Exactly two em dashes, and they are two different holes: the name the card can no longer
+    // supply (`row.name ?? "—"`), and the price of a finish of a printing that is not there
+    // (`usdPrice(null)`). Never `$0.00`, which is a price nobody quoted.
+    await expect(row.getAllByText("—")).toHaveLength(2);
+    // The one handle left. `Quantity of ${row.name ?? row.cardId}` falls back to the card id,
+    // so the control is still addressable by something even though nothing can name the card.
+    await expect(
+      canvas.getByRole("spinbutton", {
+        name: "Quantity of 0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77 (Nonfoil, NM)",
+      }),
+    ).toBeInTheDocument();
+    await expect(orphan).toHaveTextContent(MISSING);
   },
 };
 
@@ -300,6 +375,22 @@ export const EveryFinish: Story = {
       entry(printing("sta", "105"), "etched"),
     ],
     total: 3,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Three prices from three keys of one blob, through `finishPrice` rather than literals —
+    // the claim is "each finish is priced by its own key", not "these three strings".
+    for (const finish of ["nonfoil", "foil", "etched"] as const) {
+      const price = finishPrice(printing("sta", "105").prices, finish);
+      await expect(canvas.getByText(usdPrice(price))).toBeInTheDocument();
+    }
+    // The grade's word is one hover — or one screen reader — away, which is what the `<abbr>`
+    // buys over a bare "LP". Spelled the way `CONDITION_LABEL` spells it, not the way a
+    // pricing site would.
+    await expect(canvas.getByText("LP").closest("abbr")).toHaveAttribute(
+      "title",
+      CONDITION_LABEL.LP,
+    );
   },
 };
 
@@ -344,6 +435,29 @@ export const ZeroQuantity: Story = {
       ...ROWS.slice(0, 3),
     ],
     total: 4,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const empty = canvas.getByText("C21 · 263").closest('[role="row"]');
+    // Still listed, and still first — a row at zero is a record, not a deletion.
+    await expect(empty).toHaveAttribute("aria-rowindex", "2");
+    // **The only Remove button in the table**, and it is on this row. Asserting the whole list
+    // rather than this row is the point: the invisible half of the rule is that the other
+    // three rows do *not* offer one, and on a list that scrolls under the pointer a trash icon
+    // beside a four-copy row would be a one-click way to lose the lot.
+    const removes = canvas.getAllByRole("button", { name: /^Remove/ });
+    await expect(removes).toHaveLength(1);
+    await expect(removes[0]).toHaveAccessibleName(
+      "Remove Sol Ring (Nonfoil, LP) from your collection",
+    );
+    // The stepper can still be stepped back up — zero is a state it can reach and nothing else
+    // can leave.
+    await expect(
+      canvas.getByRole("spinbutton", { name: "Quantity of Sol Ring (Nonfoil, LP)" }),
+    ).toHaveValue(0);
+    // Priced, and worth nothing: `$0.00` here is the answer rather than a stand-in for one,
+    // which is exactly the distinction the em dash in {@link Orphan} is drawn for.
+    await expect(within(empty as HTMLElement).getByText(usdPrice(0))).toBeInTheDocument();
   },
 };
 

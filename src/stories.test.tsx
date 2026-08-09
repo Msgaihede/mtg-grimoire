@@ -1,5 +1,5 @@
 import { composeStories, setProjectAnnotations } from "@storybook/react-vite";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import preview from "../.storybook/preview";
 
 /**
@@ -38,6 +38,51 @@ import preview from "../.storybook/preview";
  */
 vi.mock("@tauri-apps/api/core", () => import("../.storybook/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
+
+/**
+ * Layout, faked, so that a `play` over a **virtualised** list has rows to look at.
+ *
+ * jsdom lays nothing out: every element measures 0, so `@tanstack/react-virtual` sizes its
+ * scroll container at 0px, computes an empty window and renders no rows at all. Measured
+ * 2026-08-09 with no stub: `VirtualTable` and `CollectionTable` each render **1** element with
+ * `role="row"` — the header — and `CardGrid` renders **0** tile buttons. It scrolls through
+ * `Element.scrollTo`, which jsdom does not implement either. The same three lines
+ * `VirtualTable.test.tsx:14-18` and the three views' own suites use, for the same reason.
+ *
+ * **Here and not in a story's `play`, and that is the whole point of putting it in this file.**
+ * A `play` runs in the Storybook *browser* as well as under Vitest, and `offsetHeight` is a
+ * native prototype accessor there: `Object.defineProperty` over it cannot be undone — `delete`
+ * removes the own property this call installed and does not restore the accessor it shadowed —
+ * so a story that patched it would break layout for the whole iframe, permanently, for every
+ * story the reader opened afterwards. This file is Vitest-only and the Storybook build never
+ * loads it: `main.ts`'s `stories` glob requires a literal `.stories.tsx` suffix under `src/`,
+ * which a `.test.tsx` cannot match. (The glob is not written out here: it ends in the two
+ * characters that close a block comment.)
+ *
+ * **It is global to every play, present and future**, because it is installed once for the whole
+ * file and every story in the repository runs through the loop below. Tasks 13–15 story
+ * `SearchPage` and `WishlistPage` over this same `VirtualTable` and will inherit it with no
+ * setup of their own.
+ *
+ * Two things it deliberately does **not** buy, both of which a story must keep deferring:
+ *
+ * 1. **A viewport.** 600 × 900 is a number, not this app's window, so *how many* rows the
+ *    virtualiser draws here is an artefact of this file. A `play` therefore asserts the
+ *    **presence of a named row near the top of the list** and never a count — a count would be
+ *    a green assertion that silently re-measures the day anyone touches these two numbers, the
+ *    row pitch, or `overscan`.
+ * 2. **`CardGrid`'s column count.** That wall does not ask the virtualiser how wide it is: it
+ *    measures its own rows container with `clientWidth` and a `ResizeObserver`
+ *    (`CardGrid.tsx:191-198`), and `src/test-setup.ts` stubs `ResizeObserver` to a no-op. So
+ *    `clientWidth` stays 0, `columnsFor` floors at one column, and every tile is
+ *    `TILE_MIN_WIDTH` wide. Tiles render — which is what this stub is for — but a claim about
+ *    *how many fit across* is still a claim only a browser can settle.
+ */
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 600 });
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, value: 900 });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+});
 
 /**
  * Every `play` function in every story, run under Vitest.
