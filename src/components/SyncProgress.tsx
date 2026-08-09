@@ -1,4 +1,5 @@
 import type { SyncProgressEvent } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 import { cn } from "@/lib/utils";
 
@@ -119,7 +120,10 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
     <div
       role="dialog"
       aria-labelledby="first-run-title"
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-bg px-8 text-center"
+      className={cn(
+        "fixed inset-0 flex flex-col items-center justify-center gap-6 bg-bg px-8 text-center",
+        LAYER.gate,
+      )}
     >
       <div className="max-w-md space-y-2">
         <h2 id="first-run-title" className="font-heading text-2xl text-text">

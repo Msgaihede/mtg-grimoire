@@ -10,7 +10,8 @@ import {
 } from "@/features/search/useCardSearch";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
-import { ipc, type CollectionQuery } from "@/lib/ipc";
+import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
+import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this; a collection is
@@ -18,14 +19,21 @@ import { ipc, type CollectionQuery } from "@/lib/ipc";
  */
 export const COLLECTION_PAGE_SIZE = 100;
 
-/** The sort key the backend understands. */
-export type CollectionSort = NonNullable<CollectionQuery["sort"]>;
+/** The sort key the backend understands. Re-exported so call sites keep one import. */
+export type CollectionSort = CollectionSortKey;
 
 /**
- * The orders a collection is read in, in the order a reader reaches for them.
+ * The orders the filter bar's select offers, in the order a reader reaches for them.
  *
  * Named for what they answer rather than for the column they touch: "Recently added" is
  * what a reader means by `added`, and `quantity` is asked as "which do I have most of".
+ *
+ * Four of them have a header to press as well, and this list is the shortcut to them. Two
+ * do not, which is the whole reason the select survived the table's headers becoming
+ * sortable: **"Recently added" has no column** — neither table can afford one, this one
+ * having already dropped a column at 1280px with the card pane open — and **"Highest
+ * price" is the unit price**, which is the Value column's *other* question. The Value
+ * header sorts by unit × copies, because that is the figure the cell prints.
  */
 export const COLLECTION_SORTS = [
   { value: "name", label: "Name" },
@@ -34,6 +42,22 @@ export const COLLECTION_SORTS = [
   { value: "quantity", label: "Most copies" },
   { value: "price", label: "Highest price" },
 ] as const satisfies readonly { value: CollectionSort; label: string }[];
+
+/**
+ * Which direction one press on each column asks for first.
+ *
+ * Descending on the money and count columns, because "highest first" is what pressing one
+ * of those means, and on `added` because "recently added" is what the select calls it.
+ */
+const COLLECTION_FIRST_DIR: Record<CollectionSortKey, SortDir> = {
+  name: "asc",
+  set: "asc",
+  finish: "asc",
+  quantity: "desc",
+  value: "desc",
+  price: "desc",
+  added: "desc",
+};
 
 /** Everything {@link activeFilterCount} counts — every filter the collection view offers. */
 export interface CollectionFilterState {
@@ -117,7 +141,9 @@ export function useCollection() {
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
-  const [sort, setSort] = useState<CollectionSort>("name");
+  // Empty is name order — the view's own default, which is what a cleared sort falls back
+  // to. Not a filter, so `resetAll` leaves it alone.
+  const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -179,12 +205,20 @@ export function useCollection() {
 
   // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
   // every write in the app already fires refreshes the table and the header together.
-  const listKey = ["collection", "list", filterKey, sort];
+  const sortKey = sort.map((t) => `${t.key}:${t.dir}`).join(",");
+  const listKey = ["collection", "list", filterKey, sortKey];
 
   const query = useInfiniteQuery({
     queryKey: listKey,
     queryFn: ({ pageParam }) =>
-      ipc.collectionList({ ...filters, sort, limit: COLLECTION_PAGE_SIZE, offset: pageParam }),
+      ipc.collectionList({
+        ...filters,
+        // Absent rather than `[]` when nothing is sorted, so an untouched table produces
+        // exactly the payload it always did.
+        sort: sort.length > 0 ? sort : undefined,
+        limit: COLLECTION_PAGE_SIZE,
+        offset: pageParam,
+      }),
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextOffset(pages),
     placeholderData: keepPreviousData,
@@ -225,8 +259,32 @@ export function useCollection() {
     /** The banner's "Show them", which has a destination rather than a next state — it is
      *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
+    /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
-    setSort,
+    /** One press on a column header. `additive` is Shift being held. */
+    toggleSort: (key: string, additive: boolean) =>
+      setSort((spec) =>
+        applySort(spec, key as CollectionSortKey, {
+          additive,
+          firstDir: COLLECTION_FIRST_DIR[key as CollectionSortKey] ?? "asc",
+        }),
+      ),
+    /** The filter bar's select: one term, replacing whatever was there. */
+    setSortKey: (key: CollectionSortKey) => setSort([{ key, dir: COLLECTION_FIRST_DIR[key] }]),
+    /**
+     * What the select shows.
+     *
+     * The sort's *first* term when the select offers it, and `""` — drawn as `Custom…` —
+     * when the sort starts from a column the select has no option for, which is the Value
+     * and Finish headers. Read off the first term rather than requiring a single one,
+     * because "sorted primarily by Name" is true of a two-key sort and is what a reader
+     * glancing at the control wants to know. An empty spec reads as the default it is.
+     */
+    sortSelection: (sort.length === 0
+      ? "name"
+      : COLLECTION_SORTS.some((s) => s.value === sort[0].key)
+        ? sort[0].key
+        : "") as CollectionSortKey | "",
     /** How many kinds of filter are on — the number on the Reset all badge. */
     activeCount: activeFilterCount({
       text,

@@ -50,7 +50,10 @@ pub struct WishlistQuery {
     /// flagged. [`crate::collection::CollectionQuery`]'s field, verbatim: the reconciler
     /// walks both tables, so both lists answer the same question the same way.
     pub needs_review: Option<bool>,
-    pub sort: Option<String>,
+    /// How to order the list: columns in priority order, the first deciding and the rest
+    /// breaking its ties. Empty or absent is name order. Keys outside [`WISHLIST_SORTS`]
+    /// are dropped, never interpolated.
+    pub sort: Option<Vec<crate::sorting::SortTerm>>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -123,6 +126,56 @@ const OWNED_SQL: &str = "coalesce((
             OR (w.card_id IS NULL AND ce.card_id IN
                     (SELECT id FROM cards WHERE oracle_id = w.oracle_id)
                 AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))), 0)";
+
+/// The columns the wishlist's headers can sort on, plus the two the filter bar's select
+/// offers that have no column to press.
+///
+/// **There is no `set` order, and the Printing column is not a header you can press.** An
+/// any-printing wish names no set, and a list where half the rows sort under the same blank
+/// is not an order.
+///
+/// `cost` is what finishing the wish still costs — unit price over the copies *missing*,
+/// which is the figure the Cost cell prints and which is zero for a fulfilled wish however
+/// dear the card is. `price` is what one copy costs, and stays reachable from the select.
+/// Both order by output aliases rather than by any column of either table, so a rename
+/// there is a `prepare` error at run time; `every_sort_key_prepares…` is what catches it.
+const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
+    crate::sorting::SortColumn {
+        key: "name",
+        asc: "w.name ASC",
+        desc: "w.name DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "owned",
+        asc: "owned_quantity ASC",
+        desc: "owned_quantity DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "quantity",
+        asc: "w.quantity ASC",
+        desc: "w.quantity DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "cost",
+        asc: "unit_price_usd * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
+        desc: "unit_price_usd * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "price",
+        asc: "unit_price_usd ASC NULLS LAST",
+        desc: "unit_price_usd DESC NULLS LAST",
+    },
+    // The id carries the rest of the answer, and it is not the builder's tiebreak doing it:
+    // `created_at` is whole seconds, so a handful of wishes made in one go all share one,
+    // and the appended `w.id ASC` would read them out oldest-first under a heading that
+    // says "Recently added". The duplicate id term the builder then appends is unreachable
+    // and harmless — the same shape `search`'s `ORDER_NAME` has.
+    crate::sorting::SortColumn {
+        key: "added",
+        asc: "w.created_at ASC, w.id ASC",
+        desc: "w.created_at DESC, w.id DESC",
+    },
+];
 
 pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
     if let Some(f) = input.preferred_finish.as_deref() {
@@ -362,12 +415,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         )
         .map_err(|e| e.to_string())?;
 
-    let order = match q.sort.as_deref() {
-        Some("added") => "w.created_at DESC, w.id DESC",
-        Some("price") => "unit_price_usd DESC NULLS LAST, w.name ASC, w.id ASC",
-        Some("quantity") => "w.quantity DESC, w.name ASC, w.id ASC",
-        _ => "w.name ASC, w.id ASC",
-    };
+    let order =
+        crate::sorting::order_by(q.sort.as_deref(), WISHLIST_SORTS, "w.name ASC", "w.id ASC");
     let sql = format!(
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
@@ -487,6 +536,14 @@ pub async fn wishlist_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One sort term, in the shape the UI sends.
+    fn term(key: &str, dir: &str) -> crate::sorting::SortTerm {
+        crate::sorting::SortTerm {
+            key: key.to_owned(),
+            dir: dir.to_owned(),
+        }
+    }
 
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1232,11 +1289,11 @@ mod tests {
         let dear = wish("Lightning Bolt", "o1", 2, Some("foil"));
         let unpriced = wish("Ancestral Recall", "o-recall", 9, None);
 
-        let ids = |sort: &str| {
+        let by = |sort: Vec<crate::sorting::SortTerm>| {
             list_wishes(
                 &conn,
                 &WishlistQuery {
-                    sort: Some(sort.to_owned()),
+                    sort: Some(sort),
                     ..Default::default()
                 },
             )
@@ -1246,11 +1303,100 @@ mod tests {
             .map(|r| r.id)
             .collect::<Vec<_>>()
         };
-        assert_eq!(ids("price"), vec![dear, cheap, unpriced], "dearest first");
-        assert_eq!(ids("quantity"), vec![unpriced, dear, cheap]);
-        assert_eq!(ids("added"), vec![unpriced, dear, cheap], "newest first");
-        assert_eq!(ids("name"), vec![unpriced, cheap, dear], "A before L");
-        assert_eq!(ids("w.name; DROP TABLE wishlist_entries"), ids("name"));
+        let ids = |key: &str, dir: &str| by(vec![term(key, dir)]);
+
+        assert_eq!(
+            ids("price", "desc"),
+            vec![dear, cheap, unpriced],
+            "dearest first"
+        );
+        assert_eq!(ids("quantity", "desc"), vec![unpriced, dear, cheap]);
+        assert_eq!(
+            ids("added", "desc"),
+            vec![unpriced, dear, cheap],
+            "newest first"
+        );
+        assert_eq!(
+            ids("name", "asc"),
+            vec![unpriced, cheap, dear],
+            "A before L"
+        );
+        // Reversing a sort reverses the rows rather than moving the holes: every nullable
+        // column states its null rule in both directions.
+        assert_eq!(
+            ids("price", "asc"),
+            vec![cheap, dear, unpriced],
+            "cheapest first, NULL last"
+        );
+        // Nothing owned, so `owned` ties every row and only the tiebreak separates them.
+        assert_eq!(ids("owned", "desc").len(), 3);
+        // Cost is unit × copies still missing: 9 unpriced (no cost), $40 × 2, $5 × 1.
+        assert_eq!(ids("cost", "desc"), vec![dear, cheap, unpriced]);
+        assert_eq!(
+            by(vec![term("c.name; DROP TABLE wishlist_entries", "asc")]),
+            ids("name", "asc")
+        );
+    }
+
+    /// The Cost column shows unit price × copies *still missing*, so its header sorts by
+    /// that — a fulfilled wish costs nothing however dear the card is, which is the one
+    /// thing the unit-price order cannot say.
+    #[test]
+    fn cost_sorts_by_what_is_left_to_buy_and_price_by_the_unit() {
+        let conn = seeded();
+        // A $40 foil, wanted once and already owned; a $5 nonfoil, wanted twice and owned
+        // not at all.
+        let dear = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                preferred_finish: Some("foil".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let cheap = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-2ed".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        conn.execute(
+            "INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
+                 condition,quantity,created_at,updated_at)
+             VALUES ('bolt-lea','lea','161','en','foil','NM',1,0,0)",
+            [],
+        )
+        .unwrap();
+
+        let first = |key: &str| {
+            list_wishes(
+                &conn,
+                &WishlistQuery {
+                    sort: Some(vec![term(key, "desc")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items[0]
+                .id
+        };
+        assert_eq!(
+            first("cost"),
+            cheap,
+            "$5 × 2 still to buy beats $40 already owned"
+        );
+        assert_eq!(
+            first("price"),
+            dear,
+            "and the $40 foil is still the dearest card"
+        );
     }
 
     /// The price is the one the wish would be filled at: the preferred finish's, or the

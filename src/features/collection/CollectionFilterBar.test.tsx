@@ -38,8 +38,10 @@ const collection = (over: Record<string, unknown> = {}) =>
     needsReview: undefined,
     setNeedsReview: vi.fn(),
     toggleNeedsReview: vi.fn(),
-    sort: "name",
-    setSort: vi.fn(),
+    sort: [],
+    sortSelection: "name",
+    setSortKey: vi.fn(),
+    toggleSort: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
     ...over,
@@ -86,7 +88,7 @@ describe("CollectionFilterBar", () => {
     expect(c.toggleFinish).toHaveBeenCalledWith("foil");
     expect(c.toggleCondition).toHaveBeenCalledWith("LP");
     expect(c.toggleNeedsReview).toHaveBeenCalled();
-    expect(c.setSort).toHaveBeenCalledWith("price");
+    expect(c.setSortKey).toHaveBeenCalledWith("price");
     expect(c.resetAll).toHaveBeenCalled();
     // Reset all clears the filters and not the layout: how the reader reads is not what they
     // are looking at.

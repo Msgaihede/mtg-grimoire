@@ -594,8 +594,10 @@ pub struct CollectionQuery {
     pub conditions: Option<Vec<String>>,
     /// `Some(true)` narrows to the rows a Scryfall migration or a vanished printing flagged.
     pub needs_review: Option<bool>,
-    /// `"name"` (default) | `"set"` | `"added"` | `"quantity"` | `"price"`.
-    pub sort: Option<String>,
+    /// How to order the list: columns in priority order, the first deciding and the rest
+    /// breaking its ties. Empty or absent is name order. Keys outside [`COLLECTION_SORTS`]
+    /// are dropped, never interpolated.
+    pub sort: Option<Vec<crate::sorting::SortTerm>>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -758,25 +760,76 @@ fn push_in_list(
     }
 }
 
-/// The `ORDER BY` for a sort key, matched against literals and never interpolated.
+/// The columns the collection table's headers can sort on, plus the two the filter bar's
+/// select offers that have no column to press.
 ///
-/// Every one ends in `e.id` so that ties — which are the common case, one card name
-/// covering a dozen rows — page deterministically. `set` is the binder order: natural
-/// collector number, which is a `CAST` because ~9% of them are not numeric (`741z`,
-/// `1★`, `A-123`) and a plain string sort puts `100` before `2`.
-fn order_by(sort: Option<&str>) -> &'static str {
-    match sort {
-        Some("set") => {
-            "e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC, e.collector_number ASC, e.id ASC"
-        }
-        Some("added") => "e.created_at DESC, e.id DESC",
-        Some("quantity") => "e.quantity DESC, coalesce(c.name, e.card_id) ASC, e.id ASC",
-        Some("price") => "unit_price_usd DESC NULLS LAST, coalesce(c.name, e.card_id) ASC, e.id ASC",
-        // Name order, with the orphans under their card id rather than at the top under
-        // an empty string.
-        _ => "coalesce(c.name, e.card_id) ASC, e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC, e.id ASC",
-    }
-}
+/// Matched against literals and never interpolated; [`crate::sorting::order_by`] appends
+/// the `e.id` tiebreak, so ties — the common case here, one card name covering a dozen
+/// rows — page deterministically.
+///
+/// `set` is the binder order: natural collector number, which is a `CAST` because ~9% of
+/// them are not numeric (`741z`, `1★`, `A-123`) and a plain string sort puts `100` before
+/// `2`. `name` coalesces to the card id so orphans sort under something rather than at the
+/// top under an empty string.
+///
+/// **`value` and `price` are two different questions about the same column, and both are
+/// real.** `value` is what the row is worth — unit price × copies, which is the figure the
+/// Value cell prints, and therefore what its header sorts by, because a column that
+/// reorders by something other than the number written in it is a column that lies.
+/// `price` is what one copy costs, which is the order a reader means by "what is my most
+/// expensive card"; it has no header and stays reachable from the select.
+///
+/// `finish` ranks the condition rather than spelling it: `DMG` before `LP` is alphabetical
+/// order, not grade order.
+const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
+    crate::sorting::SortColumn {
+        key: "name",
+        asc: "coalesce(c.name, e.card_id) ASC",
+        desc: "coalesce(c.name, e.card_id) DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "set",
+        asc: "e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC, e.collector_number ASC",
+        desc: "e.set_code DESC, CAST(e.collector_number AS INTEGER) DESC, e.collector_number DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "finish",
+        asc: "e.finish ASC, CASE e.condition WHEN 'NM' THEN 0 WHEN 'LP' THEN 1 \
+              WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 ELSE 5 END ASC",
+        desc: "e.finish DESC, CASE e.condition WHEN 'NM' THEN 0 WHEN 'LP' THEN 1 \
+               WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 ELSE 5 END DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "quantity",
+        asc: "e.quantity ASC",
+        desc: "e.quantity DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "value",
+        asc: "unit_price_usd * e.quantity ASC NULLS LAST",
+        desc: "unit_price_usd * e.quantity DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "price",
+        asc: "unit_price_usd ASC NULLS LAST",
+        desc: "unit_price_usd DESC NULLS LAST",
+    },
+    // The id carries the rest of the answer, and it is not the builder's tiebreak doing it:
+    // `created_at` is whole seconds, so a handful of entries added in one go all share one,
+    // and the appended `e.id ASC` would read them out oldest-first under a heading that
+    // says "Recently added". The duplicate id term the builder then appends is unreachable
+    // and harmless — the same shape `search`'s `ORDER_NAME` has.
+    crate::sorting::SortColumn {
+        key: "added",
+        asc: "e.created_at ASC, e.id ASC",
+        desc: "e.created_at DESC, e.id DESC",
+    },
+];
+
+/// Name order, with the orphans under their card id rather than at the top under an empty
+/// string. The `e.id` tiebreak is appended by [`crate::sorting::order_by`].
+const COLLECTION_DEFAULT_ORDER: &str =
+    "coalesce(c.name, e.card_id) ASC, e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC";
 
 pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<CollectionPage, String> {
     let limit = if q.limit == 0 {
@@ -808,7 +861,12 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at
          FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
-        order = order_by(q.sort.as_deref())
+        order = crate::sorting::order_by(
+            q.sort.as_deref(),
+            COLLECTION_SORTS,
+            COLLECTION_DEFAULT_ORDER,
+            "e.id ASC",
+        )
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
@@ -929,6 +987,14 @@ pub async fn collection_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One sort term, in the shape the UI sends.
+    fn term(key: &str, dir: &str) -> crate::sorting::SortTerm {
+        crate::sorting::SortTerm {
+            key: key.to_owned(),
+            dir: dir.to_owned(),
+        }
+    }
 
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1774,7 +1840,7 @@ mod tests {
         let page = list_entries(
             &conn,
             &CollectionQuery {
-                sort: Some("set".into()),
+                sort: Some(vec![term("set", "asc")]),
                 limit: 50,
                 ..Default::default()
             },
@@ -2092,10 +2158,12 @@ mod tests {
 
     /// Every sort key is a *string interpolated into the statement*, so one that names a
     /// column or an alias the query does not have is a `prepare` error at run time — an
-    /// empty list and an error dialog, not a differently-ordered one. `price` is the one
-    /// that earns this on its own: it orders by the `unit_price_usd` **output alias**, not
-    /// by any column of either table. Paged two at a time as well, so a sort that is not a
-    /// total order shows a row twice here rather than in front of a reader.
+    /// empty list and an error dialog, not a differently-ordered one. `price` and `value`
+    /// earn this on their own: both order by the `unit_price_usd` **output alias**, not by
+    /// any column of either table. Paged two at a time as well, so a sort that is not a
+    /// total order shows a row twice here rather than in front of a reader — and the
+    /// two-key case is in the list, because a second key makes an order *look* more
+    /// determined than it is.
     #[test]
     fn every_sort_key_prepares_and_pages_without_repeating_a_row() {
         let conn = seeded();
@@ -2103,19 +2171,33 @@ mod tests {
         add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
         add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
 
-        for sort in ["name", "set", "added", "quantity", "price", "nonsense"] {
+        let orders: [(&str, Vec<crate::sorting::SortTerm>); 9] = [
+            ("name", vec![term("name", "asc")]),
+            ("set", vec![term("set", "desc")]),
+            ("finish", vec![term("finish", "asc")]),
+            ("added", vec![term("added", "desc")]),
+            ("quantity", vec![term("quantity", "desc")]),
+            ("price", vec![term("price", "desc")]),
+            ("value", vec![term("value", "desc")]),
+            (
+                "quantity+name",
+                vec![term("quantity", "desc"), term("name", "asc")],
+            ),
+            ("nonsense", vec![term("nonsense", "asc")]),
+        ];
+        for (label, sort) in orders {
             let mut seen: Vec<i64> = Vec::new();
             for page in 0..2 {
                 let p = list_entries(
                     &conn,
                     &CollectionQuery {
-                        sort: Some(sort.into()),
+                        sort: Some(sort.clone()),
                         limit: 2,
                         offset: page * 2,
                         ..Default::default()
                     },
                 )
-                .unwrap_or_else(|e| panic!("sorting by `{sort}` failed: {e}"));
+                .unwrap_or_else(|e| panic!("sorting by `{label}` failed: {e}"));
                 assert_eq!(p.total, 3, "the count is the same set whatever the order");
                 seen.extend(p.items.iter().map(|r| r.id));
             }
@@ -2125,9 +2207,51 @@ mod tests {
             assert_eq!(
                 (unique.len(), seen.len()),
                 (3, 3),
-                "paging by `{sort}` returned a row twice or lost one: {seen:?}"
+                "paging by `{label}` returned a row twice or lost one: {seen:?}"
             );
         }
+    }
+
+    /// The Value column shows unit price × copies, so its header sorts by that. A column
+    /// that reorders by something other than the figure printed in it is a column that
+    /// lies — and the unit-price order the filter bar still offers really does disagree,
+    /// which is why both keys exist.
+    #[test]
+    fn value_sorts_by_the_total_and_price_by_the_unit() {
+        let conn = seeded();
+        // A cheap card held ten times is worth more than a dear one held once.
+        conn.execute(
+            "UPDATE cards SET prices='{\"usd\":\"2.00\"}' WHERE id='bolt-lea'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE cards SET prices='{\"usd\":\"15.00\"}' WHERE id='bolt-jp'",
+            [],
+        )
+        .unwrap();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 10)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+
+        let first = |sort: &str| -> String {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    sort: Some(vec![term(sort, "desc")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items[0]
+                .card_id
+                .clone()
+        };
+        assert_eq!(first("value"), "bolt-lea", "$2 × 10 beats $15 × 1");
+        assert_eq!(
+            first("price"),
+            "bolt-jp",
+            "and one $15 copy is the dearest card"
+        );
     }
 
     /// The hand-mirrored wire contract, pinned whole so a field added on this side and

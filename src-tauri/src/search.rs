@@ -63,9 +63,11 @@ pub struct SearchRequest {
     /// am I missing" list, which is the wishlist's `fulfilled` filter — that one counts
     /// copies, because a wish is filled by copies rather than by paperwork.
     pub owned: Option<bool>,
-    /// `"name"` | `"released"` | `"price"`. Anything else — including nothing at all —
-    /// is the default: relevance when `text` is set, name order when it is not.
-    pub sort: Option<String>,
+    /// How to order the page: columns in priority order, the first deciding and the rest
+    /// breaking its ties. Empty or absent is the default — relevance when `text` is set,
+    /// name order when it is not. Keys outside [`SEARCH_SORTS`] are dropped, never
+    /// interpolated.
+    pub sort: Option<Vec<crate::sorting::SortTerm>>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -164,14 +166,66 @@ const MAX_LIMIT: u32 = 200;
 /// scanning every remaining row on every keystroke.
 const TOTAL_CAP: i64 = 5_000;
 
-/// Columns of `cards` in name order, the default for a browse.
+/// Columns of `cards` in name order, the default for a browse. The `id` tiebreak that used
+/// to end this string is now appended by [`crate::sorting::order_by`], which every order
+/// here goes through — one place, so no order can be written without one.
 ///
-/// `idx_cards_name` supplies the leading term, so SQLite sorts only within each group of
-/// identically-named printings rather than the whole table. `id` last makes paging
-/// deterministic: without a total order, two printings that tie on every earlier key can
-/// swap places between the request for page 1 and the request for page 2, which shows the
-/// reader one of them twice and the other never.
-const ORDER_NAME: &str = "c.name ASC, c.released_at DESC, c.id ASC";
+/// **This costs a full table scan, and it is the one order in this file that does.**
+/// `idx_cards_name` can satisfy a leading `c.name` and block-sort *one* trailing term
+/// within each group of identically-named printings; with two, SQLite gives up and sorts
+/// all 107 k paper rows — and this string plus its tiebreak is three terms. Measured on the
+/// live database 2026-08-09: **277 ms**, against **0.1 ms** for `c.name ASC, c.id ASC`,
+/// which is what the Name column's own header sends. Left as it is deliberately: dropping
+/// `released_at` would change which printing of a card the browse opens on, which is a
+/// product decision and not a performance one.
+const ORDER_NAME: &str = "c.name ASC, c.released_at DESC";
+
+/// The columns the search table's headers can sort on, and nothing else.
+///
+/// `set` is the binder order — set code, then *natural* collector number, which is a `CAST`
+/// because ~9% of collector numbers are not numeric (`741z`, `1★`, `A-123`) and a plain
+/// string sort puts `100` before `2`. The same expression the collection has used since it
+/// grew a set order.
+///
+/// Rarity is a **rank**: alphabetically `mythic` sits between `common` and `rare`, which is
+/// an order describing nothing anybody wants. `special` and `bonus` are real values with no
+/// place in the printed hierarchy and sort after it; anything unknown sorts last.
+///
+/// Every nullable column states its null rule in both directions rather than inheriting
+/// SQLite's (NULLs first ascending, last descending): a reader reversing a sort expects the
+/// rows reversed, not the holes moved.
+///
+/// There is no `released` key. The table has no Released column to press, the frontend has
+/// never sent one, and an order nothing can reach is dead code.
+const SEARCH_SORTS: &[crate::sorting::SortColumn] = &[
+    crate::sorting::SortColumn {
+        key: "name",
+        asc: "c.name ASC",
+        desc: "c.name DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "set",
+        asc: "c.set_code ASC, CAST(c.collector_number AS INTEGER) ASC, c.collector_number ASC",
+        desc: "c.set_code DESC, CAST(c.collector_number AS INTEGER) DESC, c.collector_number DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "type",
+        asc: "c.type_line ASC NULLS LAST",
+        desc: "c.type_line DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "rarity",
+        asc: "CASE c.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 \
+              WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5 ELSE 6 END ASC",
+        desc: "CASE c.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 \
+               WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5 ELSE 6 END DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "price",
+        asc: "c.price_usd ASC NULLS LAST",
+        desc: "c.price_usd DESC NULLS LAST",
+    },
+];
 
 /// Search `cards`, newest schema assumed. Pure over the connection so it is testable
 /// without a Tauri app; [`search_cards`] is the only caller in production.
@@ -245,21 +299,20 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     let where_sql = p.where_sql();
     let mut params = p.params;
 
-    // Matched against literals, never interpolated from `req.sort`. `released_at` and
-    // `price_usd` are both nullable, so each has an explicit null rule; every sort ends in
-    // `name, id` so that ties — which at 116 k printings are the common case, not the
-    // exception — page deterministically.
-    let order = match req.sort.as_deref() {
-        Some("released") => "c.released_at DESC, c.name ASC, c.id ASC",
-        Some("price") => "c.price_usd DESC NULLS LAST, c.name ASC, c.id ASC",
-        Some("name") => ORDER_NAME,
-        // The default. `bm25` returns *smaller* numbers for better matches, so plain
-        // ascending order is best-first. The weights are (name, type_line, search_text):
-        // a card whose name is what was typed beats one that merely mentions it in its
-        // rules text, which alphabetical order had no way to express.
-        _ if ranked => "bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC, c.id ASC",
-        _ => ORDER_NAME,
+    // Matched against literals, never interpolated from `req.sort` — see `sorting`, which
+    // also appends the `c.id` tiebreak that makes ties (at 116 k printings the common case,
+    // not the exception) page deterministically.
+    //
+    // The fallback when nothing is asked for. `bm25` returns *smaller* numbers for better
+    // matches, so plain ascending order is best-first. The weights are (name, type_line,
+    // search_text): a card whose name is what was typed beats one that merely mentions it
+    // in its rules text, which alphabetical order had no way to express.
+    let fallback = if ranked {
+        "bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC"
+    } else {
+        ORDER_NAME
     };
+    let order = crate::sorting::order_by(req.sort.as_deref(), SEARCH_SORTS, fallback, "c.id ASC");
 
     // The count runs first, while `params` still holds exactly the filter parameters and
     // nothing else. `LIMIT` inside the subquery is what bounds the work: SQLite stops
@@ -430,6 +483,14 @@ pub async fn list_sets(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Set
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One sort term, in the shape the UI sends.
+    fn term(key: &str, dir: &str) -> crate::sorting::SortTerm {
+        crate::sorting::SortTerm {
+            key: key.to_owned(),
+            dir: dir.to_owned(),
+        }
+    }
 
     /// Three rows chosen to pin the tricky cases: a restricted-in-Vintage card, a
     /// two-colour card, and a digital-only one with a non-Latin name.
@@ -721,7 +782,7 @@ mod tests {
             &conn,
             &SearchRequest {
                 text: Some("lightning bolt".into()),
-                sort: Some("name".into()),
+                sort: Some(vec![term("name", "asc")]),
                 limit: 50,
                 ..Default::default()
             },
@@ -794,13 +855,27 @@ mod tests {
             .unwrap();
         }
 
-        for sort in ["name", "released", "price"] {
+        // Every single-column order, and a two-key one — which is the case a multi-key
+        // sort adds and the one where a missing tiebreak would be easiest to miss, because
+        // the second key makes the order *look* more determined than it is.
+        let orders: [(&str, Vec<crate::sorting::SortTerm>); 6] = [
+            ("name", vec![term("name", "asc")]),
+            ("set", vec![term("set", "desc")]),
+            ("type", vec![term("type", "asc")]),
+            ("rarity", vec![term("rarity", "asc")]),
+            ("price", vec![term("price", "desc")]),
+            (
+                "rarity+price",
+                vec![term("rarity", "asc"), term("price", "desc")],
+            ),
+        ];
+        for (label, sort) in orders {
             let mut seen: Vec<String> = Vec::new();
             for page in 0..4 {
                 let r = run_search(
                     &conn,
                     &SearchRequest {
-                        sort: Some(sort.into()),
+                        sort: Some(sort.clone()),
                         limit: 2,
                         offset: page * 2,
                         ..Default::default()
@@ -815,9 +890,9 @@ mod tests {
             assert_eq!(
                 unique.len(),
                 seen.len(),
-                "paging by `{sort}` returned a row twice: {seen:?}"
+                "paging by `{label}` returned a row twice: {seen:?}"
             );
-            assert_eq!(seen.len(), 8, "four pages of two, sorted by `{sort}`");
+            assert_eq!(seen.len(), 8, "four pages of two, sorted by `{label}`");
         }
     }
 
@@ -996,24 +1071,142 @@ mod tests {
         assert_eq!(r.items[0].name, "Lightning Bolt");
     }
 
+    /// The default browse still puts the newest printing of a name first, which is what
+    /// `ORDER_NAME`'s `released_at DESC` is for. Pinned because that term is also what
+    /// costs the browse a full table scan (see the constant), so the temptation to drop it
+    /// is real and the behaviour it buys should fail loudly if anyone does.
     #[test]
-    fn released_sort_is_newest_first() {
+    fn the_default_browse_puts_the_newest_printing_of_a_name_first() {
         let conn = seeded();
-        conn.execute("UPDATE cards SET released_at='1993-08-05' WHERE id='1'", [])
-            .unwrap();
-        conn.execute("UPDATE cards SET released_at='2005-10-07' WHERE id='2'", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,is_paper,raw)
+             VALUES ('old','Lightning Bolt','lea','161','en','normal','1993-08-05',1,'{}'),
+                    ('new','Lightning Bolt','m11','149','en','normal','2010-07-16',1,'{}')",
+            [],
+        )
+        .unwrap();
         let r = run_search(
             &conn,
             &SearchRequest {
-                sort: Some("released".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bolts: Vec<&str> = r
+            .items
+            .iter()
+            .filter(|c| c.name == "Lightning Bolt")
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(
+            bolts,
+            ["new", "old", "1"],
+            "newest release first, then NULL"
+        );
+    }
+
+    /// Alphabetically `mythic` sits between `common` and `rare`, which is an order
+    /// describing nothing anybody wants.
+    #[test]
+    fn rarity_sorts_by_rank_and_not_alphabetically() {
+        let conn = seeded();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                paper_only: Some(false),
+                sort: Some(vec![term("rarity", "asc")]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rarities: Vec<&str> = r.items.iter().filter_map(|c| c.rarity.as_deref()).collect();
+        assert_eq!(rarities, ["common", "uncommon", "rare"]);
+
+        let down = run_search(
+            &conn,
+            &SearchRequest {
+                paper_only: Some(false),
+                sort: Some(vec![term("rarity", "desc")]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rarities: Vec<&str> = down
+            .items
+            .iter()
+            .filter_map(|c| c.rarity.as_deref())
+            .collect();
+        assert_eq!(rarities, ["rare", "uncommon", "common"]);
+    }
+
+    /// The whole point of a list rather than one key: cheapest *within* each rarity is a
+    /// question one sort key cannot ask.
+    #[test]
+    fn a_second_term_breaks_the_first_ones_ties() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,rarity,price_usd,is_paper,raw)
+             VALUES ('c1','Cheap Common','lea','2','en','normal','common',1.0,1,'{}'),
+                    ('c2','Dear Common','lea','3','en','normal','common',9.0,1,'{}')",
+            [],
+        )
+        .unwrap();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sort: Some(vec![term("rarity", "asc"), term("price", "desc")]),
                 limit: 50,
                 ..Default::default()
             },
         )
         .unwrap();
         let names: Vec<&str> = r.items.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["Lightning Helix", "Lightning Bolt"]);
+        assert_eq!(
+            names,
+            [
+                // The fixture's Lightning Bolt is a $400 common, so it leads them.
+                "Lightning Bolt",
+                "Dear Common",
+                "Cheap Common",
+                // And the uncommon follows every common however cheap.
+                "Lightning Helix"
+            ],
+            "commons first, dearest within them, then the uncommon"
+        );
+    }
+
+    /// `set` is the binder order, and a collector number is TEXT: a plain string sort puts
+    /// `100` before `2`, which is not how a binder is laid out.
+    #[test]
+    fn the_set_order_counts_collector_numbers_rather_than_spelling_them() {
+        let conn = seeded();
+        for cn in ["2", "10", "100"] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
+                 VALUES (?1,'Numbered','zzz',?2,'en','normal',1,'{}')",
+                rusqlite::params![format!("zzz-{cn}"), cn],
+            )
+            .unwrap();
+        }
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                set_code: Some("zzz".into()),
+                sort: Some(vec![term("set", "asc")]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let numbers: Vec<&str> = r
+            .items
+            .iter()
+            .map(|c| c.collector_number.as_str())
+            .collect();
+        assert_eq!(numbers, ["2", "10", "100"]);
     }
 
     #[test]
@@ -1040,7 +1233,7 @@ mod tests {
         let r = run_search(
             &conn,
             &SearchRequest {
-                sort: Some("c.name; DROP TABLE cards".into()),
+                sort: Some(vec![term("c.name; DROP TABLE cards", "asc")]),
                 limit: 50,
                 ..Default::default()
             },
@@ -1064,7 +1257,7 @@ mod tests {
         let r = run_search(
             &conn,
             &SearchRequest {
-                sort: Some("price".into()),
+                sort: Some(vec![term("price", "desc")]),
                 limit: 50,
                 ..Default::default()
             },
