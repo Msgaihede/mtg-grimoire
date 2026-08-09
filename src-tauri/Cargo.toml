@@ -37,6 +37,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # image cache's pacer and its 429 penalty are made of.
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
 futures-util = "0.3"
+# The updater's integrity check. Every GitHub release asset carries a `digest`
+# (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
+# minisign signature a hand-written updater gives up.
+sha2 = "0.10"
+# Reading one entry — `mtg-grimoire.exe` — out of the portable release archive.
+# `deflate` only: `Compress-Archive` writes plain deflate, and the default feature set
+# drags in bzip2, zstd, lzma and AES for formats this will never see.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 httpmock = "0.8"

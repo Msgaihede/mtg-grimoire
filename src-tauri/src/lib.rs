@@ -14,6 +14,7 @@ pub mod scryfall;
 pub mod search;
 pub mod sorting;
 pub mod sync;
+pub mod update;
 pub mod wishlist;
 
 use std::path::Path;
@@ -50,6 +51,63 @@ async fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> Result<sync::Syn
         .map_err(|e| format!("could not read sync status: {e}"))
 }
 
+/// What the app knows about a newer release, read from `app_meta` and the process's own
+/// state. No network — the ribbon polls this.
+#[tauri::command]
+async fn update_status(
+    state: tauri::State<'_, Arc<AppState>>,
+    updater: tauri::State<'_, Arc<update::Updater>>,
+) -> Result<update::UpdateStatus, String> {
+    Ok(update::status(state.inner(), updater.inner()))
+}
+
+/// Ask GitHub. `force` skips the 24 h throttle; a second concurrent call is refused.
+#[tauri::command]
+async fn update_check(
+    state: tauri::State<'_, Arc<AppState>>,
+    updater: tauri::State<'_, Arc<update::Updater>>,
+    force: bool,
+) -> Result<update::UpdateStatus, String> {
+    update::check(state.inner(), updater.inner(), force).await
+}
+
+/// Download, verify and stage the update. Changes nothing about the running app.
+#[tauri::command]
+async fn update_download(
+    state: tauri::State<'_, Arc<AppState>>,
+    updater: tauri::State<'_, Arc<update::Updater>>,
+    app: tauri::AppHandle,
+) -> Result<update::UpdateStatus, String> {
+    update::download(state.inner(), updater.inner(), &app).await
+}
+
+/// Install what was staged, and leave. The window closes moments after this answers.
+#[tauri::command]
+async fn update_apply(
+    updater: tauri::State<'_, Arc<update::Updater>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    update::apply(updater.inner(), &app)
+}
+
+/// Open the release on github.com, for the install kinds that cannot update in place.
+#[tauri::command]
+async fn update_open_release_page(
+    state: tauri::State<'_, Arc<AppState>>,
+    updater: tauri::State<'_, Arc<update::Updater>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = update::status(state.inner(), updater.inner())
+        .available
+        .map(|r| r.html_url)
+        .filter(|u| u.starts_with("https://github.com/"))
+        .unwrap_or_else(|| format!("https://github.com/{}/releases/latest", update::REPO));
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("could not open the release page: {e}"))
+}
+
 /// Bring the running instance forward when a second launch is refused.
 ///
 /// Without this, double-clicking the exe a second time looks like nothing happened —
@@ -63,6 +121,18 @@ fn focus_existing_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // **Before the builder, and it has to be before it.** A build that has just replaced
+    // its predecessor is launched with `--await-predecessor`, and what it is waiting for is
+    // the old process to release the single-instance lock. By the time
+    // `tauri_plugin_single_instance` has initialised, the decision is already made: a
+    // second instance is given exit code 0, no window and no stderr, so a successor that
+    // starts too early simply vanishes — and the user is left looking at the old version
+    // with nothing to say why. See `update::await_predecessor`.
+    let exe = std::env::current_exe().unwrap_or_default();
+    if std::env::args().any(|a| a == update::AWAIT_FLAG) {
+        update::await_predecessor(&exe);
+    }
+
     tauri::Builder::default()
         // First, before every other plugin: this one has to decide whether the process
         // lives at all, and by the time another plugin has initialised, a second instance
@@ -119,7 +189,12 @@ pub fn run() {
             deck::deck_move_card,
             deck::deck_swap_printing,
             deck::deck_missing_to_wishlist,
-            deck::format_specs_list
+            deck::format_specs_list,
+            update_status,
+            update_check,
+            update_download,
+            update_apply,
+            update_open_release_page
         ])
         .setup(|app| {
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
@@ -128,13 +203,41 @@ pub fn run() {
             let state = Arc::new(init_state(app).inspect_err(|e| eprintln!("{e}"))?);
             app.manage(state.clone());
 
+            // Here rather than before the builder, and the difference is one rare bug: this
+            // deletes a staged build, and the second instance of a double-click would
+            // otherwise delete the *first* instance's staged update on its way to being
+            // refused. `setup` runs only for the instance that won the single-instance
+            // guard, so what it clears is always its own. (The `.old` a swap leaves is
+            // deleted earlier still, by `await_predecessor`; this is the path that finally
+            // clears one whose successor never got that far.)
+            let exe = std::env::current_exe().unwrap_or_default();
+            update::clean_up(&exe);
+
+            // Decided once here — `Updater::new` probes whether it can write beside the exe
+            // — so a status poll never re-answers a question that cannot change.
+            let updater = Arc::new(update::Updater::new(update::GITHUB_API.to_owned(), exe));
+            app.manage(updater.clone());
+
             // Launch is never blocked on the network: the window comes up immediately
             // and this run reports itself through `sync:progress`. The throttle inside
             // makes it a no-op on all but the first launch of the day.
             let handle = app.handle().clone();
+            let sync_state = state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = sync::run_sync(state, handle, false).await {
+                if let Err(e) = sync::run_sync(sync_state, handle, false).await {
                     eprintln!("initial sync failed: {e}");
+                }
+            });
+
+            // The daily update check, in its own task rather than chained onto the sync:
+            // the two answer to different services on different schedules, and a Scryfall
+            // failure must not be the reason the app stops noticing its own releases. Its
+            // result is written to `app_meta`, so the ribbon reads it without an event —
+            // which also means nothing is lost if this finishes before the webview is
+            // listening, the trap `sync:progress` has to work around.
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = update::check(&state, &updater, false).await {
+                    eprintln!("update check failed: {e}");
                 }
             });
             Ok(())
