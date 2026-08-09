@@ -108,6 +108,14 @@ Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in Web
 `media prefers-reduced-motion reduce "<expr>"` · `shot out.png [w h]` · `console out.jsonl`
 (stays attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that
 watches only one reports a clean console it never looked at).
+**`--shift` on `click`, `text` and `press`** holds Shift down for that one gesture
+(Chromium's modifier bitmask, `8`) — which is how a multi-key table sort is built, and the
+only honest way to check it: a `dispatchEvent({shiftKey:true})` out of `eval` skips the
+input pipeline the real modifier state comes from. On `press` it lands on the click Chromium
+synthesises, so one `onClick` reading `e.shiftKey` serves the mouse and the keyboard both.
+**A recorder dies with the window it is attached to**, and says nothing about it — restart
+the app mid-pass and every later interaction goes unwatched while the file still exists and
+still holds its `attached` line. Re-attach after any relaunch, and check the line count.
 
 - **`key` and `press` are two commands because Enter is two things.** `key` sends a
   `rawKeyDown`, which carries no `text` — the page *hears* the key and Chromium activates
@@ -129,6 +137,11 @@ watches only one reports a clean console it never looked at).
   detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
   window back, so read `innerWidth`/`innerHeight` before the first override and end the run
   with an explicit `size 1280 800`.
+  **Probe `transitionProperty`, never `transitionDuration`.** Tailwind's `transition-none`
+  sets `transition-property: none` and leaves `duration-150` alone, so a reduced-motion check
+  that reads the duration reports `0.15s` on a control that is correctly still — a false
+  failure that reads exactly like a real one (measured 2026-08-09 on a sort header:
+  `matches: true`, duration `0.15s`, property `none`).
 - **`drag <source> <target>`** is a real Chromium drag (`Input.setInterceptDrags` +
   `Input.dragIntercepted` + `Input.dispatchDragEvent`), with `--press <css>`, `--from x,y`,
   `--cancel` and `--probe <expr>` for reading the page mid-flight. **Interception bypasses
@@ -221,6 +234,27 @@ belong to the sync, and a hand-written row in either makes every later measureme
   forcing a Refresh; an orphan flag needs the day's ingest.
 - Searches keep answering through every second of a sync — 20 timed searches across one,
   every one correct, none stalled (that is what `db_read` bought).
+- **Sorting an unfiltered browse costs 310–345 ms, and the browse it replaces costs 277 ms.**
+  Measured 2026-08-09 over the live 107 337-row paper corpus, medians of five after a warm-up:
+  `set` 313 · `rarity` 325 · `rarity+price` 339 · `price` 345, against **277 ms for the
+  default name order**. So a header press costs 35–70 ms more than doing nothing, not 300.
+  **With any text filter every one of them is 12–15 ms**, because FTS narrows the set first.
+  No index was added: a multi-term sort cannot use one past its leading column, and
+  `schema::swap_staging` drops and replays every index on `cards` on each ~93 s sync.
+- **The default browse's 277 ms is a full table scan, and one `DESC` is why.** `ORDER_NAME`
+  is `c.name ASC, c.released_at DESC` — `idx_cards_name` can satisfy a leading `c.name` and
+  block-sort **one** trailing term within each group of identically-named printings, and with
+  two it gives up and sorts all 107 k rows through a temp b-tree. Measured against
+  `c.name ASC, c.id ASC`, which is what the Name column's own header sends: **0.1 ms, using
+  the index**. The `released_at` term is kept deliberately — dropping it changes which
+  printing of a card the browse opens on, which is a product decision and not a performance
+  one — and `search::tests::the_default_browse_puts_the_newest_printing_of_a_name_first`
+  pins the behaviour it buys.
+- The page query keeps its flat shape. The two correlated status subqueries
+  (`owned_quantity`, `wishlisted`) do run once per *matching* row under an unindexed sort,
+  but that is only ~35 ms of it (313 ms full vs 280 ms lean) — and the two-step form that
+  would avoid them **does not preserve the sort's order**: `row_number() OVER ()` numbers
+  rows before the `ORDER BY`, measured rather than read.
 - The ingest **commits every 2 000 rows and releases the write connection between batches**,
   so a collection edit during a sync waits one batch, not one sync. `ingest_gz` takes
   `&Mutex<Connection>` for exactly that reason. **Measured mid-ingest: 10 `collection_add`
@@ -326,6 +360,50 @@ belong to the sync, and a hand-written row in either makes every later measureme
 - A layer that Escape dismissed hands focus back to whatever opened it, *before* React
   flushes the close (the element is still mounted). An outside-click deliberately does not
   — the reader is already somewhere else.
+- **Z-indexes come from `LAYER` in `src/lib/layers.ts`, and `src/lib/layers.test.ts` sweeps
+  `src/` to keep it the only place they are written.** The bug it closed is worth the
+  paragraph: the search view's set picker (`absolute z-20`) was painted over by the results
+  table's sticky header (`sticky top-0 z-20`), because nothing between them creates a
+  stacking context and **equal z-indexes are resolved by document order** — where every
+  table header comes after the filter bar. Measured over CDP 2026-08-09 on the shipped
+  window: the popup and the header overlap by exactly 36px, and forcing the popup back to
+  the header's layer moves what `elementFromPoint` finds there from `listbox` to `row`.
+  The part a number cannot fix: a popup inside a virtualised row is capped by that row's
+  layer whatever it asks for, because the row is `absolute` *and* `transform`ed and is
+  therefore its own stacking context. That is why the row lift exists and why it sits
+  *below* the header — a row has to scroll under one. Variant spellings
+  (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
+  source text for whole class names, so a class built by interpolation emits no rule at all.
+- **An anchored popup near the right of a row is pinned to its trigger's *right* edge.**
+  Nothing clips these popups — that is the point of not portalling them — so one that
+  overflows the window scrolls the whole app sideways instead of being cut off. The set
+  picker did: 288px of listbox opening from a trigger at the end of the filter row put it
+  **174px past a 1280px window** (measured), and the page slid left, sidebar and all, the
+  moment its own `scrollIntoView` ran. `right-0`, the same decision as
+  `AddToCollection`'s `align="end"`.
+- **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
+  are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
+  collection and wishlist wrap a row in a drag source; the wishlist also decides per row
+  whether it opens a card at all, because an any-printing wish has none) and `extraHeight`
+  (the reconciler's flagged band). Its column template is an **inline style**, not a
+  Tailwind arbitrary value, for the scanner reason above.
+- **Table headers sort, and Shift builds a multi-key sort.** A press cycles one column
+  `firstDir → the opposite → gone`; the modifier decides only what happens to the *other*
+  columns, so every single-column order is reachable without ever holding Shift. `firstDir`
+  is descending on money and count columns. The whole interaction is one pure reducer,
+  `applySort` in `src/lib/sort.ts`. `aria-sort` goes on **every** sorted column — the
+  alternative is telling assistive tech that a two-key sort has one key — and the rank rides
+  in the button's accessible name (`"Price, sort priority 2"`). **Name-from-content does not
+  reach into a descendant's `aria-label`**, so a column's own description belongs on the
+  `columnheader`, not on the button inside it: on the button the Price column read back as
+  bare "Price", losing the sentence spec §5 says a price may never be shown without.
+- **A header sorts by what its column shows**, which is why the collection's Value column
+  orders by unit × copies and the wishlist's Cost by unit × copies *still missing* — not by
+  the unit price. The orders with no column to press ("Recently added", and the unit price
+  itself) stay on the filter bar's select, which drives the **same** state: picking there
+  replaces the sort with that one term, and the control reads `Custom…` once the sort starts
+  somewhere it has no option for. The wishlist's Printing column is deliberately not
+  sortable at all — an any-printing wish names no set.
 
 ## Architecture (read the spec first)
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
