@@ -1,6 +1,45 @@
+import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { ipc } from "@/lib/ipc";
 import { DecksPage } from "./DecksPage";
+
+/**
+ * `.storybook/fake/seeds.ts:475`'s `ORPHAN_DECK_CARD_ID`, spelled out because the seed keeps its
+ * three orphan ids module-private.
+ *
+ * It is deliberately outside the fixture — an orphan is a row whose printing left the database,
+ * and the only way to be one is to name an id `cards` has no row for. `world.test.ts` asserts all
+ * three are absent, so a future corpus refresh that happened to mint this id fails a test rather
+ * than quietly healing the seed under this story.
+ */
+const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
+
+/**
+ * The gallery, with deck 1's cover pointed at a printing the card database does not hold.
+ *
+ * **Staged through the command rather than through the UI, because there is no UI path to it** —
+ * and that is a fact about the app rather than a shortcut. "Set as cover" is the only control
+ * that writes one and it is withheld from an orphaned row (`ZoneColumn.tsx:793`), so a cover only
+ * *becomes* orphaned later, when a sync takes its printing away. `deck_update` validates no cover
+ * (`db.ts:2007` is a bare `coalesce`, matching `deck::update_deck`), and `coverArtist` is a
+ * lookup on the way out (`db.ts:853`, mirroring the real `LEFT JOIN cards c ON c.id =
+ * d.cover_card_id` at `deck.rs:235`) — so a stale id answers a null artist exactly as it does in
+ * the shipped app.
+ *
+ * `useQuery` rather than an effect with a `setState`, and the gallery is held back until it has
+ * landed: `DeckEditor.stories.tsx`'s `EmptyDeck` stages the same way, for the same reasons — it
+ * runs once, it is cached in the story's own client, and `staleTime: Infinity` keeps a window
+ * refocus in the Storybook browser from writing again.
+ */
+function OrphanedCover() {
+  const staged = useQuery({
+    queryKey: ["story", "orphan-cover"],
+    queryFn: () => ipc.deckUpdate(1, { coverCardId: ORPHAN_CARD_ID }),
+    staleTime: Infinity,
+  });
+  return staged.isSuccess ? <DecksPage /> : null;
+}
 
 const meta = {
   title: "Decks/Gallery",
@@ -41,15 +80,18 @@ const meta = {
           "first, names what would go with the deck, and offers archiving in the same breath " +
           "({@link DeleteAsksFirst}); the archive control is a toggle whose other face is " +
           "Restore ({@link Archived}). `deck_delete` really deletes, by cascade.\n\n" +
-          "**One state on the plan's list is not reachable and has no story: a cover whose " +
-          "artist is unknown.** The tile draws no credit line at all when `coverArtist` is null " +
-          '(`DecksPage.tsx:345-349`) — never the word "null", never a placeholder — and ' +
-          "producing that needs a deck whose `coverCardId` names a printing `cards` does not " +
-          "hold. Measured 2026-08-10: **0 of the 43** rows of `.storybook/fake/cards.ts` has a " +
-          "null `artist`, no seed points a cover at a missing id, and the one control that sets " +
-          "a cover is withheld from an orphaned row (`ZoneColumn.tsx:793` gates “Set as cover” " +
-          "on `needsReview === null`). What *is* reachable is a deck with no cover at all, " +
-          "which is every new deck — {@link NewDeck} is it.",
+          "**A cover with no artist is not drawn, and it has no UI path** — which is why " +
+          "{@link NoCoverArtist} stages it through `deck_update` instead. The tile draws no " +
+          "credit line at all when `coverArtist` is null (`DecksPage.tsx:345-349`) — never the " +
+          'word "null", never a placeholder — and reaching that needs a deck whose ' +
+          "`coverCardId` names a printing `cards` does not hold. Measured 2026-08-10: **0 of " +
+          "the 43** rows of `.storybook/fake/cards.ts` has a null `artist`, no seed points a " +
+          "cover at a missing id, and the one control that *sets* a cover is withheld from an " +
+          "orphaned row (`ZoneColumn.tsx:793` gates “Set as cover” on `needsReview === null`). " +
+          "So a cover is never orphaned at the moment it is chosen; it becomes orphaned when a " +
+          "sync takes its printing away, and it heals on the next one that brings it back. " +
+          "A deck with **no cover at all** is the other, separate state, and it is every new " +
+          "deck — {@link NewDeck} is that one.",
       },
     },
   },
@@ -75,8 +117,8 @@ export const Gallery: Story = {
     await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
     await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
     // The caption is the format's *display name* off the seeded `format_specs` row, then the
-    // count — 60 for a deck holding 77 rows of cards, because a sideboard and a scratchpad are
-    // not what "a 60-card deck" means.
+    // count — 60 for a deck holding 77 cards over 18 rows, because a sideboard and a scratchpad
+    // are not what "a 60-card deck" means.
     await expect(within(wall).getByText(/Modern ·/)).toHaveTextContent("Modern · 60 cards");
     // Scryfall's image policy, per tile and only where there is a name to credit.
     await expect(canvas.getByText("Art by Simon Dominic")).toBeInTheDocument();
@@ -179,6 +221,53 @@ export const DeleteAsksFirst: Story = {
     await expect(trash).toHaveFocus();
     // Nothing was deleted, and the wall still holds all three decks' worth of tiles and rows.
     await expect(canvas.getByText("Modern Goodstuff")).toBeInTheDocument();
+  },
+};
+
+/**
+ * A cover whose printing has left the card database — **so no illustrator is named, and none is
+ * invented.**
+ *
+ * Scryfall's image policy is why the line is conditional rather than a slot that says something:
+ * an art crop carries no printed frame, so the illustrator is credited wherever one is *shown*,
+ * and a credit the app cannot substantiate is worse than no credit. The tile draws its art, its
+ * name and its caption exactly as its neighbour does; the one line that would have said who
+ * painted it is simply not there. **It heals on the next sync that brings the printing back** —
+ * `coverArtist` is a lookup at read time (`db.ts:853`, the `LEFT JOIN cards c ON c.id =
+ * d.cover_card_id` at `deck.rs:235`), not a stored column, so nothing has to notice.
+ *
+ * Told **per tile**, which is the claim: Kenrith Two-Drops keeps its credit in the same wall on
+ * the same render. And distinct from {@link NewDeck}: this deck *has* a cover, so the frame does
+ * not say "No cover" — "the deck has not picked one" and "the art is not there" are two different
+ * things to do something about, and `Cover` tells them apart in as many words.
+ *
+ * The `needsReview` seed because that is where the orphan id lives, and it is the honest world for
+ * this state: the sync that took the printing away is the same sync that flagged the deck row
+ * naming it.
+ */
+export const NoCoverArtist: Story = {
+  parameters: { fake: { seed: "needsReview" } },
+  render: () => <OrphanedCover />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+
+    const orphaned = within(wall)
+      .getByRole("button", { name: /^Modern Goodstuff/ })
+      .closest("li");
+    await expect(orphaned).not.toBeNull();
+    const tile = within(orphaned as HTMLElement);
+    // No credit, and no claim that there is nothing to credit: the line is absent, not blank.
+    await expect(tile.queryByText(/^Art by/)).toBeNull();
+    // And it is not the empty-cover state — this deck chose a face, the face just is not there.
+    await expect(tile.queryByText("No cover")).toBeNull();
+
+    // The neighbour, unaffected, on the same render: the rule is a fact about one cover.
+    const kept = within(wall)
+      .getByRole("button", { name: /^Kenrith Two-Drops/ })
+      .closest("li");
+    await expect(within(kept as HTMLElement).getByText("Art by Kieran Yanner")).toBeInTheDocument();
+    await expect(canvas.getAllByText(/^Art by/)).toHaveLength(1);
   },
 };
 
