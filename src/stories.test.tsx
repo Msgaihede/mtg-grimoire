@@ -1,5 +1,35 @@
-import { composeStories } from "@storybook/react-vite";
-import { describe, expect, it } from "vitest";
+import { composeStories, setProjectAnnotations } from "@storybook/react-vite";
+import { describe, expect, it, vi } from "vitest";
+import preview from "../.storybook/preview";
+
+/**
+ * The module aliases `.storybook/main.ts` gives the Storybook build, given to this file.
+ *
+ * `setProjectAnnotations` alone is **not** enough for a story that talks to the backend, and
+ * the half it does not cover is invisible until something calls a command. The decorator
+ * installs a fake world into `.storybook/fake/core.ts`'s dispatch table — but `src/lib/ipc.ts`
+ * imports `@tauri-apps/api/core`, and under Vitest that resolves to the *real* module, whose
+ * `invoke` reads `window.__TAURI_INTERNALS__`. Measured 2026-08-09 with a throwaway story that
+ * called `ipc.listSets()`: with the annotations and without these mocks it renders
+ * `TypeError: Cannot read properties of undefined (reading 'invoke')` — a seeded world nobody
+ * is asking.
+ *
+ * `vi.mock` rather than an alias in `vite.config.ts`, because Vitest's `resolve.alias` is
+ * shared by all 60 test files and three of these specifiers are ones the app's own tests are
+ * entitled to see unmocked. Hoisted above the imports by Vitest's transform, so the position
+ * here is for reading, not for ordering.
+ *
+ * Keep this list in step with `.storybook/main.ts`'s — with **one deliberate omission**.
+ * `main.ts` also aliases `@/lib/images` to `.storybook/fake/images.ts`, and that one cannot be
+ * expressed here: the fake begins `export * from "../../src/lib/images"`, and a relative path
+ * to the very file being mocked. Vite's alias matches the *specifier*, so the fake's own
+ * import escapes it; `vi.mock` matches the *resolved id*, so it does not, and the factory ends
+ * up importing what it is replacing. Measured 2026-08-09: the run hangs, no output, no
+ * timeout. Nothing is lost by leaving it out — the fake's sole override is `cardImageUrl`,
+ * which swaps a `mtgimg://` URL for a synthetic data URI, and jsdom loads neither.
+ */
+vi.mock("@tauri-apps/api/core", () => import("../.storybook/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
 
 /**
  * Every `play` function in every story, run under Vitest.
@@ -54,6 +84,22 @@ function playsIn(stories: Record<string, unknown>): [string, Played][] {
     return typeof story?.play === "function";
   });
 }
+
+/**
+ * The preview's own annotations, installed **before the first `composeStories` call below**.
+ *
+ * `composeStories` snapshots the project annotations at call time, so this is not a statement
+ * of preference about where to put it: annotating after `SCANNED` is built has no effect at
+ * all, and the failure is a story running with no decorator and no explanation. It is one
+ * line, and it is one line in the only position that works.
+ *
+ * It buys `preview.tsx`'s `FakeWorld` decorator — the `QueryClientProvider` and the per-story
+ * seeded fake backend — for every story here, including the props-only ones, which neither
+ * need it nor notice it. Measured: the three CSS side-effect imports load fine under Vitest,
+ * and `context.globals.art` being `undefined` in a portable story is already handled (the
+ * decorator narrows anything that is not the literal `"live"` to synthetic art).
+ */
+setProjectAnnotations([preview]);
 
 const SCANNED = Object.entries(MODULES)
   .map(([path, mod]) => ({

@@ -49,9 +49,11 @@ export const Snow: Story = { args: { source: "{S}" } };
  * Kozilek, Compleated's real cost. **Six** tokens in the corpus come out as text, measured
  * 2026-08-09 over `mana_cost` **and** `oracle_text` across all 116,694 rows of the live
  * `cards` table (74 distinct tokens in all): `{C/P}` and `{HR}` on **2 printings** each,
- * `{D}`, `{L}`, `{HW}` and `{H}` on one each. Counting *occurrences* instead gives 5 and 4
- * for the first two, because Kozilek prints `{C/P}` twice in one cost — printings is the
- * number that means anything here.
+ * `{D}`, `{L}`, `{HW}` and `{H}` on one each. Counting *occurrences* rather than printings
+ * moves exactly two of those: `{C/P}` to 5, because Kozilek prints it twice in one cost, and
+ * `{D}` to 4. Printings is the number that means anything here — every figure above is one,
+ * and each is named rather than pointed at, because the last rewrite of this paragraph
+ * reordered the list and left a positional reference behind pointing at the wrong token.
  *
  * **Three of the six are the font's doing and three are ours**, worth separating because the
  * rendering is identical either way. `mana-font@1.18.0` defines no `.ms-cp`, `.ms-hw` or
@@ -67,7 +69,9 @@ export const UnknownToken: Story = {
   args: { source: "{8}{C/P}{C/P}" },
   play: async ({ canvasElement }) => {
     // Drawn and undrawn side by side, which is the whole point of the cost being mixed: one
-    // `<i>` for the `{8}`, and the two the font cannot draw left as their own text.
+    // `<i>` for the `{8}`, and the two `{C/P}`s left as their own text. `{C/P}` is one of the
+    // three the font genuinely has no glyph for, not one of the three our list omits — the
+    // rendering is the same either way, and the JSDoc above says which is which.
     await expect(canvasElement.querySelectorAll("i")).toHaveLength(1);
     await expect(canvasElement).toHaveTextContent("{C/P}{C/P}");
   },

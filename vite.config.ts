@@ -44,16 +44,21 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
     // `.storybook` is in scope so the fake backend is covered by the one suite `verify`
-    // runs. Stories stay out because **both** globs require a literal `.test.` segment, not
-    // because of the extension — `src/**/*.test.{ts,tsx}` does not match
-    // `src/components/RarityGem.stories.tsx` either, and that file is in the tree.
+    // runs. No `*.stories.tsx` is ever collected as a **test file** — both globs require a
+    // literal `.test.` segment, not a particular extension, so
+    // `src/components/RarityGem.stories.tsx` matches neither. Stories are nonetheless in the
+    // suite, as *modules*: `src/stories.test.tsx` globs every one of them and runs their
+    // `play` functions through `composeStories`. That is the intended shape — one collected
+    // file that owns the Storybook wiring (project annotations, the fake-backend module
+    // mocks), rather than every story file inheriting a test runner's environment.
     // What the narrower `.test.ts` on the second glob rules out is a
     // `.storybook/**/*.test.tsx`: the fakes are plain modules, and a test needing JSX is
     // testing a component, which lives under `src/`.
     include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts"],
     // Vitest stubs CSS imports as empty strings by default, which would hand
-    // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No component imports
-    // CSS, so those two files are the whole of what this turns on.
+    // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports
+    // CSS; `.storybook/preview.tsx` imports three files of it and reaches the suite through
+    // `src/stories.test.tsx`, which is the second thing this now carries.
     css: true,
   },
 });
