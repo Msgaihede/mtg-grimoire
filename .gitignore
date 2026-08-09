@@ -15,3 +15,4 @@ data/
 # Claude Code parks git worktrees here: whole second checkouts of this repo. `git add -A`
 # would otherwise try to embed one as a gitlink.
 .claude/worktrees/
+planned-features.txt
