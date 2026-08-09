@@ -1,30 +1,22 @@
-import { useEffect, useRef, type RefObject } from "react";
-import { useVirtualizer, type ReactVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
+import { useEffect } from "react";
 import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
+import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
 import { parseFinishes } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
-import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
-import { needsNextPage, useCardSearch, type CardSearch } from "./useCardSearch";
-
-/** Row height in px. Rows are uniform, so this is exact rather than an estimate. */
-const ROW_HEIGHT = 44;
-
-/** Height of the sticky header row, which the virtualiser has to account for. */
-const HEADER_HEIGHT = 36;
+import { useCardSearch, type CardSearch } from "./useCardSearch";
 
 /**
- * The six columns, shared by the header row and every body row so they stay aligned. The
- * last is 2.5rem of quick-add: a 24px button and the room to reach it.
+ * The six columns of the search table. The last is 2.5rem of quick-add: a 24px button and
+ * the room to reach it.
  *
  * Name and type are `2fr`/`1fr` rather than `1fr` and a 16rem cap. A capped track is
  * *inflexible*: grid grows it to its cap out of the free space **before** any `fr` track is
@@ -33,9 +25,110 @@ const HEADER_HEIGHT = 36;
  * across the set beside it. Two flexible tracks share the squeeze instead: at 1280px with
  * the pane open every column keeps a readable share, and closed they measure 381/190 where
  * the cap gave 315/256 — the name, which is what identifies a row, now truncates last.
+ *
+ * The keys are the backend's, verbatim: `SEARCH_SORTS` in `src-tauri/src/search.rs`. A key
+ * that does not match one there is dropped silently at the far end, which is a header that
+ * does nothing.
  */
-const GRID =
-  "grid grid-cols-[minmax(0,2fr)_8rem_minmax(0,1fr)_6rem_6rem_2.5rem] items-center gap-3";
+const COLUMNS: TableColumn<CardSummary>[] = [
+  {
+    key: "name",
+    width: "minmax(0,2fr)",
+    header: "Name",
+    sortable: true,
+    cellClassName: "flex items-baseline gap-2",
+    cell: (card) => (
+      <>
+        <span className="truncate">{card.name}</span>
+        {/* The printed symbols, from the bundled font — the same rule as the detail pane:
+            a cost is read as symbols, and `{1}{W}{U}` is a wire format. */}
+        <ManaText source={card.manaCost} className="shrink-0 text-xs" />
+        {/* The two facts the tile carries over its art, in the cell that identifies the row —
+            because they are facts about the *card*, and the table's other five columns are
+            about the printing. One truth, stated the same way in both layouts. */}
+        <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
+      </>
+    ),
+  },
+  {
+    key: "set",
+    width: "8rem",
+    header: "Set",
+    sortable: true,
+    cellClassName: "truncate font-mono text-dim",
+    // `setName` is nullable and the code is not, so the code is what is shown; the full name
+    // rides along as the tooltip when there is one. Mono because a collector number is data
+    // — the same rule as the grid caption and the pane.
+    cell: (card) => (
+      <span title={card.setName ?? undefined}>
+        {card.setCode.toUpperCase()} · {card.collectorNumber}
+      </span>
+    ),
+  },
+  {
+    key: "type",
+    width: "minmax(0,1fr)",
+    header: "Type",
+    sortable: true,
+    cellClassName: "truncate text-dim",
+    cell: (card) => card.typeLine ?? "—",
+  },
+  {
+    key: "rarity",
+    width: "6rem",
+    header: "Rarity",
+    sortable: true,
+    // Gem dot plus tinted word, exactly as the grid tiles caption a rarity — the two views
+    // show the same fact and there is no reason for it to look like two facts.
+    cell: (card) => <RarityGem rarity={card.rarity} withLabel className="max-w-full" />,
+  },
+  {
+    key: "price",
+    width: "6rem",
+    header: "Price",
+    sortable: true,
+    firstDir: "desc",
+    // Spec §5: a price is never shown without saying how old it is. The detail pane has room
+    // to say it in the open; a 36px header row does not, so the same sentence rides as the
+    // column's tooltip and inside its accessible name. The label *begins* with the visible
+    // word, which is what keeps an overriding `aria-label` legitimate here (WCAG 2.5.3,
+    // label in name) — "Price" still selects this column for anyone driving it by voice.
+    headerTitle: PRICES_AS_OF,
+    headerLabel: `Price. ${PRICES_AS_OF}`,
+    headerClassName: "text-right",
+    cellClassName: "text-right font-mono tabular-nums",
+    cell: (card) => usdPrice(card.priceUsd),
+  },
+  {
+    key: "actions",
+    width: "2.5rem",
+    // Nothing to show, and a header a screen reader still needs: an unnamed column is
+    // announced as "column 6" for every row.
+    header: "Actions",
+    srOnlyHeader: true,
+    // The row opens the card on any click and on Enter or Space, and every one of those
+    // lands here too: without stopping them, recording a copy would also open the card, and
+    // typing `12` into the quantity box would scroll the list a screenful.
+    interactive: true,
+    cell: (card) => (
+      <AddToCollectionButton
+        className={REVEAL_ON_HOVER}
+        target={{
+          cardId: card.id,
+          name: card.name,
+          setCode: card.setCode,
+          collectorNumber: card.collectorNumber,
+          // Both ride on `CardSummary`, which is what lets a row be honest: the popup
+          // offers the finishes this printing exists in — the backend checks the enum and
+          // not the card, so a foil-only printing would otherwise take a nonfoil entry —
+          // and a wish made here can be for the card rather than for this printing.
+          oracleId: card.oracleId,
+          finishes: parseFinishes(card.finishes),
+        }}
+      />
+    ),
+  },
+];
 
 /**
  * What a tile carries when it is dragged: the printing it draws, and nothing about this view.
@@ -55,71 +148,6 @@ const tileDrag = (card: CardSummary): DragPayload => ({
 });
 
 /**
- * Keyboard focus on a row, in the shape the rest of the app uses — an outline, never a
- * ring (see `FilterBar`'s `FOCUS`). The offset is *negative* here: rows are stacked
- * flush inside a scroller, and an outline standing 2px off one would be drawn over its
- * neighbours and clipped at the top and bottom of the list.
- */
-const ROW_FOCUS =
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
-
-function Row({ card }: { card: CardSummary }) {
-  return (
-    <>
-      <span role="cell" className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate">{card.name}</span>
-        {/* The printed symbols, from the bundled font — the same rule as the detail pane:
-            a cost is read as symbols, and `{1}{W}{U}` is a wire format. */}
-        <ManaText source={card.manaCost} className="shrink-0 text-xs" />
-        {/* The two facts the tile carries over its art, in the cell that identifies the row —
-            because they are facts about the *card*, and the table's other five columns are
-            about the printing. One truth, stated the same way in both layouts. */}
-        <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
-      </span>
-      {/* `setName` is nullable and the code is not, so the code is what is shown; the
-          full name rides along as the tooltip when there is one. Mono because a collector
-          number is data — the same rule as the grid caption and the pane. */}
-      <span role="cell" className="truncate font-mono text-dim" title={card.setName ?? undefined}>
-        {card.setCode.toUpperCase()} · {card.collectorNumber}
-      </span>
-      <span role="cell" className="truncate text-dim">
-        {card.typeLine ?? "—"}
-      </span>
-      {/* Gem dot plus tinted word, exactly as the grid tiles caption a rarity — the two
-          views show the same fact and there is no reason for it to look like two facts. */}
-      <span role="cell" className="min-w-0">
-        <RarityGem rarity={card.rarity} withLabel className="max-w-full" />
-      </span>
-      <span role="cell" className="text-right font-mono tabular-nums">
-        {usdPrice(card.priceUsd)}
-      </span>
-      {/* The row opens the card on any click and on Enter or Space, and every one of those
-          lands here too: without stopping them, recording a copy would also open the card,
-          and typing `12` into the quantity box would scroll the list a screenful. Those two
-          keys and no others — a blanket `stopPropagation` also took Escape away from the
-          card pane, which listens on `window`. */}
-      <span role="cell" onClick={(e) => e.stopPropagation()} onKeyDown={stopRowActivationKeys}>
-        <AddToCollectionButton
-          className={REVEAL_ON_HOVER}
-          target={{
-            cardId: card.id,
-            name: card.name,
-            setCode: card.setCode,
-            collectorNumber: card.collectorNumber,
-            // Both ride on `CardSummary`, which is what lets a row be honest: the popup
-            // offers the finishes this printing exists in — the backend checks the enum and
-            // not the card, so a foil-only printing would otherwise take a nonfoil entry —
-            // and a wish made here can be for the card rather than for this printing.
-            oracleId: card.oracleId,
-            finishes: parseFinishes(card.finishes),
-          }}
-        />
-      </span>
-    </>
-  );
-}
-
-/**
  * Card search: a filter bar, and every match in one scroll.
  *
  * The result list is virtualised because an unfiltered search matches the whole database
@@ -127,32 +155,8 @@ function Row({ card }: { card: CardSummary }) {
  */
 export function SearchPage() {
   const search = useCardSearch();
-  const { query, rows, searchKey } = search;
-  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
+  const { query, searchKey } = search;
   const view = useAppStore((s) => s.searchView);
-
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 10,
-    // The sticky header shares the scroll container with the rows, so the list does not
-    // start at the container's origin.
-    scrollMargin: HEADER_HEIGHT,
-  });
-
-  const virtualRows = virtualizer.getVirtualItems();
-  const lastRendered = virtualRows.length ? virtualRows[virtualRows.length - 1].index : -1;
-
-  // A new search reuses the same scroll container, and a browser does not reset scrollTop
-  // for new content — it clamps the old offset into the new, usually far shorter, list.
-  // Refining a search from 13 000 matches to 40 would otherwise drop the reader at the
-  // bottom of results they have never seen, and trip the paging effect below into
-  // fetching a second page nobody asked for.
-  useEffect(() => {
-    virtualizer.scrollToOffset(0);
-  }, [searchKey, virtualizer]);
 
   // Warm the images for the page that just landed, so its first paint is not a wall of
   // empty frames. The grid's own overscan mounts two rows of off-screen `<img>`s, which
@@ -195,30 +199,6 @@ export function SearchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestKey, isPlaceholder]);
 
-  // Paging is driven by the virtualiser's window rather than a scroll handler: it already
-  // knows which row is at the bottom, and it recomputes on resize too, which a scroll
-  // event never fires for.
-  useEffect(() => {
-    // The table's window, so only the table's paging. While the grid is showing, this
-    // virtualiser has no scroll element to measure and its idea of the bottom row is a
-    // leftover — the grid pages itself, through `onNeedNextPage`.
-    if (view !== "table") return;
-    // `isFetchNextPageError` is a stop, not a detail: a failed page leaves `hasNextPage`
-    // true with the reader still at the bottom, so without it this effect re-fires on
-    // every render — a tight retry loop against a database that is already saying no.
-    // The banner's Try again button is the way back.
-    if (!hasNextPage || isFetchingNextPage || isFetchNextPageError) return;
-    if (needsNextPage(lastRendered, rows.length)) void fetchNextPage();
-  }, [
-    view,
-    hasNextPage,
-    isFetchingNextPage,
-    isFetchNextPageError,
-    fetchNextPage,
-    lastRendered,
-    rows.length,
-  ]);
-
   return (
     <section className="flex h-full flex-col gap-4">
       {/* Not shown: the filter bar says what this view is far better than a title would,
@@ -227,12 +207,7 @@ export function SearchPage() {
 
       <FilterBar search={search} />
 
-      <Results
-        search={search}
-        virtualizer={virtualizer}
-        virtualRows={virtualRows}
-        scrollRef={scrollRef}
-      />
+      <Results search={search} />
     </section>
   );
 }
@@ -278,17 +253,7 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
   return count;
 }
 
-function Results({
-  search,
-  virtualizer,
-  virtualRows,
-  scrollRef,
-}: {
-  search: CardSearch;
-  virtualizer: ReactVirtualizer<HTMLDivElement, Element>;
-  virtualRows: VirtualItem[];
-  scrollRef: RefObject<HTMLDivElement | null>;
-}) {
+function Results({ search }: { search: CardSearch }) {
   const { query, rows, total, totalIsCapped, searchKey } = search;
   // Read here rather than taken as a prop: the layout is the result area's own business,
   // and the page above it only needs to know which pager is live.
@@ -386,134 +351,33 @@ function Results({
             }}
           />
         ) : (
-          <div
-            ref={scrollRef}
-            role="table"
-            aria-label="Search results"
-            // The header row plus every match, not just the rows currently in the DOM —
-            // otherwise a virtualised list tells assistive tech the database holds 20 cards.
-            // `-1` is ARIA's "the total is unknown", which is exactly what a capped count
+          <VirtualTable
+            rows={rows}
+            columns={COLUMNS}
+            label="Search results"
+            // `null` is ARIA's "the total is unknown", which is exactly what a capped count
             // is: 5 000 would be a smaller lie than 20, but still a lie.
-            aria-rowcount={totalIsCapped ? -1 : total + 1}
-            tabIndex={0}
-            className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
-          >
-            {/* Sticky inside the scroll container rather than sitting above it: a header
-              outside the scroller is wider than the rows by exactly the scrollbar, and
-              the columns drift apart by that much as soon as the list overflows.
-
-              `LAYER.header` beats the layer a row takes while a quick-add is open in it.
-              Equal z-indexes are resolved by DOM order, and every row comes after this
-              header — so at the row's layer, the row scrolling under it would be drawn
-              *over* it. */}
-            <div
-              role="row"
-              aria-rowindex={1}
-              style={{ height: HEADER_HEIGHT }}
-              className={cn(
-                GRID,
-                "sticky top-0 border-b border-border bg-surface px-3 text-xs text-dim",
-                LAYER.header,
-              )}
-            >
-              {/* `truncate` on every label, because two of these tracks are `minmax(0,…)`
-                  and collapse to nothing in a narrow window with the card pane open — and a
-                  header that overflows a zero-width track is drawn *over* the next column's,
-                  which reads as a rendering fault rather than as a squeeze. */}
-              <span role="columnheader" className="truncate">
-                Name
-              </span>
-              <span role="columnheader" className="truncate">
-                Set
-              </span>
-              <span role="columnheader" className="truncate">
-                Type
-              </span>
-              <span role="columnheader" className="truncate">
-                Rarity
-              </span>
-              {/* Spec §5: a price is never shown without saying how old it is. The detail
-                  pane has room to say it in the open; a 36px header row does not, so the
-                  same sentence rides as the column's tooltip and inside its accessible
-                  name. The label *begins* with the visible word, which is what keeps an
-                  overriding `aria-label` legitimate here (WCAG 2.5.3, label in name) —
-                  "Price" still selects this column for anyone driving it by voice. */}
-              <span
-                role="columnheader"
-                className="cursor-help truncate text-right"
-                title={PRICES_AS_OF}
-                aria-label={`Price. ${PRICES_AS_OF}`}
-              >
-                Price
-              </span>
-              {/* The quick-add column. Nothing to show, and a header a screen reader still
-                  needs: an unnamed column is announced as "column 6" for every row. */}
-              <span role="columnheader" className="sr-only">
-                Actions
-              </span>
-            </div>
-
-            {/* Holds the scrollbar open to the full list height while the rows inside it are
-              positioned absolutely. */}
-            <div
-              role="rowgroup"
-              style={{ height: virtualizer.getTotalSize(), position: "relative" }}
-            >
-              {virtualRows.map((v) => {
-                const card = rows[v.index];
-                return (
-                  // Keyed by row position, not by card id: two pages fetched either side of
-                  // a sync can carry the same printing twice, and duplicate keys would be a
-                  // React warning plus a dropped row.
-                  <div
-                    key={v.key}
-                    role="row"
-                    aria-rowindex={v.index + 2}
-                    // A row opens the card, from the mouse and from the keyboard both — the
-                    // table is the view for comparing prices, and being unable to open the
-                    // one you picked would make it a dead end for anyone not using a mouse.
-                    tabIndex={0}
-                    onClick={() => selectCard(card.id)}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter" && e.key !== " ") return;
-                      // Space scrolls the container it is pressed in, which would jump the
-                      // list by a screen at the same time as opening the card.
-                      e.preventDefault();
-                      selectCard(card.id);
-                    }}
-                    className={cn(
-                      GRID,
-                      // `group`: the quick-add in the last cell shows itself on hover, and
-                      // on the row taking focus — which is the keyboard's version of hover.
-                      //
-                      // The `:has` rule below: a row is positioned *and* transformed, which
-                      // makes it a stacking context — so an open popup's own layer cannot
-                      // lift it over the next row, which paints later simply for being later
-                      // in the DOM. The row it is open in has to come forward instead — as
-                      // far as the rows, and no further: the sticky header above is a layer
-                      // up, because a row lifted to its level would scroll over it.
-                      "group absolute inset-x-0 top-0 cursor-pointer border-b border-border/50 px-3",
-                      LAYER.raisedWhenPopupOpen,
-                      "text-sm transition-colors duration-150 motion-reduce:transition-none",
-                      ROW_FOCUS,
-                      // Which row the open pane is about. A quiet surface rather than gold:
-                      // forty rows are on screen and the one being read is already the one
-                      // beside the pane.
-                      card.id === selectedCardId ? "bg-surface text-text" : "hover:bg-surface/60",
-                    )}
-                    // `start` is measured from the scroll container, which the header shares;
-                    // this div begins below it, so the header's height comes back off.
-                    style={{
-                      height: v.size,
-                      transform: `translateY(${v.start - HEADER_HEIGHT}px)`,
-                    }}
-                  >
-                    <Row card={card} />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+            total={totalIsCapped ? null : total}
+            // Changing the sort changes the query key and therefore this, so a re-sorted
+            // list starts at the top through the scroll-reset that was already there.
+            listKey={searchKey}
+            sort={search.sort}
+            onSort={search.toggleSort}
+            // A row opens the card, from the mouse and from the keyboard both — the table is
+            // the view for comparing prices, and being unable to open the one you picked
+            // would make it a dead end for anyone not using a mouse.
+            onActivate={(card) => selectCard(card.id)}
+            isSelected={(card) => card.id === selectedCardId}
+            onNeedNextPage={() => {
+              // `isFetchNextPageError` is a stop, not a detail: a failed page leaves
+              // `hasNextPage` true with the reader still at the bottom, so without it this
+              // fires on every render — a tight retry loop against a database that is
+              // already saying no. The banner's Try again button is the way back.
+              if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
+                void query.fetchNextPage();
+              }
+            }}
+          />
         ))}
     </div>
   );

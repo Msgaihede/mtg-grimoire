@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
-import { ipc, type SearchResponse } from "@/lib/ipc";
+import { ipc, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
+import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 
 /** Rows per request. The backend clamps at 200; 50 is one screenful plus slack. */
 export const PAGE_SIZE = 50;
@@ -19,6 +20,22 @@ export const FORMATS = [
   { value: "pauper", label: "Pauper" },
   { value: "commander", label: "Commander" },
 ] as const;
+
+/**
+ * Which direction one press on each column asks for first.
+ *
+ * Descending on price, because "highest first" is what clicking a money column means, and
+ * ascending on everything that reads as a list. The table's own columns carry this too, as
+ * documentation; this table is the one that runs, because the state lives here with the
+ * query. Keep the two in step.
+ */
+const SEARCH_FIRST_DIR: Record<SearchSortKey, SortDir> = {
+  name: "asc",
+  set: "asc",
+  type: "asc",
+  rarity: "asc",
+  price: "desc",
+};
 
 /**
  * The filter's colours are the interface's mana symbols — the same six letters in the same
@@ -161,6 +178,9 @@ export function useCardSearch() {
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [owned, setOwned] = useState<boolean | undefined>(undefined);
+  // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
+  // should not also throw away the order you chose to read it in.
+  const [sort, setSort] = useState<SortSpec<SearchSortKey>>([]);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -188,6 +208,9 @@ export function useCardSearch() {
     // `String(false)` are both truthy strings, and a key that cannot tell "off" from "the
     // ones I do not own" answers one with the other's cached pages.
     owned === undefined ? "" : owned ? "owned" : "missing",
+    // The whole sort in one segment: a differently-ordered page is a different answer, and
+    // must not be served from the cached pages of the order before it.
+    sort.map((t) => `${t.key}:${t.dir}`).join(","),
   ];
 
   const query = useInfiniteQuery({
@@ -204,6 +227,9 @@ export function useCardSearch() {
         // Sent only when it is set, so an untouched filter row produces exactly the payload
         // it always did. `false` is meaningful here and `undefined` is not sent at all.
         owned,
+        // Absent rather than `[]` when nothing is sorted, so an untouched table produces
+        // exactly the payload it always did.
+        sort: sort.length > 0 ? sort : undefined,
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong.
@@ -240,6 +266,19 @@ export function useCardSearch() {
     toggleOwned: () => setOwned((current) => cycleTriState(current, true)),
     /** How many kinds of filter are on — the number on the Reset all badge. */
     activeCount: activeFilterCount({ text, format, colors, sets, manaValues, owned }),
+    /**
+     * The columns this list is ordered by, first one deciding. Empty is the view's own
+     * default: relevance when there is a query, name order when there is not.
+     */
+    sort,
+    /** One press on a column header. `additive` is Shift being held. */
+    toggleSort: (key: string, additive: boolean) =>
+      setSort((spec) =>
+        applySort(spec, key as SearchSortKey, {
+          additive,
+          firstDir: SEARCH_FIRST_DIR[key as SearchSortKey] ?? "asc",
+        }),
+      ),
     /** Clear every filter at once, including the search box. */
     resetAll: () => {
       setText("");
