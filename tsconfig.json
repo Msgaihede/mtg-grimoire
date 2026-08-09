@@ -23,14 +23,28 @@
     /* Path aliases (no baseUrl: deprecated in TS 6, paths resolve from this file) */
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+
+    /* This app is a webview: no `process`, no `Buffer`, and `setTimeout` returns a `number`
+       and not a `NodeJS.Timeout`. Nothing in `src/` may be allowed to think otherwise.
+
+       Empty rather than a list, and that is measured: the app relies on no ambient `@types`
+       package at all. `vite/client` — which types `import.meta.env` and the `*.css`
+       side-effect imports — arrives through the `/// <reference types="vite/client" />` in
+       `src/vite-env.d.ts`, and a triple-slash reference is not gated by this option.
+
+       Know what this does and does not buy, because the difference cost a review: it blocks
+       the *automatic* inclusion of `node_modules/@types/*`, and nothing more. A transitive
+       `/// <reference types="node" />` inside a dependency's own declarations walks straight
+       past it — measured 2026-08-09, with `@types/node` merely present in the tree both
+       `vitest` and `vite` pulled it into this program despite this line. **The fence that
+       actually holds is that `@types/node` is not installed**; see `.storybook/node-url.d.ts`
+       for the shim that keeps it that way. This line is the second lock, not the first. */
+    "types": []
   },
-  // The glob is spelled out rather than left as a bare `.storybook` directory entry:
-  // TypeScript expands a bare directory to a wildcard, and its wildcard expansion skips
-  // dot-directories, so the bare form contributes **zero** files. Measured 2026-08-09 with
-  // `tsc --listFiles`: nothing under the bare form, `main.ts` and `preview.tsx` under this
-  // one. The point of the entry is that the Storybook fake backend is type-checked, and the
-  // bare form fails at that silently.
-  "include": ["src", ".storybook/**/*"],
+  // `src` alone: `.storybook` is type-checked by its own `.storybook/tsconfig.json`, because
+  // it is the half that needs Node types and this half must never see them (see `types`
+  // above). `npm run build` runs both.
+  "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

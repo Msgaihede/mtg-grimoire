@@ -7,6 +7,10 @@ const config: StorybookConfig = {
   stories: ["../src/**/*.stories.tsx", "../.storybook/**/*.mdx"],
   addons: ["@storybook/addon-docs", "@storybook/addon-a11y"],
   framework: { name: "@storybook/react-vite", options: {} },
+  // Off because this repo's one external dependency is Scryfall and the shipped app runs a
+  // CSP with no remote source. A dev tool that phones home on every build does not get to be
+  // the exception.
+  core: { disableTelemetry: true },
   viteFinal: (config) => {
     config.resolve ??= {};
     // An array, not an object: these are exact-match rules and their order is the
