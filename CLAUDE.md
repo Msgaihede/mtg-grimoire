@@ -9,6 +9,65 @@ Scryfall as the only external dependency.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 
+## CI and releases (measured live 2026-08-09)
+- Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `frontend`
+  job (`npm run build`/`lint`/`test:run`) and a `rust` matrix over `windows-latest` +
+  `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
+  on both, everything `--locked`). **`ci-ok` is the one protected check** — branch protection
+  pins names by string and a matrix job's name embeds its matrix values, so the aggregator is
+  what has teeth and the matrix underneath stays free. `enforce_admins` is **false**: a red PR
+  cannot merge, a direct push to `main` still can, so "Work on `main`" below stays true.
+  Proven 2026-08-09 by a deliberate lint error: `frontend` red, both `rust` legs green,
+  **`ci-ok` red**. A green pipeline proves nothing about a gate; that run is the proof.
+- The `rust` job writes a stub `dist/index.html` first. `tauri-build` reads
+  `frontendDist: "../dist"` and fails outright when it is missing, so a Rust-only job cannot
+  compile a fresh checkout; the stub is what keeps it parallel with `frontend` instead of
+  serialized behind a full Vite build.
+- **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
+  `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
+  guard — so release-please, the build matrix and the publish step are three jobs in one
+  file, chained on `release_created`.
+- **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes
+  and keeps a `chore(main): release X.Y.Z` PR open that bumps all five version files —
+  `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
+  `src-tauri/Cargo.lock` — and writes `CHANGELOG.md`. Merging it tags, builds and publishes.
+  `bump-minor-pre-major` is on, so while on `0.x` a `feat!:` bumps the **minor**; reaching
+  1.0 is a deliberate `Release-As: 1.0.0` footer, never something a stray `!` does.
+- **The `Cargo.lock` selector must read `@.name.value`, never `@.name`.** release-please
+  parses TOML into tagged nodes, so every scalar is an object and the obvious form matches
+  nothing — and a non-match is a *warning*, not an error. Measured against the real lockfile
+  2026-08-09: `.value` changes exactly one line and leaves the `version = 4` lockfile-format
+  key alone; the bare form changes nothing at all. **`--locked` on every cargo call in both
+  workflows is what converts that silence into a failed check on the release PR itself**,
+  before anything is tagged.
+- The release is created as a **draft** and published only after every platform's assets
+  attach, so a release is never visible without its binaries. `force-tag-creation` pairs with
+  that and is not optional: a draft has no git tag until published, and without it
+  release-please's next run cannot find the previous release and replays the whole history
+  into the changelog. `gh release upload`/`edit` **do** resolve a draft by tag even though no
+  tag exists yet (measured 2026-08-09 — the draft's own URL is `untagged-<sha>`).
+- **release-please needs "Allow GitHub Actions to create and approve pull requests"**
+  (`can_approve_pull_request_reviews: true`). It is one toggle covering both verbs, and with
+  it off the run fails at the very last step — after parsing every commit, resolving the
+  version and pushing the release branch — with "GitHub Actions is not permitted to create or
+  approve pull requests". Everything looks healthy right up until it doesn't.
+- Artifacts per release: NSIS `-setup.exe`, `.msi`, a **portable `.zip`** (the bare
+  `mtg-collection-tracker.exe` — `productName` does **not** rename the binary in Tauri v2, it
+  only names the bundles — which runs from any folder and keeps `data/` beside itself, the
+  behaviour no Program Files install can reach), plus `.deb` and `.AppImage`. Windows bundle
+  filenames carry `productName` verbatim, spaces and all.
+- `--bundles` is pinned per platform. Not because RPM needs `rpmbuild` — it does not, Tauri
+  builds RPMs in-process with the pure-Rust `rpm` crate — but because shipping one is a
+  choice. AppImage is the bundle with external needs: it downloads `linuxdeploy` and wants
+  `patchelf`, `xdg-utils`, `libfuse2`.
+- **Linux artifacts are built but unverified.** Every measured claim in this file — the sync
+  timings, the image cache, the `mtgimg://` origin, the drag-and-drop interception trap — was
+  measured on Windows. Nobody has run a Linux build.
+- Not done, deliberately: no code signing (no certificate, so SmartScreen warns on the
+  installers), no auto-updater (`tauri-plugin-updater` is not a dependency), and **not**
+  GitHub Packages — none of its registry types hosts a desktop installer, which is why the
+  compiled app goes to Releases instead.
+
 ## Verifying UI in the real app (do this, not just tests)
 Every UI task in Plans 2–3 found something the suite could not: a clipped reason line, a
 tile that said nothing until you searched again, a header behind the scroller. Drive the

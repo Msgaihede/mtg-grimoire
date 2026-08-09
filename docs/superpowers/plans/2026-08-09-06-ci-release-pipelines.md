@@ -10,7 +10,7 @@ funnelling a matrix through one fixed-name aggregator job that branch protection
 `release.yml` runs release-please and the Tauri build in a *single* workflow, because a
 release created with `GITHUB_TOKEN` cannot trigger a second workflow.
 
-**Tech Stack:** GitHub Actions · `googleapis/release-please-action@v4` ·
+**Tech Stack:** GitHub Actions · `googleapis/release-please-action@v5` ·
 `tauri-apps/tauri-action@v1` · `Swatinem/rust-cache@v2` · `dtolnay/rust-toolchain@stable`
 
 ## Global Constraints
@@ -38,10 +38,22 @@ memory.
 - `tauri-apps/tauri-action` current major is **`@v1`** (`action-v1.0.0`, 2026-06-29).
   `@v0` is stale. In v1 the updater input is **`uploadUpdaterJson`** — `includeUpdaterJson`
   was renamed and no longer exists.
-- `release-please-action@v4` emits `release_created`, `tag_name`, `version` and — although
+- `release-please-action` emits `release_created`, `tag_name`, `version` and — although
   undocumented in its README — the numeric **`id`** of the created release, which is what
   `tauri-action`'s `releaseId` needs. Task 3 adds a guard that fails the build loudly if
   `id` ever comes back empty, rather than letting tauri-action create a second release.
+  Pinned at **`@v5`**; its only change from v4 is the Node 24 runtime, and the
+  output-emitting code is byte-identical.
+- **Action majors, corrected 2026-08-09 by the first live run.** `actions/checkout` and
+  `actions/setup-node` are at **v7**, not v4 — v4 targets the deprecated Node 20 runtime and
+  the run annotates it. Nothing between v4 and v7 affects this use: checkout v7's only
+  behavioural change blocks fork checkout under `pull_request_target`/`workflow_run` (unused
+  here), and setup-node's automatic package-manager caching is moot because `cache: npm` is
+  set explicitly. After the bump the run carries **zero annotations**.
+- **`gh release upload` and `gh release edit` resolve a *draft* release by tag**, even
+  though a draft has no git tag yet (its own URL is `untagged-<sha>`). Measured 2026-08-09
+  against a throwaway draft; `--draft=false` both publishes it and creates the tag. Task 3's
+  two `gh` steps and Task 6's publish step depend on this.
 - **RPM does not need `rpmbuild`.** Tauri builds it in-process with the pure-Rust `rpm`
   crate. The spec's stated reason for pinning `--bundles` was wrong; the real reason is
   that shipping an unwanted RPM is a choice, not an accident. AppImage *is* the bundle with
@@ -116,9 +128,9 @@ jobs:
     name: frontend
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -142,7 +154,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-22.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -339,6 +351,13 @@ into tagged nodes where every scalar becomes an object, so `@.name == '…'` mat
 and — worse — a non-match is a warning, not an error. `--locked` in both workflows is what
 converts that silence into a failure. See Step 4 for what to do if it does.
 
+**Measured 2026-08-09**, running release-please's own `GenericToml` updater against the
+real `src-tauri/Cargo.lock`: the `@.name.value` form changes **exactly one line**
+(`version = "0.2.0"`) and leaves the top-level `version = 4` lockfile-format key untouched;
+the bare `@.name` form changes nothing and logs only
+`No entries modified in $.package[?(@.name=='mtg-collection-tracker')].version`. This is no
+longer an assumption.
+
 - [ ] **Step 2: Write the manifest**
 
 Create `.release-please-manifest.json`:
@@ -430,7 +449,7 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -460,7 +479,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -480,7 +499,7 @@ jobs:
             xdg-utils \
             libfuse2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -579,16 +598,27 @@ Expected: `ci-ok` succeeds. The release workflow does **not** run on this PR —
 
 - [ ] **Step 1: Allow Actions to open pull requests**
 
-release-please cannot open its release PR without this, and the failure mode is an opaque
-403 in the workflow log.
+**Corrected 2026-08-09 after this failed in the field.** `can_approve_pull_request_reviews`
+must be **`true`**, not `false`. GitHub's UI presents one toggle — "Allow GitHub Actions to
+create and approve pull requests" — covering both verbs, so setting it `false` blocks PR
+*creation* as well.
 
 ```bash
 gh api -X PUT repos/Msgaihede/mtg-grimoire/actions/permissions/workflow \
   -f default_workflow_permissions=write \
-  -F can_approve_pull_request_reviews=false
+  -F can_approve_pull_request_reviews=true
 ```
 
-Expected: JSON echoing `"default_workflow_permissions": "write"`.
+Expected: `{"default_workflow_permissions":"write","can_approve_pull_request_reviews":true}`.
+
+The failure mode when it is wrong is genuinely misleading: release-please parses every
+commit, resolves the version, fetches all the extra-files and **pushes the release
+branch**, and only then dies with `GitHub Actions is not permitted to create or approve
+pull requests`. The log reads healthy right up to the last line.
+
+Note this permits Actions to approve PRs too. It grants nothing extra here because Step 4's
+protection sets `required_pull_request_reviews: null` — no approval gates anything. Revisit
+if required reviewers are ever added.
 
 - [ ] **Step 2: Merge the pipelines PR**
 
