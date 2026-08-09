@@ -120,9 +120,9 @@ describe("ipc argument names match the Rust command signatures", () => {
 
   it("sends both collection reads under `query`", async () => {
     invoke.mockResolvedValue({ items: [], total: 0 });
-    await ipc.collectionList({ sort: "set", limit: 100, offset: 0 });
+    await ipc.collectionList({ sort: [{ key: "set", dir: "asc" }], limit: 100, offset: 0 });
     expect(invoke).toHaveBeenCalledWith("collection_list", {
-      query: { sort: "set", limit: 100, offset: 0 },
+      query: { sort: [{ key: "set", dir: "asc" }], limit: 100, offset: 0 },
     });
 
     invoke.mockResolvedValue({ totalCards: 0 });

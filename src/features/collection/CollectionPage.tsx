@@ -308,6 +308,8 @@ export function CollectionPage() {
                 rows={rows}
                 total={total}
                 listKey={collection.queryKeyString}
+                sort={collection.sort}
+                onSort={collection.toggleSort}
                 onNeedNextPage={onNeedNextPage}
                 onSetQuantity={onSetQuantity}
                 onRemove={onRemove}

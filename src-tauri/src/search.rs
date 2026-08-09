@@ -1099,7 +1099,11 @@ mod tests {
             .filter(|c| c.name == "Lightning Bolt")
             .map(|c| c.id.as_str())
             .collect();
-        assert_eq!(bolts, ["new", "old", "1"], "newest release first, then NULL");
+        assert_eq!(
+            bolts,
+            ["new", "old", "1"],
+            "newest release first, then NULL"
+        );
     }
 
     /// Alphabetically `mythic` sits between `common` and `rare`, which is an order
@@ -1197,7 +1201,11 @@ mod tests {
             },
         )
         .unwrap();
-        let numbers: Vec<&str> = r.items.iter().map(|c| c.collector_number.as_str()).collect();
+        let numbers: Vec<&str> = r
+            .items
+            .iter()
+            .map(|c| c.collector_number.as_str())
+            .collect();
         assert_eq!(numbers, ["2", "10", "100"]);
     }
 

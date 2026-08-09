@@ -130,14 +130,28 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
         <label htmlFor="collection-sort" className="sr-only">
           Sort
         </label>
+        {/* The same state the table's headers drive, from the other end. Picking here
+            *replaces* the sort with that one term; the headers refine and extend it. It
+            survived the headers becoming sortable because two of its orders have no column
+            to press: "Recently added", which neither table can afford a column for, and
+            the unit price, which is the Value column's other question. */}
         <select
           id="collection-sort"
-          value={collection.sort}
-          onChange={(e) => collection.setSort(e.target.value as CollectionSort)}
+          value={collection.sortSelection}
+          onChange={(e) => collection.setSortKey(e.target.value as CollectionSort)}
           // Never gold: a sort is always on — there is no "unsorted" — so a state colour
           // here would say "a filter is active" about a control that cannot be inactive.
           className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
         >
+          {/* Reachable by reading only: picking it would be picking the sort you already
+              have. Present because a select showing nothing at all looks broken, and
+              because "Custom…" is the honest name for a sort built from headers this
+              control has no option for. */}
+          {collection.sortSelection === "" && (
+            <option value="" disabled>
+              Custom…
+            </option>
+          )}
           {COLLECTION_SORTS.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
