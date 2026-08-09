@@ -20,3 +20,5 @@ ReactDOM.createRoot(root).render(
     <App />
   </React.StrictMode>,
 );
+
+const __gateProof = 1;
