@@ -128,6 +128,13 @@ Configured with **`draft: true`**. The build takes minutes; without a draft ther
 public release with zero assets for that entire window. A failed build then leaves a draft
 to delete rather than a broken published release users have already found.
 
+**`force-tag-creation: true` is a required companion, not an option** (added 2026-08-09).
+GitHub does not create a draft release's git tag until it is published, so without it
+release-please's *next* run cannot find the previous release and replays the entire commit
+history into the changelog. `draft` and `force-tag-creation` are one decision.
+
+Permissions on the job: `contents: write`, `issues: write`, `pull-requests: write`.
+
 `release-please-config.json` bumps, from a `node` release type at the repo root:
 
 - `package.json`, `package-lock.json` — by the node strategy
@@ -139,8 +146,10 @@ to delete rather than a broken published release users have already found.
 ### Job B — `build`
 
 `if: needs.release-please.outputs.release_created == 'true'`. Matrix: `windows-latest`,
-`ubuntu-22.04`. Runs `tauri-apps/tauri-action@v0` with `releaseId` from job A, so assets
-attach to the draft.
+`ubuntu-22.04`. Runs `tauri-apps/tauri-action@v1` with `releaseId` from job A, so assets
+attach to the draft. (Corrected 2026-08-09: the current major is **v1**, not v0, and its
+updater input is `uploadUpdaterJson` — `includeUpdaterJson` was renamed and no longer
+exists.)
 
 Checkout takes the default ref: the push that triggered the workflow *is* the merge of the
 release PR, so `main`'s HEAD already carries the bumped version.
@@ -153,8 +162,11 @@ dependencies are the same as in `ci.yml`.
 Two things are pinned rather than inherited from `tauri.conf.json`'s `targets: "all"`:
 
 - **`--bundles nsis,msi`** on Windows, **`--bundles deb,appimage`** on Linux. `"all"` on
-  Linux includes RPM, and `ubuntu-22.04` has no `rpmbuild` — that is a build failure, not a
-  skipped bundle.
+  Linux also builds an RPM. (Corrected 2026-08-09: that costs nothing — Tauri builds RPMs
+  in-process with the pure-Rust `rpm` crate and does **not** shell out to `rpmbuild`. So
+  pinning is a deliberate choice about what to ship, not a workaround. AppImage is the
+  bundle with external needs: it downloads `linuxdeploy` and wants `patchelf`,
+  `xdg-utils` and `libfuse2`.)
 - **`-- --locked`** passed through to cargo. This is the check that catches a `Cargo.lock`
   release-please failed to bump, and it keeps a release reproducible from its lockfile.
 
@@ -190,14 +202,16 @@ with release-please's generated changelog as the release body.
 
 ## Open item to settle during implementation
 
-`src-tauri/Cargo.lock` carries the package version and must move with the bump.
-release-please's `toml` extra-file updater is driven by a JSONPath selector; whether it
-supports the array-filter form needed to reach `[[package]]` where `name =
-"mtg-collection-tracker"` is unverified. If it does not, the fallback is a `generic`
-updater on that line.
+**Settled 2026-08-09 by measurement.** release-please parses TOML into *tagged nodes*, so
+every scalar becomes an object and the obvious selector
+`$.package[?(@.name=='mtg-collection-tracker')].version` matches nothing. Reaching through
+the wrapper — `@.name.value` — works, but it is an undocumented internal with no upstream
+test coverage, and a non-match is a **warning, not an error**.
 
-**Acceptance test either way:** the `build` job's `-- --locked` succeeds. A stale lock is
-exactly what that flag fails on, so the pipeline itself proves the answer.
+So the selector does the work and `--locked` proves it: `--locked` is passed to every cargo
+invocation in *both* workflows, which means a missed lock bump fails CI **on the release PR
+itself**, before anything is tagged or published. The fallback, if it ever misses, is one
+`cargo check` and a commit on that PR's branch — not a config redesign.
 
 ## Manual steps (one-time, outside the workflows)
 
