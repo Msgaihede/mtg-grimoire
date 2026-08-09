@@ -367,6 +367,33 @@ describe("the allocator", () => {
     expect(readHandlers(seed(false)).deck_get({ id: 2 })!.cards[0].ownedQuantity).toBe(2);
   });
 
+  it("splits one copy between two built decks instead of giving it to neither", () => {
+    // The regression this exists for: allocating the read's own deck *last*, from what every
+    // other built deck left, makes each read hand the copy to the other one — so both answer
+    // 0 and nobody holds it. One id-ordered pass over every built deck, the read's included,
+    // is what makes the two answers add up.
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })],
+      decks: [deck({ id: 1, isBuilt: true }), deck({ id: 2, isBuilt: true })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, quantity: 1 }),
+        deckCard({ id: 2, deckId: 2, cardId: BOLT.id, quantity: 1 }),
+      ],
+    });
+    const owned = (id: number) => readHandlers(db).deck_get({ id })!.cards[0].ownedQuantity;
+    expect([owned(1), owned(2)]).toEqual([1, 0]);
+  });
+
+  it("gives two copies to the first two of three built decks, by deck id", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
+      decks: [1, 2, 3].map((id) => deck({ id, isBuilt: true })),
+      deckCards: [1, 2, 3].map((id) => deckCard({ id, deckId: id, cardId: BOLT.id, quantity: 1 })),
+    });
+    const owned = (id: number) => readHandlers(db).deck_get({ id })!.cards[0].ownedQuantity;
+    expect([owned(1), owned(2), owned(3)]).toEqual([1, 1, 0]);
+  });
+
   it("is never blocked by the built deck's own claims", () => {
     const db = makeDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
@@ -414,6 +441,19 @@ describe("the deck read", () => {
     // `lea 161`'s blob is `usd` 620.00 with both foil keys null.
     expect(detail.cards[0].unitPriceUsd).toBe(620);
     expect(detail.deck.cardCount).toBe(4);
+  });
+
+  it("reads everUncommon off the column, not off the 43 rows the fixture happens to hold", () => {
+    // Delver of Secrets is the one row where the two disagree: `everUncommon: true` from the
+    // full corpus, while the only Delver printing here is the `isd` **common**. Recomputed,
+    // Pauper Commander would show a legal commander as ineligible.
+    const delver = CARDS.find((c) => c.name.startsWith("Delver of Secrets"))!;
+    expect(delver.rarity).toBe("common");
+    const db = makeDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: delver.id, zone: "commander" })],
+    });
+    expect(readHandlers(db).deck_get({ id: 1 })!.cards[0].everUncommon).toBe(true);
   });
 
   it("answers null under the gone fault, which is what a deleted deck looks like", () => {
