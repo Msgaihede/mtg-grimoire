@@ -37,7 +37,7 @@ export function resetCommands(): void {
 
 /**
  * Rejects with an `Error`, which is what the *IPC layer* throws. A Rust command's own
- * refusal is a bare string — all 29 `#[tauri::command]` functions return
+ * refusal is a bare string — all 30 `#[tauri::command]` functions return
  * `Result<_, String>` — and a handler models that by throwing an `Error` whose message is
  * the string, because `ipcError` renders both (`typeof e === "string"` and
  * `e instanceof Error` are its first two branches) and the distinction is invisible past it.
