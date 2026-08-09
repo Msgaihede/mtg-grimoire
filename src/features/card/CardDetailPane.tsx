@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FlipHorizontal2, X } from "lucide-react";
+import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
@@ -461,15 +462,19 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
           </span>
         </div>
       ) : (
-        <img
+        <CardImage
           // The name, not "card image": this is what a screen reader announces and what
           // shows if the fetch fails, and both readers want the card.
           alt={shown?.name || card.name}
+          // Keyed on the `src` inside {@link CardImage}, which is both the flip and the card:
+          // a new face is a new image, so the fade *is* the flip (150ms, the whole motion
+          // budget, gone entirely under `prefers-reduced-motion`; a 3D card turn would be the
+          // biggest animation in an app whose only other one is the sync sweep) — and a new
+          // *card* is a new image too, which a `key={face}` was not. That mattered on the one
+          // path the pane does not blank itself first: a card already in the query cache is
+          // handed over in the same render, with no pending state to unmount the picture, so
+          // browsing back to a card you just looked at kept the other card's art on screen.
           src={src}
-          // A new face is a new image, so the fade is the flip: 150ms, the whole motion
-          // budget, and gone entirely under `prefers-reduced-motion`. A 3D card turn would
-          // be the biggest animation in an app whose only other one is the sync sweep.
-          key={face}
           onError={() => setBroken(src)}
           decoding="async"
           style={{ aspectRatio: CARD_ASPECT }}

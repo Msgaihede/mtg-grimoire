@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Archive, ArchiveRestore, ChevronRight, Copy, Plus, Trash2 } from "lucide-react";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -430,10 +431,14 @@ function Cover({ cardId }: { cardId: string | null }) {
       style={{ aspectRatio: ART_ASPECT }}
     >
       {image.src ? (
-        <img
+        <CardImage
           // Decorative: the deck's name is in the caption two lines down, and an `alt` here
           // would announce the tile twice.
           alt=""
+          // Keyed on the `src` inside {@link CardImage}, which is what makes the note above
+          // this component true rather than merely intended: a deck that changes its cover is
+          // handed a different id without remounting, and the frame would otherwise keep
+          // painting the old cover until the new crop arrived.
           src={image.src}
           loading="lazy"
           decoding="async"

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { CardImage } from "@/components/CardImage";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
@@ -370,14 +371,18 @@ function Tile<T extends GridCard>({
             style={{ aspectRatio: CARD_ASPECT }}
           >
             {image.src ? (
-              <img
+              <CardImage
                 // The name, not "card image": this string is what a screen reader announces
                 // and what shows when a fetch fails, and both readers want the card.
                 alt={card.name}
                 src={image.src}
-                // 117 k results is 117 k requests if every mounted tile fetches eagerly. The
-                // virtualizer bounds the DOM; this bounds what the DOM asks for.
-                loading="lazy"
+                // No `loading="lazy"`. It was here against "117 k results is 117 k requests
+                // if every mounted tile fetches eagerly", and that is not what happens: the
+                // virtualizer bounds the mounted tiles to the rows on screen plus two, so
+                // eager is already bounded at about two dozen images. What the browser's own
+                // intersection gate added on top was a second wait — and a lazy image is
+                // fetched at low priority, after layout, outside the preload scanner — on
+                // exactly the two dozen pictures the reader is about to look at.
                 decoding="async"
                 // An `<img>` is draggable by default, and the browser picks the *nearest*
                 // draggable ancestor as a drag's source — so the art would start a drag of

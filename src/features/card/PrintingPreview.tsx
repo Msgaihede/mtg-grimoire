@@ -6,6 +6,7 @@ import {
   useState,
   type HTMLAttributes,
 } from "react";
+import { CardImage } from "@/components/CardImage";
 import { cardImageUrl } from "@/lib/images";
 import { shouldFlipUp } from "@/lib/shouldFlipUp";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -345,7 +346,7 @@ function Preview({ printingId, anchor }: { printingId: string; anchor: HTMLEleme
           variant's own 672 × 936, so `object-cover` is a no-op that stays safe if that ever
           changes. */}
       {image.src && (
-        <img
+        <CardImage
           alt=""
           src={image.src}
           onError={image.onError}
