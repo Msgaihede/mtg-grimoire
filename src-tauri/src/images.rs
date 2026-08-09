@@ -23,14 +23,21 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Concurrent fetches. `*.scryfall.io` is documented as having no rate limit, but the
-/// spec still asks for ≤10/s sustained, and six ~60 KB requests in flight is comfortably
-/// under that on any connection that can render the grid at all.
-const MAX_CONCURRENT_FETCHES: usize = 6;
-
-/// Minimum spacing between two fetch *starts* — the ≤10/s ceiling expressed as something
-/// a scheduler can enforce.
-const MIN_FETCH_INTERVAL: Duration = Duration::from_millis(100);
+/// Images in flight at once — and the whole of the pacing, because there is deliberately
+/// no interval between fetch *starts* any more.
+///
+/// `cards.scryfall.io` is documented as having **no** rate limit. The ≤10/s figure is
+/// `api.scryfall.com`'s rule for "all other methods", and [`is_fetchable`] guarantees an
+/// image can be fetched from nowhere but the CDN — so the 100 ms gate that used to sit here
+/// was charging one origin's limit to another, and it was most of what made a cold grid
+/// slow: six sequential images that owed the network almost nothing measured **554 ms**
+/// under it, and 6 ms without.
+///
+/// What this number bounds is therefore *this machine* — sockets, worker threads, and the
+/// memory of that many ~60 KB bodies in flight — rather than Scryfall's patience. Sixteen is
+/// about two screenfuls of tiles arriving together. The 429 handling below is untouched and
+/// is what still makes this safe if that assumption ever stops holding.
+const MAX_CONCURRENT_FETCHES: usize = 16;
 
 /// Shortest pause a 429 can buy: what Scryfall documents a rate limit as costing.
 /// A `Retry-After: 0` or `: 1` is not permission to retry inside the window we are
@@ -433,9 +440,11 @@ pub struct Cache {
     dir: PathBuf,
     /// Caps images in flight. A grid that scrolls fast can queue hundreds of tiles.
     permits: tokio::sync::Semaphore,
-    /// Serialises the *start* of each fetch so [`MIN_FETCH_INTERVAL`] is enforced, and
-    /// carries the 429 penalty: Scryfall's rate limit is per application, so a limit one
+    /// When the 429 penalty lifts. Scryfall's rate limit is per application, so a limit one
     /// request earns has to be paid by every request, not just that one.
+    ///
+    /// An instant in the past — the gate open — for the whole of a normal session: since the
+    /// pacing interval went, this carries a penalty and nothing else.
     gate: tokio::sync::Mutex<tokio::time::Instant>,
     /// Images fetched but not stored. A read-only data directory or a full disk costs the
     /// user a slower grid rather than a blank one, which is right — but it is also
@@ -590,8 +599,8 @@ impl Cache {
     ///   to re-read, and nothing may be recorded, so the waiter necessarily fetches.
     ///
     /// Both are acceptable rather than merely tolerated. The cost is one extra request to an
-    /// origin Scryfall documents as having no rate limit, still paced by this cache's own
-    /// semaphore and 100 ms gate, in a window the app is already busy in — against a design
+    /// origin Scryfall documents as having no rate limit, still bounded by this cache's own
+    /// semaphore, in a window the app is already busy in — against a design
     /// that would have to hold the fetched bytes in the single-flight map to hand them over,
     /// which turns a map of empty mutexes into a map of image buffers whose lifetime nothing
     /// currently bounds. That handoff is the upgrade if the degraded mode ever measures as a
@@ -654,16 +663,16 @@ impl Cache {
         })
     }
 
-    /// One paced fetch: a permit, then the interval gate, then the request.
+    /// One fetch: a permit, a glance at the penalty gate, then the request.
     ///
-    /// The gate is a **deadline, not a queue**. A wait of pacing size (≤
-    /// [`MIN_FETCH_INTERVAL`]) is slept out, because that is the ≤10/s ceiling doing its
-    /// job. A wait longer than that can only be a 429 penalty some other tile earned, and
-    /// standing in line for it would be wrong twice over: the request occupies a worker
-    /// thread and a permit for up to five minutes, and a *second* rate limit could not
-    /// even report itself until the first sleeper woke. So a penalty is answered rather
-    /// than waited on — "not now, in N seconds" is a complete answer, and the protocol
-    /// turns it into a 503 with a `Retry-After` the UI can act on.
+    /// The gate is a **deadline, not a queue**, and it holds nothing at all unless some
+    /// other tile has earned a 429 — the routine pacing that used to share it is gone with
+    /// [`MAX_CONCURRENT_FETCHES`]'s note. Standing in line for a penalty would be wrong
+    /// twice over: the request would occupy a worker thread and a permit for up to five
+    /// minutes, and a *second* rate limit could not even report itself until the first
+    /// sleeper woke. So a penalty is answered rather than waited on — "not now, in N
+    /// seconds" is a complete answer, and the protocol turns it into a 503 with a
+    /// `Retry-After` the UI can act on.
     async fn fetch(&self, client: &scryfall::Client, uri: &str) -> Result<Vec<u8>, ImageError> {
         let _permit = self
             .permits
@@ -671,15 +680,13 @@ impl Cache {
             .await
             .map_err(|e| ImageError::Fetch(e.to_string()))?;
         {
-            let mut next = self.gate.lock().await;
+            let next = self.gate.lock().await;
             let remaining = next.saturating_duration_since(tokio::time::Instant::now());
-            if remaining > MIN_FETCH_INTERVAL {
+            if !remaining.is_zero() {
                 return Err(ImageError::RateLimited {
                     retry_after_secs: secs_rounded_up(remaining),
                 });
             }
-            tokio::time::sleep_until(*next).await;
-            *next = tokio::time::Instant::now() + MIN_FETCH_INTERVAL;
         }
 
         match client.fetch_image(uri).await {
@@ -832,25 +839,28 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
 ///
 /// A bound on the call, not on the app: nothing stops several of these loops running at
 /// once, and a fast scroll can start one per page that lands. That is survivable rather
-/// than designed — every loop still goes through the same semaphore and the same 100 ms
-/// gate, so concurrent loops share one budget instead of multiplying it. What they do
-/// cost is *ordering*: a later page's warm-up interleaves with an earlier one's. A
-/// single-flight map keyed on [`ImageKey`] is the real answer to both that and to a tile
-/// racing its own prefetch, and it is Plan-3 machinery — see the carryover ledger.
+/// than designed — every loop still goes through the same semaphore, so concurrent loops
+/// share one budget instead of multiplying it, and [`Cache`]'s single-flight map means two
+/// loops that overlap on a key cost one round trip rather than two. What they still cost is
+/// *ordering*: a later page's warm-up interleaves with an earlier one's.
 const MAX_PREFETCH: usize = 100;
 
 /// The keys a prefetch request turns into, validated exactly as a protocol request is,
-/// **furthest-away first**.
+/// **in reading order**.
 ///
-/// The order is the whole point. The grid mounts the head of a page as tiles the instant
-/// it arrives, and every one of those tiles issues its own `mtgimg://` request; nothing
-/// dedups a fetch that is already in flight, so a prefetch starting at index 0 asks
-/// Scryfall for the same bytes a second time and spends a permit and a 100 ms slot doing
-/// it — against the tile the reader is currently staring at. Walking from the far end
-/// means the two meet in the middle instead of colliding at the start, and by the time
-/// the prefetch reaches the head those keys are cache hits.
+/// The order is the whole point, and it turned over when [`Cache`]'s single-flight map
+/// landed. This list used to be walked backwards, on the reasoning that the grid mounts the
+/// head of a page as tiles the instant it arrives and "nothing dedups a fetch that is
+/// already in flight" — so a prefetch starting at index 0 would ask Scryfall for the same
+/// bytes a second time, against the tile the reader is staring at.
+///
+/// That premise is false now: two callers who want one key meet on its lock, and the second
+/// re-reads what the first wrote. Colliding at the head is the *good* case — it is a wait on
+/// a request already in flight rather than a second round trip. Walking backwards, on the
+/// other hand, spends the whole permit budget on cards fifty rows below the fold while the
+/// reader waits on the ones in front of them. So: first card first.
 pub fn prefetch_keys(card_ids: &[String], variant: Variant) -> Vec<ImageKey> {
-    let mut keys: Vec<ImageKey> = card_ids
+    card_ids
         .iter()
         .filter(|id| is_card_id(id))
         // Front faces only: the back of a double-faced card is not on screen until
@@ -860,13 +870,10 @@ pub fn prefetch_keys(card_ids: &[String], variant: Variant) -> Vec<ImageKey> {
             face: 0,
             variant,
         })
+        // The head of what was sent — the page the reader is on — never the tail of a long
+        // list, which is nowhere near it.
         .take(MAX_PREFETCH)
-        .collect();
-    // After the cap, never before: the cap keeps the first `MAX_PREFETCH` ids of what was
-    // sent, and reversing first would warm the far tail of a long list — nowhere near the
-    // page the reader is on.
-    keys.reverse();
-    keys
+        .collect()
 }
 
 /// Warm the cache for a page of results.
@@ -903,7 +910,8 @@ pub async fn prefetch_images(
 ///
 /// A pass, not a budget: keys already on disk are never selected, so a collection of ten
 /// thousand cards warms over several sessions and each one starts where the last stopped.
-/// At the measured 100 ms pacing this is a little over three minutes of background work.
+/// It shares [`MAX_CONCURRENT_FETCHES`] with the grid the reader is using, which is what
+/// keeps a pre-warm from being felt rather than a pacing interval.
 pub const MAX_PREWARM: usize = 2_000;
 
 /// The cards the user owns, wants, or has put in a deck, that have no cached image yet.
@@ -951,9 +959,9 @@ pub fn prewarm_keys(
 /// Warm the cache for what the user owns. Returns how many images were queued.
 ///
 /// Fire-and-forget in the same sense as [`prefetch_images`]: it resolves when the work is
-/// queued. The loop shares the cache's own semaphore and 100 ms gate with the live grid, so
-/// a pre-warm running behind a browsing session competes for the same budget rather than
-/// doubling it, and it abandons the batch on the first rate limit.
+/// queued. The loop shares the cache's own semaphore with the live grid, so a pre-warm
+/// running behind a browsing session competes for the same budget rather than doubling it,
+/// and it abandons the batch on the first rate limit.
 #[tauri::command]
 pub async fn prewarm_collection(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -1275,13 +1283,14 @@ mod tests {
         assert_eq!(keys.len(), 1);
     }
 
-    /// The reason the batch is walked backwards: the grid mounts the *head* of a page as
-    /// tiles the moment it lands, and each of those tiles issues its own protocol request.
-    /// A prefetch that also started at index 0 would ask for the same key twice — nothing
-    /// dedups an in-flight fetch — and the duplicate spends a permit and a 100 ms slot
-    /// against the tile the reader is waiting on.
+    /// The batch is walked in reading order, and [`Cache`]'s single-flight map is what makes
+    /// that the right answer: the grid mounts the *head* of a page as tiles the moment it
+    /// lands, so a prefetch that starts at index 0 asks for keys those tiles are asking for
+    /// too — and the second asker now waits on the first's lock instead of spending a second
+    /// round trip. Walking backwards would spend the whole permit budget on cards fifty rows
+    /// below the fold while the reader waits on the ones in front of them.
     #[test]
-    fn a_prefetch_batch_starts_at_the_far_end_of_the_page() {
+    fn a_prefetch_batch_starts_at_the_top_of_the_page() {
         let ids: Vec<String> = (0..50)
             .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
             .collect();
@@ -1290,28 +1299,28 @@ mod tests {
 
         assert_eq!(keys.len(), 50);
         assert_eq!(
-            keys[0].card_id, ids[49],
-            "the last card of the page is fetched first"
+            keys[0].card_id, ids[0],
+            "the card the reader is looking at is warmed first"
         );
         assert_eq!(
-            keys[49].card_id, ids[0],
-            "the first card — already mounted as a tile — is fetched last"
+            keys[49].card_id, ids[49],
+            "and the far end of the page last"
         );
     }
 
-    /// Reversed *after* the cap, not before: the cap keeps the first `MAX_PREFETCH` ids of
-    /// what was sent, and reversing first would silently prefetch the wrong end of a long
-    /// list — the far tail of 500 ids is nowhere near the page the reader is on.
+    /// The cap keeps the *head* of what was sent — the page the reader is on — rather than
+    /// the tail of a long list, which is nowhere near it.
     #[test]
-    fn a_capped_batch_reverses_the_ids_it_kept_not_the_ones_it_dropped() {
+    fn a_capped_batch_keeps_the_head_of_the_page_in_order() {
         let ids: Vec<String> = (0..500)
             .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
             .collect();
 
         let keys = prefetch_keys(&ids, Variant::Grid);
 
-        assert_eq!(keys[0].card_id, ids[MAX_PREFETCH - 1]);
-        assert_eq!(keys[MAX_PREFETCH - 1].card_id, ids[0]);
+        assert_eq!(keys.len(), MAX_PREFETCH);
+        assert_eq!(keys[0].card_id, ids[0]);
+        assert_eq!(keys[MAX_PREFETCH - 1].card_id, ids[MAX_PREFETCH - 1]);
     }
 
     #[test]
@@ -2069,36 +2078,66 @@ mod tests {
         );
     }
 
-    /// The ≤10/s ceiling the spec asks for, expressed as something a scheduler can
-    /// enforce: two fetch *starts* are at least [`MIN_FETCH_INTERVAL`] apart.
+    /// Nothing artificial stands between a screenful of tiles and their bytes.
+    ///
+    /// The gate this used to assert against was `api.scryfall.com`'s ≤10/s rule applied to
+    /// `cards.scryfall.io`, which Scryfall documents as having **no** rate limit — and
+    /// [`is_fetchable`] guarantees an image can come from nowhere else. It cost every cold
+    /// screenful a 100 ms slot per tile, which is most of what "images load slowly" was.
     #[tokio::test]
-    async fn consecutive_fetches_are_spaced_by_the_pacing_interval() {
-        let f = Fixture::new("pacing");
+    async fn consecutive_fetches_are_not_paced_apart() {
+        const N: usize = 6;
+        let f = Fixture::new("unpaced");
         let server = MockServer::start();
         server.mock(|when, then| {
             when.method(GET);
             then.status(200).body(vec![7u8; 4]);
         });
-        f.card(BOLT, &format!("{}/grid/a.webp?1", server.base_url()));
-        f.card(
-            "ab000000-0000-0000-0000-000000000001",
-            &format!("{}/grid/b.webp?2", server.base_url()),
-        );
+        let ids: Vec<String> = (0..N)
+            .map(|i| format!("{i:08}-0000-0000-0000-000000000000"))
+            .collect();
+        for (i, id) in ids.iter().enumerate() {
+            f.card(id, &format!("{}/grid/{i}.webp?1", server.base_url()));
+        }
         let client = scryfall::Client::new(server.base_url());
 
         let started = std::time::Instant::now();
-        f.get(&client, &key(BOLT, 0, Variant::Grid)).await.unwrap();
-        f.get(
-            &client,
-            &key("ab000000-0000-0000-0000-000000000001", 0, Variant::Grid),
-        )
-        .await
-        .unwrap();
+        for id in &ids {
+            f.get(&client, &key(id, 0, Variant::Grid)).await.unwrap();
+        }
+
+        // The old gate forced (N-1) × 100 ms = 500 ms on exactly this sequence, whatever the
+        // origin did. The bound is loose because a loopback round trip is not free either;
+        // what it catches is a pacing interval, not a slow machine.
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "{N} sequential fetches took {:?} — something is pacing them apart again",
+            started.elapsed()
+        );
+    }
+
+    /// The gate is still there, and it is still what a 429 is charged to: what changed is
+    /// that it holds a *penalty* deadline and never a routine one. A cache that has earned
+    /// nothing must let a fetch straight through.
+    #[tokio::test]
+    async fn an_unpenalised_gate_holds_nothing_back() {
+        let cache = Cache::new(std::env::temp_dir().join("mtg-grimoire-test-gate"));
 
         assert!(
-            started.elapsed() >= MIN_FETCH_INTERVAL,
-            "two fetches took {:?}, which is faster than the pacing gate allows",
-            started.elapsed()
+            cache.gate.lock().await.elapsed() >= Duration::ZERO,
+            "a fresh gate must already be open"
+        );
+
+        cache.penalise(Duration::from_secs(120)).await;
+
+        let remaining = cache
+            .gate
+            .lock()
+            .await
+            .saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            remaining > Duration::from_secs(115),
+            "a penalty must still shut the gate: {remaining:?}"
         );
     }
 
@@ -2224,8 +2263,8 @@ mod tests {
 
     /// Carryover item 3, ledgered twice: nothing deduplicated two requests for the same
     /// key in flight at once, so a tile and its own prefetch — or two prefetch loops from
-    /// two pages that landed together — could each spend a permit, a 100 ms slot and a
-    /// round trip on the same bytes. One fetch per key, and the second caller reads what
+    /// two pages that landed together — could each spend a permit and a round trip on the
+    /// same bytes. One fetch per key, and the second caller reads what
     /// the first one wrote.
     #[tokio::test]
     async fn two_requests_for_one_image_make_one_round_trip() {
