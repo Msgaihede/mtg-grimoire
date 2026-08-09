@@ -10,6 +10,7 @@ import { needsNextPage } from "@/features/search/useCardSearch";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { finishLabel } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
@@ -187,7 +188,8 @@ export function CollectionTable({
         style={{ height: HEADER_HEIGHT }}
         className={cn(
           GRID,
-          "sticky top-0 z-20 border-b border-border bg-surface px-3 text-xs text-dim",
+          "sticky top-0 border-b border-border bg-surface px-3 text-xs text-dim",
+          LAYER.header,
         )}
       >
         <span role="columnheader" className="truncate">

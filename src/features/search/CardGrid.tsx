@@ -4,6 +4,7 @@ import { CardImage } from "@/components/CardImage";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
+import { LAYER } from "@/lib/layers";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
@@ -255,11 +256,11 @@ export function CardGrid<T extends GridCard>({
           <div
             key={v.key}
             // The row a quick-add is open in comes to the front. Its `transform` makes it a
-            // stacking context, so the popup's own `z-20` cannot lift it above the *next*
+            // stacking context, so the popup's own layer cannot lift it above the *next*
             // row — which paints later simply for being later in the DOM, and would cover
             // the popup with the tiles below it. `:has` keeps that fact where the stacking
             // context is, rather than threading "is a popup open in me" up through a tile.
-            className="absolute inset-x-0 top-0 flex gap-3 has-[[aria-expanded=true]]:z-10"
+            className={cn("absolute inset-x-0 top-0 flex gap-3", LAYER.raisedWhenPopupOpen)}
             style={{ height: tileHeight, transform: `translateY(${v.start}px)` }}
           >
             {rows.slice(v.index * columns, v.index * columns + columns).map((card, i) => (

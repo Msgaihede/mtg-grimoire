@@ -1,3 +1,6 @@
+import { LAYER } from "@/lib/layers";
+import { cn } from "@/lib/utils";
+
 /**
  * How a test finds the line.
  *
@@ -40,7 +43,7 @@ export function DropIndicator() {
     <span
       {...{ [DROP_LINE_ATTR]: "" }}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5 bg-accent"
+      className={cn("pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-accent", LAYER.raised)}
     />
   );
 }

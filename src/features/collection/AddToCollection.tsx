@@ -6,6 +6,7 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
@@ -258,8 +259,12 @@ function AddPopup({
       // `aria-modal` either — the list behind it stays live, and a dialog that claims the
       // page is inert while it demonstrably is not is worse than no dialog at all.
       className={cn(
-        "absolute top-7 z-20 w-64 space-y-3 rounded-lg border border-border bg-surface p-3",
+        "absolute top-7 w-64 space-y-3 rounded-lg border border-border bg-surface p-3",
         "text-left shadow-lg",
+        // Only ever effective against this popup's *siblings*: on a table row or a grid row
+        // the anchor is inside a transformed element, which caps everything in it at that
+        // row's own layer. See `LAYER`.
+        LAYER.popup,
         align === "start" ? "left-0" : "right-0",
         FOCUS,
       )}

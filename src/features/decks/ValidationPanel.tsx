@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "
 import { ChevronRight } from "lucide-react";
 import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { estimateBracket } from "./validation/bracket";
@@ -292,8 +293,9 @@ function Findings({
       // moment it opens (`SetCombobox`'s decision, for its reason). The editor behind it stays
       // live, which is the point — a reader fixes the deck while reading what is wrong with it.
       className={cn(
-        "absolute left-0 top-11 z-20 w-80 max-w-[calc(100vw-2rem)] rounded-lg border",
+        "absolute left-0 top-11 w-80 max-w-[calc(100vw-2rem)] rounded-lg border",
         "border-border bg-bg/95 p-3 text-xs shadow-lg",
+        LAYER.popup,
         // The panel scrolls rather than the editor: a Standard deck full of cards from other
         // formats is sixty findings, and a layer taller than the window has no way back to its
         // own chip.

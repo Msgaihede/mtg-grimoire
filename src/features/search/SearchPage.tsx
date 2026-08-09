@@ -7,6 +7,7 @@ import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/Ad
 import type { DragPayload } from "@/features/decks/dnd";
 import { parseFinishes } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
@@ -401,16 +402,18 @@ function Results({
               outside the scroller is wider than the rows by exactly the scrollbar, and
               the columns drift apart by that much as soon as the list overflows.
 
-              `z-20` beats the `z-10` a row takes while a quick-add is open in it. Equal
-              z-indexes are resolved by DOM order, and every row comes after this header —
-              so at `z-10` the row scrolling under it would be drawn *over* it. */}
+              `LAYER.header` beats the layer a row takes while a quick-add is open in it.
+              Equal z-indexes are resolved by DOM order, and every row comes after this
+              header — so at the row's layer, the row scrolling under it would be drawn
+              *over* it. */}
             <div
               role="row"
               aria-rowindex={1}
               style={{ height: HEADER_HEIGHT }}
               className={cn(
                 GRID,
-                "sticky top-0 z-20 border-b border-border bg-surface px-3 text-xs text-dim",
+                "sticky top-0 border-b border-border bg-surface px-3 text-xs text-dim",
+                LAYER.header,
               )}
             >
               {/* `truncate` on every label, because two of these tracks are `minmax(0,…)`
@@ -484,13 +487,13 @@ function Results({
                       // on the row taking focus — which is the keyboard's version of hover.
                       //
                       // The `:has` rule below: a row is positioned *and* transformed, which
-                      // makes it a stacking context — so an open popup's `z-20` cannot lift
-                      // it over the next row, which paints later simply for being later in
-                      // the DOM. The row it is open in has to come forward instead — as far
-                      // as the rows, and no further: the sticky header above is `z-20`,
-                      // because a row lifted to its level would scroll over it.
+                      // makes it a stacking context — so an open popup's own layer cannot
+                      // lift it over the next row, which paints later simply for being later
+                      // in the DOM. The row it is open in has to come forward instead — as
+                      // far as the rows, and no further: the sticky header above is a layer
+                      // up, because a row lifted to its level would scroll over it.
                       "group absolute inset-x-0 top-0 cursor-pointer border-b border-border/50 px-3",
-                      "has-[[aria-expanded=true]]:z-10",
+                      LAYER.raisedWhenPopupOpen,
                       "text-sm transition-colors duration-150 motion-reduce:transition-none",
                       ROW_FOCUS,
                       // Which row the open pane is about. A quiet surface rather than gold:
