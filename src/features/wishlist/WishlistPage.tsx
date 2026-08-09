@@ -12,6 +12,7 @@ import { cardDraggable } from "@/features/decks/dnd";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { finishLabel } from "@/lib/finish";
 import { ipc, ipcError, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
@@ -553,7 +554,8 @@ function WishlistTable({
         style={{ height: HEADER_HEIGHT }}
         className={cn(
           GRID,
-          "sticky top-0 z-20 border-b border-border bg-surface px-3 text-xs text-dim",
+          "sticky top-0 border-b border-border bg-surface px-3 text-xs text-dim",
+          LAYER.header,
         )}
       >
         <span role="columnheader" className="truncate">

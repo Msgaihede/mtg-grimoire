@@ -4,6 +4,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -509,8 +510,9 @@ function DeleteConfirm({
       // the question reads as having dropped out of the control that asked it — and the
       // control the caret goes back to is still on screen while the reader decides.
       className={cn(
-        "absolute inset-x-0 top-8 z-20 rounded-lg border border-border bg-bg/95 p-2",
+        "absolute inset-x-0 top-8 rounded-lg border border-border bg-bg/95 p-2",
         "text-xs shadow-lg",
+        LAYER.popup,
         FOCUS,
       )}
       // Clicking or tabbing away is an answer too, and it is the safe one — `onClose`, not
@@ -667,8 +669,9 @@ function CreateDeckForm({
       // Anchored rather than portalled, and not `aria-modal`: `SetCombobox`'s decision, for
       // its reason — `style-src 'self'` refuses what every overlay library injects.
       className={cn(
-        "absolute left-0 top-11 z-20 w-72 rounded-lg border border-border bg-surface p-3",
+        "absolute left-0 top-11 w-72 rounded-lg border border-border bg-surface p-3",
         "shadow-lg",
+        LAYER.popup,
       )}
     >
       <form

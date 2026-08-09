@@ -16,6 +16,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { usdPrice } from "@/lib/prices";
 import { shouldFlipUp } from "@/lib/shouldFlipUp";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -720,8 +721,9 @@ function RowMenu({
       // "Move to Sideboard" and slipping a few pixels drags the row instead of pressing it.
       data-no-drag=""
       className={cn(
-        "absolute right-1 z-20 w-44 rounded-lg border border-border bg-bg/95 p-1",
+        "absolute right-1 w-44 rounded-lg border border-border bg-bg/95 p-1",
         "text-xs shadow-lg",
+        LAYER.popup,
         // Anchored under whatever it belongs to normally, and above it on the rows near the
         // foot of the column — where opening downwards would put half the menu past the
         // scroller's edge, with nothing to scroll it back into view.

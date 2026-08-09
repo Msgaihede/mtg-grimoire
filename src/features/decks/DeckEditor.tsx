@@ -12,6 +12,7 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import { ipcError, type DeckCard, type DeckZone } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -881,8 +882,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             ref={trayRef}
             aria-hidden="true"
             className={cn(
-              "absolute inset-x-0 bottom-0 -top-3 z-30 flex items-center justify-center gap-1.5",
+              "absolute inset-x-0 bottom-0 -top-3 flex items-center justify-center gap-1.5",
               "rounded-md border border-dashed text-xs",
+              // Above the popups rather than among them: a drag can start while a zone
+              // menu is open, and this is the target the pointer is being carried to.
+              LAYER.dragTray,
               overTray
                 ? "border-destructive/60 bg-destructive/10 text-destructive"
                 : "border-border bg-surface text-dim",

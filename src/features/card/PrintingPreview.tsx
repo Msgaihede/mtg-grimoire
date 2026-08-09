@@ -8,9 +8,11 @@ import {
 } from "react";
 import { CardImage } from "@/components/CardImage";
 import { cardImageUrl } from "@/lib/images";
+import { LAYER } from "@/lib/layers";
 import { shouldFlipUp } from "@/lib/shouldFlipUp";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
+import { cn } from "@/lib/utils";
 
 /**
  * How long the pointer — or the caret — has to rest on a printings row before its art appears.
@@ -338,7 +340,10 @@ function Preview({ printingId, anchor }: { printingId: string; anchor: HTMLEleme
       // belongs to, and a layer that took the pointer would make them unhoverable — the reader
       // would leave the row, the preview would close, the row would be entered again, and the
       // list would flicker under a perfectly still hand.
-      className="pointer-events-none absolute z-20 overflow-hidden rounded-xl border border-border bg-bg shadow-lg"
+      className={cn(
+        "pointer-events-none absolute overflow-hidden rounded-xl border border-border bg-bg shadow-lg",
+        LAYER.popup,
+      )}
     >
       {/* An empty frame while the bytes are on their way (~127 ms cold) and if they never
           arrive — `useImageRetry`'s own answer: the frame *is* the placeholder, and a preview
