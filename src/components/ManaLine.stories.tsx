@@ -13,8 +13,9 @@ const meta = {
           "The app's signature, and its only progress bar: a 2px W→U→B→R→G rule under the " +
           "ribbon, present on every screen. During a sync the rule dims and a full-strength " +
           "copy of itself fills across it behind a gold cap — the one place where the " +
-          "identity element and a functional one are the same element. Each `label` below is " +
-          "a literal value of `PHASE_LABEL`, because a sync cannot produce any other.",
+          "identity element and a functional one are the same element. Every `label` below is " +
+          "a string `manaLineSync` can actually return — a value of `PHASE_LABEL`, or the " +
+          '`"Syncing card data"` it falls back to while busy with no event in hand.',
       },
     },
   },
@@ -50,6 +51,20 @@ export const Indeterminate: Story = {
     await expect(bar).toHaveAttribute("aria-valuemax", "100");
     await expect(bar.querySelector(".animate-mana-sweep")).toHaveClass("motion-reduce:hidden");
   },
+};
+
+/**
+ * Busy, with no progress event in hand — the same sweep as `Indeterminate`, under the one
+ * label that is not a `PHASE_LABEL` value.
+ *
+ * Not an edge case: `busy` decides what the line shows and an event is evidence of progress
+ * rather than of running, so a sync whose early events Tauri dropped (emitted before the
+ * webview registered its listener) shows this and nothing else until the next one lands. It is
+ * the state a reader is most likely to catch the line in, and `manaLineSync` has a literal of
+ * its own for it.
+ */
+export const BeforeAnyEvent: Story = {
+  args: { sync: { label: "Syncing card data", value: null } },
 };
 
 /** The gold cap at 98%: the leading edge has to stay legible against five shifting hues right

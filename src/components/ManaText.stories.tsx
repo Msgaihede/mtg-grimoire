@@ -43,15 +43,25 @@ export const Colourless: Story = { args: { source: "{C}{C}" } };
 export const Snow: Story = { args: { source: "{S}" } };
 
 /**
- * A token this version of the font has no glyph for stays visible in braces — at worst a
- * cost the reader has to decode, never a symbol that silently vanishes.
+ * A token with no glyph class stays visible in braces — at worst a cost the reader has to
+ * decode, never a symbol that silently vanishes.
  *
- * This is Kozilek, Compleated's real cost, and `{C/P}` is the most common of the **six**
- * tokens in the entire corpus that `mana-font@1.18` cannot draw: `{C/P}` (5 printings),
- * `{D}` (4), `{HR}` (2), `{L}`, `{HW}` and `{H}` — measured 2026-08-09 over
- * `mana_cost` **and** `oracle_text` on all 116,694 rows of the live `cards` table, of which
- * 74 distinct tokens appear in total. `{W/U/P}` is *not* one of them, so a story built on
- * that would draw a perfectly good glyph while claiming to show the fallback.
+ * Kozilek, Compleated's real cost. **Six** tokens in the corpus come out as text, measured
+ * 2026-08-09 over `mana_cost` **and** `oracle_text` across all 116,694 rows of the live
+ * `cards` table (74 distinct tokens in all): `{C/P}` and `{HR}` on **2 printings** each,
+ * `{D}`, `{L}`, `{HW}` and `{H}` on one each. Counting *occurrences* instead gives 5 and 4
+ * for the first two, because Kozilek prints `{C/P}` twice in one cost — printings is the
+ * number that means anything here.
+ *
+ * **Three of the six are the font's doing and three are ours**, worth separating because the
+ * rendering is identical either way. `mana-font@1.18.0` defines no `.ms-cp`, `.ms-hw` or
+ * `.ms-hr` — there is nothing to draw. It *does* define `.ms-d` (`\ea2e`), `.ms-h`
+ * (`\e618`) and `.ms-l` (`\ea2d`); those three fall back only because `MANA_COST_GLYPHS`
+ * (`src/lib/mana.ts`) is a deliberately closed list that omits them, and `mana.test.ts` walks
+ * that list → `mana.css` and never the other way, so nothing reports the gap.
+ *
+ * `{W/U/P}` is in neither group: `wup` is on the list *and* in the font, so a story built on
+ * it would draw a perfectly good glyph while claiming to show the fallback.
  */
 export const UnknownToken: Story = {
   args: { source: "{8}{C/P}{C/P}" },
