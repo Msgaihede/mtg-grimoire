@@ -1,6 +1,11 @@
 node_modules/
 dist/
 storybook-static/
+# `tsconfig.node.json` is `composite`, so anything that builds it as a *project* — `tsc -b`,
+# or an editor's TS server doing the same — drops a `.tsbuildinfo` beside it. `npm run build`
+# does not (plain `tsc` ignores `references`), which is why this arrives on a developer's
+# machine and never in CI, and why it is worth a line rather than a diagnosis.
+*.tsbuildinfo
 src-tauri/target/
 src-tauri/data/
 data/

@@ -43,7 +43,11 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    // `.storybook` is in scope so the fake backend is covered by the one suite `verify`
+    // runs. `.test.ts` and not `.test.{ts,tsx}`: the fakes are plain modules, and the
+    // narrower glob is also what keeps `*.stories.tsx` — which Storybook collects and
+    // Vitest must not — out of the run.
+    include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts"],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No component imports
     // CSS, so those two files are the whole of what this turns on.
