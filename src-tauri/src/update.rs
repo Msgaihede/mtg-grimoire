@@ -80,7 +80,13 @@ const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 /// than a progress bar can use.
 const PROGRESS_EMIT_BYTES: u64 = 256 * 1024;
 
-/// How long a freshly launched successor waits for the process it replaced to let go.
+/// How long a freshly launched successor waits for the process it replaced to exit.
+///
+/// `cfg(windows)` because the only thing that reads it is, and so is the self-replacement it
+/// bounds: every other platform lands on [`InstallKind::Other`] and never relaunches
+/// anything. Without the gate this is dead code on the Linux leg of CI — which is how it was
+/// found, the aggregator doing its job.
+#[cfg(windows)]
 const AWAIT_PREDECESSOR: Duration = Duration::from_secs(15);
 
 /// The argument a swapped-in build is launched with. See [`await_predecessor`].
