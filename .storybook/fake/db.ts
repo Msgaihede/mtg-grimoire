@@ -21,6 +21,8 @@
  *    text) and orders the page by `bm25` with the name weighted ten times the rest. Here it
  *    is a substring over `name` and `type_line` only, and a text search comes back in the
  *    same name order a browse does — so a story must never be *about* relevance ranking.
+ *    Only that *default* differs: a sort the reader asked for is applied here exactly as
+ *    `sorting::order_by` applies it, because it replaces the ranking either way.
  *    The collection's text filter is the same substring but reaches through the card, which
  *    keeps `list_entries`' real property that an orphan matches no text at all; the
  *    wishlist's is over the wish's own stored `name`, as its `LIKE` is.
@@ -36,11 +38,11 @@
  *    printings at all; this one cannot produce a set with no rows, only one whose rows are
  *    all digital. Its `setType` is therefore always `null` — `FakeCard` has no `set_type`
  *    column, and nothing renders one.
- * 4. **Both lists' `sort: "added"` orders by row id** — `collection_list`'s and
- *    `wishlist_list`'s — because neither row type carries a `created_at`.
- *    `created_at DESC, id DESC` is what `collection.rs` and `wishlist.rs` write; `id DESC` is
- *    that sort's own tiebreaker and is monotonic with insertion order in a hand-seeded
- *    fixture.
+ * 4. **Both lists' `added` key orders by row id alone** — `collection_list`'s and
+ *    `wishlist_list`'s — because neither row type carries a `created_at`. `collection.rs` and
+ *    `wishlist.rs` write `created_at, id` in whichever direction was asked for; the id is that
+ *    sort's own second term, and it is monotonic with insertion order in a hand-seeded fixture,
+ *    so both directions still mean what they say.
  * 5. **Prices come out of the blob with `Number`**, where SQLite writes
  *    `CAST(json_extract(…) AS REAL)`. The two differ only on a value that is neither a
  *    decimal string nor null (SQLite answers `0.0`, this answers `null`), which the blobs
@@ -84,6 +86,7 @@ import type {
   CardSummary,
   CollectionQuery,
   CollectionRow,
+  CollectionSortKey,
   DeckCard,
   DeckInput,
   DeckPatch,
@@ -94,13 +97,16 @@ import type {
   EntryPatch,
   Printing,
   SearchRequest,
+  SearchSortKey,
   SetSummary,
   SwapResult,
   SyncOutcome,
   WishInput,
   WishRow,
   WishlistQuery,
+  WishlistSortKey,
 } from "@/lib/ipc";
+import type { SortSpec } from "@/lib/sort";
 
 /* ------------------------------------------------------------------ the rows ---------- */
 
@@ -245,14 +251,6 @@ function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** `x DESC NULLS LAST`, for the two nullable sort keys (`price_usd`, `unit_price_usd`). */
-function descNullsLast(a: number | null, b: number | null): number {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
-  return b - a;
-}
-
 function parseJson(text: string | null): unknown {
   if (text === null) return null;
   try {
@@ -300,6 +298,150 @@ function nonblank(v: string | undefined | null): string | null {
   const t = (v ?? "").trim();
   return t === "" ? null : t;
 }
+
+/* ------------------------------------------------------------------ ordering ---------- */
+
+/** Two rows compared: one term of an `ORDER BY`, as a function. */
+type Compare<T> = (a: T, b: T) => number;
+
+/** Numbers, for a {@link nullsLast} column over money. */
+const numeric: Compare<number> = (a, b) => a - b;
+
+/**
+ * One sortable column — `sorting::SortColumn`, whose two `&'static str`s become two
+ * comparators.
+ *
+ * Both directions are stated rather than one plus a flip, for the reason that struct's own
+ * doc gives for writing out both SQL strings: a nullable column carries its null rule in
+ * *both* directions rather than inheriting SQLite's, so `desc` is not always `asc` reversed.
+ * {@link reversible} builds the columns where it is, {@link nullsLast} the ones where it is
+ * not.
+ */
+interface SortColumn<T> {
+  asc: Compare<T>;
+  desc: Compare<T>;
+}
+
+/** A column whose `desc` SQL is its `asc` SQL with every term flipped — which is every
+ *  non-nullable column in the three tables, the two `CASE` ranks included. */
+function reversible<T>(asc: Compare<T>): SortColumn<T> {
+  return { asc, desc: (a, b) => asc(b, a) };
+}
+
+/**
+ * A nullable column carrying `NULLS LAST` in **both** directions.
+ *
+ * Not {@link reversible}, and that is the whole point of it: reversing `… ASC NULLS LAST`
+ * moves the holes to the top, and a reader reversing a sort expects the rows reversed, not
+ * the holes moved.
+ */
+function nullsLast<T, V>(of: (row: T) => V | null, compare: Compare<V>): SortColumn<T> {
+  const order = (a: T, b: T, sign: number) => {
+    const x = of(a);
+    const y = of(b);
+    if (x === null) return y === null ? 0 : 1;
+    if (y === null) return -1;
+    return sign * compare(x, y);
+  };
+  return { asc: (a, b) => order(a, b, 1), desc: (a, b) => order(a, b, -1) };
+}
+
+/**
+ * `sorting::order_by`, as a comparator instead of a string of SQL.
+ *
+ * **Nothing in `src/lib/sort.ts` is reused here, because nothing there sorts rows.** That
+ * module answers a header *press* — `applySort` takes a spec and a key and returns the next
+ * spec — and its other three exports read a spec for the header's arrow, its rank and its
+ * `aria-sort`. The spec `ipc.ts` carries is the whole of what the two sides share; ordering
+ * rows is the backend's half, and this is the backend.
+ *
+ * Every rule `order_by` has:
+ *
+ * * terms in the order they arrive, the first deciding and the rest breaking its ties;
+ * * a key `columns` does not list is **dropped**, never trusted — the property that a sort
+ *   can only choose among fixed clauses and never write one;
+ * * a repeated key keeps only its first appearance;
+ * * anything that is not `"desc"` is ascending, because a typo must be a default and not a
+ *   list that refuses to load;
+ * * `fallback` is what an empty or wholly unrecognised spec means — the view's own order,
+ *   never insertion order — and the table's unique id is appended **always**, because the
+ *   pagers use `OFFSET` and a sort that is not a total order shows one row twice.
+ */
+function orderBy<T, K extends string>(
+  spec: SortSpec<K> | undefined,
+  columns: Readonly<Partial<Record<K, SortColumn<T>>>>,
+  fallback: Compare<T>,
+  tiebreak: Compare<T>,
+): Compare<T> {
+  const parts: Compare<T>[] = [];
+  const used = new Set<K>();
+  for (const term of spec ?? []) {
+    const column = columns[term.key];
+    if (column === undefined || used.has(term.key)) continue;
+    used.add(term.key);
+    parts.push(term.dir === "desc" ? column.desc : column.asc);
+  }
+  if (parts.length === 0) parts.push(fallback);
+  parts.push(tiebreak);
+  return (a, b) => {
+    for (const part of parts) {
+      const n = part(a, b);
+      if (n !== 0) return n;
+    }
+    return 0;
+  };
+}
+
+/**
+ * `CAST(collector_number AS INTEGER)` — the natural collector number both `set` orders sort
+ * on before the raw string.
+ *
+ * `parseInt` matches the CAST on the two shapes a sort can feel: a leading integer wins, and
+ * a value with none is 0. Both shapes are in the fixture rather than only in the real corpus
+ * — `amh2 5s` parses to 5 and `fin A-248` to 0.
+ */
+function castInteger(s: string): number {
+  return Number.parseInt(s, 10) || 0;
+}
+
+/**
+ * `search::SEARCH_SORTS`' rarity `CASE`, which is a **rank**: alphabetically `mythic` sits
+ * between `common` and `rare`, an order describing nothing anybody wants. `special` and
+ * `bonus` are real values with no place in the printed hierarchy and sort after it.
+ */
+const RARITY_RANK: Record<string, number> = {
+  common: 0,
+  uncommon: 1,
+  rare: 2,
+  mythic: 3,
+  special: 4,
+  bonus: 5,
+};
+
+/** The `CASE`'s `ELSE 6`, which a NULL rarity takes too — no `WHEN` matches a NULL, so an
+ *  unknown rarity and a missing one sort together. */
+const RARITY_UNKNOWN = 6;
+
+function rarityRank(rarity: string | null): number {
+  if (rarity === null) return RARITY_UNKNOWN;
+  return RARITY_RANK[rarity] ?? RARITY_UNKNOWN;
+}
+
+/**
+ * `collection::COLLECTION_SORTS`' condition `CASE`: grade order, because `DMG` before `LP`
+ * is alphabetical order and not what anybody means by condition.
+ *
+ * Its `ELSE 5` has no counterpart here and needs none — `collection_entries.condition` is
+ * `NOT NULL` with a `CHECK` over exactly these five (`schema.rs`), which is the statement
+ * `FakeEntry["condition"]` makes in the type system.
+ */
+const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
+  NM: 0,
+  LP: 1,
+  MP: 2,
+  HP: 3,
+  DMG: 4,
+};
 
 /* ------------------------------------------------------------------ card filters ------ */
 
@@ -906,6 +1048,147 @@ function toDeckCard(db: FakeDb, dc: FakeDeckCard, ownedQuantity: number): DeckCa
   };
 }
 
+/* ------------------------------------------------------------------ the three orders -- */
+
+/**
+ * `search::SEARCH_SORTS`.
+ *
+ * **There is no `released` key**, and that is not an omission this fake made: the search
+ * table has no Released column to press and the frontend has never sent one, so the order
+ * `search.rs` used to carry is gone rather than renamed.
+ */
+const SEARCH_SORTS: Readonly<Record<SearchSortKey, SortColumn<FakeCard>>> = {
+  name: reversible((a, b) => cmp(a.name, b.name)),
+  // Binder order: set code, then the natural collector number, then the raw string, which
+  // breaks the ties the CAST leaves (`5` against `5s`).
+  set: reversible(
+    (a, b) =>
+      cmp(a.setCode, b.setCode) ||
+      castInteger(a.collectorNumber) - castInteger(b.collectorNumber) ||
+      cmp(a.collectorNumber, b.collectorNumber),
+  ),
+  type: nullsLast((c) => c.typeLine, cmp),
+  rarity: reversible((a, b) => rarityRank(a.rarity) - rarityRank(b.rarity)),
+  // The `price_usd` **column** — the fallback chain a search row shows — never a finish's
+  // price out of the `prices` blob. `search.rs` selects the column and does not read the blob.
+  price: nullsLast((c) => c.priceUsd, numeric),
+};
+
+/** `search::ORDER_NAME`, the default for a browse: the card, then its newest printing. */
+const SEARCH_BROWSE_ORDER: Compare<FakeCard> = (a, b) =>
+  cmp(a.name, b.name) || cmp(b.releasedAt, a.releasedAt);
+
+/**
+ * `collection::list_entries`' whole `ORDER BY`: `COLLECTION_SORTS` over
+ * `COLLECTION_DEFAULT_ORDER`, with `e.id ASC` appended.
+ *
+ * The card behind each row is looked up **once per row**, not once per comparison, because
+ * `cardById` is a linear scan of `db.cards` and a comparator runs many times more often than
+ * there are rows. That is also where the real query does it: `c` is a join, evaluated per row.
+ */
+function collectionOrder(
+  db: FakeDb,
+  rows: readonly FakeEntry[],
+  spec: SortSpec<CollectionSortKey> | undefined,
+): Compare<FakeEntry> {
+  const cards = new Map(rows.map((e) => [e.id, cardById(db, e.cardId)]));
+  /** `coalesce(c.name, e.card_id)`: an orphan sorts under its card id rather than at the top
+   *  under an empty string. */
+  const name = (e: FakeEntry) => cards.get(e.id)?.name ?? e.cardId;
+  /** `FINISH_PRICE_USD`: this row's finish, out of the blob. */
+  const unitPrice = (e: FakeEntry) => finishPriceUsd(cards.get(e.id) ?? null, e.finish);
+  return orderBy(
+    spec,
+    {
+      name: reversible((a, b) => cmp(name(a), name(b))),
+      // The entry's own denormalised printing, which an orphan still has.
+      set: reversible(
+        (a, b) =>
+          cmp(a.setCode, b.setCode) ||
+          castInteger(a.collectorNumber) - castInteger(b.collectorNumber) ||
+          cmp(a.collectorNumber, b.collectorNumber),
+      ),
+      // The finish spelled, then the condition **ranked** — see {@link CONDITION_RANK}.
+      finish: reversible(
+        (a, b) =>
+          cmp(a.finish, b.finish) || CONDITION_RANK[a.condition] - CONDITION_RANK[b.condition],
+      ),
+      quantity: reversible((a, b) => a.quantity - b.quantity),
+      // `unit_price_usd * e.quantity` — what the row is **worth**, which is the figure the
+      // Value cell prints and therefore what its header must sort by. NULL times a quantity
+      // is NULL, so an unpriced finish is a hole; a priced row at quantity 0 is a real zero.
+      value: nullsLast((e) => {
+        const p = unitPrice(e);
+        return p === null ? null : p * e.quantity;
+      }, numeric),
+      // What **one copy** costs. The other question about the same column, and the one a
+      // reader means by "my most expensive card"; no header sends it, the filter bar's
+      // select does.
+      price: nullsLast(unitPrice, numeric),
+      // Simplification 4: no `created_at` column here, so the id — that sort's own second
+      // term in `collection.rs` — carries the whole answer, in whichever direction was asked.
+      added: reversible((a, b) => a.id - b.id),
+    } satisfies Record<CollectionSortKey, SortColumn<FakeEntry>>,
+    // `COLLECTION_DEFAULT_ORDER`, written out rather than composed from the `name` and `set`
+    // columns above: it stops at the natural collector number and never reaches the raw
+    // string those three terms end with.
+    (a, b) =>
+      cmp(name(a), name(b)) ||
+      cmp(a.setCode, b.setCode) ||
+      castInteger(a.collectorNumber) - castInteger(b.collectorNumber),
+    (a, b) => a.id - b.id,
+  );
+}
+
+/**
+ * `wishlist::list_wishes`' whole `ORDER BY`: `WISHLIST_SORTS` over `w.name ASC`, with
+ * `w.id ASC` appended.
+ *
+ * **There is no `set` key**, and that too is `wishlist.rs`'s decision rather than a gap here:
+ * an any-printing wish names no set, and a list where half the rows sort under the same blank
+ * is not an order.
+ *
+ * Both derived figures are taken once per row, which is again where the real query takes
+ * them — `owned_quantity` is a scalar subquery and `unit_price_usd` a `json_extract` over the
+ * joined printing, and both are output aliases the `ORDER BY` then names.
+ */
+function wishlistOrder(
+  db: FakeDb,
+  rows: readonly FakeWish[],
+  spec: SortSpec<WishlistSortKey> | undefined,
+): Compare<FakeWish> {
+  const ownedBy = new Map(rows.map((w) => [w.id, ownedAgainstWish(db, w)]));
+  const priceBy = new Map(
+    rows.map((w) => [w.id, finishPriceUsd(wishCard(db, w), w.preferredFinish ?? "nonfoil")]),
+  );
+  const owned = (w: FakeWish) => ownedBy.get(w.id) ?? 0;
+  /** The cheapest way to satisfy the wish, per copy: the preferred finish's price if it names
+   *  one, else the nonfoil price of the printing the wish is about. */
+  const unitPrice = (w: FakeWish) => priceBy.get(w.id) ?? null;
+  return orderBy(
+    spec,
+    {
+      name: reversible((a, b) => cmp(a.name, b.name)),
+      // `OWNED_SQL`'s finish-aware count — the figure the Owned cell prints, and the one a
+      // foil wish does not get from the nonfoil in the binder.
+      owned: reversible((a, b) => owned(a) - owned(b)),
+      quantity: reversible((a, b) => a.quantity - b.quantity),
+      // `unit_price_usd * max(0, w.quantity - owned_quantity)` — what finishing the wish
+      // still costs, which is 0 for a fulfilled wish however dear the card is, and a hole
+      // when the printing has no price for that finish.
+      cost: nullsLast((w) => {
+        const p = unitPrice(w);
+        return p === null ? null : p * Math.max(0, w.quantity - owned(w));
+      }, numeric),
+      price: nullsLast(unitPrice, numeric),
+      // Simplification 4, exactly as the collection's `added`.
+      added: reversible((a, b) => a.id - b.id),
+    } satisfies Record<WishlistSortKey, SortColumn<FakeWish>>,
+    (a, b) => cmp(a.name, b.name),
+    (a, b) => a.id - b.id,
+  );
+}
+
 /* ------------------------------------------------------------------ the handlers ------ */
 
 /** `search.rs`'s page size when the caller does not choose one, and the ceiling when it
@@ -981,17 +1264,13 @@ export function readHandlers(db: FakeDb) {
       });
       // The count stops at the cap rather than walking the table on every keystroke.
       const counted = Math.min(matched.length, TOTAL_CAP + 1);
-      const sorted = [...matched].sort((a, b) => {
-        switch (req.sort) {
-          case "released":
-            return cmp(b.releasedAt, a.releasedAt) || cmp(a.name, b.name) || cmp(a.id, b.id);
-          case "price":
-            return descNullsLast(a.priceUsd, b.priceUsd) || cmp(a.name, b.name) || cmp(a.id, b.id);
-          // Name order, which is also where a text search lands here — see simplification 1.
-          default:
-            return cmp(a.name, b.name) || cmp(b.releasedAt, a.releasedAt) || cmp(a.id, b.id);
-        }
-      });
+      // `SEARCH_SORTS` over the browse order, with `c.id ASC` appended. Simplification 1 is
+      // the one place this parts from `run_search`, and only on the **default**: the real
+      // fallback under text is `bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC`, and there
+      // is no FTS index here to rank with, so a text search lands in the browse's name order.
+      const sorted = [...matched].sort(
+        orderBy(req.sort, SEARCH_SORTS, SEARCH_BROWSE_ORDER, (a, b) => cmp(a.id, b.id)),
+      );
       return {
         items: sorted.slice(req.offset, req.offset + limit).map((c) => toCardSummary(db, c)),
         total: Math.min(counted, TOTAL_CAP),
@@ -1058,46 +1337,7 @@ export function readHandlers(db: FakeDb) {
       const q = args.query;
       const rows = collectionScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      // `CAST(collector_number AS INTEGER)` first — `order_by`'s reason is that a large
-      // minority of collector numbers are not numeric (`741z`, `1★`, `A-123`) and a plain
-      // string sort puts `100` before `2`. `parseInt` matches the CAST on both: a leading
-      // integer wins, and a value with none is 0.
-      const num = (s: string) => Number.parseInt(s, 10) || 0;
-      const name = (e: FakeEntry) => cardById(db, e.cardId)?.name ?? e.cardId;
-      const sorted = [...rows].sort((a, b) => {
-        switch (q.sort) {
-          case "set":
-            return (
-              cmp(a.setCode, b.setCode) ||
-              num(a.collectorNumber) - num(b.collectorNumber) ||
-              cmp(a.collectorNumber, b.collectorNumber) ||
-              a.id - b.id
-            );
-          // Simplification 4: no `created_at` column, so its tiebreaker stands alone.
-          case "added":
-            return b.id - a.id;
-          case "quantity":
-            return b.quantity - a.quantity || cmp(name(a), name(b)) || a.id - b.id;
-          case "price":
-            return (
-              descNullsLast(
-                finishPriceUsd(cardById(db, a.cardId), a.finish),
-                finishPriceUsd(cardById(db, b.cardId), b.finish),
-              ) ||
-              cmp(name(a), name(b)) ||
-              a.id - b.id
-            );
-          // Name order, with the orphans under their card id rather than at the top under
-          // an empty string.
-          default:
-            return (
-              cmp(name(a), name(b)) ||
-              cmp(a.setCode, b.setCode) ||
-              num(a.collectorNumber) - num(b.collectorNumber) ||
-              a.id - b.id
-            );
-        }
-      });
+      const sorted = [...rows].sort(collectionOrder(db, rows, q.sort));
       return {
         items: sorted
           .slice(q.offset, q.offset + limit)
@@ -1138,20 +1378,7 @@ export function readHandlers(db: FakeDb) {
       const q = args.query;
       const rows = wishlistScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const unitPrice = (w: FakeWish) =>
-        finishPriceUsd(wishCard(db, w), w.preferredFinish ?? "nonfoil");
-      const sorted = [...rows].sort((a, b) => {
-        switch (q.sort) {
-          case "added":
-            return b.id - a.id;
-          case "price":
-            return descNullsLast(unitPrice(a), unitPrice(b)) || cmp(a.name, b.name) || a.id - b.id;
-          case "quantity":
-            return b.quantity - a.quantity || cmp(a.name, b.name) || a.id - b.id;
-          default:
-            return cmp(a.name, b.name) || a.id - b.id;
-        }
-      });
+      const sorted = [...rows].sort(wishlistOrder(db, rows, q.sort));
       return {
         items: sorted.slice(q.offset, q.offset + limit).map((w) => toWishRow(db, w)),
         total: rows.length,

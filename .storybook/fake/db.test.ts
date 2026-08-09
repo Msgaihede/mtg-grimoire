@@ -13,11 +13,15 @@ import { CARDS, type FakeCard } from "./cards";
 import type {
   CardSummary,
   CollectionPage,
+  CollectionSortKey,
   DeckDetail,
   EntryChange,
   EntryInput,
+  SearchSortKey,
   WishlistPage,
+  WishlistSortKey,
 } from "@/lib/ipc";
+import type { SortSpec } from "@/lib/sort";
 
 const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
 /** The second Bolt printing — `2x2 117`, uncommon. Used wherever "a different printing of
@@ -291,6 +295,326 @@ describe("prices", () => {
     expect(summary.totalCards).toBe(2);
     expect(summary.uniqueCards).toBe(2);
     expect(summary.entries).toBe(2);
+  });
+});
+
+/**
+ * `sorting::order_by` as this fake implements it, over the three lists that take a spec.
+ *
+ * A sort is an ordered list of `{key, dir}`, the first term deciding and the rest breaking
+ * its ties, so every block below has to answer two questions and not one: does the key mean
+ * what the Rust's `ORDER BY` means by it, and does a *later* term still get a say. The
+ * two-term tests are written so the first term alone cannot produce the answer.
+ *
+ * Rows are asserted by row id (or by set code, for cards) rather than by name: half of these
+ * fixtures are two printings of one card on purpose.
+ */
+describe("ordering", () => {
+  /** The fixture printing at one `(setCode, collectorNumber)`, which `cards.ts` says is a key
+   *  over these 43 rows even though it is not one in `cards`. */
+  const at = (setCode: string, collectorNumber: string) =>
+    CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber)!;
+
+  describe("the search", () => {
+    const setCodesFor = (db: ReturnType<typeof makeDb>, sort?: SortSpec<SearchSortKey>) =>
+      readHandlers(db)
+        .search_cards({ req: { sort, limit: 10, offset: 0 } })
+        .items.map((i) => i.setCode);
+
+    it("lets a second term break a tie the first leaves", () => {
+      // Two rarities, two rows each, four different prices.
+      const db = makeDb({
+        cards: [
+          at("lea", "161"), // Lightning Bolt, common, 620
+          at("unf", "239"), // Forest, common, 0.98
+          at("2x2", "117"), // Lightning Bolt, uncommon, 2.50
+          at("nph", "57"), // Dismember, uncommon, 3.96
+        ],
+      });
+      // `rarity` alone leaves both pairs tied, and the `c.id ASC` that `order_by` appends to
+      // every order decides them — cheapest first in both pairs, by coincidence of the uuids,
+      // which is the opposite of what the second term below asks for.
+      expect(setCodesFor(db, [{ key: "rarity", dir: "asc" }])).toEqual([
+        "unf",
+        "lea",
+        "nph",
+        "2x2",
+      ]);
+      // Dearest first *within* each rarity — an order the first term on its own cannot reach.
+      expect(
+        setCodesFor(db, [
+          { key: "rarity", dir: "asc" },
+          { key: "price", dir: "desc" },
+        ]),
+      ).toEqual(["lea", "unf", "nph", "2x2"]);
+    });
+
+    it("ranks rarity rather than spelling it", () => {
+      const db = makeDb({
+        cards: [
+          at("mp2", "8"), // special
+          at("vma", "4"), // bonus — the fixture's only one, and one of its two digital rows
+          at("roe", "4"), // mythic
+          at("fut", "153"), // rare
+          at("c21", "263"), // uncommon
+          at("unf", "239"), // common
+        ],
+      });
+      const page = readHandlers(db).search_cards({
+        // `paperOnly` is omitted-means-true, and `vma 4` is digital.
+        req: { paperOnly: false, sort: [{ key: "rarity", dir: "asc" }], limit: 10, offset: 0 },
+      });
+      // Alphabetically this is bonus, common, mythic, rare, special, uncommon — an order
+      // describing nothing anybody wants, which is why the SQL is a `CASE` and not a column.
+      expect(page.items.map((i) => i.rarity)).toEqual([
+        "common",
+        "uncommon",
+        "rare",
+        "mythic",
+        "special",
+        "bonus",
+      ]);
+    });
+
+    it("orders `set` by the natural collector number and not by the string", () => {
+      const db = makeDb({
+        cards: [at("lea", "232"), at("lea", "47"), at("lea", "288"), at("lea", "161")],
+      });
+      const numbers = (sort: SortSpec<SearchSortKey>) =>
+        readHandlers(db)
+          .search_cards({ req: { sort, limit: 10, offset: 0 } })
+          .items.map((i) => i.collectorNumber);
+      // As strings `"161" < "232" < "288" < "47"`, so this answer is the CAST's and nothing
+      // else's.
+      expect(numbers([{ key: "set", dir: "asc" }])).toEqual(["47", "161", "232", "288"]);
+      expect(numbers([{ key: "set", dir: "desc" }])).toEqual(["288", "232", "161", "47"]);
+    });
+
+    it("keeps the unpriced rows last in both directions", () => {
+      const db = makeDb({
+        cards: [
+          at("2ed", "48"), // Ancestral Recall, price_usd 4999.95
+          at("2x2", "117"), // Lightning Bolt, price_usd 2.50
+          at("sld", "913"), // Sol Ring, price_usd null
+        ],
+      });
+      expect(setCodesFor(db, [{ key: "price", dir: "asc" }])).toEqual(["2x2", "2ed", "sld"]);
+      // Reversed rows, not moved holes — which is why the column states `NULLS LAST` twice
+      // instead of letting SQLite's default flip it.
+      expect(setCodesFor(db, [{ key: "price", dir: "desc" }])).toEqual(["2ed", "2x2", "sld"]);
+    });
+
+    it("keeps a missing type line last in both directions", () => {
+      // No row of `CARDS` has a null `typeLine`, and the column is nullable, so the fixture
+      // for it is made rather than found. Named `Aaa` so name order would put it first.
+      const noType: FakeCard = {
+        ...at("2x2", "117"),
+        id: "no-type-line",
+        name: "Aaa",
+        typeLine: null,
+      };
+      const db = makeDb({ cards: [at("unf", "239"), noType, at("2x2", "117")] });
+      const types = (sort: SortSpec<SearchSortKey>) =>
+        readHandlers(db)
+          .search_cards({ req: { sort, limit: 10, offset: 0 } })
+          .items.map((i) => i.typeLine);
+      expect(types([{ key: "type", dir: "asc" }])).toEqual([
+        "Basic Land — Forest",
+        "Instant",
+        null,
+      ]);
+      expect(types([{ key: "type", dir: "desc" }])).toEqual([
+        "Instant",
+        "Basic Land — Forest",
+        null,
+      ]);
+    });
+
+    it("answers name order for an empty spec, for no spec, and reverses on desc", () => {
+      // Declared out of name order, so insertion order is a wrong answer this can catch.
+      const db = makeDb({
+        cards: [at("c21", "263"), at("2ed", "48"), at("unf", "239")],
+      });
+      const names = (sort?: SortSpec<SearchSortKey>) =>
+        readHandlers(db)
+          .search_cards({ req: { sort, limit: 10, offset: 0 } })
+          .items.map((i) => i.name);
+      expect(names([])).toEqual(["Ancestral Recall", "Forest", "Sol Ring"]);
+      expect(names()).toEqual(["Ancestral Recall", "Forest", "Sol Ring"]);
+      expect(names([{ key: "name", dir: "desc" }])).toEqual([
+        "Sol Ring",
+        "Forest",
+        "Ancestral Recall",
+      ]);
+    });
+
+    it("drops a key it does not know, and keeps a repeated key's first appearance", () => {
+      const db = makeDb({ cards: [at("c21", "263"), at("2ed", "48"), at("unf", "239")] });
+      const nameOrder = ["2ed", "unf", "c21"];
+      // `released` is the key the contract lost. A key the table does not list is dropped
+      // rather than interpolated, so this spec is empty and the browse order answers.
+      expect(
+        setCodesFor(db, [{ key: "released", dir: "desc" }] as unknown as SortSpec<SearchSortKey>),
+      ).toEqual(nameOrder);
+      // A repeated key is dead SQL whose second copy reads like the one that won. The first
+      // appearance is the one the reader built first.
+      expect(
+        setCodesFor(db, [
+          { key: "name", dir: "asc" },
+          { key: "name", dir: "desc" },
+        ]),
+      ).toEqual(nameOrder);
+    });
+  });
+
+  describe("the collection", () => {
+    const idsFor = (db: ReturnType<typeof makeDb>, sort?: SortSpec<CollectionSortKey>) =>
+      readHandlers(db)
+        .collection_list({ query: { sort, limit: 10, offset: 0 } })
+        .items.map((i) => i.id);
+
+    it("lets a second term break a tie the first leaves", () => {
+      const db = makeDb({
+        collectionEntries: [
+          entry({ id: 1, cardId: at("c21", "263").id, quantity: 2 }), // Sol Ring
+          entry({ id: 2, cardId: at("2ed", "48").id, quantity: 2 }), // Ancestral Recall
+          entry({ id: 3, cardId: at("unf", "239").id, quantity: 5 }), // Forest
+        ],
+      });
+      // The two twos tie, and `e.id ASC` decides them.
+      expect(idsFor(db, [{ key: "quantity", dir: "desc" }])).toEqual([3, 1, 2]);
+      expect(
+        idsFor(db, [
+          { key: "quantity", dir: "desc" },
+          { key: "name", dir: "asc" },
+        ]),
+      ).toEqual([3, 2, 1]);
+    });
+
+    it("orders `finish` by the finish, then by the condition's grade", () => {
+      const db = makeDb({
+        collectionEntries: [
+          entry({ id: 1, finish: "nonfoil", condition: "NM" }),
+          entry({ id: 2, finish: "foil", condition: "DMG" }),
+          entry({ id: 3, finish: "foil", condition: "NM" }),
+          entry({ id: 4, finish: "etched", condition: "NM" }),
+        ],
+      });
+      // `etched < foil < nonfoil` is byte order over the finish itself; `NM` before `DMG`
+      // inside the foils is the **rank**, and alphabetical order would answer the reverse.
+      expect(idsFor(db, [{ key: "finish", dir: "asc" }])).toEqual([4, 3, 2, 1]);
+      expect(idsFor(db, [{ key: "finish", dir: "desc" }])).toEqual([1, 2, 3, 4]);
+    });
+
+    it("sorts `value` by the row total and `price` by one copy", () => {
+      const db = makeDb({
+        collectionEntries: [
+          // `2x2 117` nonfoil is usd 2.50; ten copies are worth 25.00.
+          entry({ id: 1, cardId: at("2x2", "117").id, quantity: 10 }),
+          // `sta 105` nonfoil is usd 17.85; one copy is worth 17.85.
+          entry({ id: 2, cardId: at("sta", "105").id, quantity: 1 }),
+          // `sld 913`'s `usd` is null, so both columns are a hole for it.
+          entry({ id: 3, cardId: at("sld", "913").id, quantity: 5 }),
+        ],
+      });
+      expect(idsFor(db, [{ key: "value", dir: "desc" }])).toEqual([1, 2, 3]);
+      expect(idsFor(db, [{ key: "price", dir: "desc" }])).toEqual([2, 1, 3]);
+      // Ascending puts the two priced rows the other way round and leaves the hole where it
+      // was: the two questions disagree in both directions.
+      expect(idsFor(db, [{ key: "value", dir: "asc" }])).toEqual([2, 1, 3]);
+      expect(idsFor(db, [{ key: "price", dir: "asc" }])).toEqual([1, 2, 3]);
+    });
+
+    it("reads `added` in the direction it was asked for", () => {
+      const db = makeDb({
+        collectionEntries: [entry({ id: 1 }), entry({ id: 2 }), entry({ id: 3 })],
+      });
+      expect(idsFor(db, [{ key: "added", dir: "desc" }])).toEqual([3, 2, 1]);
+      expect(idsFor(db, [{ key: "added", dir: "asc" }])).toEqual([1, 2, 3]);
+    });
+
+    it("answers name order for an empty spec and for no spec, with an orphan under its id", () => {
+      const db = makeDb({
+        collectionEntries: [
+          entry({ id: 1, cardId: at("c21", "263").id }), // Sol Ring
+          entry({ id: 2, cardId: "zzz-gone" }), // no such card
+          entry({ id: 3, cardId: at("2ed", "48").id }), // Ancestral Recall
+        ],
+      });
+      // `coalesce(c.name, e.card_id)` in byte order: `Ancestral Recall`, `Sol Ring`,
+      // `zzz-gone`. The orphan sorts under its card id rather than at the top under an
+      // empty string.
+      expect(idsFor(db, [])).toEqual([3, 1, 2]);
+      expect(idsFor(db)).toEqual([3, 1, 2]);
+    });
+  });
+
+  describe("the wishlist", () => {
+    const idsFor = (db: ReturnType<typeof makeDb>, sort?: SortSpec<WishlistSortKey>) =>
+      readHandlers(db)
+        .wishlist_list({ query: { sort, limit: 10, offset: 0 } })
+        .items.map((i) => i.id);
+
+    it("sorts `owned` by the finish-aware count the row prints", () => {
+      const db = makeDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 3 })],
+        wishlistEntries: [
+          // No finish named, so the three nonfoils in the binder count.
+          wish({ id: 1, cardId: BOLT_2X2.id }),
+          // For the foil, which those three do not fill.
+          wish({ id: 2, cardId: BOLT_2X2.id, preferredFinish: "foil" }),
+        ],
+      });
+      expect(idsFor(db, [{ key: "owned", dir: "desc" }])).toEqual([1, 2]);
+      expect(idsFor(db, [{ key: "owned", dir: "asc" }])).toEqual([2, 1]);
+    });
+
+    it("sorts `cost` by what is still missing and `price` by one copy", () => {
+      const db = makeDb({
+        collectionEntries: [entry({ id: 1, cardId: at("2ed", "48").id, quantity: 1 })],
+        wishlistEntries: [
+          // Fulfilled: one wanted, one owned. `max(0, 1 - 1)` is 0, so the dearest card in
+          // the fixture costs nothing to finish.
+          wish({ id: 1, cardId: at("2ed", "48").id, quantity: 1 }),
+          // Two wanted at usd 2.50 and none owned: 5.00 still to spend.
+          wish({ id: 2, cardId: at("2x2", "117").id, quantity: 2 }),
+          // A null `usd`, so the cost is a hole and not a zero.
+          wish({ id: 3, cardId: at("sld", "913").id, quantity: 4 }),
+        ],
+      });
+      expect(idsFor(db, [{ key: "cost", dir: "desc" }])).toEqual([2, 1, 3]);
+      expect(idsFor(db, [{ key: "cost", dir: "asc" }])).toEqual([1, 2, 3]);
+      // The same three rows, ordered by what one copy costs: the fulfilled wish is first
+      // rather than second, which is the whole difference between the two keys.
+      expect(idsFor(db, [{ key: "price", dir: "desc" }])).toEqual([1, 2, 3]);
+    });
+
+    it("reads `quantity` and `added` in the direction they were asked for", () => {
+      const db = makeDb({
+        wishlistEntries: [
+          wish({ id: 1, cardId: at("c21", "263").id, quantity: 1 }),
+          wish({ id: 2, cardId: at("2ed", "48").id, quantity: 4 }),
+          wish({ id: 3, cardId: at("unf", "239").id, quantity: 2 }),
+        ],
+      });
+      expect(idsFor(db, [{ key: "quantity", dir: "desc" }])).toEqual([2, 3, 1]);
+      expect(idsFor(db, [{ key: "quantity", dir: "asc" }])).toEqual([1, 3, 2]);
+      expect(idsFor(db, [{ key: "added", dir: "desc" }])).toEqual([3, 2, 1]);
+      expect(idsFor(db, [{ key: "added", dir: "asc" }])).toEqual([1, 2, 3]);
+    });
+
+    it("answers name order for an empty spec and for no spec, and reverses on desc", () => {
+      const db = makeDb({
+        wishlistEntries: [
+          wish({ id: 1, cardId: at("c21", "263").id }), // Sol Ring
+          wish({ id: 2, cardId: at("2ed", "48").id }), // Ancestral Recall
+          wish({ id: 3, cardId: at("unf", "239").id }), // Forest
+        ],
+      });
+      expect(idsFor(db, [])).toEqual([2, 3, 1]);
+      expect(idsFor(db)).toEqual([2, 3, 1]);
+      expect(idsFor(db, [{ key: "name", dir: "desc" }])).toEqual([1, 3, 2]);
+    });
   });
 });
 
