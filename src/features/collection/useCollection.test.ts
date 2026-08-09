@@ -226,9 +226,9 @@ describe("useCollection", () => {
     const { result } = renderHook(() => useCollection(), { wrapper });
     await waitFor(() => expect(collectionSummary).toHaveBeenCalledTimes(1));
 
-    act(() => result.current.setSort("price"));
+    act(() => result.current.setSortKey("price"));
 
-    await waitFor(() => expect(lastQuery().sort).toBe("price"));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "price", dir: "desc" }]));
     expect(collectionSummary).toHaveBeenCalledTimes(1);
   });
 });

@@ -398,7 +398,8 @@ export interface CollectionQuery extends CardFilters {
    *  are dealt with, so it is a real filter and reaches the wire as `false` rather than being
    *  dropped the way a blank string is. Absent asks nothing. */
   needsReview?: boolean;
-  sort?: "name" | "set" | "added" | "quantity" | "price";
+  /** How to order the list, first column deciding. Empty or absent is name order. */
+  sort?: SortSpec<CollectionSortKey>;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;

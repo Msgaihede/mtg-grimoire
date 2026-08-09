@@ -96,6 +96,15 @@ const REVIEW_NOTE =
 const lastQuery = () =>
   collectionList.mock.calls[collectionList.mock.calls.length - 1][0] as CollectionQuery;
 
+/**
+ * The filter bar's sort control.
+ *
+ * By role and exact name, because every sortable column header carries a `title` reading
+ * "Sort by …" — and `getByLabelText` falls back to `title`, so a loose `/sort/i` matches
+ * the whole header row as well.
+ */
+const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
+
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return {
@@ -526,19 +535,58 @@ describe("CollectionPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await userEvent.selectOptions(screen.getByLabelText(/sort/i), "price");
+    await userEvent.selectOptions(sortSelect(), "price");
 
     await waitFor(() => {
       const q = lastQuery();
       expect(q.finishes).toEqual(["etched"]);
       expect(q.conditions).toEqual(["LP"]);
-      expect(q.sort).toBe("price");
+      // The select sets one term, and the direction is the column's own first — "Highest
+      // price" is the label, so descending is what it means.
+      expect(q.sort).toEqual([{ key: "price", dir: "desc" }]);
       expect(q.limit).toBe(100);
     });
     // The header describes the same rows as the table under it, or it is worse than no
     // header at all.
     const asked = collectionSummary.mock.calls[collectionSummary.mock.calls.length - 1][0];
     expect(asked).toMatchObject({ finishes: ["etched"], conditions: ["LP"] });
+  });
+
+  /**
+   * The select and the headers are one state seen from two ends. Picking from the select
+   * replaces the sort; a header refines it; and once the sort starts somewhere the select
+   * has no option for — the Value column, which is unit × copies rather than the unit price
+   * the select offers — it says so rather than showing an order that is not the one running.
+   */
+  it("drives one sort from the headers and the select together", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Copies" }));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
+    // A header the select also offers reads back on it.
+    expect(sortSelect()).toHaveValue("quantity");
+
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("button", { name: /^Value/ }));
+    await user.keyboard("{/Shift}");
+    await waitFor(() =>
+      expect(lastQuery().sort).toEqual([
+        { key: "quantity", dir: "desc" },
+        { key: "value", dir: "desc" },
+      ]),
+    );
+
+    // Still "Most copies": the select reads the sort's *first* term, and that is still one
+    // it knows.
+    expect(sortSelect()).toHaveValue("quantity");
+
+    // Now start from Value alone, which the select has no option for at all.
+    await user.click(screen.getByRole("button", { name: /^Value/ }));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
+    expect(sortSelect()).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
   });
 
   /** The wall is a wall of *cards*: two entries for one printing (a foil and a nonfoil) are
