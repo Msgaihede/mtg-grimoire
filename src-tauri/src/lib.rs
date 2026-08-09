@@ -204,7 +204,7 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         .and_then(|p| p.parent().map(Path::to_path_buf));
     let app_data = app.path().app_data_dir().map_err(|e| {
         format!(
-            "MTG Collection Tracker could not locate a folder to store its data in: {e}\n\
+            "MTG Grimoire could not locate a folder to store its data in: {e}\n\
              The per-user application data folder is unavailable on this system."
         )
     })?;
@@ -225,7 +225,7 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
     let conn = db::open(&db_path).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
     schema::prepare_database(&conn).map_err(|e| {
         format!(
-            "MTG Collection Tracker could not prepare its database at {}: {e}\n\
+            "MTG Grimoire could not prepare its database at {}: {e}\n\
              The file may be from a newer version of the app, or damaged. Moving it \
              aside will let the app rebuild it from Scryfall.",
             db_path.display()
@@ -257,7 +257,7 @@ fn data_dir_error(portable: Option<&Path>, fallback: &Path, err: rusqlite::Error
         |p| format!("  {}", p.display()),
     );
     format!(
-        "MTG Collection Tracker could not create or open its database.\n\
+        "MTG Grimoire could not create or open its database.\n\
          It tried these folders, in order:\n\
          {portable}\n  {fallback}\n\
          Check that one of them exists and is writable, then start the app again.\n\
@@ -277,12 +277,12 @@ mod tests {
     fn the_startup_error_names_both_candidate_folders() {
         let msg = data_dir_error(
             Some(Path::new("D:\\Apps\\mtg\\data")),
-            Path::new("C:\\Users\\x\\AppData\\Roaming\\com.mtgcollection.tracker\\data"),
+            Path::new("C:\\Users\\x\\AppData\\Roaming\\com.mtggrimoire.app\\data"),
             rusqlite::Error::InvalidQuery,
         );
         assert!(msg.contains("D:\\Apps\\mtg\\data"), "{msg}");
         assert!(
-            msg.contains("C:\\Users\\x\\AppData\\Roaming\\com.mtgcollection.tracker\\data"),
+            msg.contains("C:\\Users\\x\\AppData\\Roaming\\com.mtggrimoire.app\\data"),
             "{msg}"
         );
         assert!(msg.contains("writable"), "{msg}");

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MTG Collection Tracker",
+  "productName": "MTG Grimoire",
   "version": "0.2.0",
-  "identifier": "com.mtgcollection.tracker",
+  "identifier": "com.mtggrimoire.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MTG Collection Tracker",
+        "title": "MTG Grimoire",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,

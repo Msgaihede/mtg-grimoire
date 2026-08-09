@@ -107,8 +107,8 @@ jobs:
         env:
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
-          $zip = "mtg-collection-tracker-$env:VERSION-windows-x64-portable.zip"
-          Compress-Archive -Path src-tauri/target/release/mtg-collection-tracker.exe -DestinationPath $zip
+          $zip = "mtg-grimoire-$env:VERSION-windows-x64-portable.zip"
+          Compress-Archive -Path src-tauri/target/release/mtg-grimoire.exe -DestinationPath $zip
           "PORTABLE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Attach the portable zip to the draft release

@@ -67,7 +67,7 @@ export type DeckWrite =
  * draggable**: the moment a second feature drags something, `{ kind, cardId, name }` from it
  * would otherwise be a card these zones would add.
  */
-const MARK = "mtg-collection/deck-drag";
+const MARK = "mtg-grimoire/deck-drag";
 const MARK_KEY = "dragSource";
 
 /**
