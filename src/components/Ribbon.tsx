@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { CircleArrowUp, RefreshCw } from "lucide-react";
 import { ManaLine } from "@/components/ManaLine";
 import type { ManaLineSync } from "@/lib/mana";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,17 @@ export interface RibbonProps {
   onRefresh: () => void;
   /** Drives the mana line. `null` when nothing is running. */
   sync: ManaLineSync | null;
+  /** A newer version of the app exists — `"0.3.0"`. `null` when there is nothing to say. */
+  updateVersion?: string | null;
+  /**
+   * Whether this install can actually install it, which decides what the button *promises*.
+   * An MSI install and every Linux build can only be pointed at the release page, and a
+   * button reading "Update to 0.3.0" on one of those is the interface making a promise it
+   * cannot keep.
+   */
+  updateInstallable?: boolean;
+  /** Opens Settings, where the release notes and the actual update controls are. */
+  onOpenUpdate?: () => void;
 }
 
 /**
@@ -45,6 +56,9 @@ export function Ribbon({
   hasError,
   onRefresh,
   sync,
+  updateVersion = null,
+  updateInstallable = false,
+  onOpenUpdate,
 }: RibbonProps) {
   // Two sentences about one folder, in the tooltip that already names it. Not a banner:
   // every affected image still *displays* — the bytes were in hand when the write failed
@@ -76,6 +90,30 @@ export function Ribbon({
         <h1 className="truncate font-heading text-lg leading-none">{title}</h1>
 
         <div className="ml-auto flex min-w-0 items-center gap-3">
+          {/* Before the status line and Refresh, because it is the rarer and more
+              consequential thing on this row — and gold rather than the border grey every
+              other control wears, which is the app's existing word for "you can act on
+              this" rather than a new colour invented for one button. The boldness budget
+              is spent on the mana line two pixels below; this borrows a token it already
+              has. */}
+          {updateVersion && (
+            <button
+              type="button"
+              onClick={onOpenUpdate}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-2 rounded-md border border-accent/60 px-3 py-1.5",
+                "text-sm text-accent",
+                "transition-colors duration-150 hover:bg-accent/10 motion-reduce:transition-none",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              )}
+            >
+              <CircleArrowUp className="size-4" aria-hidden="true" />
+              {/* Two labels, because they are two different promises. This install can
+                  replace itself; an MSI or Linux build can only be shown where to
+                  download — and a control says exactly what happens when it is used. */}
+              {updateInstallable ? `Update to ${updateVersion}` : `${updateVersion} available`}
+            </button>
+          )}
           {upToDate && !busy && !hasError && (
             <p role="status" className="shrink-0 text-xs text-dim">
               Already up to date

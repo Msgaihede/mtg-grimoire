@@ -85,4 +85,53 @@ describe("Ribbon", () => {
       "50",
     );
   });
+
+  it("stays out of the way when there is no update", () => {
+    render(<Ribbon {...props()} />);
+    expect(screen.queryByRole("button", { name: /update|available/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two labels are two different promises, and that is the whole reason there are two.
+   * A portable or NSIS install really can replace itself; an MSI install and every Linux
+   * build can only be shown where to download. "Update to 0.3.0" on one of those is the
+   * interface promising something no code behind it can do.
+   */
+  it("promises an update only where one can actually be installed", () => {
+    const { rerender } = render(
+      <Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true })} />,
+    );
+    expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeInTheDocument();
+
+    rerender(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: false })} />);
+    expect(screen.queryByRole("button", { name: /^Update to/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "0.3.0 available" })).toBeInTheDocument();
+  });
+
+  it("opens the update panel rather than doing anything itself", async () => {
+    const onOpenUpdate = vi.fn();
+    const onRefresh = vi.fn();
+    render(
+      <Ribbon
+        {...props({ updateVersion: "0.3.0", updateInstallable: true, onOpenUpdate, onRefresh })}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Update to 0.3.0" }));
+    expect(onOpenUpdate).toHaveBeenCalledOnce();
+    // Two buttons on one row that both start something long-running: they must not be the
+    // same button by accident.
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A sync is the app's other long job, and it disables Refresh. The update button is about
+   * a different service entirely and stays pressable — the panel it opens reads nothing a
+   * sync is writing.
+   */
+  it("stays available while a sync is running", () => {
+    render(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true, busy: true })} />);
+    expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeEnabled();
+  });
 });

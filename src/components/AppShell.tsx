@@ -18,6 +18,7 @@ import { useAppStore, type ViewId } from "@/lib/store";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
+import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
 
 const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
@@ -66,7 +67,7 @@ export const DROP_OVER = "bg-accent/10";
  * line, Refresh button and mana line, and the first-run overlay — and one poll for the
  * whole app is the point of the arrangement.
  */
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, update }: { children: ReactNode; update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
   const { status, error, refresh, refreshing, upToDate } = useSync();
@@ -119,6 +120,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           hasError={error !== null}
           onRefresh={refresh}
           sync={manaLineSync(progress, busy)}
+          updateVersion={update.status?.available?.version ?? null}
+          updateInstallable={update.action !== "unavailable"}
+          onOpenUpdate={() => setActiveView("settings")}
         />
 
         {/* Given the whole screen when the database is empty, so it needs the error and
