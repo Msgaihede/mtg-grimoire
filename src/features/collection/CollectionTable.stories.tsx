@@ -1,0 +1,443 @@
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, fn, within } from "storybook/test";
+import { finishPrice, type Finish } from "@/lib/finish";
+import type { CollectionRow } from "@/lib/ipc";
+import { PRICES_AS_OF } from "@/lib/prices";
+import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
+import { CollectionTable } from "./CollectionTable";
+
+/**
+ * A fixture printing, by the two columns that identify one — `CardImage.stories.tsx`'s helper,
+ * for its reason: `CARDS` is generated and a regeneration may reorder it, so an index would
+ * quietly point at a different card and every claim below it would still read as true.
+ */
+function printing(setCode: string, collectorNumber: string): FakeCard {
+  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
+  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
+  return card;
+}
+
+let nextId = 1;
+
+/**
+ * One `collection_entries` row, joined to its card — a `CollectionRow` built the way
+ * `.storybook/fake/db.ts`'s `toCollectionRow` builds one.
+ *
+ * Written here rather than imported because that function is not exported (grepped 2026-08-09:
+ * `db.ts`'s eleven exports are its four row types, `Fault`, `FakeDb`, `makeDb`, `CLOCK_BASE` and
+ * the three handler tables — no DTO builder among them). What is copied is the rule that
+ * matters: every `cards`-derived field is
+ * nullable and comes off the card, while `setCode`, `collectorNumber` and `lang` are the
+ * **entry's own** — denormalised at write time so an entry survives its printing leaving the
+ * database.
+ *
+ * The USD price goes through the app's own `finishPrice`, which is a lookup by finish in the
+ * `prices` blob with **no fallback of any kind**: `cards.price_usd` is a nonfoil→foil→etched
+ * chain built for sorting, and using it here would price a plain copy at foil rates.
+ */
+function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}): CollectionRow {
+  return {
+    id: nextId++,
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    setName: card.setName,
+    collectorNumber: card.collectorNumber,
+    lang: card.lang,
+    rarity: card.rarity,
+    manaCost: card.manaCost,
+    typeLine: card.typeLine,
+    layout: card.layout,
+    finish,
+    condition: "NM",
+    quantity: 1,
+    tradelistQuantity: 0,
+    unitPriceUsd: finishPrice(card.prices, finish),
+    // `collection::FINISH_PRICE_EUR`, hole and all: **`eur_etched` does not exist in
+    // Scryfall's data**, so an etched card is unpriced in euros rather than valued at the
+    // nonfoil rate. Set by hand because `@/lib/finish` exports no EUR twin — and because
+    // **this table has no EUR column at all**, so nothing below draws it. It is on the DTO,
+    // it is summed by `CollectionSummaryHeader`'s `unpricedEur`, and it is invisible here.
+    unitPriceEur: null,
+    purchasePrice: null,
+    purchaseCurrency: null,
+    acquiredAt: null,
+    acquisitionSource: null,
+    serialNumber: null,
+    altered: false,
+    signed: false,
+    proxy: false,
+    misprint: false,
+    grading: null,
+    // Never null — the column defaults to `[]`.
+    tags: "[]",
+    notes: null,
+    needsReview: null,
+    updatedAt: 1_786_266_000,
+    ...over,
+  };
+}
+
+/**
+ * Eight entries, in `collection::COLLECTION_DEFAULT_ORDER` — name, then set code, then the
+ * collector number cast to an integer.
+ *
+ * Written in that order rather than sorted here, because **this component does not sort**: the
+ * backend answers a page already ordered and the `sort` prop only tells the headers what to
+ * draw. A story that handed rows in one order and a spec claiming another would be showing a
+ * table that lies.
+ *
+ * Two of the eight are chosen for what they cannot say. Alpha Black Lotus has **no USD price
+ * at all** — `usd`, `usd_foil` and `usd_etched` are every one of them null in the fixture, and
+ * it is priced in euros (€38 719.86) and in tix — so its Value cell is an em dash rather than
+ * `$0.00`, which is a price nobody quoted. The Double Masters Bolt is the four-copy row, which
+ * is the only shape that draws the per-copy line under the total.
+ */
+const ROWS: CollectionRow[] = [
+  entry(printing("2ed", "48"), "nonfoil"),
+  entry(printing("lea", "232"), "nonfoil", { condition: "HP" }),
+  entry(printing("gtc", "148"), "foil", { quantity: 2 }),
+  entry(printing("mh2", "267"), "etched"),
+  entry(printing("2x2", "117"), "nonfoil", { condition: "LP", quantity: 4 }),
+  entry(printing("lea", "161"), "nonfoil", { condition: "MP" }),
+  entry(printing("c21", "263"), "nonfoil"),
+  entry(printing("mh2", "259"), "nonfoil", { quantity: 2 }),
+];
+
+/**
+ * `reconcile::sweep_orphans`' sentence, verbatim (`src-tauri/src/reconcile.rs:633-635`).
+ *
+ * 131 characters — the band is one line, and the *second* half is what to do about it, which is
+ * why the whole sentence rides as the cell's `title` as well.
+ */
+const MISSING =
+  "This printing is not in the card database. It may have been removed by the last " +
+  "card-data sync, or it may return with the next one.";
+
+/**
+ * `reconcile::flag_unfoldable`'s sentence (`src-tauri/src/reconcile.rs:589-591`), with a card id
+ * interpolated where the real one puts Scryfall's new id.
+ *
+ * The other kind of flag: this row's printing is **still in the database** and still draws its
+ * name, its mana cost, its rarity and its price. A flag is a sentence, not a hiding place.
+ */
+const UNFOLDABLE =
+  "Scryfall merged this printing into 0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77, but this entry " +
+  "could not be moved there. It is unchanged — check it against your other entries for that " +
+  "card.";
+
+const meta = {
+  title: "Collection/Table",
+  component: CollectionTable,
+  tags: ["autodocs"],
+  args: {
+    rows: ROWS,
+    total: ROWS.length,
+    listKey: "stories",
+    sort: [],
+    onSort: fn(),
+    onNeedNextPage: fn(),
+    onSetQuantity: fn(),
+    onRemove: fn(),
+  },
+  // A height, because the table is `min-h-0 flex-1` and expects a flex parent that has already
+  // decided how tall the list is.
+  decorators: [
+    (Story) => (
+      <div className="flex h-[26rem] max-w-[52rem] flex-col">
+        <Story />
+      </div>
+    ),
+  ],
+  parameters: {
+    docs: {
+      description: {
+        component:
+          "The collection as a table: one row per **entry**, and the quantity editable in " +
+          "place. Per entry rather than per card because a foil in a sleeve and a played " +
+          "nonfoil are two different things to own, priced differently and sold separately.\n\n" +
+          "Six columns over the shared `VirtualTable`. Only the name flexes; everything else " +
+          "holds something whose width is known, because a price column that squeezes is a " +
+          "column nobody can scan. It was seven until the card pane opened beside it at " +
+          "1280px — 6.5rem of per-copy price plus its gap was the difference between a name " +
+          "column of 124px and one of 40 — so that figure moved into the Value cell, under " +
+          "the number it multiplies into and only on rows where the two differ.\n\n" +
+          "**This component sorts nothing.** `sort` tells the headers what to draw and " +
+          "`onSort` reports one press; the rows arrive already ordered from " +
+          "`collection::list_entries`. Every story below hands over rows in the order that " +
+          "query would have returned them.",
+      },
+    },
+  },
+} satisfies Meta<typeof CollectionTable>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+/**
+ * The ordinary list.
+ *
+ * **No `play` on this page reaches a row**, and it is worth knowing why rather than meeting it
+ * as a puzzle: jsdom lays nothing out, so `@tanstack/react-virtual` measures the scroller at 0px
+ * and renders an empty window. `VirtualTable.test.tsx:14-18` stubs
+ * `offsetHeight`/`offsetWidth`/`scrollTo` for exactly this, and a story file has no `beforeAll`
+ * to put that in — nor any business patching `HTMLElement.prototype` inside the browser
+ * Storybook renders in. Measured 2026-08-09 with a throwaway spec: this table renders **1**
+ * element with `role="row"` under Vitest with no stub, and that one is the header. So the plays
+ * here are about the header and the table element; the rows are Task 17's to look at.
+ */
+export const Rows: Story = {};
+
+/**
+ * Nothing owned — and the table draws **no empty state of its own**.
+ *
+ * `CollectionPage` owns that sentence, because what an empty list means depends on why it is
+ * empty (nothing added yet, or every filter excluding everything) and only the page knows which.
+ */
+export const Empty: Story = {
+  args: { rows: [], total: 0 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // 0 rows plus the header. The count is of rows **matching the filters**, not rows in the
+    // DOM — otherwise a virtualised list would tell assistive tech the collection holds 20
+    // cards. A collection total is counted in full, so there is no unknown-count case here and
+    // this is never `-1`.
+    await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
+      "aria-rowcount",
+      "1",
+    );
+    // Six columns, the removal column included: it draws nothing, and a screen reader still
+    // needs its name, or every row announces "column 6".
+    await expect(canvas.getAllByRole("columnheader")).toHaveLength(6);
+    await expect(canvas.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * A flagged row, **listed and counted exactly as before**.
+ *
+ * `needs_review` is a sentence, not a flag: the reconciler writes what happened and the first
+ * message wins, so a later sweep never overwrites an earlier one. Non-NULL means "listed,
+ * counted, and asking to be looked at" — never "hidden".
+ *
+ * The band is drawn inside the **name's cell** rather than beside it, because a `<p>` among a
+ * row's cells is not a cell and what is not a cell is not announced. It is one line, and the
+ * row grows by 20px to hold it: `extraHeight` is what tells the virtualiser so, and without it
+ * a flagged row would overlap the one below by exactly that band.
+ *
+ * The sentence here is `flag_unfoldable`'s, so the card behind it is still perfectly present —
+ * name, mana cost, rarity, price and all. The row that has *lost* its printing is {@link Orphan}.
+ */
+export const NeedsReview: Story = {
+  args: {
+    rows: [
+      entry(printing("mh2", "138"), "nonfoil", { needsReview: UNFOLDABLE }),
+      ...ROWS.slice(0, 3),
+    ],
+    total: 4,
+  },
+};
+
+/**
+ * The printing has left `cards`, and the entry is still the user's.
+ *
+ * Every card-derived field is `null` — name, set name, rarity, mana cost, type line, layout,
+ * and both prices — while `setCode`, `collectorNumber` and `lang` are intact, because those are
+ * the **entry's own** columns, copied at write time for exactly this day. So the row still says
+ * *which* piece of cardboard it is even though nothing can say what is printed on it.
+ *
+ * What that looks like: an em dash where the name goes (`row.name ?? "—"`), a set cell that
+ * still reads `LEA · 232`, a `RarityGem` with no rarity, and a Value of `—` rather than `$0.00`.
+ * The stepper's accessible name falls back to the card id, which is the only handle left.
+ *
+ * The sentence is `sweep_orphans`' (`reconcile.rs:633-635`) — the sweep runs after every ingest
+ * and **clears the flag again if the card comes back**, which is why an orphan is flagged and
+ * never deleted.
+ */
+export const Orphan: Story = {
+  args: {
+    rows: [
+      entry(printing("lea", "232"), "nonfoil", {
+        // An id `cards` has no row for, which is what an orphan *is*. The printing above is
+        // still what supplies `setCode`, `collectorNumber` and `lang` — the entry's own
+        // denormalised columns, which is exactly how a real orphaned row keeps them.
+        cardId: "0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77",
+        name: null,
+        setName: null,
+        rarity: null,
+        manaCost: null,
+        typeLine: null,
+        layout: null,
+        unitPriceUsd: null,
+        unitPriceEur: null,
+        needsReview: MISSING,
+      }),
+      ...ROWS.slice(0, 3),
+    ],
+    total: 4,
+  },
+};
+
+/**
+ * One printing, three entries: a nonfoil, a lightly played foil and an etched — which is the
+ * whole reason this table is one row per **entry** rather than one per card.
+ *
+ * Finish is an **enum** and never a boolean: `etched` is a third thing, and flattening it into
+ * `foil: true` is the single most common way an importer loses data. The column reads
+ * `Foil · LP`, with the grade inside an `<abbr>` so its word — "Lightly played" — is one hover or
+ * one screen reader away.
+ *
+ * The prices differ because each finish is a **different key** in the same `prices` blob. The
+ * Strixhaven Lightning Bolt below is the fixture that has all three: `usd` $17.85,
+ * `usd_foil` $23.85, `usd_etched` $18.68 (measured over `.storybook/fake/cards.ts`,
+ * 2026-08-09).
+ */
+export const EveryFinish: Story = {
+  args: {
+    rows: [
+      entry(printing("sta", "105"), "nonfoil"),
+      entry(printing("sta", "105"), "foil", { condition: "LP" }),
+      entry(printing("sta", "105"), "etched"),
+    ],
+    total: 3,
+  },
+};
+
+/**
+ * An etched printing on its own — the finish whose price has a hole in it.
+ *
+ * `usd_etched` exists and is $2.07 for this printing (Assassin's Creed 211, the fixture's one
+ * **etched-only** card: its `finishes` is `["etched"]`, and its `usd` and `usd_foil` are both
+ * null). `eur_etched` does **not** exist in Scryfall's data at all, so `unitPriceEur` is `null`
+ * for every etched row in the app.
+ *
+ * That hole is invisible here and this story cannot show it: **the table has no EUR column** —
+ * six columns, and Value is USD. Where it does surface is `CollectionSummaryHeader`, which
+ * reports `unpricedEur` beside the EUR total for exactly this reason.
+ */
+export const Etched: Story = {
+  args: { rows: [entry(printing("acr", "211"), "etched")], total: 1 },
+};
+
+/**
+ * A row the user owns none of — **and the row stays**.
+ *
+ * Zero is a state the stepper can reach and nothing else can leave. The backend keeps the row
+ * with its condition, its purchase price and its acquisition story until something says delete,
+ * and the only thing in the app that does is the trash button in the last column — which is
+ * offered **on an empty row and nowhere else**. On a row that still holds cards it would be a
+ * one-click way to lose the lot from a list that scrolls under the pointer.
+ *
+ * The row recedes rather than disappearing: `rowClassName` puts `text-dim` on it, applied last
+ * so it wins over the selection colour. The Value cell is a real `$0.00` here and not an em
+ * dash — the price is known and the quantity is zero, which is a different fact from "this
+ * finish has no price".
+ *
+ * The wishlist and `deck_cards` are the opposite by table CHECK (`quantity > 0`): a wish for
+ * none of something is not a wish, and a zone slot at zero holds no condition, no price and no
+ * story. Only the collection's zero is worth keeping.
+ */
+export const ZeroQuantity: Story = {
+  args: {
+    rows: [
+      entry(printing("c21", "263"), "nonfoil", { quantity: 0, condition: "LP" }),
+      ...ROWS.slice(0, 3),
+    ],
+    total: 4,
+  },
+};
+
+/**
+ * Sorted by what each row is **worth** — quantity times the finish's unit price, descending.
+ *
+ * The header sorts by the figure printed in the cell, not by the unit price underneath it: a
+ * column that reorders by something other than the number in it is a column that lies. `NULLS
+ * LAST` in **both** directions, so reversing this moves the rows and not the holes — which is
+ * why Alpha Black Lotus, priced in euros and in nothing else, sits at the foot either way.
+ *
+ * The rows below are in the order `collection::list_entries` would answer that spec, with the
+ * entry id breaking ties as `COLLECTION_SORTS` appends it.
+ */
+export const SortedByValue: Story = {
+  args: {
+    rows: [...ROWS].sort((a, b) => {
+      const value = (r: CollectionRow) =>
+        r.unitPriceUsd === null ? null : r.unitPriceUsd * r.quantity;
+      const x = value(a);
+      const y = value(b);
+      if (x === null) return y === null ? a.id - b.id : 1;
+      if (y === null) return -1;
+      return y - x || a.id - b.id;
+    }),
+    sort: [{ key: "value", dir: "desc" }],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("columnheader", { name: /^Value/ })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    // Spec §5 in one assertion: the Value column may never be shown without saying how old its
+    // prices are, and a 36px header row has nowhere to write the sentence — so it is the
+    // header's accessible name, which **begins** with the visible word (WCAG 2.5.3) so the
+    // column stays addressable by what is written on it.
+    await expect(canvas.getByRole("columnheader", { name: /^Value/ })).toHaveAttribute(
+      "aria-label",
+      `Value. ${PRICES_AS_OF}`,
+    );
+    // One key, so no priority is announced: "1 of 1" is a number that says nothing.
+    await expect(canvas.getByRole("button", { name: "Value" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * Two keys: finish first, then value inside each finish.
+ *
+ * The question a collection is usually read for is two-part — "my dearest foils" is a finish and
+ * a price — and one key answers half of it, leaving the rest to whatever order the database
+ * happened to produce. The Finish column sorts by the finish spelled out and then by the
+ * condition **ranked** (`NM` before `DMG`, because alphabetical order puts `DMG` first and that
+ * is not what anybody means by condition).
+ */
+export const SortedByFinishThenValue: Story = {
+  args: {
+    rows: [
+      entry(printing("mh2", "267"), "etched"),
+      entry(printing("sta", "105"), "foil", { quantity: 2 }),
+      entry(printing("gtc", "148"), "foil"),
+      entry(printing("2ed", "48"), "nonfoil"),
+      entry(printing("mh2", "259"), "nonfoil", { quantity: 2 }),
+      entry(printing("lea", "232"), "nonfoil", { condition: "HP" }),
+    ],
+    total: 6,
+    sort: [
+      { key: "finish", dir: "asc" },
+      { key: "value", dir: "desc" },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // `aria-sort` on **every** sorted column rather than only the first: the alternative is
+    // telling assistive tech that a two-key sort has one key.
+    await expect(canvas.getByRole("columnheader", { name: /^Finish/ })).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    await expect(canvas.getByRole("columnheader", { name: /^Value/ })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    await expect(
+      canvas.getByRole("button", { name: "Finish · condition, sort priority 1" }),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Value, sort priority 2" }),
+    ).toBeInTheDocument();
+    // Untouched columns still report a state, because they *could* be sorted — which is a
+    // different statement from the Actions column's, which carries no `aria-sort` at all.
+    await expect(canvas.getByRole("columnheader", { name: /^Name/ })).toHaveAttribute(
+      "aria-sort",
+      "none",
+    );
+  },
+};
