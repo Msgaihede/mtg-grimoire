@@ -88,6 +88,19 @@ const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
     "CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)",
+    // The collapsed search's whole cost model. Its group step reads `oracle_id` in group
+    // order and finds every other column it needs inside the index, so the scan is
+    // *covering*: 108 ms for the default collapsed browse against 767 ms without it,
+    // measured 2026-08-11 over the live 107 337-row paper corpus. 14 MB, and 0.7 s added to
+    // a 92–99 s sync.
+    //
+    // The column order is load-bearing and the trailing four are not decoration — drop one
+    // and the scan stops covering. Widening it further with `rarity`/`set_code`/`type_line`
+    // was built and measured, and is a straight loss: it made the name sort 38 → 61 ms and
+    // left the sorts it was meant to help unchanged, because those cost row lookups rather
+    // than index reads.
+    "CREATE INDEX IF NOT EXISTS idx_cards_collapse \
+     ON cards(oracle_id, is_paper, released_at, id, name, price_usd)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch.
@@ -148,7 +161,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -690,6 +703,23 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA user_version = 6;")?;
         tx.commit()?;
     }
+    if v < 7 {
+        let tx = conn.unchecked_transaction()?;
+        // One index on `cards`, for the collapsed search. This re-runs the whole
+        // [`CARDS_INDEXES`] batch rather than naming the new one: every statement in it is
+        // `IF NOT EXISTS`, so the step means "bring the index list up to date" and the
+        // other three are untouched. A fresh install already has it from the v1 block and
+        // arrives here with nothing to do.
+        //
+        // Nothing here reads `raw`, so [`json_raw`] has no part to play. Nothing here
+        // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
+        // renumbered, so no `cards_fts` rebuild is owed — the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(&cards_indexes_sql())?;
+        // Literal `7`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 7;")?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1053,6 +1083,71 @@ pub(crate) mod tests {
         assert_eq!(still, 1, "the debt stays where a later run will find it");
     }
 
+    /// The collapsed search reads this index and nothing else; without it the default
+    /// browse costs 767 ms instead of 108 ms. It lives in [`CARDS_INDEXES`] because
+    /// [`swap_staging`] drops `cards` with its indexes on every sync and replays only that
+    /// list — an index created anywhere else is gone at the next sync, on every machine
+    /// that has already migrated.
+    #[test]
+    fn the_collapse_index_exists_after_migrate_and_survives_a_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("migrate must create idx_cards_collapse");
+        // The column order is the whole point: `oracle_id` leads so the GROUP BY reads it
+        // in group order, and the rest are there so the scan is covering.
+        assert!(
+            sql.contains("oracle_id, is_paper, released_at, id, name, price_usd"),
+            "index column order decides whether the scan is covering: {sql}"
+        );
+
+        create_staging(&conn).unwrap();
+        swap_staging(&conn).unwrap();
+        let after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type='index' AND tbl_name='cards' AND name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 1, "the swap must replay the collapse index");
+    }
+
+    /// A database already at head must gain the index, and running the step twice must be a
+    /// no-op — every statement in [`CARDS_INDEXES`] is `IF NOT EXISTS`, which is what lets
+    /// the v7 step re-run the whole list rather than naming one index.
+    #[test]
+    fn the_v7_step_is_idempotent_and_adds_the_index_to_an_existing_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        // Stand in for a database that migrated before v7 existed.
+        conn.execute_batch("DROP INDEX idx_cards_collapse; PRAGMA user_version = 6;")
+            .unwrap();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
     #[test]
     fn staging_swap_replaces_cards_and_fts_finds_new_rows() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1079,13 +1174,14 @@ pub(crate) mod tests {
         let idx: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='cards'
-                 AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name')",
+                 AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name',
+                              'idx_cards_collapse')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
         assert_eq!(
-            idx, 3,
+            idx, 4,
             "indexes must be recreated under their original names"
         );
 
