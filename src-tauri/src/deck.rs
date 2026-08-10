@@ -23,7 +23,15 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// The five zones, re-exported from the schema so the CHECK and its Rust twin cannot drift.
-pub const ZONES: [&str; 5] = crate::schema::DECK_ZONES;
+///
+/// Schema v7 (Plan 8, Task 1) deleted `schema::DECK_ZONES` — the zone became a user-owned
+/// `deck_categories` row, and `deck_cards.zone` no longer exists — so this now points at
+/// `schema::CATEGORY_KINDS`, the same five words under their new name. This is the one
+/// change Task 1 makes here, purely to keep the crate compiling; every zone-shaped query in
+/// this file (`deck_cards.zone`, the `DECK_CARD_GRAIN` writes, `ZONE_PRIORITY`'s allocator
+/// walk) still targets a column that is gone, and is Task 3's job to re-point onto
+/// `category_id`, not this task's.
+pub const ZONES: [&str; 5] = crate::schema::CATEGORY_KINDS;
 
 /// What a deck is in when nobody says otherwise — `decks.format_key`'s own DDL default, so
 /// an omitted `formatKey` means here exactly what it means in SQL.

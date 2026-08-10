@@ -148,7 +148,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -180,27 +180,86 @@ pub const COLLECTION_GRAIN: &str = "card_id, finish, condition, lang, altered, s
 pub const WISHLIST_GRAIN: &str =
     "coalesce(oracle_id, ''), coalesce(card_id, ''), coalesce(preferred_finish, '')";
 
-/// The five deck zones, spec §6 verbatim. CHECK-constrained in SQL and mirrored in TS.
+/// The five rules roles a deck category can carry, spec §6 verbatim — the same five words
+/// `deck_cards.zone` held before schema v7 replaced the zone with a category the user owns.
+/// CHECK-constrained on `deck_categories.kind` and mirrored in TS.
 ///
-/// The v5 DDL spells the five words out rather than interpolating this constant, for the
+/// The v7 DDL spells the five words out rather than interpolating this constant, for the
 /// reason [`CARDS_COLUMNS`] is frozen: a migration step is history. Editing this list would
 /// silently rewrite the CHECK a *fresh* install creates while every upgraded database kept
-/// the old one, and the two would then disagree about what a deck can hold. A sixth zone is
-/// a new migration step. What this constant is for is everything that is not history — the
-/// TypeScript mirror, and `the_deck_card_grain_folds_and_the_zone_and_quantity_checks_hold`,
-/// which walks it against the live CHECK so the copies cannot drift apart unnoticed.
-pub const DECK_ZONES: [&str; 5] = ["main", "side", "commander", "companion", "maybe"];
+/// the old one, and the two would then disagree about what a category's kind can be. A
+/// sixth kind is a new migration step. What this constant is for is everything that is not
+/// history — the TypeScript mirror, and
+/// `a_category_kind_is_one_of_the_five_and_predefined_names_round_trip`, which walks it
+/// against the live CHECK so the copies cannot drift apart unnoticed, exactly as
+/// `DECK_ZONES` and its CHECK never did.
+pub const CATEGORY_KINDS: [&str; 5] = ["main", "side", "commander", "companion", "maybe"];
 
-/// What makes two deck-card rows the same row: one printing in one zone of one deck.
+/// The one predefined category per non-`main` kind, seeded once per deck as `(kind, name,
+/// is_active)`. `main` has no row here: a user-made category is always kind `main`, and a
+/// deck can own any number of them, so there is nothing singular about `main` to
+/// predefine — it is the four *fixed* rules roles that get one guaranteed category each.
+///
+/// `is_active` is where "counts toward nothing" is decided: `maybe` is seeded `false` and
+/// the other three `true`, which is the whole of what used to make the scratchpad a special
+/// case scattered across five files — it is now one seeded row like any other, and every
+/// reader that used to ask "is this the maybe zone?" asks "is this category active?" instead.
+///
+/// Nothing in the v7 migration reads this constant: the backfill below is history, frozen
+/// like [`CATEGORY_KINDS`]'s DDL, and points at its own literal strings rather than at
+/// something later code could change out from under it. This constant is for
+/// `deck_meta::ensure_predefined_categories`, which creates these four rows for every deck
+/// from here on.
+pub const PREDEFINED_CATEGORIES: [(&str, &str, bool); 4] = [
+    ("commander", "Commander", true),
+    ("side", "Sideboard", true),
+    ("companion", "Companion", true),
+    ("maybe", "Maybeboard", false),
+];
+
+/// What makes two deck-card rows the same row: one printing, in one category, in one
+/// variant, of one deck.
 ///
 /// Written once for [`COLLECTION_GRAIN`]'s reason — the UNIQUE index and every
 /// `ON CONFLICT(…)` target must match verbatim, and a target that matches no index is a
 /// runtime error at the first quick-add rather than a compile error. No `coalesce` is
-/// needed here: all three columns are `NOT NULL`, so none of them can go distinct-by-NULL.
+/// needed here: every column is `NOT NULL`, so none of them can go distinct-by-NULL.
 ///
-/// `zone` is *in* the grain because the same printing in `main` and in `maybe` is two
-/// intentions, not one row that moved.
-pub const DECK_CARD_GRAIN: &str = "deck_id, card_id, zone";
+/// `category_id` is *in* the grain for exactly `zone`'s old reason: the same printing filed
+/// under the main deck and under the Maybeboard is two intentions, not one row that moved —
+/// only now that is read off a category the user can rename rather than off a fixed word.
+/// `variant` is new in v7 and widens the grain again: the same printing can sit in the
+/// `live` deck and the `theory` one at once, and an edit made while trying out a change must
+/// never fold into the row the deck is actually sleeved as.
+pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id";
+
+/// What makes two category rows the same row: one name per deck. This is a different
+/// uniqueness question from [`PREDEFINED_CATEGORIES`]'s "at most one predefined row per
+/// kind per deck" (`idx_deck_categories_kind`, a *partial* index over `kind <> 'main'`) — a
+/// user is free to name a category of their own "Sideboard" too, and that collides with
+/// nothing on this grain, because the predefined Sideboard was never named by the user.
+pub const DECK_CATEGORY_GRAIN: &str = "deck_id, name";
+
+/// What makes two tag rows the same row: one name per deck, [`DECK_CATEGORY_GRAIN`]'s shape
+/// for the same reason. A tag is picked by name from the app's fixed colour palette, and a
+/// deck cannot hold two tags called the same thing.
+pub const DECK_TAG_GRAIN: &str = "deck_id, name";
+
+/// The two decks every deck secretly is: `live`, what is actually sleeved up and playable,
+/// and `theory`, what it is being built toward. CHECK-constrained on `deck_cards.variant`
+/// and `deck_audit.variant`, and part of [`DECK_CARD_GRAIN`] — the reason a change tried out
+/// in Theory is a different row from the Live one it is being tried against, never a draft
+/// that could silently overwrite it. `deck::allocate_deck` reserves collection copies for
+/// `live` only: a theory list is a plan, and a plan claims nothing.
+pub const DECK_VARIANTS: [&str; 2] = ["live", "theory"];
+
+/// What a `deck_audit` row can record, CHECK-constrained on `deck_audit.kind`. Rust records
+/// which of these happened and the facts a sentence needs (`payload`, `delta`); TypeScript
+/// owns turning that into the sentence a person reads on the history drawer, because a
+/// sentence is domain logic and this table has to survive the day the wording changes.
+pub const AUDIT_KINDS: [&str; 9] = [
+    "add", "remove", "quantity", "move", "swap", "tag", "category", "folder", "deck",
+];
 
 /// One deck's claim on one collection entry. Both columns are `NOT NULL` enforced foreign
 /// keys, so the grain is the pair and nothing else: a deck reserves copies *of a collection
@@ -576,8 +635,14 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              );
+             -- Frozen as a literal, not `{{deck_grain}}`: schema v7 changes what
+             -- `DECK_CARD_GRAIN` *means* (category and variant replace the zone), and this
+             -- step is history — it must keep building the v5-era index over the v5-era
+             -- table it actually created above, not whatever the constant says today. The
+             -- same reason `CARDS_COLUMNS` and the v5 zone CHECK are spelled out rather than
+             -- interpolated.
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_cards_grain
-                ON deck_cards ({deck_grain});
+                ON deck_cards (deck_id, card_id, zone);
              CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards (card_id);
 
              CREATE TABLE IF NOT EXISTS deck_allocations (
@@ -625,7 +690,6 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 allows_companion INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL
              );",
-            deck_grain = DECK_CARD_GRAIN,
             alloc_grain = ALLOCATION_GRAIN
         ))?;
 
@@ -688,6 +752,178 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         // Literal `6`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 6;")?;
+        tx.commit()?;
+    }
+    if v < 7 {
+        let tx = conn.unchecked_transaction()?;
+        // Plan 8. The deck's grouping stops being a fixed five-word enum and becomes rows the
+        // user owns — so `deck_cards.zone` is replaced by `deck_cards.category_id`, and the
+        // category carries the `kind` the rules used to read off the zone. Nothing about the
+        // rules changed: `kind` takes exactly the five values `zone` took, and the validation
+        // engine and the allocator read it in the same places. What is new is that a category
+        // also has a NAME, an ORDER and an ACTIVE flag — and `is_active = 0` means "counts
+        // toward nothing", which is precisely what `maybe` used to mean. So the scratchpad
+        // stops being a special case in five files and becomes one seeded row.
+        //
+        // `zone` cannot be dropped in place: it is inside a CHECK and inside the unique index,
+        // and SQLite refuses `DROP COLUMN` for either. The table is rebuilt, which is also how
+        // `category_id` gets to be `NOT NULL` rather than nullable-with-a-promise.
+        tx.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS deck_folders (
+                id INTEGER PRIMARY KEY,
+                -- User↔user, CASCADE: deleting a folder deletes the folders inside it. The
+                -- DECKS inside it are NOT deleted — see `decks.folder_id` below, which is
+                -- SET NULL. A folder is a filing decision; a deck is the user's work.
+                parent_id INTEGER REFERENCES deck_folders(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_deck_folders_parent ON deck_folders (parent_id);
+
+             CREATE TABLE IF NOT EXISTS deck_categories (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                -- The rules role, and the same five words `deck_cards.zone` held. A category
+                -- the user makes is always 'main'; the other four are predefined, one per deck.
+                kind TEXT NOT NULL
+                    CHECK (kind IN ('main','side','commander','companion','maybe')),
+                -- 'Only active groups are treated as being included in the deck.' Seeded 0 for
+                -- the Maybeboard and 1 for everything else.
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_categories_grain
+                ON deck_categories ({category_grain});
+             -- At most one predefined category per kind per deck. Partial, because 'main' is
+             -- the kind every user category has and there may be forty of them.
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_categories_kind
+                ON deck_categories (deck_id, kind) WHERE kind <> 'main';
+
+             CREATE TABLE IF NOT EXISTS deck_tags (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                -- A token name from the app's fixed tag palette, not a hex string: the webview
+                -- owns what a colour looks like, and a stored hex would outlive the theme.
+                color TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_tags_grain
+                ON deck_tags ({tag_grain});
+
+             CREATE TABLE IF NOT EXISTS deck_audit (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                at INTEGER NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'live'
+                    CHECK (variant IN ('live','theory')),
+                kind TEXT NOT NULL CHECK (kind IN
+                    ('add','remove','quantity','move','swap','tag','category','folder','deck')),
+                -- Soft, like every card id in a user table, and nullable: a category rename
+                -- is about no card at all.
+                card_id TEXT,
+                card_name TEXT,
+                -- The facts the sentence is built from. Rust records WHAT happened; the
+                -- webview writes the sentence, because a sentence is domain logic and this
+                -- table has to survive the day the wording changes.
+                payload TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(payload)),
+                -- Signed copies, for the day header's '+7 / -6' roll-up.
+                delta INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE INDEX IF NOT EXISTS idx_deck_audit_deck ON deck_audit (deck_id, at DESC);
+
+             ALTER TABLE decks ADD COLUMN folder_id INTEGER
+                REFERENCES deck_folders(id) ON DELETE SET NULL;
+             ALTER TABLE decks ADD COLUMN notes TEXT;
+             ALTER TABLE decks ADD COLUMN theory_enabled INTEGER NOT NULL DEFAULT 0;",
+            category_grain = DECK_CATEGORY_GRAIN,
+            tag_grain = DECK_TAG_GRAIN,
+        ))?;
+
+        // One category per (deck, zone) that actually holds cards, named and flagged from
+        // PREDEFINED_CATEGORIES — except 'main', whose legacy rows all land in one category
+        // called 'Main deck'. Splitting those by card type is the app's `autoCategoryFor`
+        // rule, which lives in TypeScript because it is domain logic; running a second copy of
+        // it here would be two rules to keep in step. The categories panel offers
+        // 'Auto-categorise from card types', which is that one rule, pressed once.
+        tx.execute_batch(
+            "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+             SELECT DISTINCT dc.deck_id,
+                    CASE dc.zone WHEN 'main' THEN 'Main deck'
+                                 WHEN 'side' THEN 'Sideboard'
+                                 WHEN 'commander' THEN 'Commander'
+                                 WHEN 'companion' THEN 'Companion'
+                                 ELSE 'Maybeboard' END,
+                    dc.zone,
+                    CASE dc.zone WHEN 'maybe' THEN 0 ELSE 1 END,
+                    CASE dc.zone WHEN 'commander' THEN 0 WHEN 'main' THEN 1
+                                 WHEN 'side' THEN 2 WHEN 'companion' THEN 3 ELSE 4 END,
+                    unixepoch(), unixepoch()
+               FROM deck_cards dc;",
+        )?;
+
+        // The rebuild. `category_id` is NOT NULL from the first row, which is only possible
+        // because the categories above already exist.
+        tx.execute_batch(&format!(
+            "CREATE TABLE deck_cards_v7 (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                -- CASCADE: deleting a category deletes the cards filed under it, which is
+                -- what the confirm dialog says it will do. Moving them out first is the
+                -- caller's job and `deck_category_delete` does exactly that when asked.
+                category_id INTEGER NOT NULL
+                    REFERENCES deck_categories(id) ON DELETE CASCADE,
+                variant TEXT NOT NULL DEFAULT 'live'
+                    CHECK (variant IN ('live','theory')),
+                card_id TEXT NOT NULL,
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                name TEXT NOT NULL,
+                -- SET NULL, not CASCADE: deleting a tag must never delete a card.
+                tag_id INTEGER REFERENCES deck_tags(id) ON DELETE SET NULL,
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+
+             INSERT INTO deck_cards_v7
+                (id, deck_id, category_id, variant, card_id, set_code, collector_number,
+                 lang, name, tag_id, quantity, needs_review, created_at, updated_at)
+             SELECT dc.id, dc.deck_id, cat.id, 'live', dc.card_id, dc.set_code,
+                    dc.collector_number, dc.lang, dc.name, NULL, dc.quantity,
+                    dc.needs_review, dc.created_at, dc.updated_at
+               FROM deck_cards dc
+               JOIN deck_categories cat
+                 ON cat.deck_id = dc.deck_id AND cat.kind = dc.zone;
+
+             -- `DROP TABLE deck_cards` fires `deck_cards`' own OUTBOUND foreign keys (there
+             -- are none) under `PRAGMA foreign_keys=ON`, same as any other statement — but
+             -- that pragma is a documented no-op *inside a transaction*, and `migrate` always
+             -- runs inside one. It must be left exactly as it already was; there is nothing
+             -- to toggle here. The rename is what keeps `deck_cards_v7`'s row ids — copied
+             -- verbatim above — as `deck_cards.id`, which is what lets `deck_allocations` and
+             -- anything else holding one stay correct without a repoint of its own.
+             DROP TABLE deck_cards;
+             ALTER TABLE deck_cards_v7 RENAME TO deck_cards;
+
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_cards_grain
+                ON deck_cards ({deck_grain});
+             CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards (card_id);
+             CREATE INDEX IF NOT EXISTS idx_deck_cards_category ON deck_cards (category_id);",
+            deck_grain = DECK_CARD_GRAIN,
+        ))?;
+
+        // Literal `7`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 7;")?;
         tx.commit()?;
     }
     Ok(())
@@ -2054,6 +2290,23 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    /// One category of one deck — the v7 stand-in for what `deck_meta::
+    /// ensure_predefined_categories` will create once Task 2 lands. `is_active` follows
+    /// [`PREDEFINED_CATEGORIES`]'s own rule (`maybe` inactive, everything else active)
+    /// rather than taking a parameter, because no test below has a reason to want otherwise
+    /// yet — a caller that does can `UPDATE` the row it gets back the id of.
+    pub(crate) fn category(conn: &Connection, deck_id: i64, kind: &str, name: &str) -> i64 {
+        let is_active = i64::from(kind != "maybe");
+        conn.query_row(
+            "INSERT INTO deck_categories
+                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 0, unixepoch(), unixepoch()) RETURNING id",
+            rusqlite::params![deck_id, name, kind, is_active],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// One collection row, nonfoil NM, at the one grain these tests need.
     pub(crate) fn entry(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
         conn.query_row(
@@ -2068,22 +2321,23 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    /// One printing in one zone of one deck, with the printing denormalised beside the
-    /// soft `card_id` exactly as `deck.rs` will write it.
+    /// One printing in one category of one deck (the `live` variant, the only one these
+    /// tests need), with the printing denormalised beside the soft `card_id` exactly as
+    /// `deck.rs` will write it.
     pub(crate) fn deck_card(
         conn: &Connection,
         deck_id: i64,
         card_id: &str,
-        zone: &str,
+        category_id: i64,
         quantity: i64,
     ) -> i64 {
         conn.query_row(
             "INSERT INTO deck_cards
-                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
                  created_at,updated_at)
-             VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,?4,unixepoch(),unixepoch())
+             VALUES (?1,?2,?3,'lea','161','en','Lightning Bolt',?4,unixepoch(),unixepoch())
              RETURNING id",
-            rusqlite::params![deck_id, card_id, zone, quantity],
+            rusqlite::params![deck_id, category_id, card_id, quantity],
             |r| r.get(0),
         )
         .unwrap()
@@ -2112,7 +2366,8 @@ pub(crate) mod tests {
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         let entry = entry(&conn, "bolt", 4);
-        deck_card(&conn, deck, "bolt", "main", 4);
+        let main = category(&conn, deck, "main", "Main deck");
+        deck_card(&conn, deck, "bolt", main, 4);
         allocate(&conn, deck, entry, 4);
 
         conn.execute("DELETE FROM decks WHERE id = ?1", [deck])
@@ -2144,7 +2399,8 @@ pub(crate) mod tests {
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         let entry = entry(&conn, "bolt", 4);
-        deck_card(&conn, deck, "bolt", "main", 4);
+        let main = category(&conn, deck, "main", "Main deck");
+        deck_card(&conn, deck, "bolt", main, 4);
         allocate(&conn, deck, entry, 4);
 
         conn.execute("DELETE FROM collection_entries WHERE id = ?1", [entry])
@@ -2191,7 +2447,8 @@ pub(crate) mod tests {
         )
         .unwrap();
         let entry = entry(&conn, "bolt", 4);
-        deck_card(&conn, deck, "bolt", "main", 4);
+        let main = category(&conn, deck, "main", "Main deck");
+        deck_card(&conn, deck, "bolt", main, 4);
         allocate(&conn, deck, entry, 4);
 
         create_staging(&conn).unwrap();
@@ -2235,63 +2492,311 @@ pub(crate) mod tests {
         );
     }
 
-    /// The grain is what a zone write upserts against, so it has to fold — and the two
-    /// CHECKs are the enum and the zero rule, both enforced where they cannot be argued
-    /// with. `zone` is in the grain because the same printing in `main` and in `maybe` is
-    /// two different intentions, not one row with two homes.
+    /// The grain is what a category or variant write upserts against, so it has to fold —
+    /// and the quantity CHECK is enforced where it cannot be argued with. `category_id` is
+    /// in the grain for exactly `zone`'s old reason: the same printing filed under Main and
+    /// under the Maybeboard is two different intentions, not one row with two homes.
+    /// `variant` is new in v7 and in the grain again for the same shape of reason — the
+    /// same printing can sit in the Live deck and the Theory one at once, and an edit tried
+    /// out in Theory must never fold into the Live row it is being tried against.
+    ///
+    /// The enum-walking half of this test's predecessor —
+    /// `the_deck_card_grain_folds_and_the_zone_and_quantity_checks_hold`, which proved
+    /// `DECK_ZONES` against the live CHECK — moved to
+    /// `a_category_kind_is_one_of_the_five_and_predefined_names_round_trip` below: the CHECK
+    /// it walks now lives on `deck_categories.kind`, not on `deck_cards` at all.
     #[test]
-    fn the_deck_card_grain_folds_and_the_zone_and_quantity_checks_hold() {
+    fn the_deck_card_grain_folds_and_the_quantity_check_holds() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         seed_card(&conn, "bolt", "lea", "161");
         let d = deck(&conn, "Burn");
+        let main = category(&conn, d, "main", "Main deck");
+        let maybe = category(&conn, d, "maybe", "Maybeboard");
 
-        let add = |zone: &str, qty: i64| {
+        let add = |category_id: i64, variant: &str, qty: i64| {
             conn.execute(
                 &format!(
                     "INSERT INTO deck_cards
-                        (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
-                         created_at,updated_at)
-                     VALUES (?1,'bolt','lea','161','en','Lightning Bolt',?2,?3,
+                        (deck_id,category_id,variant,card_id,set_code,collector_number,lang,
+                         name,quantity,created_at,updated_at)
+                     VALUES (?1,?2,?3,'bolt','lea','161','en','Lightning Bolt',?4,
                              unixepoch(),unixepoch())
                      ON CONFLICT ({DECK_CARD_GRAIN}) DO UPDATE
                         SET quantity = quantity + excluded.quantity"
                 ),
-                rusqlite::params![d, zone, qty],
+                rusqlite::params![d, category_id, variant, qty],
             )
         };
-        add("main", 2).unwrap();
-        add("main", 3).expect("a second add must fold into the first, not raise");
-        add("maybe", 1).expect("`zone` is in the grain: `maybe` is a different row");
+        add(main, "live", 2).unwrap();
+        add(main, "live", 3).expect("a second add must fold into the first, not raise");
+        add(maybe, "live", 1)
+            .expect("`category_id` is in the grain: the Maybeboard is a different row");
+        add(main, "theory", 1)
+            .expect("`variant` is in the grain: Theory is a different row from Live");
 
-        let (rows, main): (i64, i64) = conn
+        let (rows, main_qty): (i64, i64) = conn
             .query_row(
-                "SELECT count(*), (SELECT quantity FROM deck_cards WHERE zone='main')
+                "SELECT count(*), (SELECT quantity FROM deck_cards
+                                    WHERE category_id = ?1 AND variant = 'live')
                  FROM deck_cards",
-                [],
+                [main],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!((rows, main), (2, 5));
+        assert_eq!((rows, main_qty), (3, 5));
 
-        // The enum is the five spec words and not their synonyms — 'sideboard' is what
-        // every other deck site calls this zone, which is exactly why it has to bounce.
-        // And zero removes here, as on the wishlist: `deck.rs` owns that translation, so
-        // a zero that reaches SQL is a bug and must not be storable.
-        for (zone, qty) in [("sideboard", 4), ("side", 0)] {
-            let err = add(zone, qty).expect_err(&format!("({zone}, {qty}) must not be storable"));
+        // Zero and negative are refused by the same shape of CHECK the collection and
+        // wishlist share: a deck slot at zero holds nothing worth keeping, so it never
+        // reaches the database as a stored row — `deck.rs` owns that translation into a
+        // delete, and a non-positive quantity that reaches SQL anyway is a bug.
+        for qty in [0, -1] {
+            let err =
+                add(main, "live", qty).expect_err(&format!("quantity {qty} must not be storable"));
             assert!(
                 matches!(&err, rusqlite::Error::SqliteFailure(e, _)
                          if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
-                "({zone}, {qty}) was rejected, but not by a CHECK: {err}"
+                "quantity {qty} was rejected, but not by a CHECK: {err}"
             );
         }
-        // Every zone the constant names is a zone the CHECK accepts. `DECK_ZONES` is
-        // mirrored in TypeScript and spelled out again in the frozen v5 DDL, so this is
-        // what keeps the three copies saying the same five words.
-        for zone in DECK_ZONES {
-            add(zone, 1).unwrap_or_else(|e| panic!("`{zone}` must be a legal zone, but: {e}"));
+    }
+
+    // ---- v7: categories replace the zone --------------------------------------------
+
+    /// `zone` is gone from `deck_cards` entirely, `category_id` is `NOT NULL`, and the two
+    /// columns the wider grain needs (`variant`, `tag_id`) exist. This is the shape check;
+    /// `the_v7_step_carries_a_v6_deck_across_into_categories` is the behaviour it enables.
+    #[test]
+    fn the_v7_step_replaces_the_zone_with_a_category() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrate(&conn).unwrap();
+
+        // `zone` is gone from the table entirely, and `category_id` is NOT NULL.
+        let cols: Vec<(String, i64)> = conn
+            .prepare("SELECT name, \"notnull\" FROM pragma_table_info('deck_cards')")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            !cols.iter().any(|(n, _)| n == "zone"),
+            "zone survived the rebuild"
+        );
+        assert_eq!(cols.iter().find(|(n, _)| n == "category_id").unwrap().1, 1);
+        assert!(cols.iter().any(|(n, _)| n == "variant"));
+        assert!(cols.iter().any(|(n, _)| n == "tag_id"));
+    }
+
+    /// A database that stopped at version 6 — decks and their cards in the pre-category
+    /// shape, which is what every machine that has synced since Plan 4 has on disk today.
+    /// Built by hand rather than by calling [`migrate`] and rewinding `PRAGMA user_version`
+    /// backward: rewinding the pragma would still leave `deck_cards` in its *v7* shape,
+    /// which is exactly the state this fixture must not be in — `migrate` never runs a step
+    /// twice, so a v7-shaped table with `user_version` forced back to 6 would hit the `if
+    /// v < 7` block over a table it does not match and fail in a way no real upgrade ever
+    /// could.
+    ///
+    /// Only the two tables the v7 step actually reads or writes are built: `decks` and
+    /// `deck_cards`, both the v5 shape, unchanged through v6 (the only thing v6 added was
+    /// `app_meta`, which this step never touches). `migrate`'s `if v < 7` branch is the only
+    /// one that can run once `user_version` already says 6, so nothing earlier is needed —
+    /// the same reasoning `v1_database` uses one step down.
+    fn v6_deck_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE decks (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                format_key TEXT NOT NULL DEFAULT 'casual',
+                description TEXT,
+                cover_kind TEXT NOT NULL DEFAULT 'card_art'
+                    CHECK (cover_kind IN ('card_art','custom')),
+                cover_card_id TEXT,
+                cover_image_path TEXT,
+                is_built INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE deck_cards (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                card_id TEXT NOT NULL,
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                name TEXT NOT NULL,
+                zone TEXT NOT NULL
+                    CHECK (zone IN ('main','side','commander','companion','maybe')),
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX idx_deck_cards_grain ON deck_cards (deck_id, card_id, zone);
+             CREATE INDEX idx_deck_cards_card ON deck_cards (card_id);
+
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// The test that fails in the field and nowhere else if the backfill is wrong: a real
+    /// v6 deck, one card in each of the five legacy zones, migrated forward. Every card must
+    /// land in a category whose `kind` is the zone it came from, keep its quantity and its
+    /// own `deck_cards.id` (which `deck_allocations` may be holding), and the Maybeboard
+    /// alone must come out `is_active = 0`.
+    #[test]
+    fn the_v7_step_carries_a_v6_deck_across_into_categories() {
+        let conn = v6_deck_database();
+        conn.execute(
+            "INSERT INTO decks (name, created_at, updated_at)
+             VALUES ('Burn', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let deck_id = conn.last_insert_rowid();
+
+        let zones = ["main", "side", "commander", "companion", "maybe"];
+        let mut ids = Vec::new();
+        for zone in zones {
+            conn.execute(
+                "INSERT INTO deck_cards
+                    (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                     created_at,updated_at)
+                 VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,3,unixepoch(),unixepoch())",
+                rusqlite::params![deck_id, format!("bolt-{zone}"), zone],
+            )
+            .unwrap();
+            ids.push((zone, conn.last_insert_rowid()));
         }
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        for (zone, id) in ids {
+            let (kind, is_active, quantity, row_id): (String, i64, i64, i64) = conn
+                .query_row(
+                    "SELECT cat.kind, cat.is_active, dc.quantity, dc.id
+                       FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+                      WHERE dc.card_id = ?1",
+                    [format!("bolt-{zone}")],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap_or_else(|e| panic!("no migrated row for the `{zone}` card: {e}"));
+            assert_eq!(
+                kind, zone,
+                "the `{zone}` card must land in a category of the matching kind"
+            );
+            assert_eq!(quantity, 3, "`{zone}`'s quantity must survive the rebuild");
+            assert_eq!(
+                row_id, id,
+                "`{zone}`'s `deck_cards.id` must survive the rebuild"
+            );
+            let want_active = i64::from(zone != "maybe");
+            assert_eq!(
+                is_active, want_active,
+                "`{zone}`'s category `is_active` must be {want_active}"
+            );
+        }
+    }
+
+    /// The twin of `the_v2_backfill_leaves_the_search_index_answering` and its v3/v5
+    /// siblings, one step further down the ladder: v7 touches only the deck tables, never
+    /// `cards`, so it owes `cards_fts` no rebuild — and this is what proves that claim
+    /// rather than assuming it. Run from `v1_database` so the whole ladder is walked, v7
+    /// included, exactly as the v3 gzip-guard test does one step up.
+    #[test]
+    fn the_v7_step_leaves_the_search_index_answering() {
+        let conn = v1_database();
+        insert_raw(&conn, "bolt", "Lightning Bolt", r#"{"object":"card"}"#);
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "the FTS index must survive the v7 step");
+    }
+
+    /// Walks [`CATEGORY_KINDS`] against the live CHECK on `deck_categories.kind`, the way
+    /// `the_deck_card_grain_folds_and_the_zone_and_quantity_checks_hold` used to walk
+    /// `DECK_ZONES` against `deck_cards`' own — so the constant and the CHECK cannot drift
+    /// apart unnoticed. [`PREDEFINED_CATEGORIES`]'s `(kind, name, is_active)` triples are
+    /// what `deck_meta::ensure_predefined_categories` will insert verbatim, so round-tripping
+    /// them here is the proof that every one is a legal row before any Rust code depends on
+    /// that being true.
+    #[test]
+    fn a_category_kind_is_one_of_the_five_and_predefined_names_round_trip() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let d = deck(&conn, "Burn");
+
+        let insert_kind = |kind: &str| {
+            conn.execute(
+                "INSERT INTO deck_categories
+                    (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?2, 1, 0, unixepoch(), unixepoch())",
+                rusqlite::params![d, kind],
+            )
+        };
+        for kind in CATEGORY_KINDS {
+            insert_kind(kind).unwrap_or_else(|e| panic!("`{kind}` must be a legal kind, but: {e}"));
+        }
+        let err = insert_kind("sideboard").expect_err("`sideboard` is not a kind the CHECK knows");
+        assert!(
+            matches!(&err, rusqlite::Error::SqliteFailure(e, _)
+                     if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
+            "`sideboard` was rejected, but not by a CHECK: {err}"
+        );
+
+        // `PREDEFINED_CATEGORIES` round-trips: every non-`main` kind, inserted the way
+        // `deck_meta::ensure_predefined_categories` will insert it, reads back with the
+        // same name and active flag it was seeded with — on a fresh deck, so the rows
+        // above (all `is_active = 1`, all named after their own kind) cannot be mistaken
+        // for these.
+        let d2 = deck(&conn, "Predefined");
+        for (kind, name, active) in PREDEFINED_CATEGORIES {
+            conn.execute(
+                "INSERT INTO deck_categories
+                    (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, unixepoch(), unixepoch())",
+                rusqlite::params![d2, name, kind, i64::from(active)],
+            )
+            .unwrap_or_else(|e| panic!("PREDEFINED_CATEGORIES `{kind}` must insert, but: {e}"));
+            let (read_name, read_active): (String, i64) = conn
+                .query_row(
+                    "SELECT name, is_active FROM deck_categories
+                      WHERE deck_id = ?1 AND kind = ?2",
+                    rusqlite::params![d2, kind],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(read_name, name, "`{kind}` must round-trip its name");
+            assert_eq!(
+                read_active,
+                i64::from(active),
+                "`{kind}` must round-trip its active flag"
+            );
+        }
+        assert_eq!(
+            PREDEFINED_CATEGORIES.len(),
+            CATEGORY_KINDS.len() - 1,
+            "every kind except `main` is predefined"
+        );
     }
 
     /// The seed is the research doc's format table as data, and the engine reads rules
