@@ -17,13 +17,24 @@
 //! no `REFERENCES` clause anywhere near a card id, with the printing denormalised beside
 //! the id so a row stays identifiable after the id it points at stops resolving.
 //!
-//! Enforced foreign keys exist only *between user tables*, and there are exactly three, all
-//! `ON DELETE CASCADE`: `deck_cards.deck_id`, `deck_allocations.deck_id` and
-//! `deck_allocations.collection_entry_id`. CASCADE is chosen per delete-site — it is right
-//! at both user-initiated ones (deleting a deck takes its list and its reservations;
-//! `collection::remove_entry` frees reservations on copies that no longer exist), and the
-//! one non-user delete, [`crate::reconcile`]'s fold, repoints allocations onto the
-//! surviving entry *before* the delete so its cascade fires over nothing.
+//! Enforced foreign keys exist only *between user tables* — never against `cards.id`, where
+//! a declared `REFERENCES` would abort every sync (see [`swap_staging`]) — and the `ON
+//! DELETE` action is chosen per delete-site rather than fixed once for the whole schema:
+//! CASCADE where the parent's deletion genuinely means the child should go too, SET NULL
+//! where the child has to outlive it.
+//!
+//! CASCADE is the common case — `deck_cards.deck_id`, `deck_cards.category_id`,
+//! `deck_allocations.deck_id`, `deck_allocations.collection_entry_id`,
+//! `deck_categories.deck_id`, `deck_tags.deck_id`, `deck_audit.deck_id` and
+//! `deck_folders.parent_id` all take it, because a deleted deck's cards and reservations, a
+//! deleted category's cards, and a deleted folder's sub-folders have nowhere else to be. It
+//! is right, too, at the app's one *non-user* delete: [`crate::reconcile`]'s fold repoints
+//! allocations onto the surviving entry *before* the delete runs, so the cascade fires over
+//! nothing, and `collection::remove_entry` relies on the same action to free reservations on
+//! copies that no longer exist. SET NULL is the other two — `decks.folder_id` (a folder is a
+//! filing decision, and the decks inside it are the user's work, not the folder's to take
+//! down with it) and `deck_cards.tag_id` (deleting a tag must never delete a card) — named
+//! here so this list can be checked against the DDL rather than trusted on its own.
 
 use rusqlite::Connection;
 
@@ -2598,11 +2609,19 @@ pub(crate) mod tests {
     /// v < 7` block over a table it does not match and fail in a way no real upgrade ever
     /// could.
     ///
-    /// Only the two tables the v7 step actually reads or writes are built: `decks` and
-    /// `deck_cards`, both the v5 shape, unchanged through v6 (the only thing v6 added was
-    /// `app_meta`, which this step never touches). `migrate`'s `if v < 7` branch is the only
-    /// one that can run once `user_version` already says 6, so nothing earlier is needed —
-    /// the same reasoning `v1_database` uses one step down.
+    /// The two tables the v7 step actually reads or writes are built in the v5 shape,
+    /// unchanged through v6 (the only thing v6 added was `app_meta`, which this step never
+    /// touches): `decks` and `deck_cards`. Alongside them, in reduced but real shape:
+    /// `collection_entries` and `deck_allocations` — not because the v7 step touches either,
+    /// but because `deck_allocations.collection_entry_id` and `deck_allocations.deck_id` are
+    /// the one enforced FK chain sharing `deck_cards`' neighbourhood, and `db::open` always
+    /// runs with `foreign_keys=ON`. Proving the `DROP TABLE deck_cards` / rebuild sequence
+    /// does not disturb that chain needs the chain to actually exist under the pragma, not
+    /// an argument that nothing points at `deck_cards` inbound.
+    ///
+    /// `migrate`'s `if v < 7` branch is the only one that can run once `user_version` already
+    /// says 6, so nothing earlier is needed — the same reasoning `v1_database` uses one step
+    /// down.
     fn v6_deck_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -2638,6 +2657,33 @@ pub(crate) mod tests {
              CREATE UNIQUE INDEX idx_deck_cards_grain ON deck_cards (deck_id, card_id, zone);
              CREATE INDEX idx_deck_cards_card ON deck_cards (card_id);
 
+             -- Reduced to the columns an allocation and its target need — nothing
+             -- decorative — but the FK and its CASCADE are the real v4/v5 DDL verbatim,
+             -- because those are exactly what this fixture exists to put under load.
+             CREATE TABLE collection_entries (
+                id INTEGER PRIMARY KEY,
+                card_id TEXT NOT NULL,
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                condition TEXT NOT NULL DEFAULT 'NM'
+                    CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+                quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE deck_allocations (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                collection_entry_id INTEGER NOT NULL
+                    REFERENCES collection_entries(id) ON DELETE CASCADE,
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+
              PRAGMA user_version = 6;",
         )
         .unwrap();
@@ -2645,10 +2691,15 @@ pub(crate) mod tests {
     }
 
     /// The test that fails in the field and nowhere else if the backfill is wrong: a real
-    /// v6 deck, one card in each of the five legacy zones, migrated forward. Every card must
-    /// land in a category whose `kind` is the zone it came from, keep its quantity and its
-    /// own `deck_cards.id` (which `deck_allocations` may be holding), and the Maybeboard
-    /// alone must come out `is_active = 0`.
+    /// v6 deck, one card in each of the five legacy zones, migrated forward under
+    /// `foreign_keys=ON` — as every real launch runs it, `db::open` always sets it — with a
+    /// live `deck_allocations` reservation on a `collection_entries` row along for the ride,
+    /// so the one enforced FK chain sharing `deck_cards`' neighbourhood is *proven* to
+    /// survive the `DROP TABLE` / rebuild sequence rather than assumed to, on the strength of
+    /// nothing declaring an inbound reference to `deck_cards`. Every card must land in a
+    /// category whose `kind` is the zone it came from, keep its quantity and its own
+    /// `deck_cards.id` (which `deck_allocations` may separately be holding), and the
+    /// Maybeboard alone must come out `is_active = 0`.
     #[test]
     fn the_v7_step_carries_a_v6_deck_across_into_categories() {
         let conn = v6_deck_database();
@@ -2674,12 +2725,53 @@ pub(crate) mod tests {
             ids.push((zone, conn.last_insert_rowid()));
         }
 
+        // A live reservation, on the neighbouring FK chain the v7 rebuild must not disturb:
+        // four copies owned, all four claimed by this deck.
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,tags,
+                 created_at,updated_at)
+             VALUES ('bolt-main','lea','161','en','nonfoil','NM',4,'[]',
+                     unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        let entry_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO deck_allocations
+                (deck_id, collection_entry_id, quantity, created_at, updated_at)
+             VALUES (?1, ?2, 4, unixepoch(), unixepoch())",
+            rusqlite::params![deck_id, entry_id],
+        )
+        .unwrap();
+
+        // The pragma every real launch runs under (`db::open`). Set before `migrate`, not
+        // inside it: `PRAGMA foreign_keys` is a no-op mid-transaction, and `migrate` opens
+        // its own.
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrate(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+
+        let allocated: i64 = conn
+            .query_row(
+                "SELECT da.quantity FROM deck_allocations da
+                   JOIN collection_entries ce ON ce.id = da.collection_entry_id
+                   JOIN decks d ON d.id = da.deck_id
+                  WHERE da.deck_id = ?1",
+                [deck_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|e| {
+                panic!("the allocation must still resolve after the deck_cards rebuild: {e}")
+            });
+        assert_eq!(
+            allocated, 4,
+            "the allocation's quantity must survive the rebuild untouched"
+        );
 
         for (zone, id) in ids {
             let (kind, is_active, quantity, row_id): (String, i64, i64, i64) = conn
