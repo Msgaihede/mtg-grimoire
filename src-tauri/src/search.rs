@@ -202,6 +202,44 @@ const TOTAL_CAP: i64 = 5_000;
 /// product decision and not a performance one.
 const ORDER_NAME: &str = "c.name ASC, c.released_at DESC";
 
+/// What makes two printings the same card.
+///
+/// `coalesce`, and not a bare `c.oracle_id`: the column is NULLABLE, and a bare `GROUP BY`
+/// puts **every** null-oracle printing into one group — not a wrong row but a *merged* one,
+/// showing unrelated cards under a single name with a printing count and a price range
+/// spanning all of them, and nothing anywhere would flag it.
+///
+/// No live row is null (0 of 116 590, reversible printings included), so this is 69 ms —
+/// 108 ms against 38 ms for the bare column — spent on a population of zero. Spent anyway,
+/// because the failure is silent, and because the collapsed browse is still 2.3× faster than
+/// today's uncollapsed one with it.
+///
+/// An **expression index** on this does not recover the 69 ms: SQLite will scan such an
+/// index but will not treat it as *covering*, and the page went to 700 ms (measured
+/// 2026-08-11). [`crate::schema::CARDS_INDEXES`]' `idx_cards_collapse` leads with the plain
+/// `oracle_id` column, and the group step computes the coalesce as it scans.
+const COLLAPSE_KEY: &str = "coalesce(c.oracle_id, c.id)";
+
+/// The representative printing's `id`, straight out of the aggregate that picks it.
+///
+/// `released_at` is a fixed-width ISO date, so coalescing it to `'0000-00-00'` makes the
+/// concatenation order exactly as `released_at DESC, id DESC` — and because that prefix is
+/// always ten characters, `substr(…, 11)` **is** the winning row's id. That is what turns
+/// the join back into a *primary-key* lookup: 108 ms, against 767 ms for joining on the
+/// group key and matching the composite expression a second time.
+///
+/// Ties on `released_at` break to the **greatest** id, where [`ORDER_NAME`] breaks them to
+/// the least. Ids are UUIDs, so both are arbitrary; this is the one that is written down.
+const COLLAPSE_REP: &str = "substr(max(coalesce(c.released_at,'0000-00-00') || c.id), 11)";
+
+/// Name order for a collapsed browse: the group's own name, which is also what it displays.
+///
+/// `min(c.name)`, not the representative's `c.name`. 71 of the 37 553 paper groups span two
+/// names — all reversible cards, `Command Tower` beside `Command Tower // Command Tower` —
+/// and `min` picks the canonical spelling in every one. Sorting by one and showing the other
+/// would file a row under a name it does not read as.
+const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
+
 /// The columns the search table's headers can sort on, and nothing else.
 ///
 /// `set` is the binder order — set code, then *natural* collector number, which is a `CAST`
@@ -336,13 +374,27 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     };
     let order = crate::sorting::order_by(req.sort.as_deref(), SEARCH_SORTS, fallback, "c.id ASC");
 
+    let collapse = req.collapse.unwrap_or(false);
+
     // The count runs first, while `params` still holds exactly the filter parameters and
     // nothing else. `LIMIT` inside the subquery is what bounds the work: SQLite stops
     // producing rows at the cap, so the count costs the cap, not the table.
-    let count_sql = format!(
-        "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} LIMIT {cap})",
-        cap = TOTAL_CAP + 1
-    );
+    //
+    // Collapsed, the denominator is a count of **cards**: the pager divides by it and the
+    // caption prints it, so counting printings over a list of cards would be a lie in both
+    // places. The cap still bounds it — SQLite stops producing *groups* at 5 001.
+    let count_sql = if collapse {
+        format!(
+            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} \
+             GROUP BY {COLLAPSE_KEY} LIMIT {cap})",
+            cap = TOTAL_CAP + 1
+        )
+    } else {
+        format!(
+            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} LIMIT {cap})",
+            cap = TOTAL_CAP + 1
+        )
+    };
     let counted: i64 = conn
         .query_row(
             &count_sql,
@@ -363,17 +415,59 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // 12 000-printing collection: the first page of 50 goes 0.16 ms → 1.6 ms, 200 rows cost
     // 3.5 ms, and page 100 (offset 5 000) goes 35 ms → 53 ms. The pager stops at the cap,
     // so that last figure is the worst one there is.
-    let sql = format!(
-        "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
-                c.type_line, c.mana_cost, c.price_usd, c.layout, c.oracle_id, c.finishes,
-                coalesce((SELECT sum(e.quantity) FROM collection_entries e
-                           WHERE e.card_id = c.id), 0),
-                EXISTS (SELECT 1 FROM wishlist_entries w
-                         WHERE w.card_id = c.id
-                            OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
-                                AND w.oracle_id = c.oracle_id))
-         FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
-    );
+    let sql = if collapse {
+        // Two steps. The group step computes every aggregate **and** the representative's
+        // id, and it takes the `LIMIT` — so at most 50 rows are ever fetched out of
+        // `cards`. Then one primary-key join back for that row's own columns.
+        //
+        // **The two status subqueries probe `c.oracle_id` — the joined representative's own
+        // indexed column — and never `g.oid`.** Writing them against the group key cost
+        // 1 514 ms on the browse and 12 729 ms on the rarity sort (measured 2026-08-11),
+        // because `coalesce(…)` is not indexable and each of 37 553 groups then re-scanned
+        // `cards`. It is the most expensive mistake available in this file.
+        //
+        // The cost of that choice is one edge case: a card whose `oracle_id` is NULL reads
+        // `0` copies rather than merging with another card's. A fence around the type,
+        // which is how the rest of the app treats a null `oracle_id` too.
+        //
+        // `g.nm` is `min(c.name)` and is what the row *displays*, so the browse sorts and
+        // reads by the same string — see `ORDER_NAME_COLLAPSED`.
+        format!(
+            "WITH g AS (
+                SELECT {COLLAPSE_KEY} AS oid, count(*) AS printings,
+                       min(c.price_usd) AS lo, max(c.price_usd) AS hi, min(c.name) AS nm,
+                       {COLLAPSE_REP} AS rep
+                FROM {from_sql} WHERE {where_sql}
+                GROUP BY {COLLAPSE_KEY}
+                ORDER BY {ORDER_NAME_COLLAPSED}, {COLLAPSE_KEY} ASC
+                LIMIT ? OFFSET ?
+             )
+             SELECT c.id, g.nm, c.set_code, c.set_name, c.collector_number, c.rarity,
+                    c.type_line, c.mana_cost, c.price_usd, c.layout, c.oracle_id, c.finishes,
+                    coalesce((SELECT sum(e.quantity) FROM collection_entries e
+                               JOIN cards k ON k.id = e.card_id
+                              WHERE k.oracle_id = c.oracle_id), 0),
+                    EXISTS (SELECT 1 FROM wishlist_entries w
+                             WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
+                                OR w.card_id IN (SELECT id FROM cards
+                                                  WHERE oracle_id = c.oracle_id)),
+                    g.printings, g.lo, g.hi
+             FROM g JOIN cards c ON c.id = g.rep
+             ORDER BY g.nm ASC, c.id ASC"
+        )
+    } else {
+        format!(
+            "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
+                    c.type_line, c.mana_cost, c.price_usd, c.layout, c.oracle_id, c.finishes,
+                    coalesce((SELECT sum(e.quantity) FROM collection_entries e
+                               WHERE e.card_id = c.id), 0),
+                    EXISTS (SELECT 1 FROM wishlist_entries w
+                             WHERE w.card_id = c.id
+                                OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
+                                    AND w.oracle_id = c.oracle_id))
+             FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
+        )
+    };
     // Pushed last, because `?` binds by position and these are the last two in the SQL.
     params.push(Box::new(limit));
     params.push(Box::new(req.offset));
@@ -402,9 +496,23 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             finishes: row.get(11).map_err(|e| e.to_string())?,
             owned_quantity: row.get(12).map_err(|e| e.to_string())?,
             wishlisted: row.get(13).map_err(|e| e.to_string())?,
-            printings: 1,
-            price_low: row.get(8).map_err(|e| e.to_string())?,
-            price_high: row.get(8).map_err(|e| e.to_string())?,
+            // Uncollapsed, a row is a printing: it stands for one, and its "range" is its
+            // own price. Collapsed, the three ride on the group step's aggregates.
+            printings: if collapse {
+                row.get(14).map_err(|e| e.to_string())?
+            } else {
+                1
+            },
+            price_low: if collapse {
+                row.get(15).map_err(|e| e.to_string())?
+            } else {
+                row.get(8).map_err(|e| e.to_string())?
+            },
+            price_high: if collapse {
+                row.get(16).map_err(|e| e.to_string())?
+            } else {
+                row.get(8).map_err(|e| e.to_string())?
+            },
         });
     }
     Ok(SearchResponse {
@@ -985,6 +1093,202 @@ mod tests {
         assert_eq!(card.printings, 1);
         assert_eq!(card.price_low, card.price_usd);
         assert_eq!(card.price_high, card.price_usd);
+    }
+
+    /// Three printings of one card become one row, and the row says how many it stands for
+    /// and what the cheapest and dearest of them cost.
+    #[test]
+    fn collapse_folds_every_printing_of_a_card_into_one_row() {
+        let conn = seeded();
+        for (id, set, released, price) in [
+            ("b1", "lea", "1993-08-05", 400.0),
+            ("b2", "m10", "2009-07-17", 5.0),
+            ("b3", "m11", "2010-07-16", 3.0),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,
+                                    price_usd,is_paper,oracle_id,raw)
+                 VALUES (?1,'Shock',?2,'1','en','normal',?3,?4,1,'o-shock','{}')",
+                rusqlite::params![id, set, released, price],
+            )
+            .unwrap();
+        }
+
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let shocks: Vec<&CardSummary> = r.items.iter().filter(|c| c.name == "Shock").collect();
+        assert_eq!(shocks.len(), 1, "three printings, one row");
+        assert_eq!(shocks[0].printings, 3);
+        assert_eq!(shocks[0].id, "b3", "the newest printing represents the card");
+        assert_eq!(shocks[0].price_low, Some(3.0));
+        assert_eq!(shocks[0].price_high, Some(400.0));
+    }
+
+    /// `total` is a count of **cards** when the rows are cards. A caption reading "5 cards"
+    /// over three rows would be the pager's denominator lying to the reader.
+    #[test]
+    fn the_total_counts_cards_when_the_search_is_collapsed() {
+        let conn = seeded();
+        for id in ["b1", "b2", "b3"] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                    oracle_id,raw)
+                 VALUES (?1,'Shock','lea',?1,'en','normal',1,'o-shock','{}')",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+        let flat = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let collapsed = run_search(
+            &conn,
+            &SearchRequest {
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // The fixture's own two paper rows carry no `oracle_id`, so each is its own card.
+        assert_eq!(flat.total, 5, "two fixture printings plus three Shocks");
+        assert_eq!(collapsed.total, 3, "two fixture cards plus one Shock");
+        assert_eq!(collapsed.total as usize, collapsed.items.len());
+    }
+
+    /// `cards.oracle_id` is NULLABLE. A bare `GROUP BY c.oracle_id` puts every null-oracle
+    /// printing in one group — not a wrong row but a *merged* one, showing unrelated cards
+    /// under a single name with a printing count spanning all of them, and nothing anywhere
+    /// would flag it. No live row is null (0 of 116 590), so this case exists only here —
+    /// and [`COLLAPSE_KEY`]'s `coalesce` is what it pins.
+    #[test]
+    fn printings_with_no_oracle_id_are_each_their_own_card() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        for (id, name) in [("n1", "Alpha"), ("n2", "Beta")] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
+                 VALUES (?1,?2,'lea','1','en','normal',1,'{}')",
+                rusqlite::params![id, name],
+            )
+            .unwrap();
+        }
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.total, 2, "two cards, not one merged group");
+        let names: Vec<&str> = r.items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Alpha", "Beta"]);
+        assert!(r.items.iter().all(|c| c.printings == 1));
+    }
+
+    /// Filters narrow printings first; the survivors are grouped. So the count and the
+    /// range describe what matched, and never the whole database.
+    #[test]
+    fn the_printing_count_describes_what_matched_and_not_the_database() {
+        let conn = seeded();
+        for (id, set, price) in [("b1", "lea", 400.0), ("b2", "m10", 5.0), ("b3", "m10", 3.0)] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,price_usd,
+                                    is_paper,oracle_id,raw)
+                 VALUES (?1,'Shock',?2,?1,'en','normal',?3,1,'o-shock','{}')",
+                rusqlite::params![id, set, price],
+            )
+            .unwrap();
+        }
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                set_code: Some("m10".into()),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(
+            r.items[0].printings, 2,
+            "the two m10 printings, not all three"
+        );
+        assert_eq!(
+            r.items[0].price_high,
+            Some(5.0),
+            "and priced across those two"
+        );
+    }
+
+    /// "Do I have this card" is the question a collapsed row asks, so copies of *any*
+    /// printing count toward it. Uncollapsed the same fixture still answers per printing.
+    #[test]
+    fn a_collapsed_row_counts_copies_of_every_printing_of_the_card() {
+        let conn = seeded();
+        for (id, set) in [("b1", "lea"), ("b2", "m10")] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                    oracle_id,released_at,search_text,raw)
+                 VALUES (?1,'Shock',?2,?1,'en','normal',1,'o-shock','2009-01-01','Shock','{}')",
+                rusqlite::params![id, set],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('b1','lea','b1','en','nonfoil','NM',2,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let collapsed = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("shock".into()),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(collapsed.items.len(), 1);
+        assert_eq!(
+            collapsed.items[0].owned_quantity, 2,
+            "copies of any printing of the card"
+        );
+
+        let flat = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("shock".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let b2 = flat.items.iter().find(|c| c.id == "b2").unwrap();
+        assert_eq!(b2.owned_quantity, 0, "uncollapsed is still per printing");
     }
 
     /// `collapse` is optional in the payload and absent means false, so every existing
