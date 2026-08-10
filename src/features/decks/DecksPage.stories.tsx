@@ -5,7 +5,7 @@ import { ipc } from "@/lib/ipc";
 import { DecksPage } from "./DecksPage";
 
 /**
- * `.storybook/fake/seeds.ts:475`'s `ORPHAN_DECK_CARD_ID`, spelled out because the seed keeps its
+ * `.storybook/fake/seeds.ts:462`'s `ORPHAN_DECK_CARD_ID`, spelled out because the seed keeps its
  * three orphan ids module-private.
  *
  * It is deliberately outside the fixture — an orphan is a row whose printing left the database,
@@ -22,8 +22,8 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
  * and that is a fact about the app rather than a shortcut. "Set as cover" is the only control
  * that writes one and it is withheld from an orphaned row (`ZoneColumn.tsx:793`), so a cover only
  * *becomes* orphaned later, when a sync takes its printing away. `deck_update` validates no cover
- * (`db.ts:2007` is a bare `coalesce`, matching `deck::update_deck`), and `coverArtist` is a
- * lookup on the way out (`db.ts:853`, mirroring the real `LEFT JOIN cards c ON c.id =
+ * (`db.ts:2019` is a bare `coalesce`, matching `deck::update_deck`), and `coverArtist` is a
+ * lookup on the way out (`db.ts:855`, mirroring the real `LEFT JOIN cards c ON c.id =
  * d.cover_card_id` at `deck.rs:235`) — so a stale id answers a null artist exactly as it does in
  * the shipped app.
  *
@@ -71,7 +71,7 @@ const meta = {
           "**archived**. `deck::list_decks` sorts archived last, then most recently touched " +
           "first, so that order is the wall's.\n\n" +
           "**A tile's count is not the deck's row count.** `cardCount` is summed over " +
-          "`SIZE_ZONES` — main plus commander (`db.ts:835-836`, mirroring `DeckRow.cardCount`) " +
+          "`SIZE_ZONES` — main plus commander (`db.ts:837-838`, mirroring `DeckRow.cardCount`) " +
           "— so the Modern deck's 15 sideboard cards and its 2-card scratchpad are in the " +
           "editor and not in the caption. The number under a tile is the number the format's " +
           "size rule is about, which is the same definition the editor's headline figure and " +
@@ -144,7 +144,7 @@ export const Gallery: Story = {
  * **Archived sorts last and is never deleted.** The same icon control is Archive on a live deck
  * and Restore on a filed one, named for what pressing it would do, so the deck the reader put
  * away is one press from coming back. `Old School 93/94` is the seeded archived deck and it is
- * under the 60-card minimum on purpose (`seeds.ts:390-393`) — a deck somebody stopped working
+ * under the 60-card minimum on purpose (`seeds.ts:377-380`) — a deck somebody stopped working
  * on is the cheapest place to keep that branch reachable.
  *
  * Its caption reads 22 cards, and pressing Archive on a live deck moves it here in front of the
@@ -186,7 +186,7 @@ export const Archived: Story = {
 /**
  * The one question this view asks before doing something it cannot undo.
  *
- * `deck_delete` really deletes — the deck, its cards and its claims, by cascade (`db.ts:2014-2020`)
+ * `deck_delete` really deletes — the deck, its cards and its claims, by cascade (`db.ts:2026-2032`)
  * — and a deck is minutes of work, so the destructive control asks once, in words, naming what
  * would go with it and offering the reversible thing instead. The count in the question is the
  * tile's own, from one derivation of the plural, so the caption and the question can never
@@ -233,7 +233,7 @@ export const DeleteAsksFirst: Story = {
  * and a credit the app cannot substantiate is worse than no credit. The tile draws its art, its
  * name and its caption exactly as its neighbour does; the one line that would have said who
  * painted it is simply not there. **It heals on the next sync that brings the printing back** —
- * `coverArtist` is a lookup at read time (`db.ts:853`, the `LEFT JOIN cards c ON c.id =
+ * `coverArtist` is a lookup at read time (`db.ts:855`, the `LEFT JOIN cards c ON c.id =
  * d.cover_card_id` at `deck.rs:235`), not a stored column, so nothing has to notice.
  *
  * Told **per tile**, which is the claim: Kenrith Two-Drops keeps its credit in the same wall on
@@ -336,7 +336,7 @@ export const NewDeck: Story = {
 /**
  * A write the database refused.
  *
- * `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
+ * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the wall underneath is untouched and
  * still holds every tile.
  *

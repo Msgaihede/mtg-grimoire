@@ -255,6 +255,35 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   `gone`. Saying nothing gets `starter` with no fault. A fault is set on the world, so a story
   about `BUSY` shows what the *app* does with a refusal rather than what one mocked call
   returns.
+- **A world belongs to a story, not to the module — because a docs page mounts every story on
+  it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
+  so a fake built on module globals looks right and answers all ten stories of a docs page as
+  whichever one installed itself last. The global stays — `src/lib/ipc.ts` imports `invoke` as
+  a bare function and no React context travels down an import — but it is a **pointer** at a
+  world now, and `.storybook/fake/scope.ts` owns the four ways it is kept right: a per-world
+  `QueryClient` binding every `queryFn`/`mutationFn`, an `<Activate>` sibling rendered
+  **before** the story so its effect lands first (React fires effects in fiber-completion
+  order), `invoke` re-pointing on the way out so an awaited continuation stays put, and one
+  `setTimeout` patch for `useSync`'s poll chain. Adding an entry point to the fake means asking
+  which of the four covers it. `src/stories.test.tsx` mounts two seeds **simultaneously** and
+  is the test that fails if any of this regresses; `.storybook/fake/world.test.ts` covers the
+  three unit-testable layers, each proven by breaking it.
+- **`useAppStore` is the one global that cannot be made per-story from `.storybook/`** —
+  zustand's `create` does not expose its initializer, and the actions close over that one
+  store's `set`. So the four story files that write it during render (`AppShell`,
+  `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
+  `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
+  **frame** and with it its own module graph. The other 28 render inline. A new story file that
+  writes the store needs the same parameter or its docs page shows one story's view under every
+  heading.
+- **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
+  because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
+  `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
+  for *no such printing*. Lookup is the union of the live worlds' cards over `CARDS`.
+- **A fixture more than one story file needs lives in `.storybook/fake/fixtures.ts`.** A CSF
+  file cannot own one — every non-default export is indexed as a story — but a non-CSF module
+  can, and `printing()` had been written out eleven times before it had a home. Not in
+  `cards.ts`: that file is generated wholesale and says so.
 - **Art is synthetic by default, with a Live toolbar switch.** Synthetic so a checkout with no
   network renders every story exactly as one with it, and so `build-storybook` produces a
   static site that draws card art without touching Scryfall. **No card image bytes are

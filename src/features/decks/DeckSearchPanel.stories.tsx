@@ -286,7 +286,7 @@ export const NoMatch: Story = {
 /**
  * A write the database refused, said beside the button that was pressed.
  *
- * `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
+ * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the wall underneath is untouched and
  * still counting 41.
  *

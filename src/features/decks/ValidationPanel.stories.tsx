@@ -480,7 +480,7 @@ export const UnknownLegality: Story = {
  * Tiny Leaders: Reborn caps every card at mana value 3, and Fire // Ice is a 4.
  *
  * `maxManaValue` is the cell, and `tlr` is the only seeded row that sets one — 3, at
- * `fixtures.ts:201`. The rule reads **every face** as well as the card, because Scryfall's
+ * `validation/fixtures.ts:201`. The rule reads **every face** as well as the card, because Scryfall's
  * top-level `cmc` is the front face's and an adventure or a modal double-faced card can hide a
  * face above the ceiling behind a legal number. Fire // Ice is the opposite case and worth having
  * for it: CR 202.3d sums a split card's halves, so its `cmc` is 4 while each half is 2, and the

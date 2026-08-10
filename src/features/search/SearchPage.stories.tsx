@@ -78,7 +78,7 @@ const meta = {
           "stale.\n\n" +
           "**The corpus is 43 printings and a default search finds 41 of them.** " +
           "`SearchRequest.paperOnly` is omitted-means-true and the fixture holds two digital " +
-          "printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — `.storybook/fake/seeds.ts:633` " +
+          "printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — `.storybook/fake/seeds.ts:620` " +
           "names the same two), so every count on this page under the `starter` seed is 41 and " +
           'not 43. Measured 2026-08-10 by calling `readHandlers(seed("starter")).search_cards` ' +
           "with the page's own request.\n\n" +
@@ -195,7 +195,7 @@ export const NeedsReview: Story = {
  *
  * This is the whole point of the app's second connection. Reads go through `AppState.db_read`
  * (`SQLITE_OPEN_READ_ONLY`) so a search is not stuck behind an ~80 s ingest, and the fake keeps
- * that asymmetry exactly: `db.ts:1467`'s `BUSY` is raised by `refuseIfBusy` in every write
+ * that asymmetry exactly: `db.ts:1479`'s `BUSY` is raised by `refuseIfBusy` in every write
  * handler and by no read handler at all.
  *
  * So a `busy` story about *this* page is a story about nothing changing. Where the refusal is
@@ -216,7 +216,7 @@ export const Busy: Story = {
 /**
  * 5 243 printings, and a count that stops before it has walked them.
  *
- * The backend counts to `search::TOTAL_CAP` and no further — `db.ts:1199`, 5 000 — because
+ * The backend counts to `search::TOTAL_CAP` and no further — `db.ts:1201`, 5 000 — because
  * nobody reads the exact size of a 116 k-row browse. Past it the answer carries
  * `totalIsCapped`, and `countOf` (`SearchPage.tsx:222-225`) renders `5,000+ cards`: a floor,
  * which is true, rather than `5,000 cards`, which would not be.
@@ -261,7 +261,7 @@ export const CappedTotal: Story = {
  * Typing until the count is real again.
  *
  * The `+` is not decoration: it is on while the backend stopped counting and off the moment the
- * match set fits under the cap. `Ancient` is one of the 26 adjectives `seeds.ts:556-583` builds
+ * match set fits under the cap. `Ancient` is one of the 26 adjectives `seeds.ts:543-570` builds
  * the synthetic corpus from, so it names one card in 26 — 201 printings, measured 2026-08-10 —
  * and the caption becomes an exact figure with the `aria-rowcount` to match.
  *
@@ -294,10 +294,10 @@ export const NarrowedToAnExactCount: Story = {
  * The `owned` filter, and the one thing about it that is easy to get wrong: **it counts entries,
  * not copies.**
  *
- * `db.ts:1256-1262` mirrors `search.rs` here — the filter asks whether `collection_entries` has a
+ * `db.ts:1258-1264` mirrors `search.rs` here — the filter asks whether `collection_entries` has a
  * row for the printing, and a row stepped to zero is a row the collection keeps. So Smuggler's
  * Copter passes `owned: true` on the strength of a row holding **no copies at all**
- * (`seeds.ts:267-269`, seeded at quantity 0 with the note that outlived the cards), while
+ * (`seeds.ts:254-256`, seeded at quantity 0 with the note that outlived the cards), while
  * `OwnedBadge` draws nothing for it: the badge's own guard is `owned <= 0 && !wishlisted`
  * (`OwnedBadge.tsx:29`).
  *

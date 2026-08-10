@@ -1429,7 +1429,7 @@ export function readHandlers(db: FakeDb) {
     /**
      * `deck::list_format_specs`, served from the validation fixtures.
      *
-     * **`SPECS` and no second copy**: `fixtures.ts` is already a hand-copied mirror of
+     * **`SPECS` and no second copy**: `validation/fixtures.ts` is already a hand-copied mirror of
      * `schema.rs`'s `FORMAT_SPECS_SEED`, and a second mirror is a second place for a cell to
      * drift. It carries **12** of the 25 seeded rows (measured 2026-08-09) — the formats the
      * engine tests need — so a picker in a story offers 12 formats and not 24.
@@ -1578,7 +1578,7 @@ function validName(name: string): string {
 /**
  * `deck::valid_format`, over {@link SPECS} rather than the `format_specs` table.
  *
- * **A narrower table, so a narrower answer**: `fixtures.ts` carries 12 of the 25 seeded rows
+ * **A narrower table, so a narrower answer**: `validation/fixtures.ts` carries 12 of the 25 seeded rows
  * (the read's `format_specs_list` says so), and this refuses the other 13 — `premodern` is a
  * format the app knows and a story cannot make a deck in. Blank is the DDL's own default and
  * is not checked against the table at all, exactly as the Rust returns early for it.

@@ -37,7 +37,7 @@ const row = (c: FakeCard): Row => ({
 const ALL: Row[] = CARDS.map(row);
 
 /**
- * `search::SEARCH_SORTS`' rarity `CASE`, copied from `.storybook/fake/db.ts:412-428` so
+ * `search::SEARCH_SORTS`' rarity `CASE`, copied from `.storybook/fake/db.ts:414-430` so
  * {@link SortedByTwoColumns} can put its rows in the order a backend answering that spec would.
  *
  * It is a **rank**, not an alphabet: `mythic` sorts between `common` and `rare`, and `special`
@@ -258,7 +258,7 @@ export const Empty: Story = {
  * One key, ascending — the ordinary case, and the one that needs no rank.
  *
  * The rows are handed over in name order because that is what a backend answering
- * `[{ key: "name", dir: "asc" }]` would return. `cmp` in `.storybook/fake/db.ts:250` sorts by
+ * `[{ key: "name", dir: "asc" }]` would return. `cmp` in `.storybook/fake/db.ts:252` sorts by
  * UTF-16 code units, which is SQLite's default `BINARY` collation, so `localeCompare` is
  * deliberately not used here either: it sorts `"a"` before `"B"` and would reorder the list
  * against what the app would actually show.

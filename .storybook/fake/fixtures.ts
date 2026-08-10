@@ -19,6 +19,12 @@
  * string and `writeFileSync`s it over whatever was there — so a helper added beside `CARDS` is
  * deleted by the next corpus refresh, with no conflict and nothing to notice. Its own header says
  * "do not edit by hand". This file is where hand-written fixtures *over* that corpus live instead.
+ *
+ * **There is a second `fixtures.ts` in this repository** — `src/features/decks/validation/
+ * fixtures.ts`, the hand-copied mirror of `schema.rs`'s `FORMAT_SPECS_SEED` that `SPECS` comes
+ * from — and `ValidationPanel.stories.tsx` imports both. Anything citing that one by line number
+ * spells the directory out, because a bare `fixtures.ts:201` in a file that imports two of them
+ * names neither.
  */
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";

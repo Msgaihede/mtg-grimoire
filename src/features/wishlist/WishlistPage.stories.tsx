@@ -28,13 +28,13 @@ const meta = {
           "Driven end to end by `.storybook/fake/`. The **five seeded wishes are five different " +
           "answers to “is this filled?”**, and every one of them is arithmetic the fake really " +
           "does rather than a number written into a fixture — `wishlist::OWNED_SQL` is mirrored " +
-          "at `db.ts:772-781`. Measured 2026-08-10 over " +
+          "at `db.ts:774-783`. Measured 2026-08-10 over " +
           '`readHandlers(seed("starter")).wishlist_list`: Counterspell 2 of 4, Jace 0 of 1, ' +
           "the **foil** Ragavan 0 of 1 with a nonfoil in the binder, Rhystic Study 0 of 1, and " +
           "the any-printing Sol Ring **2 of 1** — fulfilled twice over, because a wish naming no " +
           "printing is filled by every printing of the card.\n\n" +
           "**Zero deletes here, and the collection's zero does not.** `wishlist_set_quantity(0)` " +
-          "removes the row (`db.ts:1956-1965`, mirroring the table's `CHECK (quantity > 0)`) " +
+          "removes the row (`db.ts:1968-1977`, mirroring the table's `CHECK (quantity > 0)`) " +
           "because a wish for none of something is not a wish. **But the stepper cannot reach " +
           "zero**: it is `min={1}` (`WishlistPage.tsx:572`), because a stepper that deleted a row " +
           "when held down would be a one-way door with no undo. Removal is its own control, and " +
@@ -42,7 +42,7 @@ const meta = {
           "because the UI does not offer one.\n\n" +
           "**There is no `Large` story, and that is a fact about the seeds rather than about " +
           'this page.** `seed: "large"` builds 5 243 cards and 600 collection entries and ' +
-          "**no wishes at all** — `seeds.ts:747-749` says so in as many words, and " +
+          "**no wishes at all** — `seeds.ts:734-736` says so in as many words, and " +
           "`wishlist_list` answers `total: 0` under it (measured 2026-08-10). A story named " +
           "`Large` would render the zero state {@link Empty} already covers, under a name " +
           "promising depth. Closing it means seeding wishes into `largeSeed`, which is a change " +
@@ -91,9 +91,9 @@ export const Default: Story = {
  * A foil wish reading nothing owned, with a nonfoil of the same printing in the binder.
  *
  * This is why finish is part of what makes two wishes two wishes. `ownedAgainstWish` narrows by
- * the wish's `preferredFinish` when it names one (`db.ts:772-781`), so the seeded nonfoil
- * Damaged Ragavan (`.storybook/fake/seeds.ts:252-254`) fills none of the seeded foil wish
- * (`seeds.ts:292`) — 0 of 1, beside a collection that holds one.
+ * the wish's `preferredFinish` when it names one (`db.ts:774-783`), so the seeded nonfoil
+ * Damaged Ragavan (`.storybook/fake/seeds.ts:239-241`) fills none of the seeded foil wish
+ * (`seeds.ts:279`) — 0 of 1, beside a collection that holds one.
  *
  * Condition is deliberately *not* a term in that count: a wishlist has nowhere to say "and in
  * NM", so a Damaged copy would fill a finish-blind wish completely.
@@ -193,7 +193,7 @@ export const Empty: Story = {
  * a list told every row is the same height would overlap the one below it by exactly that band.
  *
  * The seeded sentence is `reconcile::flag_deleted`'s, copied verbatim with its date into
- * `.storybook/fake/seeds.ts:489`. It is the flagged row's *whole* explanation, and the second
+ * `.storybook/fake/seeds.ts:476`. It is the flagged row's *whole* explanation, and the second
  * half of it is what to do about it — which is why the band carries the sentence as a `title` as
  * well, and why a screen reader gets all of it either way.
  *
@@ -222,7 +222,7 @@ export const NeedsReview: Story = {
 /**
  * A write the database refused.
  *
- * `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
+ * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the list underneath is untouched.
  * The alert is a `role="alert"` of its own rather than a line folded into the status above it:
  * that one describes the list, and this one describes something the reader just did to it.

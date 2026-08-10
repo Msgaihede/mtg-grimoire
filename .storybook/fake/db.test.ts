@@ -810,7 +810,7 @@ describe("the table as a command table", () => {
 describe("the tables that are not tables", () => {
   it("serves format_specs from the validation fixtures, in sort order", () => {
     const specs = readHandlers(makeDb()).format_specs_list();
-    // 12 of the 25 seeded rows — `fixtures.ts` mirrors the formats the engine tests need,
+    // 12 of the 25 seeded rows — `validation/fixtures.ts` mirrors the formats the engine tests need,
     // measured 2026-08-09.
     expect(specs).toHaveLength(12);
     expect(specs.map((s) => s.sortOrder)).toEqual(
