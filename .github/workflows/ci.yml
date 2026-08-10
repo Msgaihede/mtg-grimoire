@@ -36,6 +36,15 @@ jobs:
       - name: Test
         run: npm run test:run
 
+      # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `src/`, so `tsc`
+      # and ESLint already see them — MDX is checked by neither, and Prettier actively breaks
+      # it (it rewrites `{/* */}` to `{/_ _/}`, which fails the build). This step runs in
+      # `frontend` rather than a job of its own because `frontend` already feeds `ci-ok`, the
+      # one protected check; a new job would need adding to that aggregator's `needs:` to have
+      # any teeth at all.
+      - name: Build Storybook
+        run: npm run build-storybook
+
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
