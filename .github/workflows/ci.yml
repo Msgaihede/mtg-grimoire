@@ -159,6 +159,18 @@ jobs:
       - name: Test
         run: npm run test:run
 
+      # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `src/`, so `tsc`
+      # and ESLint already see them; `.storybook/DesignSystem.mdx` is seen by neither — `tsc`
+      # reads only `.ts`/`.tsx`, and `eslint` reports "File ignored because no matching
+      # configuration was supplied". It covers more than MDX: the Storybook build is also what
+      # compiles `.storybook/preview.css` and the fake backend's entry points.
+      #
+      # In `frontend` rather than a job of its own because `frontend` already feeds `ci-ok`,
+      # the one protected check; a new job would need adding to that aggregator's `needs:` to
+      # have any teeth at all.
+      - name: Build Storybook
+        run: npm run build-storybook
+
   rust:
     name: rust (${{ matrix.os }})
     needs: changes

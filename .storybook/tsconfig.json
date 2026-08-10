@@ -1,0 +1,23 @@
+{
+  /* The Storybook half of the type-check, split from the app's on purpose.
+
+     `.storybook/main.ts` is Node code — it imports `node:url` — while everything under
+     `src/` runs in a webview. A separate program is what lets `node-url.d.ts` declare that
+     one module for this directory alone; see that file for why `@types/node` is not
+     installed instead. `npm run build` runs `tsc` and then `tsc -p .storybook`, so the fake
+     backend — which mirrors every DTO in `ipc.ts` — is checked by `npm run verify` exactly
+     as the app is.
+
+     `vite/client` is listed because this program does not contain `src/vite-env.d.ts` and so
+     does not inherit its triple-slash reference; `preview.tsx`'s three CSS side-effect
+     imports need the `declare module "*.css"` it carries.
+
+     `extends` inherits `paths` from the parent, and a relative path in an extended config
+     resolves against the file that *declared* it — so `@/*` still points at `<repo>/src/*`
+     and not at `.storybook/src/*`. */
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client"]
+  },
+  "include": ["**/*"]
+}

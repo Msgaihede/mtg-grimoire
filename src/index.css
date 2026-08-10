@@ -6,7 +6,12 @@
    retiring it. Documentation must be free to name a class without shipping it.
 
    Anything that holds classes has to be listed here now. Today that is `src/` and the app
-   shell; a new one is a silently missing style, so add it in the same commit. */
+   shell; a new one is a silently missing style, so add it in the same commit.
+
+   `.storybook` is deliberately **not** listed, and does not become one of those missing
+   styles: `.storybook/preview.css` imports this file and declares that source itself, so
+   Storybook gets the classes and the shipped bundle does not. It was listed here once, and
+   the cost was measured — see that file's header. */
 @import "tailwindcss" source(none);
 @source "../src";
 @source "../index.html";

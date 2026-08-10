@@ -1,0 +1,35 @@
+/* The app's stylesheet plus the one Tailwind source only Storybook needs, and the reason the
+   two are separate files.
+
+   `src/index.css` runs `@import "tailwindcss" source(none)`, so every directory holding
+   classes has to be listed there by hand — and listing `.storybook` in that file put
+   Storybook's own utilities into the **shipped** bundle. Measured 2026-08-09 across two full
+   `npm run build`s: `dist/assets/index-*.css` went 119,935 → 119,126 bytes, **11 rules
+   dropped and 0 added** — `.size-10`, `.break-words`, `.p-0`, `.mb-4`, `.mt-4`, `.mt-6`,
+   `.gap-y-3`, `.leading-5`, `.grid-cols-[auto_1fr]` and the `minmax(12rem,1fr)` and
+   `minmax(15rem,1fr)` grid tracks. Small today because a decorator mostly reaches for
+   utilities the app already uses; it is the *growth* that matters, since every page added to
+   the catalogue adds its own.
+
+   So the app's entry stays the app's, `preview.tsx` imports this instead, and the extra
+   source is declared here. **`@source` resolves relative to the file that declares it**,
+   which is what makes the split work at all: the path below is `<repo>/.storybook`, the same
+   directory the old line named, reached from one level deeper.
+
+   **This does not fence off stories, and nothing can**: a `.stories.tsx` lives under `src/`,
+   which `@source "../src"` scans and must. A utility written only in a story is still in the
+   shipped CSS. So is a bare utility *word* in prose — `.contents` survived this split because
+   four files under `src/` use the English word "contents" in a comment, and the scanner
+   cannot tell the two apart. That is the same hazard `source(none)` was introduced for; it is
+   bounded here and not worth a fence.
+
+   One editing note, learned by breaking the build with it: a CSS comment cannot hold a glob
+   with a star-slash in it, because that closes the comment. `storybook build` is the check
+   that catches it — which is the whole argument for Part 2's CI step, made against this file
+   on its first draft.
+
+   A new directory of Storybook-only classes goes here; a new one under `src/` goes in
+   `src/index.css`. Putting either in the other file is silent both ways — a missing style in
+   one direction, a bigger shipped bundle in the other. */
+@import "../src/index.css";
+@source "../.storybook";

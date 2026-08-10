@@ -1,8 +1,18 @@
 node_modules/
 dist/
+storybook-static/
+# `tsconfig.node.json` is `composite`, so anything that builds it as a *project* — `tsc -b`,
+# or an editor's TS server doing the same — drops a `.tsbuildinfo` beside it. `npm run build`
+# does not (plain `tsc` ignores `references`), which is why this arrives on a developer's
+# machine and never in CI, and why it is worth a line rather than a diagnosis.
+*.tsbuildinfo
 src-tauri/target/
 src-tauri/data/
 data/
 *.local
 .DS_Store
 .superpowers/
+# Claude Code parks git worktrees here: whole second checkouts of this repo. `git add -A`
+# would otherwise try to embed one as a gitlink.
+.claude/worktrees/
+planned-features.txt
