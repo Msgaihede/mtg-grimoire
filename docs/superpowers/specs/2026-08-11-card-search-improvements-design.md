@@ -30,17 +30,18 @@ The default browse is the state the page opens in, so its cost is the design con
 
 | query | today | collapsed |
 |---|---|---|
-| default browse, page 1 (50 rows) | 301 ms | **38 ms** |
-| …carrying the owned/wishlist status subqueries | 301 ms | **45 ms** |
-| capped count | 15 ms | **1.1 ms** |
-| page 100 (offset 4950 — the deepest the pager reaches) | 53 ms | **64 ms** |
-| text `dragon*`, relevance-ranked | ~2 ms | **21 ms** |
-| text `bolt*`, relevance-ranked | ~2 ms | **1.7 ms** |
-| Set / Rarity / Type header press, **no filter at all** | 313–325 ms | **448–525 ms** |
+| default browse, page 1 (50 rows), status subqueries included | 301 ms | **108 ms** |
+| capped count | 15 ms | **31 ms** |
+| **the page as the view opens it (page + count)** | **316 ms** | **139 ms** |
+| page 100 (offset 4950 — the deepest the pager reaches) | 53 ms | **119 ms** |
+| price sort | 345 ms | **95 ms** |
+| text `dragon*`, relevance-ranked | ~2 ms | **25 ms** |
+| text `bolt*`, relevance-ranked | ~2 ms | **2.1 ms** |
+| Set / Rarity / Type header press, **no filter at all** | 313–325 ms | **600–620 ms** |
 
-Collapsing therefore makes the app's slowest ordinary query **eight times faster**, and the only
-thing it makes slower is a header press on a completely unfiltered browse. With any text in the box
-every one of those sorts is ~40 ms, because FTS narrows the set before the grouping runs.
+Collapsing therefore makes the state the page opens in **2.3× faster**, and the only thing it makes
+slower is a header press on a completely unfiltered browse. With any text in the box every one of
+those sorts is ~40 ms, because FTS narrows the set before the grouping runs.
 
 ### Three shapes were measured and two rejected
 
@@ -48,10 +49,40 @@ every one of those sorts is ~40 ms, because FTS narrows the set before the group
 |---|---|
 | `row_number() OVER (PARTITION BY oracle_id …)` | **2,486 ms** |
 | `GROUP BY` + join back on `oracle_id` and a composite key | 767 ms |
-| `GROUP BY` + join back on the **primary key** (below) | **38 ms** |
+| `GROUP BY` + join back on the **primary key** (below) | **108 ms** |
 
 The window function stays at 2,475 ms even with the new index available, so it is not a tuning
 problem — it is the wrong shape. It sorts and partitions all 107 k rows before `LIMIT` can apply.
+
+### 2.1 The group key is null-safe, and that costs 69 ms
+
+`cards.oracle_id` is NULLABLE. A bare `GROUP BY c.oracle_id` puts **every** null-oracle printing in
+one group — not a wrong row but a *merged* one, showing N unrelated cards under a single name with a
+printing count and a price range spanning all of them, and nothing anywhere would flag it. The group
+key is therefore `coalesce(c.oracle_id, c.id)`, which gives a null-oracle printing a group of its
+own.
+
+| group key | browse page | count | 3 fixture rows, 2 of them null-oracle |
+|---|---|---|---|
+| `c.oracle_id` | 38 ms | 0.8 ms | **2 groups — wrong** |
+| `coalesce(c.oracle_id, c.id)` | **108 ms** | **31 ms** | 3 groups |
+| `c.oracle_id, CASE WHEN c.oracle_id IS NULL THEN c.id END` | 93 ms | 34 ms | 3 groups |
+
+The compound key is 15 ms cheaper than `coalesce` and yields a *nullable* group key that every
+downstream join then has to handle; `coalesce` yields one non-null key and is what the design uses.
+
+No live row is null — 0 of 116,590, reversible printings included — so this is 69 ms spent on a
+population of zero. It is spent anyway because the failure mode is silent, and because the collapsed
+browse is still 2.3× faster than today's with it.
+
+**An expression index on `coalesce(oracle_id, id)` does not rescue the 69 ms**: measured, SQLite
+scans it but will not treat it as *covering*, so the page went to **700 ms**. The plain index below
+is what the group step reads.
+
+**The status subqueries must key on `c.oracle_id` — the joined representative's own column — and
+never on the group key.** Writing them against `coalesce(...)` cost the browse **1,514 ms** and the
+rarity sort **12,729 ms**, because the expression is not indexable and every one of 37,553 groups
+then re-scanned `cards`. Measured, and the single most expensive mistake available in this design.
 
 ## 3. Collapse — backend
 
@@ -67,7 +98,7 @@ substr(max(coalesce(c.released_at,'0000-00-00') || c.id), 11) AS rep
 sort exactly as `released_at DESC, id DESC` — and because the date is always 10 characters,
 **`substr(…, 11)` is the representative's `id`**. That is what turns the join back into
 `JOIN cards c ON c.id = g.rep`, a primary-key lookup, and it is the difference between 767 ms and
-38 ms. Verified against a per-group `ORDER BY released_at DESC, id DESC LIMIT 1`: **50 groups
+108 ms. Verified against a per-group `ORDER BY released_at DESC, id DESC LIMIT 1`: **50 groups
 checked, 0 mismatches.**
 
 Ties on `released_at` are broken by the **greatest** `id`, where the uncollapsed browse's
@@ -133,21 +164,21 @@ combination, and it is the honest reading — the row summarises the answer, not
 
 `ownedQuantity` is the exception, and deliberately: it sums copies across **all** printings of the
 oracle card, because "do I have this card" is the question a collapsed row asks. `wishlisted` is
-true for a wish on any printing or on the oracle card. Measured cost of both together: nil — the
-page goes 38 ms to 45 ms.
+true for a wish on any printing or on the oracle card. Both probe `c.oracle_id` on the joined
+representative row, for the reason §2.1 measured at four figures; the 108 ms page carries them.
 
 ### 3.5 The sorts
 
 | sort | answered by | unfiltered browse |
 |---|---|---|
-| name | the group step (`min(name)`) | 38 ms |
-| price, low end asc / high end desc | the group step (`min`/`max(price_usd)`) | 37 ms |
-| relevance (text searches) | the group step (`min(score)`) | 2–21 ms |
-| set, rarity, type | the **representative's** own columns | 448–525 ms |
+| name | the group step (`min(name)`) | 108 ms |
+| price, low end asc / high end desc | the group step (`min`/`max(price_usd)`) | 95 ms |
+| relevance (text searches) | the group step (`min(score)`) | 2–25 ms |
+| set, rarity, type | the **representative's** own columns | 600–620 ms |
 
 The first three are computed by the grouping itself, so `LIMIT 50` applies before the join and only
 50 rows are ever fetched. The last three are properties of a row the group step has not resolved
-yet, so all 37,553 groups are joined and sorted before the limit. That is the 448–525 ms, it happens
+yet, so all 37,553 groups are joined and sorted before the limit. That is the 600–620 ms, it happens
 only on a completely unfiltered browse, and any text at all takes it to ~40 ms.
 
 Sorting by an aggregate instead — "the best rarity this card was ever printed at" — was rejected:
@@ -309,10 +340,10 @@ nothing about `mtgimg://` or about a photograph under a gradient.
 
 ## 9. Risks
 
-- **The 448–525 ms sorts.** Set, rarity and type on a completely unfiltered collapsed browse. Known,
-  measured, documented; any text filter takes them to ~40 ms. Closing it means resolving the
-  representative's sort keys from a covering index before the limit, which the wide-index
-  measurement says is not free.
+- **The 600–620 ms sorts.** Set, rarity and type on a completely unfiltered collapsed browse —
+  roughly double today's 313–325 ms. Known, measured, documented; any text filter takes them to
+  ~40 ms. Closing it means resolving the representative's sort keys from a covering index before the
+  limit, which the wide-index measurement says is not free.
 - **`MATERIALIZED` is invisible load-bearing syntax.** Dropping it is a runtime SQL error rather
   than a bad ranking, so it fails loudly — but only on a *text* search, which is why a test covers
   that path specifically.
