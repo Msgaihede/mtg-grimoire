@@ -599,11 +599,15 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //   `decks.cover_card_id` carry no REFERENCES clause, and the printing (plus the
         //   name: a deck list that cannot name an orphaned card is not a list) is
         //   denormalised beside `card_id`, exactly as the collection and wishlist do.
-        // * Everything that names USER DATA is an enforced reference — the only three
-        //   in the schema, all ON DELETE CASCADE, an action chosen per delete-site:
-        //   right for the two user-initiated deletes (deck delete, `remove_entry`), and
-        //   made safe for the one non-user delete (the reconciler's fold) by
-        //   `reconcile::fold_into_existing` repointing allocations BEFORE it deletes.
+        // * Everything that names USER DATA is an enforced reference — `deck_cards.deck_id`,
+        //   `deck_allocations.deck_id` and `deck_allocations.collection_entry_id`, all ON
+        //   DELETE CASCADE here. (v7 adds several more elsewhere, two of them SET NULL —
+        //   see the module doc at the top of this file for the current, checkable list;
+        //   this step is history and only ever spoke for what it itself created.) CASCADE
+        //   is chosen per delete-site: right for the two user-initiated deletes (deck
+        //   delete, `remove_entry`), and made safe for the one non-user delete (the
+        //   reconciler's fold) by `reconcile::fold_into_existing` repointing allocations
+        //   BEFORE it deletes.
         tx.execute_batch(&format!(
             "ALTER TABLE cards ADD COLUMN power TEXT;
              ALTER TABLE cards ADD COLUMN toughness TEXT;
@@ -2612,12 +2616,23 @@ pub(crate) mod tests {
     /// The two tables the v7 step actually reads or writes are built in the v5 shape,
     /// unchanged through v6 (the only thing v6 added was `app_meta`, which this step never
     /// touches): `decks` and `deck_cards`. Alongside them, in reduced but real shape:
-    /// `collection_entries` and `deck_allocations` — not because the v7 step touches either,
-    /// but because `deck_allocations.collection_entry_id` and `deck_allocations.deck_id` are
-    /// the one enforced FK chain sharing `deck_cards`' neighbourhood, and `db::open` always
-    /// runs with `foreign_keys=ON`. Proving the `DROP TABLE deck_cards` / rebuild sequence
-    /// does not disturb that chain needs the chain to actually exist under the pragma, not
-    /// an argument that nothing points at `deck_cards` inbound.
+    /// `collection_entries` and `deck_allocations`.
+    ///
+    /// **Neither is touched by the v7 step, and neither proves anything about the
+    /// `DROP TABLE deck_cards` / rebuild sequence itself** — `deck_allocations` references
+    /// `decks(id)` and `collection_entries(id)`, and the v7 step only does an additive
+    /// `ALTER TABLE decks ADD COLUMN` (renumbers nothing) and never touches
+    /// `collection_entries` at all, so that chain is causally disconnected from the rebuild
+    /// by construction. What they *are* here for: proving the whole migration still
+    /// completes under `foreign_keys=ON` — the pragma `db::open` always runs with, and which
+    /// no test with real deck rows had exercised before this one — and proving a user's
+    /// pre-existing allocation is still there and still resolves once the migration is over,
+    /// rather than quietly cleared. What proves the rebuild leaves no dangling reference is
+    /// `foreign_keys=ON` itself — every FK here is checked immediately, so a bad
+    /// `category_id` fails the migration outright rather than committing (measured in the
+    /// test below) — with `PRAGMA foreign_key_check` afterwards as a whole-database sweep
+    /// for whatever that immediate check cannot see: a dangling reference this transaction's
+    /// own writes never touch.
     ///
     /// `migrate`'s `if v < 7` branch is the only one that can run once `user_version` already
     /// says 6, so nothing earlier is needed — the same reasoning `v1_database` uses one step
@@ -2692,14 +2707,22 @@ pub(crate) mod tests {
 
     /// The test that fails in the field and nowhere else if the backfill is wrong: a real
     /// v6 deck, one card in each of the five legacy zones, migrated forward under
-    /// `foreign_keys=ON` — as every real launch runs it, `db::open` always sets it — with a
-    /// live `deck_allocations` reservation on a `collection_entries` row along for the ride,
-    /// so the one enforced FK chain sharing `deck_cards`' neighbourhood is *proven* to
-    /// survive the `DROP TABLE` / rebuild sequence rather than assumed to, on the strength of
-    /// nothing declaring an inbound reference to `deck_cards`. Every card must land in a
-    /// category whose `kind` is the zone it came from, keep its quantity and its own
-    /// `deck_cards.id` (which `deck_allocations` may separately be holding), and the
-    /// Maybeboard alone must come out `is_active = 0`.
+    /// `foreign_keys=ON` — as every real launch runs it, `db::open` always sets it. This is
+    /// what the test actually demonstrates: the migration completes with foreign keys
+    /// enforced (which, measured by temporarily breaking the rebuild's `SELECT`, is already
+    /// what would refuse a dangling `category_id` — `migrate` itself fails outright rather
+    /// than committing one, before `PRAGMA foreign_key_check` below ever runs); every card
+    /// keeps its quantity and its own `deck_cards.id` (which `deck_allocations` may
+    /// separately be holding) and lands in a category whose `kind` is the zone it came from —
+    /// which is the assertion that would catch the backfill's JOIN resolving to a *valid but
+    /// wrong* category, the one failure mode neither FK enforcement nor `foreign_key_check`
+    /// can see, since the reference still resolves; with the Maybeboard alone coming out
+    /// `is_active = 0`; no reference anywhere in the whole database is left dangling, on any
+    /// table, including ones this test does not otherwise touch (`foreign_key_check`'s own
+    /// job once `migrate` has returned); and a pre-existing `deck_allocations` reservation is
+    /// still there and still resolves afterwards — proving the migration does not quietly
+    /// clear a user's claims, not that the rebuild "cannot" disturb them, since that FK chain
+    /// does not run through `deck_cards` at all.
     #[test]
     fn the_v7_step_carries_a_v6_deck_across_into_categories() {
         let conn = v6_deck_database();
@@ -2725,8 +2748,11 @@ pub(crate) mod tests {
             ids.push((zone, conn.last_insert_rowid()));
         }
 
-        // A live reservation, on the neighbouring FK chain the v7 rebuild must not disturb:
-        // four copies owned, all four claimed by this deck.
+        // A live reservation the migration must not quietly clear: four copies owned, all
+        // four claimed by this deck. Its own FK chain (`deck_allocations` → `decks` and
+        // `collection_entries`) does not run through `deck_cards`, so this proves the
+        // migration leaves a user's existing claims alone — not that the rebuild "cannot"
+        // touch them, which `PRAGMA foreign_key_check` below is what actually shows.
         conn.execute(
             "INSERT INTO collection_entries
                 (card_id,set_code,collector_number,lang,finish,condition,quantity,tags,
@@ -2756,6 +2782,33 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
 
+        // A whole-database dangling-reference sweep, for less than it first looks like it
+        // buys. Measured directly (temporarily changing the v7 rebuild's `SELECT`
+        // to `cat.id + 100000` and running this test): a *dangling* `category_id` never
+        // reaches this line at all — `migrate(&conn).unwrap()` above already panics on
+        // "FOREIGN KEY constraint failed", because every FK here is checked immediately
+        // under `foreign_keys=ON`, and `INSERT INTO deck_cards_v7 … SELECT` fails outright
+        // rather than committing a bad row. So this assertion is not what would catch that
+        // bug; the pragma being on before `migrate` runs already is. What this line still
+        // covers, and `migrate(&conn).unwrap()` does not: a dangling reference on a row this
+        // transaction's own DML never touches — pre-existing corruption, or a future step
+        // that writes through a path this one does not — on any FK, on any table, not only
+        // the five cards this test names. (A *valid but wrong* reference — the backfill's
+        // JOIN landing a row in the right kind of category but the wrong deck — is a
+        // different failure mode again, one no dangling-reference check can see; that is
+        // what the per-card `kind` assertion below is for.)
+        let violations: Vec<String> = conn
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            violations.is_empty(),
+            "the rebuild must leave no dangling foreign key anywhere in the database: {violations:?}"
+        );
+
         let allocated: i64 = conn
             .query_row(
                 "SELECT da.quantity FROM deck_allocations da
@@ -2766,11 +2819,11 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap_or_else(|e| {
-                panic!("the allocation must still resolve after the deck_cards rebuild: {e}")
+                panic!("the pre-existing allocation must still resolve after the migration: {e}")
             });
         assert_eq!(
             allocated, 4,
-            "the allocation's quantity must survive the rebuild untouched"
+            "the migration must not quietly clear a user's existing allocation"
         );
 
         for (zone, id) in ids {
