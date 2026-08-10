@@ -6,44 +6,28 @@ import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
 import { SearchPage } from "@/features/search/SearchPage";
+import { SettingsPage } from "@/features/settings/SettingsPage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
-import { useAppStore, type ViewId } from "@/lib/store";
+import { useAppStore } from "@/lib/store";
+import { useUpdate, type Update } from "@/lib/useUpdate";
 
-/**
- * What each view says while it is still a placeholder.
- *
- * The blurb only — no title. The ribbon's `h1` already names the active view, and a
- * second copy of the same word in the content was both a repetition and, at 20px against
- * the ribbon's 18px, a subheading louder than the heading above it.
- */
-const BLURB: Record<Exclude<ViewId, "search" | "collection" | "wishlist" | "decks">, string> = {
-  settings: "Data folder, sync behaviour, import and export. Coming in a later plan.",
-};
-
-function ActiveView() {
+function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
   if (activeView === "search") return <SearchPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
+  if (activeView === "settings") return <SettingsPage update={update} />;
   // The gallery is the Decks view in its first state and the editor is the same view with a
   // deck open — one destination, two states, which is why the id lives in the store and not in
   // a route. Keyed by the deck: opening a second one from anywhere is a fresh editor rather
   // than one that inherits the last deck's grouping and open menu.
-  if (activeView === "decks") {
-    return openDeckId === null ? (
-      <DecksPage />
-    ) : (
-      <DeckEditor key={openDeckId} deckId={openDeckId} />
-    );
-  }
-
-  return (
-    <section className="mx-auto max-w-prose py-16 text-center">
-      <p className="text-sm text-dim">{BLURB[activeView]}</p>
-    </section>
-  );
+  //
+  // Last, and with no placeholder branch after it: every `ViewId` is now a real view, so the
+  // `BLURB` map that used to catch Settings has nothing left to catch. What is still missing
+  // from Settings is a sentence *inside* Settings, where it belongs.
+  return openDeckId === null ? <DecksPage /> : <DeckEditor key={openDeckId} deckId={openDeckId} />;
 }
 
 /**
@@ -68,13 +52,17 @@ export default function App() {
   // whole app — every sync tick, every keystroke in the search box — and each one tears
   // the window listener down and adds it back for no change in behaviour.
   const closeCard = useCallback(() => setSelectedCardId(null), [setSelectedCardId]);
+  // Owned here rather than in `AppShell`, because two places render it: the ribbon's button
+  // and the Settings panel. One hook means one `update:progress` listener — two would be two
+  // subscriptions racing to describe the same download.
+  const update = useUpdate();
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AppShell>
+      <AppShell update={update}>
         <div className="flex h-full min-h-0 gap-4">
           <div className="min-w-0 flex-1">
-            <ActiveView />
+            <ActiveView update={update} />
           </div>
           {selectedCardId && (
             <CardDetailPane

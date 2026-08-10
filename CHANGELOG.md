@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.2.0...v0.3.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* the Tauri bundle identifier changes from `com.mtgcollection.tracker` to `com.mtggrimoire.app`. A machine that installed v0.2.0 with the NSIS or MSI installer will see this as a separate application rather than an upgrade, and its per-user database under `%APPDATA%/com.mtgcollection.tracker/data` is not migrated -- copy the folder across to keep it. Portable installs are unaffected: their `data/` sits beside the exe and is found exactly as before.
+
+### Features
+
+* **collection:** sortable headers over the shared table ([b8c075a](https://github.com/Msgaihede/mtg-grimoire/commit/b8c075adb543cd450d41cb9a1b9634b2646d7c8d))
+* rename the app to MTG Grimoire ([3284268](https://github.com/Msgaihede/mtg-grimoire/commit/3284268ab3b19085c3ab75c2772f349a56683aa6))
+* **search:** order results by a list of columns, not one key ([8e34525](https://github.com/Msgaihede/mtg-grimoire/commit/8e345252040bbb137cbe23ab1561c301d7ab470f))
+* **search:** sort the results table by clicking its headers ([836f74d](https://github.com/Msgaihede/mtg-grimoire/commit/836f74da17c864db556d47773806dec736d1aef0))
+* **sort:** one ORDER BY builder for all three lists ([061141d](https://github.com/Msgaihede/mtg-grimoire/commit/061141ddccd4f0f717ea36bbeded06c3512d3799))
+* **sort:** the sort spec every table header will drive ([f45d1db](https://github.com/Msgaihede/mtg-grimoire/commit/f45d1db982137d080798d599bbd6b60014e3ffec))
+* **table:** one virtualised table for the three that were copies ([7d7e458](https://github.com/Msgaihede/mtg-grimoire/commit/7d7e458877fc1c7bb0c23d963d5f5ddf179dc68a))
+* **update:** a ribbon affordance and a Settings panel for updates ([c15d105](https://github.com/Msgaihede/mtg-grimoire/commit/c15d10583ffc210f3e7bae4b21b5714ec59eb931))
+* **update:** check GitHub Releases and install from inside the app ([4f983d9](https://github.com/Msgaihede/mtg-grimoire/commit/4f983d9709c0b60cf14df715d80ebbfb2c67a022))
+* **wishlist:** sortable headers over the shared table ([e89c8f1](https://github.com/Msgaihede/mtg-grimoire/commit/e89c8f12e631fbed0a7ad7e054a5a427878deba6))
+
+
+### Bug Fixes
+
+* **images:** never paint one card's art under another card's name ([e5c31d4](https://github.com/Msgaihede/mtg-grimoire/commit/e5c31d42e91099a04285e967e9fc74213b50c9fb))
+* **search:** keep the set picker inside the window, and drive it live ([81396cb](https://github.com/Msgaihede/mtg-grimoire/commit/81396cbe5e2e54abb71da569e8df6f43f89310a9))
+* **ui:** stop a table header painting over an open dropdown ([bcbbe23](https://github.com/Msgaihede/mtg-grimoire/commit/bcbbe23c9b21447ec21159d67906be1f92266bee))
+* **update:** gate the predecessor timeout to Windows ([366a28b](https://github.com/Msgaihede/mtg-grimoire/commit/366a28bdcc953442496e59e44d40b7be13a2a34a))
+* **update:** wait on the predecessor's process, not on deleting its image ([f2f31f6](https://github.com/Msgaihede/mtg-grimoire/commit/f2f31f6306bbbac3364096203b796869b7403485))
+
+
+### Performance Improvements
+
+* **images:** stop pacing an origin that has no rate limit ([221f774](https://github.com/Msgaihede/mtg-grimoire/commit/221f774eba2b8c5d0da5e01e9f4b0f8097eacf24))
+
 ## [0.2.0](https://github.com/Msgaihede/mtg-grimoire/compare/mtg-collection-tracker-v0.1.0...mtg-collection-tracker-v0.2.0) (2026-08-09)
 
 
