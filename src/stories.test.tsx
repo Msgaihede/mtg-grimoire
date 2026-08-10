@@ -1,6 +1,16 @@
+import type { ReactElement } from "react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { composeStories, setProjectAnnotations } from "@storybook/react-vite";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import preview from "../.storybook/preview";
+import { CARDS } from "../.storybook/fake/cards";
+// **The two story modules the block at the foot of this file names.** Imported rather than
+// pulled out of the glob below, because `composeStories` types its result from the module's own
+// exports and the glob types every module as `unknown` — a story reached that way has no
+// `Gallery` on it as far as the compiler is concerned. The glob loads these two eagerly as
+// well; a module is one instance either way, so this costs nothing but the two lines.
+import * as AppShellStories from "./components/AppShell.stories";
+import * as DecksPageStories from "./features/decks/DecksPage.stories";
 
 /**
  * The module aliases `.storybook/main.ts` gives the Storybook build, given to this file.
@@ -197,3 +207,97 @@ for (const { file, plays } of SCANNED) {
     }
   });
 }
+
+/**
+ * Two stories with different seeds, **mounted at the same time**.
+ *
+ * This is the shape of an autodocs page and it is the one shape every other test in this
+ * repository misses: the loop above renders one story per `it`, and `.storybook/`'s own suite
+ * has no React in it at all (`vite.config.ts` collects `.test.ts` there, never `.test.tsx`).
+ * The fake used to install a story's world by overwriting module globals, which is correct
+ * when Storybook unmounts one story before mounting the next and wrong when ten of them mount
+ * together — the last one to render owned the dispatch table for the whole page. Ten story
+ * files put differing seeds and faults on one docs page.
+ *
+ * The two pairs below are the two ways a story's data arrives:
+ *
+ * * `DecksPage` reads through TanStack Query.
+ * * `AppShell` does not. Its card count comes from `useSync`, which is `setState` and a
+ *   chained `setTimeout` by deliberate choice (`useSync.ts:88-93`), and its first poll is made
+ *   straight out of a **mount effect**.
+ *
+ * **Measured 2026-08-10, by breaking each half of the fix in turn and re-running this block**,
+ * because "two mechanisms cover this" is worth nothing unless someone has checked which:
+ *
+ * * Simulate the old module-global world — one shared scope for every `installWorld` — and
+ *   **both** fail. That is the regression this block exists for.
+ * * Disable the `queryFn`/`mutationFn` binding in `world.ts` and both still pass: on a *first*
+ *   mount TanStack Query's fetch starts from `useSyncExternalStore`'s subscribe, which runs in
+ *   the layout phase after `<Activate>`'s. The binding is what covers everything after that
+ *   first mount — a refetch, a retry, an invalidation — and `world.test.ts`'s "keeps a world's
+ *   fetches in it" is where that half is proved, because it can ask for one out of turn.
+ * * Move `preview.tsx`'s `<Activate>` after `{children}` and the **`AppShell` pair fails** while
+ *   the `DecksPage` pair passes. That is the ordering claim in `Activate`'s doc, measured: a
+ *   mount effect reaching the fake directly has nothing else holding the pointer for it.
+ *
+ * Both pairs are written so that each half asserts something **positive** that only its own
+ * seed can produce. A pair of negatives would stay green on a page where nothing rendered.
+ */
+describe("two stories with different seeds, mounted together", () => {
+  /** What `sync_status` answers under the `starter` seed — `db.cards.length`, which is the
+   *  generated corpus. Derived rather than typed, so a regeneration moves it. */
+  const STARTER_CARDS = CARDS.length.toLocaleString("en-US");
+
+  /** Each story in a box of its own, so `within` can ask one of them a question. A composed
+   *  story brings its own decorators, and both of these bring a fixed-size frame. */
+  const both = (first: ReactElement, second: ReactElement) => {
+    render(
+      <>
+        <div data-testid="first">{first}</div>
+        <div data-testid="second">{second}</div>
+      </>,
+    );
+    return [within(screen.getByTestId("first")), within(screen.getByTestId("second"))] as const;
+  };
+
+  it("answers each one's queries out of its own world", async () => {
+    const { Gallery, Empty } = composeStories(DecksPageStories);
+    const [starter, empty] = both(<Gallery />, <Empty />);
+
+    // `starter` has three decks and `empty` has none, and each half waits for its own answer.
+    await waitFor(async () => {
+      await expect(starter.getByRole("list", { name: "Your decks" })).toBeInTheDocument();
+    });
+    await waitFor(async () => {
+      await expect(
+        empty.getByText(/A deck is a list you build for a format\./),
+      ).toBeInTheDocument();
+    });
+    // …and neither has the other's. Read after both positives have landed, on a DOM that has
+    // already committed both stories.
+    await expect(empty.queryByRole("list", { name: "Your decks" })).toBeNull();
+    await expect(starter.queryByText(/A deck is a list you build for a format\./)).toBeNull();
+  });
+
+  it("answers each one's mount-effect poll out of its own world", async () => {
+    const { Search, FirstRun } = composeStories(AppShellStories);
+    const [starter, empty] = both(<Search />, <FirstRun />);
+
+    // The `starter` shell knows how many cards it has…
+    await waitFor(async () => {
+      await expect(starter.getByText(new RegExp(`${STARTER_CARDS} cards`))).toBeInTheDocument();
+    });
+    // …and the `empty` one is still setting up, which is the whole of what a `cardCount` of
+    // exactly 0 means.
+    await waitFor(async () => {
+      await expect(empty.getByRole("dialog")).toHaveTextContent("Setting up your card database");
+    });
+    await expect(starter.queryByRole("dialog")).toBeNull();
+    await expect(empty.queryByText(new RegExp(`${STARTER_CARDS} cards`))).toBeNull();
+    // Both stories set the same `activeView`, so this pair says nothing about `useAppStore` —
+    // which `preview.tsx` explains cannot be made per-story from outside `src/`, and which is
+    // why the four story files that write it during render render in frames on their docs
+    // pages instead.
+    await expect(starter.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
+  });
+});

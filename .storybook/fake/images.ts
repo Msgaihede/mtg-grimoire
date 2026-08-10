@@ -71,9 +71,61 @@ export function setArtMode(next: ArtMode): void {
   mode = next;
 }
 
-/** The 43 fixture printings by id. A `find` per tile would be fine; a wall of them per render
- *  is forty-odd scans for a lookup that never changes. */
-const BY_ID = new Map<string, FakeCard>(CARDS.map((c) => [c.id, c]));
+/**
+ * The generated 43 by id — the corpus when no world is installed, and the floor under every
+ * world that is.
+ *
+ * A `find` per tile would be fine; a wall of them per render is forty-odd scans for a lookup
+ * that never changes.
+ */
+const FIXTURE_CORPUS = new Map<string, FakeCard>(CARDS.map((c) => [c.id, c]));
+
+/**
+ * The `cards` table of every **installed** world, newest lookups first.
+ *
+ * **This is the fix for the `large` seed drawing 5 200 error placeholders.** This module used
+ * to keep one map built from `CARDS` at module load, so every id `seeds.ts`'s `largeCards()`
+ * mints — `f0000000-0000-4000-8000-…`, 5 200 of them — missed it, fell through to
+ * {@link synthetic} with no row, and was drawn as the literal **"Unknown card"** over eight
+ * hex digits. That state means "this story asked for a printing the corpus does not have",
+ * and it was being shown for 5 200 printings the corpus *did* have, with real
+ * `artCropUrl`/`normalUrl` columns on them that Live art could never reach either. The
+ * `SearchPage` `large` wall was a screen of identical placeholders.
+ *
+ * A set of maps rather than one, because a docs page has several worlds installed at once
+ * (see `scope.ts`). A union is the right answer to a lookup by card id whichever world asks:
+ * an id identifies a printing, every world draws its rows from the same generated corpus, and
+ * two worlds that hold the same id hold the same row. So this needs none of the pointer
+ * discipline the dispatch table needs — which matters, because `cardImageUrl` is called
+ * during render, from components no decorator wraps.
+ */
+const corpora = new Set<ReadonlyMap<string, FakeCard>>();
+
+/** Add a world's cards, and hand back the removal. `installWorld` calls it; the story's
+ *  unmount calls what it returns. */
+export function installCorpus(cards: readonly FakeCard[]): () => void {
+  const corpus = new Map<string, FakeCard>(cards.map((c) => [c.id, c]));
+  corpora.add(corpus);
+  return () => {
+    corpora.delete(corpus);
+  };
+}
+
+/**
+ * The row behind a card id, or `undefined` for a printing nothing has.
+ *
+ * Falls back to {@link FIXTURE_CORPUS} rather than answering only out of the installed
+ * worlds, which is what keeps the `empty` seed drawing named placeholders: its `cards` table
+ * is empty by design, and a story that renders a known printing beside it — the quick-add
+ * popup's target, a card pane opened on an id — should still say which card it is.
+ */
+function cardById(cardId: string): FakeCard | undefined {
+  for (const corpus of corpora) {
+    const card = corpus.get(cardId);
+    if (card) return card;
+  }
+  return FIXTURE_CORPUS.get(cardId);
+}
 
 /**
  * The URL for one face of one printing at one size — the fake's answer, with the real
@@ -87,7 +139,7 @@ const BY_ID = new Map<string, FakeCard>(CARDS.map((c) => [c.id, c]));
  * where it is at least labelled as one.
  */
 export function cardImageUrl(cardId: string, face: number, variant: ImageVariant): string {
-  const card = BY_ID.get(cardId);
+  const card = cardById(cardId);
   if (mode === "live" && card && face === 0) {
     // The fixture carries two of Scryfall's six `image_uris` keys — `art_crop` and `normal`
     // (`gen-storybook-cards.mjs:230-231`) — so `thumb` and `display` are served the 488x680

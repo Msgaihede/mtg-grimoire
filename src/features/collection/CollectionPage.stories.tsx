@@ -47,6 +47,27 @@ const meta = {
   ],
   parameters: {
     docs: {
+      /**
+       * **Each story on this page gets its own frame**, which is the one thing that gives it its
+       * own `useAppStore`.
+       *
+       * Every story in this file writes `collectionView` during render, and the store is a module
+       * singleton that `.storybook/` cannot make per-story: zustand's `create` does not expose
+       * the initializer it was given, and the store's actions close over that one store's `set`,
+       * so a second instance of it would take an edit to `src/lib/store.ts`. Inline, an autodocs
+       * page mounts every story at once and the last one to render would own the store for all of
+       * them — every story below showing the same view, the same card, the same layout, and
+       * reading as a component that ignores its arguments.
+       *
+       * The fake **backend** needs none of this — a world is per story in-process now
+       * (`.storybook/fake/scope.ts`), and 28 of the 32 story files still render inline. This is
+       * the four that touch the one global left over.
+       *
+       * The height is the frame's, not a minimum: `inline: false` makes `height` the iframe's
+       * actual height (`@storybook/addon-docs`'s `StoryBlockParameters`), so it is this file's
+       * own decorator box plus room for the chrome around it.
+       */
+      story: { inline: false, height: "680px" },
       description: {
         component:
           "What the collection adds up to, what is in it, and the quantities editable in " +

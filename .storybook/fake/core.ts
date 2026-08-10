@@ -10,29 +10,32 @@
  *
  * Handlers are registered rather than imported so this module stays a dispatcher with no
  * knowledge of the data — `db.ts` owns that, and a story's seed swaps it wholesale.
- */
-
-/**
- * `never` in the argument position, not `unknown` and not `any`.
  *
- * It is what lets one `registerCommands` call carry handlers with differently-shaped args:
- * a parameter is checked contravariantly, `never` is assignable to every type, and so
- * `(args: { n: number }) => number` satisfies this while `(args: unknown) => …` would
- * reject it. The price is one cast at the single call site in `invoke`, which is the right
- * side of the trade — the handler maps are written once per fixture and read constantly.
+ * **The table it dispatches into belongs to a story, not to this module.** `scope.ts` owns
+ * the pointer and the four ways it is kept right; read its header before changing anything
+ * here.
  */
-export type CommandHandler = (args: never) => unknown;
+import { activateScope, activeScope, createScope, resetScopes } from "./scope";
+import type { CommandTable } from "./scope";
 
-let handlers: Record<string, CommandHandler> = {};
+export type { CommandHandler, CommandTable } from "./scope";
 
-/** Merge, not replace: a story adds a command or overrides one without restating the rest. */
-export function registerCommands(next: Record<string, CommandHandler>): void {
-  handlers = { ...handlers, ...next };
+/** Merge into the active scope's table, not replace it: a story adds a command or overrides
+ *  one without restating the rest. */
+export function registerCommands(next: CommandTable): void {
+  const scope = activeScope();
+  scope.commands = { ...scope.commands, ...next };
 }
 
-/** Drop every handler. The per-story decorator calls this before re-seeding. */
+/** Drop every handler, and every world. `core.test.ts`'s `beforeEach`; `installWorld` builds
+ *  a fresh scope instead, which is the same guarantee without reaching across stories. */
 export function resetCommands(): void {
-  handlers = {};
+  resetScopes();
+}
+
+/** A world with these commands and no listeners, ready to be pointed at. */
+export function commandScope(commands: CommandTable) {
+  return createScope(commands);
 }
 
 /**
@@ -41,9 +44,23 @@ export function resetCommands(): void {
  * `Result<_, String>` — and a handler models that by throwing an `Error` whose message is
  * the string, because `ipcError` renders both (`typeof e === "string"` and
  * `e instanceof Error` are its first two branches) and the distinction is invisible past it.
+ *
+ * **The scope is read once, before the first `await`, and re-pointed at on the way out.**
+ * Reading it once is what stops a story's call being answered from a world that became
+ * active while its handler was in flight. Re-pointing is the other half, and it is for the
+ * caller rather than for us: `useSync.ts:130` schedules its next poll in the continuation
+ * *after* `await ipc.syncStatus()`, and a continuation runs as a microtask with whatever the
+ * pointer says then. Setting it here lands it before that microtask, so the poll chain stays
+ * inside the story that started it. Nothing restores it afterwards, deliberately — every
+ * entry into the fake sets the pointer first, so a stale one is never read.
  */
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const handler = handlers[cmd];
+  const scope = activeScope();
+  const handler = scope.commands[cmd];
   if (!handler) throw new Error(`No fake handler registered for command "${cmd}"`);
-  return (await (handler as (a: unknown) => unknown)(args ?? {})) as T;
+  try {
+    return (await (handler as (a: unknown) => unknown)(args ?? {})) as T;
+  } finally {
+    activateScope(scope);
+  }
 }

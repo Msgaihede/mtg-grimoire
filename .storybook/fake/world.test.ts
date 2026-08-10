@@ -39,7 +39,7 @@ describe("per-story isolation", () => {
   });
 
   it("gives the next story a store the last one's writes never touched", async () => {
-    const first = installWorld({ seed: "starter" });
+    const first = installWorld({ seed: "starter" }).db;
     expect(firstEntry(first).quantity).toBe(FIRST_ENTRY_QUANTITY);
 
     // Through `invoke`, not through the handler map: this is the path a component takes, so a
@@ -51,7 +51,7 @@ describe("per-story isolation", () => {
     expect(change.quantity).toBe(99);
     expect(firstEntry(first).quantity).toBe(99);
 
-    const second = installWorld({ seed: "starter" });
+    const second = installWorld({ seed: "starter" }).db;
     expect(firstEntry(second).quantity).toBe(FIRST_ENTRY_QUANTITY);
     // Not the same objects, which is the property that makes the line above true rather than
     // lucky: the writes mutate rows in place, so a shared row array would have carried the 99.
@@ -116,10 +116,166 @@ describe("per-story isolation", () => {
   });
 
   it("defaults to starter with no fault when a story says nothing", () => {
-    const db = installWorld(undefined);
+    const db = installWorld(undefined).db;
     expect(db.fault).toBeNull();
     expect(db.cards).toBe(seed("starter").cards);
     expect(db.decks).toHaveLength(3);
+  });
+});
+
+/**
+ * Two worlds installed at once, which is what an autodocs page is.
+ *
+ * The block above proves a world is *replaced* cleanly — one story after another, which is the
+ * canvas. This one proves two can be **live together**, because a docs page mounts every story
+ * on it simultaneously and ten of this repository's story files put differing seeds and faults
+ * on one page. Every test here fails against the module-global world this replaced: `installWorld`
+ * overwrote one dispatch table, so the second install answered for both stories.
+ *
+ * `scope.ts`'s header names four ways into the fake. Three of them are unit-testable and are
+ * below; the fourth (a mount effect landing before the story's own) needs React and lives in
+ * `src/stories.test.tsx`.
+ */
+describe("two worlds at once", () => {
+  beforeEach(() => {
+    resetCommands();
+  });
+
+  /** What a default search finds in a world — the query `SearchPage` opens with. */
+  const searchTotal = async (): Promise<number> => {
+    const page = await invoke<SearchResponse>("search_cards", {
+      req: { limit: 0, offset: 0, sort: "name" },
+    });
+    return page.total;
+  };
+
+  it("answers each world out of its own rows, whichever was installed last", async () => {
+    const starter = installWorld({ seed: "starter" });
+    const empty = installWorld({ seed: "empty" });
+
+    // The *second* install is the one the pointer is left on, so this is the reading the old
+    // module-global fake gave for both stories.
+    await expect(searchTotal()).resolves.toBe(0);
+
+    const inStarter = await starter.run(() => searchTotal());
+    expect(inStarter).toBeGreaterThan(0);
+    expect(inStarter).toBe(starter.db.cards.filter((c) => c.isPaper).length);
+    await expect(empty.run(() => searchTotal())).resolves.toBe(0);
+    // And back again: `run` restores the pointer rather than leaving it wherever it finished.
+    await expect(starter.run(() => searchTotal())).resolves.toBe(inStarter);
+  });
+
+  it("applies each world's fault to that world only", async () => {
+    const busy = installWorld({ seed: "starter", fault: "busy" });
+    const fine = installWorld({ seed: "starter" });
+
+    await expect(
+      busy.run(() => invoke("collection_set_quantity", { id: 1, quantity: 7 })),
+    ).rejects.toThrow(/busy finishing a sync/);
+    await expect(
+      fine.run(() => invoke<EntryChange>("collection_set_quantity", { id: 1, quantity: 7 })),
+    ).resolves.toMatchObject({ quantity: 7 });
+  });
+
+  it("keeps a world's fetches in it when its query client is the one asking", async () => {
+    const starter = installWorld({ seed: "starter" });
+    const empty = installWorld({ seed: "empty" });
+    const expected = await starter.run(() => searchTotal());
+
+    // **Leave the pointer on the other world first.** Every call above re-points it at the
+    // world that answered (`core.ts`'s `invoke`), so a `fetchQuery` written straight after one
+    // would be answered correctly by accident and prove nothing about the binding.
+    await expect(empty.run(() => searchTotal())).resolves.toBe(0);
+
+    // No `run` around this: `fetchQuery` is the path a component's `useQuery` takes, and the
+    // binding `worldQueryClient` puts on `queryFn` is the only thing pointing it at `starter`
+    // while `empty` is the world the pointer was left on.
+    const fetched = await starter.client.fetchQuery({
+      queryKey: ["search", "starter"],
+      queryFn: () => searchTotal(),
+    });
+    expect(fetched).toBe(expected);
+  });
+
+  it("carries a world across the await that follows one of its own calls", async () => {
+    const starter = installWorld({ seed: "starter" });
+    installWorld({ seed: "empty" });
+
+    // `run` restores the pointer the moment this callback *returns its promise* — before the
+    // first `await` has resolved. The second call is therefore made from a continuation that
+    // nothing is holding the pointer for, and `useSync.ts:130` is the real call site with that
+    // shape: it schedules its next poll after `await ipc.syncStatus()`.
+    const [first, second] = await starter.run(async () => {
+      const before = await searchTotal();
+      const after = await searchTotal();
+      return [before, after];
+    });
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBe(first);
+  });
+
+  it("fires a timer in the world that scheduled it", async () => {
+    const starter = installWorld({ seed: "starter" });
+    const empty = installWorld({ seed: "empty" });
+    const expected = await starter.run(() => searchTotal());
+
+    let deliver: (n: number) => void = () => {};
+    let fail: (e: unknown) => void = () => {};
+    const fromTimer = new Promise<number>((resolve, reject) => {
+      deliver = resolve;
+      fail = reject;
+    });
+    starter.run(() => {
+      // Thirty seconds later in the app (`useSync.ts:130`); zero here, and the wait is what
+      // matters rather than the delay — by the time this runs, nothing is on the stack.
+      setTimeout(() => void searchTotal().then(deliver, fail), 0);
+    });
+
+    // The other world answers a call in the meantime and leaves the pointer on itself, which
+    // is what a docs page looks like — and without it this test passes on the pointer the
+    // measurement above happened to leave behind rather than on the timer binding.
+    // A macrotask timer fires after these microtasks, so the ordering is not a race.
+    await expect(empty.run(() => searchTotal())).resolves.toBe(0);
+    await expect(fromTimer).resolves.toBe(expected);
+  });
+
+  it("gives an emitted event to every mounted story and to no unmounted one", async () => {
+    const heard: string[] = [];
+
+    const first = installWorld({ seed: "starter" });
+    const unmountFirst = first.mount();
+    await first.run(() => listen("sync:progress", () => heard.push("first")));
+
+    const second = installWorld({ seed: "starter" });
+    const unmountSecond = second.mount();
+    await second.run(() => listen("sync:progress", () => heard.push("second")));
+
+    emitFake("sync:progress", { phase: "downloading" });
+    // Both, because a `play` holds no handle on a world and nothing could choose between the
+    // stories on a page with. On the canvas exactly one is ever mounted.
+    expect(heard).toEqual(["first", "second"]);
+
+    unmountFirst();
+    heard.length = 0;
+    emitFake("sync:progress", { phase: "ingesting" });
+    // The first story's subscriber left with the first story — no sweep, and nothing reached
+    // across to the second to do it.
+    expect(heard).toEqual(["second"]);
+    unmountSecond();
+  });
+
+  it("leaves the app store alone for a world that is sharing a page", () => {
+    installWorld({ seed: "starter" });
+    useAppStore.getState().setActiveView("decks");
+
+    // What a docs page does: the store is one object for the whole page, so the second story
+    // on it must not reach into the first story's view.
+    installWorld({ seed: "empty" }, { resetStore: false });
+    expect(useAppStore.getState().activeView).toBe("decks");
+
+    // …and the canvas, where a story is on its own, still gets the app's own defaults.
+    installWorld({ seed: "empty" });
+    expect(useAppStore.getState().activeView).toBe("search");
   });
 });
 
