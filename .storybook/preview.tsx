@@ -3,7 +3,9 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import type { Decorator, Preview } from "@storybook/react-vite";
 import { freshQueryClient, installWorld, type FakeParams } from "./fake/world";
 import { setArtMode } from "./fake/images";
-import "../src/index.css";
+// The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
+// a Tailwind source, which is the one thing the shipped bundle must not inherit. See its header.
+import "./preview.css";
 import "mana-font/css/mana.css";
 import "keyrune/css/keyrune.css";
 
