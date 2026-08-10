@@ -7,8 +7,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
-import { allHandlers, makeDb, readHandlers, writeHandlers } from "./db";
+import { allHandlers, makeDb, neverCheckedUpdate, readHandlers, writeHandlers } from "./db";
 import type { FakeDeck, FakeDeckCard, FakeEntry, FakeWish } from "./db";
+import { seed } from "./seeds";
 import { CARDS, type FakeCard } from "./cards";
 import type {
   CardSummary,
@@ -1409,5 +1410,105 @@ describe("the whole command table", () => {
       updatedAt: null,
     });
     expect(() => writeHandlers(makeDb({ fault: "syncError" })).sync_run()).toThrow(/rate limited/);
+  });
+});
+
+/**
+ * The updater, whose whole design is that **nothing about it is stored as an answer**.
+ *
+ * `UpdateStatus` has three fields a fixture could have hard-coded and none of them is:
+ * `available` is the cached release re-compared against the running version, `asset` is
+ * `pick_asset`'s suffix match against the install kind, and `staged` is a boolean over an
+ * object that carries a version. Store any of the three and a world can be built in which
+ * they disagree — an install offered a download it has no asset for, a notice for a version
+ * it is already running — which is exactly the class of bug the panel exists to not have.
+ */
+describe("the update state", () => {
+  /** The version pair `.storybook/fake/fixtures.ts` seeds, restated as an expectation rather
+   *  than imported: a test that read the same constant as the code could not notice the two
+   *  drifting into the wrong order. */
+  const RUNNING = "0.3.0";
+  const RELEASED = "0.4.0";
+
+  it("derives an update from two version strings, never from a stored flag", () => {
+    // Default: the last check found the release this build *is*, so there is nothing to say.
+    const quiet = readHandlers(makeDb()).update_status();
+    expect(quiet).toMatchObject({ currentVersion: RUNNING, available: null, asset: null });
+    // `lastCheckAt` is what separates this from "never looked", and it is answered.
+    expect(quiet.lastCheckAt).toBe(String(WHEN));
+
+    const seen = readHandlers(makeDb({ fault: "updateAvailable" })).update_status();
+    expect(seen.available?.version).toBe(RELEASED);
+    // The portable install's asset, chosen by the tail of its name — the release carries the
+    // NSIS setup too, and `pick_asset` is what tells them apart.
+    expect(seen.asset?.name).toBe(`mtg-grimoire-${RELEASED}-windows-x64-portable.zip`);
+    expect(seen.staged).toBe(false);
+  });
+
+  it("offers an install kind it cannot update no asset at all", () => {
+    const db = makeDb({ fault: "updateAvailable" });
+    db.update.installKind = "other";
+    const status = readHandlers(db).update_status();
+    // The news is still delivered — a reader should know a new version exists — and there is
+    // nothing to download it with, which is the whole of `UpdateAction`'s `unavailable`.
+    expect(status.available?.version).toBe(RELEASED);
+    expect(status.asset).toBeNull();
+    expect(() => writeHandlers(db).update_download()).toThrow(/no download for this kind/);
+  });
+
+  it("never checked is not the same as nothing new", () => {
+    const db = makeDb({ update: neverCheckedUpdate() });
+    expect(readHandlers(db).update_status()).toMatchObject({
+      lastCheckAt: null,
+      available: null,
+    });
+    // And it is the state `seeds.ts`'s first-run world is in.
+    expect(readHandlers(seed("empty")).update_status().lastCheckAt).toBeNull();
+  });
+
+  it("honours the 24 h throttle, and force is what skips it", () => {
+    const db = makeDb();
+    // A check inside the window answers the status it already had and asks nothing.
+    expect(writeHandlers(db).update_check({ force: false }).available).toBeNull();
+    expect(db.update.latestSeen?.version).toBe(RUNNING);
+
+    // Which is why "Check now" sends `force: true`.
+    expect(writeHandlers(db).update_check({ force: true }).available?.version).toBe(RELEASED);
+    expect(db.update.latestSeen?.version).toBe(RELEASED);
+  });
+
+  it("checks when it has never checked, without being forced", () => {
+    const db = makeDb({ update: neverCheckedUpdate() });
+    expect(writeHandlers(db).update_check({ force: false }).available?.version).toBe(RELEASED);
+    expect(db.update.lastCheckAt).toBe(String(WHEN));
+  });
+
+  it("downloads, stages, and only then has something to install", () => {
+    const db = makeDb();
+    // Nothing to download until a check has found something.
+    expect(() => writeHandlers(db).update_download()).toThrow(/no update to download/);
+    expect(() => writeHandlers(db).update_apply()).toThrow(/no downloaded update to install/);
+
+    writeHandlers(db).update_check({ force: true });
+    const after = writeHandlers(db).update_download();
+    expect(after.staged).toBe(true);
+    expect(db.update.staged).toEqual({ version: RELEASED });
+    // Answered, and in the app the window closes moments later — so a successful apply has
+    // nothing to assert but its own silence.
+    expect(writeHandlers(db).update_apply()).toBeUndefined();
+  });
+
+  it("puts GitHub's refusal and a bad checksum in the sentences the app prints", () => {
+    const db = makeDb({ fault: "updateError" });
+    expect(() => writeHandlers(db).update_check({ force: true })).toThrow(/rate limiting/);
+    // The check refused, so nothing was written: a failed check must not look like a
+    // successful one that found nothing.
+    expect(db.update.lastCheckAt).toBe(String(WHEN));
+    expect(db.update.latestSeen?.version).toBe(RUNNING);
+
+    const available = makeDb({ fault: "updateError" });
+    available.update.latestSeen = available.update.remote;
+    expect(() => writeHandlers(available).update_download()).toThrow(/published checksum/);
+    expect(available.update.staged).toBeNull();
   });
 });

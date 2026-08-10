@@ -28,7 +28,7 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
-import type { DeckCard } from "@/lib/ipc";
+import type { DeckCard, ReleaseInfo, UpdateAsset } from "@/lib/ipc";
 
 /**
  * A fixture printing, by the two columns that identify one — the set code and the collector
@@ -184,5 +184,76 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     unitPriceUsd: null,
     ownedQuantity: 0,
     ...over,
+  };
+}
+
+/* ------------------------------------------------------------------- the updater ------- */
+
+/**
+ * The two versions every update fixture is about: what this world is running, and what the
+ * release it can see is.
+ *
+ * **A pair of fixture values, and never the app's own version.** The real one is
+ * `CARGO_PKG_VERSION` and release-please owns it (CLAUDE.md: versions are never typed by
+ * hand); anything here that tried to track it would make every update story render
+ * differently after every release. What the pair has to be is **ordered**, because the whole
+ * of `update::is_newer` is that comparison and `db.ts`'s `toUpdateStatus` derives `available`
+ * from it rather than storing a flag.
+ */
+export const CURRENT_VERSION = "0.3.0";
+export const NEXT_VERSION = "0.4.0";
+
+/**
+ * One GitHub release, with both Windows assets on it — `update::ReleaseInfo`, which is also
+ * exactly what `app_meta.update_latest_seen` holds (the row *is* that struct, serialised).
+ *
+ * Two files need this and they need the **same** one: `db.ts` seeds a world's `latestSeen`
+ * and `remote` from it, and `Settings/UpdatePanel`'s stories build their `status` argument
+ * from it. A second copy would let a prop-driven story and a world-driven story disagree
+ * about what a release looks like, which is precisely the drift this panel renders.
+ *
+ * Fresh per call rather than shared, for the reason every seed builder is: a world writes
+ * this object into its own `latestSeen`, and two worlds reaching one release object is one
+ * edit away from a story seeing another's.
+ *
+ * The asset names carry the **suffixes** `update::pick_asset` matches on, so `db.ts`'s
+ * `pickAsset` really has to choose between them. The sizes are inside the 4.8–6.5 MB the real
+ * Windows artifacts run to (`update::MAX_ASSET_BYTES`' own note), because the panel prints
+ * them through `formatBytes` and a round number would read as invented.
+ */
+export function release(version: string): ReleaseInfo {
+  const assets: UpdateAsset[] = [
+    {
+      name: `mtg-grimoire-${version}-windows-x64-portable.zip`,
+      url: `https://example.invalid/mtg-grimoire-${version}-windows-x64-portable.zip`,
+      size: 6_453_913,
+      // GitHub's own `sha256:<hex>`, and the whole of this updater's integrity story: there is
+      // no signing keypair behind it, and an **absent** digest is a refusal rather than an
+      // unverified pass.
+      digest: "sha256:9f2c1d0b7a5e4c3f8d6b2a19e0f7c4d3b8a5e2c1f0d9b6a3e8c5f2d1b0a7e4c39",
+    },
+    {
+      name: `MTG.Grimoire_${version}_x64-setup.exe`,
+      url: `https://example.invalid/MTG.Grimoire_${version}_x64-setup.exe`,
+      size: 4_812_744,
+      digest: "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+    },
+  ];
+  return {
+    version,
+    tag: `v${version}`,
+    // Plain text, as written — and the `###` below is the point of it. `UpdatePanel` shows a
+    // release body verbatim in a `<pre>`, because this app has no markdown renderer and
+    // half-rendered markdown reads worse than none.
+    notes:
+      "### Features\n" +
+      "* the deck editor takes a card from anywhere in the window\n" +
+      "* Settings, with the update panel you are reading\n\n" +
+      "### Bug Fixes\n" +
+      "* the wishlist counts a foil wish against foils only",
+    publishedAt: "2026-08-09T04:02:20Z",
+    // `update::REPO`, which is where an install that cannot update itself is sent.
+    htmlUrl: `https://github.com/Msgaihede/mtg-grimoire/releases/tag/v${version}`,
+    assets,
   };
 }

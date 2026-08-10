@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { SyncStatus } from "@/lib/ipc";
 import { statusLine } from "@/lib/useSync";
 import { Ribbon } from "./Ribbon";
@@ -172,6 +172,55 @@ export const FirstRun: Story = {
   },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByText("No card data yet")).toBeInTheDocument();
+  },
+};
+
+/**
+ * A newer version of the app, and the only control on this row that is not about the card
+ * database.
+ *
+ * It sits **before** the status line and Refresh because it is the rarer and more
+ * consequential thing on the row, and it is gold where every other control is border grey —
+ * the app's existing word for "you can act on this" rather than a colour invented for one
+ * button. The boldness budget is spent on the mana line two pixels below; this borrows a token
+ * that line already has.
+ *
+ * Pressing it updates nothing. `onOpenUpdate` opens Settings, where the release notes and the
+ * actual controls are, and the label is what that promises: an install that can replace
+ * itself is offered the verb. `Settings/UpdatePanel` is the panel it opens, and
+ * `Chrome/AppShell` is the same button driven by a seeded world, where the press really does
+ * change the view.
+ *
+ * The handler is a `fn()` and the press is the claim, which is a thing no screenshot shows.
+ */
+export const UpdateAvailable: Story = {
+  args: { updateVersion: "0.4.0", updateInstallable: true, onOpenUpdate: fn() },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Update to 0.4.0" }));
+    await expect(args.onOpenUpdate).toHaveBeenCalledOnce();
+    // Refresh is untouched beside it: two independent things the app can be doing, and a new
+    // release says nothing about the card data.
+    await expect(canvas.getByRole("button", { name: "Refresh data" })).toBeEnabled();
+  },
+};
+
+/**
+ * The same news to an install that cannot act on it — an MSI, or any Linux build.
+ *
+ * **Two labels, because they are two different promises.** `update::pick_asset` answers
+ * nothing for `InstallKind::Other`, so there is no in-app path from here to a new version; a
+ * button reading "Update to 0.4.0" on one of those would be the interface promising something
+ * it cannot keep. It still says a version is out, because a reader should know.
+ *
+ * The absence of the other label is the claim, so it is asserted.
+ */
+export const UpdateNotInstallable: Story = {
+  args: { updateVersion: "0.4.0", updateInstallable: false, onOpenUpdate: fn() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "0.4.0 available" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /^Update to/ })).toBeNull();
   },
 };
 

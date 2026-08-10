@@ -79,6 +79,7 @@
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
+import { CURRENT_VERSION, NEXT_VERSION, release } from "./fixtures";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -1287,20 +1288,6 @@ const IMAGE_STORE_FAILURES = 7;
 
 /* ------------------------------------------------------------------ the updater ------- */
 
-/**
- * The two versions this fixture is about: what it is running, and what the release it can
- * see is.
- *
- * **A pair of fixture values, not the app's version.** The real one is `CARGO_PKG_VERSION`
- * and release-please owns it (CLAUDE.md: versions are never typed by hand); nothing here may
- * pretend to track it, because a fixture that moved with the app would make every update
- * story render differently after every release. What the pair has to be is *ordered* — the
- * whole of `update::is_newer` is that comparison — and {@link isNewer} is what decides which
- * of the two states a world is in, rather than a stored flag.
- */
-const CURRENT_VERSION = "0.3.0";
-const NEXT_VERSION = "0.4.0";
-
 /** `update::CHECK_INTERVAL_SECS`. Unauthenticated `api.github.com` allows 60 requests/hour
  *  per IP, so a check is daily and a poll is out of the question. */
 const CHECK_INTERVAL_SECS = 86_400;
@@ -1321,54 +1308,20 @@ const UPDATE_RATE_LIMITED = "GitHub is rate limiting update checks right now. Tr
 const NO_UPDATE = "there is no update to download.";
 const noDownloadFor = (version: string) =>
   `release ${version} has no download for this kind of install. Open the release page instead.`;
-/** `update::verify_digest`'s failure — the whole of this updater's integrity story, so its
- *  wording is what a reader gets when the bytes do not match. */
-const CHECKSUM_FAILED =
-  "the download did not match the checksum the release publishes for it. Nothing was installed.";
+/**
+ * `update::verify_digest`'s mismatch, which is a format string over the two hashes — the
+ * expected one with its `sha256:` prefix already stripped, as the real comparison strips it.
+ *
+ * The whole of this updater's integrity story: there is no signing keypair behind it, so an
+ * **absent** digest is a refusal too rather than an unverified pass. {@link WRONG_DIGEST} is
+ * what a corrupted download hashed to, and it only has to differ.
+ */
+const checksumFailed = (want: string, got: string) =>
+  `the download did not match its published checksum (expected ${want}, got ${got}). ` +
+  `It has been deleted.`;
+const WRONG_DIGEST = "0000000000000000000000000000000000000000000000000000000000000000";
 /** `update::apply` with an empty `Updater::staged`. */
 const NOTHING_STAGED = "there is no downloaded update to install.";
-
-/**
- * The release GitHub is serving, with both Windows assets on it.
- *
- * Built fresh per call rather than shared, for {@link makeDb}'s reason: `update_check` writes
- * it into `latestSeen`, and a story that could reach one release object from two worlds is a
- * story that could see another's edit. Nothing mutates a release today; this costs one
- * allocation and removes the question.
- */
-function releaseFor(version: string): ReleaseInfo {
-  const assets: UpdateAsset[] = [
-    {
-      name: `mtg-grimoire-${version}-windows-x64-portable.zip`,
-      url: `https://example.invalid/mtg-grimoire-${version}-windows-x64-portable.zip`,
-      // The Windows artifacts are 4.8–6.5 MB (`update::MAX_ASSET_BYTES`' own note), and the
-      // panel prints this through `formatBytes`, so it wants to be a real-looking figure.
-      size: 6_453_913,
-      digest: "sha256:9f2c1d0b7a5e4c3f8d6b2a19e0f7c4d3b8a5e2c1f0d9b6a3e8c5f2d1b0a7e4c39",
-    },
-    {
-      name: `MTG.Grimoire_${version}_x64-setup.exe`,
-      url: `https://example.invalid/MTG.Grimoire_${version}_x64-setup.exe`,
-      size: 4_812_744,
-      digest: "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
-    },
-  ];
-  return {
-    version,
-    tag: `v${version}`,
-    // Plain text, as written. `UpdatePanel` shows it verbatim in a `<pre>` — this app has no
-    // markdown renderer, and the `###` below is the story of that: it stays a `###`.
-    notes:
-      "### Features\n" +
-      "* the deck editor takes a card from anywhere in the window\n" +
-      "* Settings, with the update panel you are reading\n\n" +
-      "### Bug Fixes\n" +
-      "* the wishlist counts a foil wish against foils only",
-    publishedAt: "2026-08-09T04:02:20Z",
-    htmlUrl: `https://github.com/Msgaihede/mtg-grimoire/releases/tag/v${version}`,
-    assets,
-  };
-}
 
 /**
  * A portable install that checked today and is on the newest release — and a newer one
@@ -1386,8 +1339,8 @@ export function defaultUpdate(): FakeUpdate {
   return {
     installKind: "portable",
     lastCheckAt: String(CLOCK_BASE),
-    latestSeen: releaseFor(CURRENT_VERSION),
-    remote: releaseFor(NEXT_VERSION),
+    latestSeen: release(CURRENT_VERSION),
+    remote: release(NEXT_VERSION),
     staged: null,
   };
 }
@@ -2610,7 +2563,10 @@ export function writeHandlers(db: FakeDb) {
       if (current.asset === null) throw refuse(noDownloadFor(release.version));
       const size = current.asset.size;
       emitFake("update:progress", { done: 0, total: size });
-      if (db.fault === "updateError") throw refuse(CHECKSUM_FAILED);
+      if (db.fault === "updateError") {
+        const want = (current.asset.digest ?? "").replace(/^sha256:/, "");
+        throw refuse(checksumFailed(want, WRONG_DIGEST));
+      }
       emitFake("update:progress", { done: size, total: size });
       db.update.staged = { version: release.version };
       return toUpdateStatus(db);

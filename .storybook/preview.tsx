@@ -103,7 +103,7 @@ function FakeWorld({
  * render — `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Everything else on every other docs page is isolated in-process, which
- * is what keeps the catalogue readable: 28 of the 32 story files still render inline.
+ * is what keeps the catalogue readable: 30 of the 34 story files still render inline.
  */
 const withFake: Decorator = (Story, context) => {
   // **Here and not in `installWorld`, and not inside `FakeWorld`'s memo either.** A global is
