@@ -28,22 +28,39 @@ term rather than a filter — every printing that is returned today is still ret
 
 The default browse is the state the page opens in, so its cost is the design constraint.
 
-| query | today | collapsed |
-|---|---|---|
-| default browse, page 1 (50 rows), status subqueries included | 301 ms | **108 ms** |
-| capped count | 15 ms | **31 ms** |
-| **the page as the view opens it (page + count)** | **316 ms** | **139 ms** |
-| page 100 (offset 4950 — the deepest the pager reaches) | 53 ms | **119 ms** |
-| price sort | 345 ms | **95 ms** |
-| text `dragon*`, relevance-ranked | ~2 ms | **25 ms** |
-| text `bolt*`, relevance-ranked | ~2 ms | **2.1 ms** |
-| Set / Rarity / Type header press, **no filter at all** | 313–325 ms | **600–620 ms** |
+**These are re-measured through `run_search` itself** — a release build, over a read-only copy of the
+live corpus, five runs per query with a warm-up, medians — rather than through hand-written SQL. An
+earlier draft of this spec timed the two modes in different worlds and got the story wrong; §2.2
+records what that cost and why the numbers below are the ones to trust.
 
-Collapsing therefore makes the state the page opens in **2.3× faster**, and the only thing it makes
-slower is a header press on a completely unfiltered browse. With any text in the box every one of
-those sorts is ~40 ms, because FTS narrows the set before the grouping runs.
+The index is the variable, so all three columns matter:
+
+| query | **today** (no index) | uncollapsed, indexed | **collapsed**, indexed |
+|---|---|---|---|
+| default browse, page 1 + count | **397 ms** | 25 ms | **145 ms** |
+| page 100 (offset 4950 — the deepest the pager reaches) | — | — | 159 ms |
+| price sort | — | — | 150 ms |
+| text `dragon`, relevance-ranked | 33 ms | 28 ms | 84 ms |
+| Set / Rarity / Type header press, **no filter at all** | — | — | 670 ms |
+
+Two things follow, and they are different things:
+
+* **The index is worth more than the feature it was added for.** It takes the *uncollapsed* browse
+  from a full table scan (`SCAN c`, 397 ms) to a covering index scan at **25 ms** — 16× — and every
+  search in the app that is not collapsed gets that for nothing. CLAUDE.md's recorded 277 ms for the
+  default browse is the same full scan, measured on a different day.
+* **Collapsing itself costs about 120 ms** on top of that indexed baseline, because grouping 107 337
+  rows into 37 553 and picking a representative is real work. Against the app as it ships **today**,
+  the collapsed browse is still **2.7× faster** (145 ms against 397 ms) — but that is the index
+  earning it, not the grouping.
+
+With any text in the box the picture changes completely: FTS narrows before the grouping runs, so a
+collapsed text search is 84 ms and a collapsed text search *with* a representative sort is 88 ms.
 
 ### Three shapes were measured and two rejected
+
+These three were compared in a single `node:sqlite` harness with the index present, so the ratios
+between them hold even though the absolute numbers sit higher than the `run_search` figures above:
 
 | shape | default browse |
 |---|---|
@@ -53,6 +70,19 @@ those sorts is ~40 ms, because FTS narrows the set before the grouping runs.
 
 The window function stays at 2,475 ms even with the new index available, so it is not a tuning
 problem — it is the wrong shape. It sorts and partitions all 107 k rows before `LIMIT` can apply.
+
+### 2.0 How the first draft of this table came to be wrong
+
+Worth recording, because the mistake is easy and the symptom was a table of numbers that looked
+authoritative. The uncollapsed baseline was measured **before** `idx_cards_collapse` existed and the
+collapsed figures **after** it was created, in a series of ad-hoc scripts. The index turned out to
+accelerate both modes, so the comparison credited the grouping with a 2.3× speed-up that the index
+had actually paid for — and hid that grouping costs ~120 ms.
+
+Two rules came out of it, and the numbers above obey both: **time the thing the app runs, not a
+transcription of it** (a `#[test]` calling `run_search` found this in one run), and **when a change
+adds an index, measure the before-state with the index too** — otherwise the index's win is
+attributed to whatever shipped alongside it.
 
 ### 2.1 The group key is null-safe, and that costs 69 ms
 
@@ -169,17 +199,21 @@ representative row, for the reason §2.1 measured at four figures; the 108 ms pa
 
 ### 3.5 The sorts
 
-| sort | answered by | unfiltered browse |
-|---|---|---|
-| name | the group step (`min(name)`) | 108 ms |
-| price, low end asc / high end desc | the group step (`min`/`max(price_usd)`) | 95 ms |
-| relevance (text searches) | the group step (`min(score)`) | 2–25 ms |
-| set, rarity, type | the **representative's** own columns | 600–620 ms |
+| sort | answered by | unfiltered browse | with text |
+|---|---|---|---|
+| name | the group step (`min(name)`) | 145 ms | 84 ms |
+| price, low end asc / high end desc | the group step (`min`/`max(price_usd)`) | 150 ms | — |
+| relevance (text searches) | the group step (`min(score)`) | — | 84 ms |
+| set, rarity, type | the **representative's** own columns | **670 ms** | 88 ms |
 
 The first three are computed by the grouping itself, so `LIMIT 50` applies before the join and only
 50 rows are ever fetched. The last three are properties of a row the group step has not resolved
-yet, so all 37,553 groups are joined and sorted before the limit. That is the 600–620 ms, it happens
-only on a completely unfiltered browse, and any text at all takes it to ~40 ms.
+yet, so all 37,553 groups are joined and sorted before the limit. That is the 670 ms; it happens
+only on a completely unfiltered browse, and any text at all takes it to 88 ms.
+
+The group step therefore gives up its `LIMIT` when — and only when — the sort names one of `set`,
+`rarity` or `type`. Keeping the limit there would page the wrong 50 groups: the ones that lead in
+*name* order, re-sorted among themselves.
 
 Sorting by an aggregate instead — "the best rarity this card was ever printed at" — was rejected:
 CLAUDE.md's rule is that a header sorts by what its column shows, and the column shows the
@@ -340,10 +374,10 @@ nothing about `mtgimg://` or about a photograph under a gradient.
 
 ## 9. Risks
 
-- **The 600–620 ms sorts.** Set, rarity and type on a completely unfiltered collapsed browse —
-  roughly double today's 313–325 ms. Known, measured, documented; any text filter takes them to
-  ~40 ms. Closing it means resolving the representative's sort keys from a covering index before the
-  limit, which the wide-index measurement says is not free.
+- **The 670 ms sorts.** Set, rarity and type on a completely unfiltered collapsed browse. Known,
+  measured, documented; any text filter takes them to 88 ms, and the same sort *uncollapsed* is
+  25 ms away behind the All-printings toggle. Closing it means resolving the representative's sort
+  keys from a covering index before the limit, which the wide-index measurement says is not free.
 - **`MATERIALIZED` is invisible load-bearing syntax.** Dropping it is a runtime SQL error rather
   than a bad ranking, so it fails loudly — but only on a *text* search, which is why a test covers
   that path specifically.
