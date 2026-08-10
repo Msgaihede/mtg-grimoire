@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.3.0...v0.4.0) (2026-08-10)
+
+
+### Features
+
+* **storybook:** add the card fixture corpus ([b88cf2d](https://github.com/Msgaihede/mtg-grimoire/commit/b88cf2d5887e9897e94c2f23dcf8c60f9b1cb8e5))
+* **storybook:** fake backend reads, deriving DTOs from rows ([32b4540](https://github.com/Msgaihede/mtg-grimoire/commit/32b4540dfc47bb1259fdd202952220b312744da3))
+* **storybook:** fake backend writes, honouring the grain and the zero rules ([711daee](https://github.com/Msgaihede/mtg-grimoire/commit/711daee0649436ff8a0470fda466d5030b3b2808))
+* **storybook:** fake the invoke and listen seams ([ba5cd75](https://github.com/Msgaihede/mtg-grimoire/commit/ba5cd75fb53d6afededa675b3beda2882d669e3b))
+* **storybook:** install Storybook 10 and wire it into the existing configs ([3ecb5b4](https://github.com/Msgaihede/mtg-grimoire/commit/3ecb5b4be760528b479ed64471d02b4577d071ca))
+* **storybook:** seeds, faults and per-story isolation ([cc67fa4](https://github.com/Msgaihede/mtg-grimoire/commit/cc67fa47986a3c8f272f0ef7b854cbbd06186185))
+* **storybook:** stories for CardImage, Figure, FilterChips and the summary header ([c18b319](https://github.com/Msgaihede/mtg-grimoire/commit/c18b319e7864f034456a29cc931c1b3c70f69262))
+* **storybook:** stories for DeckStats and every validation finding ([146c8bb](https://github.com/Msgaihede/mtg-grimoire/commit/146c8bb0713093603102d5b2d07e5667e5096019))
+* **storybook:** stories for the app chrome and sync surfaces ([55182f7](https://github.com/Msgaihede/mtg-grimoire/commit/55182f74f9713c7e388aa5dccb06da292ae23919))
+* **storybook:** stories for the card pane and the quick-add popup ([8ac776e](https://github.com/Msgaihede/mtg-grimoire/commit/8ac776ef07243422f115191980d0450ad77b383c))
+* **storybook:** stories for the deck gallery, editor and search panel ([3383e68](https://github.com/Msgaihede/mtg-grimoire/commit/3383e680f62208c39366d5269ff0c029af0db612))
+* **storybook:** stories for the five smallest primitives ([69a8679](https://github.com/Msgaihede/mtg-grimoire/commit/69a8679c8a291f8a31695b29f5cebe8f9b4a0e7c))
+* **storybook:** stories for the six card and table surfaces ([62a7b9e](https://github.com/Msgaihede/mtg-grimoire/commit/62a7b9e99ba4ad15ea57e39a9f1ad54d7385bf7c))
+* **storybook:** stories for the three list pages ([e3648c2](https://github.com/Msgaihede/mtg-grimoire/commit/e3648c220d1a3f512ca8f858d17012f2935aec2b))
+* **storybook:** synthetic card art with a live-art toolbar switch ([97aa606](https://github.com/Msgaihede/mtg-grimoire/commit/97aa606111985f0fa4791223363e14a6852c180f))
+
+
+### Bug Fixes
+
+* **css:** keep Storybook's Tailwind source out of the shipped bundle ([b8b59fe](https://github.com/Msgaihede/mtg-grimoire/commit/b8b59fe18a3df11a29fa38ed8c6bc2b0c1496fe8))
+* **storybook:** annotate the two DTO handlers nothing else binds ([47e370a](https://github.com/Msgaihede/mtg-grimoire/commit/47e370a090bb4fae353f72d65c27906c9802e4d8))
+* **storybook:** bring the fake backend up to the multi-sort contract ([c87fd77](https://github.com/Msgaihede/mtg-grimoire/commit/c87fd77df31fe8a028ce5772a240ea11d9b6a2e9))
+* **storybook:** correct four claims and glob the story-play runner ([975dd0e](https://github.com/Msgaihede/mtg-grimoire/commit/975dd0e213d915e8cec16aab1125fe7040a07e40))
+* **storybook:** correct three claims and carry the two columns the filters key on ([e828b7f](https://github.com/Msgaihede/mtg-grimoire/commit/e828b7fec2e658c53e3c28d727cec6f23ccb8c1f))
+* **storybook:** correct two comment claims flagged in review ([680a4c6](https://github.com/Msgaihede/mtg-grimoire/commit/680a4c66b74c96be038401b6f6aeb8e342615ed3))
+* **storybook:** give every story its own world, and its own card corpus ([8e8ad1f](https://github.com/Msgaihede/mtg-grimoire/commit/8e8ad1f51219c085f727a140104b9cffaf1b5a64))
+* **storybook:** keep Node types out of the app program, and disable telemetry ([842ebc9](https://github.com/Msgaihede/mtg-grimoire/commit/842ebc9cbd33fbc627af92f5ca886a55a45513d2))
+* **storybook:** make the story runner work for a story with a backend ([615f7dc](https://github.com/Msgaihede/mtg-grimoire/commit/615f7dc30888a4214d6eb60bafca4938ddd613a2))
+* **storybook:** story the orphaned deck cover, which is reachable ([fb377f5](https://github.com/Msgaihede/mtg-grimoire/commit/fb377f520f1bee9ae01d681a070bdec5a5e3f658))
+* **storybook:** teach the fake the updater, and the shell its new prop ([744931d](https://github.com/Msgaihede/mtg-grimoire/commit/744931d9ebff3638ef3db9e204796dede285d6d0))
+* **storybook:** the fake allocator gave a shared copy to nobody ([418e0f4](https://github.com/Msgaihede/mtg-grimoire/commit/418e0f4230d29fa30edd1469a0683803515f2b9c))
+
 ## [0.3.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.2.0...v0.3.0) (2026-08-09)
 
 
