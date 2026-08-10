@@ -100,6 +100,14 @@ export interface SearchRequest {
    * order when it is not.
    */
   sort?: SortSpec<SearchSortKey>;
+  /**
+   * Fold every printing of one card into a single row, represented by the newest printing.
+   *
+   * Absent means false, which is what this command has always answered. A **view mode**
+   * rather than a filter — see `useCardSearch`, where it is deliberately outside
+   * `activeFilterCount` and `resetAll`.
+   */
+  collapse?: boolean;
   /** Clamped to 200 by the backend; 0 means "use the default page size". */
   limit: number;
   offset: number;
@@ -152,6 +160,21 @@ export interface CardSummary {
   ownedQuantity: number;
   /** Whether a wish covers this printing — pinned to it, or unpinned on its oracle card. */
   wishlisted: boolean;
+  /**
+   * How many printings this row stands for — `1` when the search is not collapsed, because
+   * a row is a printing then.
+   *
+   * Collapsed, it counts the printings that **matched the filters** rather than every
+   * printing that exists: a search narrowed to one set reports the printings in that set.
+   */
+  printings: number;
+  /**
+   * Cheapest and dearest {@link CardSummary.priceUsd} among the printings this row stands
+   * for; both equal it when the search is not collapsed. Render a range only when the two
+   * differ — most cards have one printing, and `$2.15–$2.15` is noise.
+   */
+  priceLow: number | null;
+  priceHigh: number | null;
 }
 
 /** A page of results plus the size of the whole match set, for the pager. */

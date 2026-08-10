@@ -62,6 +62,9 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
   finishes,
   ownedQuantity: 0,
   wishlisted: false,
+  printings: 1,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 });
 
 /**

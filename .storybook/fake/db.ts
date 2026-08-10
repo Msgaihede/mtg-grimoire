@@ -651,7 +651,62 @@ function toCardSummary(db: FakeDb, c: FakeCard): CardSummary {
     finishes: c.finishes,
     ownedQuantity: ownedOfPrinting(db, c.id),
     wishlisted: wishlisted(db, c),
+    // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
+    // price. One shape for both modes, exactly as `search.rs` returns it.
+    printings: 1,
+    priceLow: c.priceUsd,
+    priceHigh: c.priceUsd,
   };
+}
+
+/**
+ * `search.rs`'s `COLLAPSE_KEY` — what makes two printings the same card.
+ *
+ * `coalesce(oracle_id, id)`, not a bare `oracleId`: the column is nullable, and grouping on
+ * it alone would put every null-oracle printing in one group, showing unrelated cards under
+ * a single name. No live row is null, which is exactly why the fake has to model it — a
+ * seed *can* mint one.
+ */
+function collapseKey(c: FakeCard): string {
+  return c.oracleId ?? c.id;
+}
+
+/**
+ * `search.rs`'s collapsed page: one row per card, represented by the **newest** printing.
+ *
+ * Three things here are the parts a fake most easily gets wrong, so each is the real rule:
+ *
+ * * The **name** is `min(name)` across the group and not the representative's, because 71 of
+ *   the corpus's paper groups span two names (reversible cards — `Command Tower` beside
+ *   `Command Tower // Command Tower`) and the browse sorts by the same `min`.
+ * * `printings`, `priceLow` and `priceHigh` describe **what matched**, not the database:
+ *   filters narrow printings first and the survivors are grouped.
+ * * `ownedQuantity` sums copies of **every** printing of the card, because "do I have this
+ *   card" is the question a collapsed row asks. Uncollapsed it stays per printing.
+ */
+function collapseToCards(db: FakeDb, matched: FakeCard[]): CardSummary[] {
+  const groups = new Map<string, FakeCard[]>();
+  for (const c of matched) {
+    const key = collapseKey(c);
+    const group = groups.get(key);
+    if (group) group.push(c);
+    else groups.set(key, [c]);
+  }
+
+  return [...groups.values()].map((group) => {
+    // `released_at DESC, id DESC` — the real pick, ties to the greatest id.
+    const rep = [...group].sort((a, b) => cmp(b.releasedAt, a.releasedAt) || cmp(b.id, a.id))[0];
+    const priced = group.map((c) => c.priceUsd).filter((p): p is number => p !== null);
+    return {
+      ...toCardSummary(db, rep),
+      name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
+      printings: group.length,
+      priceLow: priced.length > 0 ? Math.min(...priced) : null,
+      priceHigh: priced.length > 0 ? Math.max(...priced) : null,
+      ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id), 0),
+      wishlisted: group.some((c) => wishlisted(db, c)),
+    };
+  });
 }
 
 /**
@@ -1470,8 +1525,6 @@ export function readHandlers(db: FakeDb) {
         }
         return true;
       });
-      // The count stops at the cap rather than walking the table on every keystroke.
-      const counted = Math.min(matched.length, TOTAL_CAP + 1);
       // `SEARCH_SORTS` over the browse order, with `c.id ASC` appended. Simplification 1 is
       // the one place this parts from `run_search`, and only on the **default**: the real
       // fallback under text is `bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC`, and there
@@ -1479,8 +1532,18 @@ export function readHandlers(db: FakeDb) {
       const sorted = [...matched].sort(
         orderBy(req.sort, SEARCH_SORTS, SEARCH_BROWSE_ORDER, (a, b) => cmp(a.id, b.id)),
       );
+
+      // Collapsed, the rows are cards and so is the denominator: the pager divides by
+      // `total` and the caption prints it, so counting printings over a list of cards would
+      // be a lie in both places. Grouping *after* the sort keeps the representative-picking
+      // and the ordering independent, which is what the two-step SQL does too.
+      const rows: CardSummary[] = req.collapse
+        ? collapseToCards(db, sorted)
+        : sorted.map((c) => toCardSummary(db, c));
+      // The count stops at the cap rather than walking the table on every keystroke.
+      const counted = Math.min(rows.length, TOTAL_CAP + 1);
       return {
-        items: sorted.slice(req.offset, req.offset + limit).map((c) => toCardSummary(db, c)),
+        items: rows.slice(req.offset, req.offset + limit),
         total: Math.min(counted, TOTAL_CAP),
         totalIsCapped: counted > TOTAL_CAP,
       };

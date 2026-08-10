@@ -86,6 +86,9 @@ function found(name: string): CardSummary {
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,
+    printings: 1,
+    priceLow: 1.5,
+    priceHigh: 1.5,
   };
 }
 
