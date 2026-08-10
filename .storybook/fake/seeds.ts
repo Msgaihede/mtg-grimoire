@@ -31,25 +31,12 @@
 import { CARDS, type FakeCard } from "./cards";
 import { CLOCK_BASE, makeDb } from "./db";
 import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry, FakeWish } from "./db";
+import { printing } from "./fixtures";
 import type { DeckZone } from "@/lib/ipc";
 
 export type SeedName = "empty" | "starter" | "needsReview" | "large";
 
 /* ------------------------------------------------------------------ row builders ------- */
-
-/**
- * The fixture printing at one `(setCode, collectorNumber)`.
- *
- * Rows are written against this rather than against a pasted uuid so that a typo is a thrown
- * error at seed time instead of a silently orphaned row that renders as a blank name and a
- * plausible story. Measured over `CARDS` 2026-08-09: all 43 `(setCode, collectorNumber)` pairs
- * are distinct, so the pair is a key here even though it is not one in `cards`.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture card at ${setCode} ${collectorNumber}`);
-  return card;
-}
 
 /**
  * Row ids, handed out in insertion order — `INTEGER PRIMARY KEY`'s own behaviour, and what

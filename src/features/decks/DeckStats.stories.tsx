@@ -1,63 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
-import { finishPrice } from "@/lib/finish";
 import type { DeckCard } from "@/lib/ipc";
-import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
+import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { DeckStats } from "./DeckStats";
-
-/**
- * A fixture printing, by the two columns that identify one — `ZoneColumn.stories.tsx`'s helper,
- * for its reason: `CARDS` is generated and a regeneration may reorder it, so an index would
- * quietly point at a different card and every number claimed below it would still read as true.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
-}
-
-let nextId = 1;
-
-/**
- * One `deck_cards` row joined to its card, as `deck::get_deck` answers it — `ZoneColumn`'s
- * builder, unchanged.
- *
- * `unitPriceUsd` goes through the app's own `finishPrice`, asked for **nonfoil**, which is the
- * `usd` key of this printing's `prices` blob and never the `cards.price_usd` column: that one is
- * a nonfoil→foil→etched fallback chain built for sorting, and this strip *sums* its prices. A
- * deck names a printing rather than a finish, and nonfoil is the cheapest way to satisfy it.
- */
-function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard {
-  return {
-    id: nextId++,
-    cardId: card.id,
-    zone: "main",
-    quantity: 1,
-    name: card.name,
-    setCode: card.setCode,
-    collectorNumber: card.collectorNumber,
-    lang: card.lang,
-    needsReview: null,
-    oracleId: card.oracleId,
-    manaCost: card.manaCost,
-    cmc: card.cmc,
-    typeLine: card.typeLine,
-    oracleText: card.oracleText,
-    colors: card.colors,
-    colorIdentity: card.colorIdentity,
-    legalities: card.legalities,
-    power: card.power,
-    toughness: card.toughness,
-    layout: card.layout,
-    rarity: card.rarity,
-    faces: card.faces,
-    gameChanger: card.gameChanger,
-    everUncommon: card.everUncommon,
-    unitPriceUsd: finishPrice(card.prices, "nonfoil"),
-    ownedQuantity: 0,
-    ...over,
-  };
-}
 
 /**
  * Every copy of these rows claimed from the collection — what the allocator answers for a deck
@@ -72,46 +17,15 @@ function allOwned(cards: DeckCard[]): DeckCard[] {
   return cards.map((card) => ({ ...card, ownedQuantity: card.quantity }));
 }
 
-/** `reconcile::sweep_orphans`' sentence, verbatim (`src-tauri/src/reconcile.rs:634-635`). */
-const MISSING =
-  "This printing is not in the card database. It may have been removed by the last " +
-  "card-data sync, or it may return with the next one.";
-
 /**
- * A row whose printing has left `cards`: no type line, no mana cost, no price, no art.
+ * `n` copies of a row whose printing has left `cards`: no type line, no mana cost, no price, no
+ * art.
  *
  * It is what makes three of this strip's holes visible at once — a card with no mana value is
  * counted out of the curve rather than filed under 0, a card with no type line lands in the deck
  * list's `Other` bucket, and a card with no price is counted as unpriced rather than as free.
  */
-const orphan = (quantity: number): DeckCard => ({
-  id: 900 + quantity,
-  cardId: "0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77",
-  zone: "main",
-  quantity,
-  name: "Sword of the Meek",
-  setCode: "dst",
-  collectorNumber: "132",
-  lang: "en",
-  needsReview: MISSING,
-  oracleId: null,
-  manaCost: null,
-  cmc: null,
-  typeLine: null,
-  oracleText: null,
-  colors: null,
-  colorIdentity: null,
-  legalities: null,
-  power: null,
-  toughness: null,
-  layout: null,
-  rarity: null,
-  faces: null,
-  gameChanger: null,
-  everUncommon: false,
-  unitPriceUsd: null,
-  ownedQuantity: 0,
-});
+const orphan = (quantity: number): DeckCard => orphanDeckCard({ quantity });
 
 const meta = {
   title: "Decks/DeckStats",

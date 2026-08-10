@@ -2,21 +2,8 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 import { cardImageUrl } from "@/lib/images";
-import { CARDS, type FakeCard } from "../../.storybook/fake/cards";
+import { printing } from "../../.storybook/fake/fixtures";
 import { CardImage } from "./CardImage";
-
-/**
- * A fixture printing, by the two columns that identify one.
- *
- * By set and collector number rather than by index, because `CARDS` is generated
- * (`scripts/gen-storybook-cards.mjs`) and a regeneration may reorder it — an index would then
- * quietly point at a different card and every claim below it would still read as true.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
-}
 
 const BOLT = printing("lea", "161");
 const LOTUS = printing("lea", "232");

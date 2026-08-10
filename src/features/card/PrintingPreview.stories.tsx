@@ -2,18 +2,9 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fireEvent, within } from "storybook/test";
 import { RarityGem } from "@/components/RarityGem";
-import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
+import type { FakeCard } from "../../../.storybook/fake/cards";
+import { printing } from "../../../.storybook/fake/fixtures";
 import { PREVIEW_FRAME_ATTR, PrintingPreview } from "./PrintingPreview";
-
-/**
- * A fixture printing, by the two columns that identify one — `CardImage.stories.tsx`'s helper,
- * for its reason: `CARDS` is generated and a regeneration may reorder it.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
-}
 
 /** Four printings of Lightning Bolt and one of Delver, which is what the pane's printings list
  *  looks like: one oracle card, several pieces of cardboard. */

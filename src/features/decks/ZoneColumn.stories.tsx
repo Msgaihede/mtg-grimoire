@@ -1,71 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
-import { finishPrice } from "@/lib/finish";
 import type { DeckCard } from "@/lib/ipc";
-import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
+import { deckCard, MISSING, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
-
-/**
- * A fixture printing, by the two columns that identify one — `CardImage.stories.tsx`'s helper,
- * for its reason: `CARDS` is generated and a regeneration may reorder it.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
-}
-
-let nextId = 1;
-
-/**
- * One `deck_cards` row joined to its card, as `deck::get_deck` answers it.
- *
- * Built here from `CARDS` rather than through `validation/fixtures`' `card()` builder, and the
- * difference is the id: that builder makes one up (`c-<name>`), which is right for the
- * validation engine — it never draws anything — and wrong here, because the row thumbnail is
- * `cardImageUrl(card.cardId, 0, "art")` and a made-up id has no art on either side of the **Art**
- * toolbar switch.
- *
- * `unitPriceUsd` goes through the app's own `finishPrice`, asked for **nonfoil** — which is the
- * `usd` key of this printing's `prices` blob and never the `cards.price_usd` column, since that
- * one is a nonfoil→foil→etched fallback chain built for sorting. A deck names a printing rather
- * than a finish, and nonfoil is the cheapest way to satisfy it.
- */
-function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard {
-  return {
-    id: nextId++,
-    cardId: card.id,
-    zone: "main",
-    quantity: 1,
-    // Denormalised on the row, like the collection's — the one name an orphaned row still has.
-    name: card.name,
-    setCode: card.setCode,
-    collectorNumber: card.collectorNumber,
-    lang: card.lang,
-    needsReview: null,
-    oracleId: card.oracleId,
-    manaCost: card.manaCost,
-    cmc: card.cmc,
-    typeLine: card.typeLine,
-    oracleText: card.oracleText,
-    colors: card.colors,
-    colorIdentity: card.colorIdentity,
-    legalities: card.legalities,
-    power: card.power,
-    toughness: card.toughness,
-    layout: card.layout,
-    rarity: card.rarity,
-    faces: card.faces,
-    gameChanger: card.gameChanger,
-    everUncommon: card.everUncommon,
-    unitPriceUsd: finishPrice(card.prices, "nonfoil"),
-    // An **allocation**, never a decrement — how many copies this deck has reserved out of the
-    // collection. Zero until a story says otherwise, which is also what an unbuilt deck with an
-    // empty collection reads.
-    ownedQuantity: 0,
-    ...over,
-  };
-}
 
 /**
  * Twelve rows and **40 copies**, spread over enough types that the buckets have something to
@@ -91,48 +28,14 @@ const MAIN: DeckCard[] = [
   deckCard(printing("lea", "288"), { quantity: 8, ownedQuantity: 8 }),
 ];
 
-/** `reconcile::sweep_orphans`' sentence, verbatim (`src-tauri/src/reconcile.rs:633-635`). */
-const MISSING =
-  "This printing is not in the card database. It may have been removed by the last " +
-  "card-data sync, or it may return with the next one.";
-
 /**
- * A row whose printing has left `cards` — every card-derived field `null`, the row's own four
- * intact, and a sentence saying so.
+ * The orphaned row the two stories below draw: a printing that has left `cards`, listed and
+ * counted exactly as before.
  *
- * `deck_cards` denormalises `name` as well as the printing (unlike `collection_entries`), so an
- * orphaned deck row still knows what it is called. What it has lost is its type line — which is
- * why it lands in the `Other` bucket — its mana cost, its rarity, its price and its art.
+ * Bound to a name rather than built inline, because {@link MenuOpenOnAnOrphan} has to say which
+ * row it opened the menu on.
  */
-const ORPHAN: DeckCard = {
-  id: 900,
-  cardId: "0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77",
-  zone: "main",
-  quantity: 1,
-  name: "Sword of the Meek",
-  setCode: "dst",
-  collectorNumber: "132",
-  lang: "en",
-  needsReview: MISSING,
-  oracleId: null,
-  manaCost: null,
-  cmc: null,
-  typeLine: null,
-  oracleText: null,
-  colors: null,
-  colorIdentity: null,
-  legalities: null,
-  power: null,
-  toughness: null,
-  layout: null,
-  rarity: null,
-  faces: null,
-  gameChanger: null,
-  // `false` for an orphan, because nothing is known about a card that is not there.
-  everUncommon: false,
-  unitPriceUsd: null,
-  ownedQuantity: 0,
-};
+const ORPHAN: DeckCard = orphanDeckCard();
 
 const meta = {
   title: "Decks/ZoneColumn",
