@@ -16,3 +16,20 @@ data/
 # would otherwise try to embed one as a gitlink.
 .claude/worktrees/
 planned-features.txt
+
+# design-sync (claude.ai/design). What is committed is the *input* to a sync — the config,
+# the authored entry barrel and tsconfig, NOTES.md, conventions.md and any owned previews or
+# adapter forks — because a re-sync replays every decision this repo has already made. What
+# is ignored is everything a run regenerates: the staged converter and its deps, the emitted
+# bundle, the reference storybook (minutes to build, megabytes, and derived from `src/`), and
+# the per-run verification scratch. Verified state deliberately does NOT live in git: it
+# travels in the uploaded project's own `_ds_sync.json`, which is what lets a sync from a
+# second machine skip re-verifying what this one already proved.
+.ds-sync/
+ds-bundle/
+.design-sync/sb-reference/
+.design-sync/dist/
+.design-sync/learnings/
+.design-sync/.cache/
+.design-sync/node_modules
+.design-sync/*.log

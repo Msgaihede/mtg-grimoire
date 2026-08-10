@@ -1,0 +1,24 @@
+{
+  // Module resolution for the design-sync converter only — never for `npm run build`.
+  //
+  // It exists because esbuild has no idea what `.storybook/main.ts` does. That file rewrites
+  // three imports through a Vite alias array, and every one of them matters here: without the
+  // rewrites a preview compiles the *real* `@tauri-apps/api/core`, whose `invoke` has no
+  // backend outside the Tauri webview, and the *real* `@/lib/images`, whose `mtgimg://` URLs
+  // resolve to nothing on claude.ai/design. Both render a story that is wrong in a way the
+  // storybook side is not — which is precisely what the compare loop would then flag.
+  //
+  // **Order is the contract, exactly as it is in `.storybook/main.ts`.** The converter's
+  // `tsconfigPathsPlugin` walks these rules in declaration order and takes the first match, so
+  // the three exact-match rules must precede the `@/*` wildcard. Move `@/*` up and `@/lib/images`
+  // silently resolves to the real module again.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@tauri-apps/api/core": ["../.storybook/fake/core.ts"],
+      "@tauri-apps/api/event": ["../.storybook/fake/event.ts"],
+      "@/lib/images": ["../.storybook/fake/images.ts"],
+      "@/*": ["../src/*"]
+    }
+  }
+}

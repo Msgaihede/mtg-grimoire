@@ -18,8 +18,28 @@ export default tseslint.config(
   // without them touching any lintable file.
   // Only `worktrees/`, matching `.gitignore` exactly: the rest of `.claude/` is ordinary
   // project config, and a future `.claude/hooks/*.mjs` should be linted like `scripts/` is.
+  //
+  // The three design-sync directories are the same argument as `dist/`, one step further out.
+  // `ds-bundle/` is the converter's emitted bundle — a 600 KB IIFE plus 14 generated `.d.ts`
+  // files, which on its own contributed ~24,900 errors to `npm run lint` the first time it
+  // existed on disk. `.ds-sync/` is the staged converter and its own `node_modules`.
+  // `.design-sync/` is mixed and ignored **whole**, deliberately: most of it is generated
+  // (`sb-reference/`, `.cache/`, `dist/`), and the handful of committed files are the sync's
+  // harness rather than app source — `tsconfig.json` never includes them, the converter's own
+  // esbuild compiles them, and `previews/*.tsx` copies its `compose` helper verbatim from
+  // generated code where the `any`s are the point. Lint them and you are linting a tool's
+  // input against the app's rules.
   {
-    ignores: ["dist/", "storybook-static/", "src-tauri/", "node_modules/", ".claude/worktrees/"],
+    ignores: [
+      "dist/",
+      "storybook-static/",
+      "src-tauri/",
+      "node_modules/",
+      ".claude/worktrees/",
+      "ds-bundle/",
+      ".ds-sync/",
+      ".design-sync/",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

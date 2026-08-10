@@ -1,0 +1,41 @@
+{
+  // Emits the `.d.ts` tree the converter reads — and nothing else.
+  //
+  // Two things depend on it, and both fail silently without it. The converter's component
+  // roster is the intersection of the storybook titles and the package's *exported* names, and
+  // that export list comes from a declaration file: with none, all 14 titles drop as
+  // `[TITLE_UNMAPPED]` and the build writes zero components. The second is the payload — each
+  // emitted `<Name>.d.ts` is the API contract the design agent codes against, extracted from
+  // these declarations. `RibbonProps`, `SyncProgressProps`, `TableColumn<Row>` and
+  // `CardImageProps` are real interfaces in `src/`; without an emit they would be guesses.
+  //
+  // Separate from the repo's own `tsconfig.json` because that one is `noEmit` and always will
+  // be — this is an app, and `npm run build` type-checks rather than emits. Extending it keeps
+  // the `paths`, `strict` and `jsx` settings identical, so the declarations describe the same
+  // program the app compiles.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    // `allowImportingTsExtensions` is legal under `emitDeclarationOnly`, but nothing in `src/`
+    // uses it and leaving it on would let one in unnoticed.
+    "allowImportingTsExtensions": false,
+    // Errors do not block the emit (`noEmitOnError` defaults false) — deliberately. This is a
+    // *view* of the source for a documentation tool; a type error in `src/` is `npm run verify`'s
+    // to fail, not this file's, and half a declaration tree is worth more than none.
+    "rootDir": "..",
+    "declarationDir": "./dist",
+    "declarationMap": false,
+    "composite": false,
+    "incremental": false
+  },
+  // `entry.ts` is the barrel; `../src` is everything it re-exports. `preview-runtime.tsx` is
+  // deliberately absent — it is the preview harness, not API, and a declaration for it would
+  // put the fake backend into the surface the design agent reads.
+  "include": ["../src", "./entry.ts"],
+  // Tests and stories are not API. They emit harmlessly, but they land in the same tree the
+  // converter globs and every one of them is a file ts-morph then has to parse.
+  "exclude": ["../src/**/*.test.ts", "../src/**/*.test.tsx", "../src/**/*.stories.tsx"],
+  "references": []
+}
