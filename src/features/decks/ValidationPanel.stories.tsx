@@ -1,65 +1,16 @@
 import type { RefObject } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { finishPrice } from "@/lib/finish";
 import type { DeckCard } from "@/lib/ipc";
-import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
+import { deckCard, MISSING, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { SPECS } from "./validation/fixtures";
 import { ValidationPanel } from "./ValidationPanel";
 
-/**
- * A fixture printing, by the two columns that identify one — `ZoneColumn.stories.tsx`'s helper,
- * for its reason: `CARDS` is generated and a regeneration may reorder it, so an index would
- * quietly point at a different card and every claim below it would still read as true.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
-}
-
-let nextId = 1;
-
-/**
- * One `deck_cards` row joined to its card, as `deck::get_deck` answers it — `ZoneColumn`'s
- * builder, unchanged, because a deck row is a deck row wherever it is read.
- *
- * Every card fact comes off the printing rather than being written here, and that is the whole
- * discipline of this file: the engine's verdict is only worth rendering if the facts it read are
- * the ones the database holds. The one field written by hand is `legalities` in
- * {@link UnknownLegality}, which is a deliberate data fault and says so.
- */
-function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard {
-  return {
-    id: nextId++,
-    cardId: card.id,
-    zone: "main",
-    quantity: 1,
-    name: card.name,
-    setCode: card.setCode,
-    collectorNumber: card.collectorNumber,
-    lang: card.lang,
-    needsReview: null,
-    oracleId: card.oracleId,
-    manaCost: card.manaCost,
-    cmc: card.cmc,
-    typeLine: card.typeLine,
-    oracleText: card.oracleText,
-    colors: card.colors,
-    colorIdentity: card.colorIdentity,
-    legalities: card.legalities,
-    power: card.power,
-    toughness: card.toughness,
-    layout: card.layout,
-    rarity: card.rarity,
-    faces: card.faces,
-    gameChanger: card.gameChanger,
-    everUncommon: card.everUncommon,
-    unitPriceUsd: finishPrice(card.prices, "nonfoil"),
-    ownedQuantity: 0,
-    ...over,
-  };
-}
+/* Every card fact in every deck below comes off a corpus printing, through the two builders
+   imported above rather than written out here, and that is the whole discipline of this file:
+   the engine's verdict is only worth rendering if the facts it read are the ones the database
+   holds. The one field written by hand is `legalities` in `UnknownLegality`, which is a
+   deliberate data fault and says so. */
 
 /**
  * The chip's ref, one per story.
@@ -166,54 +117,6 @@ const commanderSingles = (): DeckCard[] => [
   deckCard(printing("kld", "235")),
   deckCard(printing("mh2", "259")),
 ];
-
-/**
- * `reconcile::sweep_orphans`' sentence, verbatim (`src-tauri/src/reconcile.rs:634-635`).
- *
- * The engine prints it back as `${name}: ${needsReview}` rather than writing one of its own,
- * because the reconciler already knows what happened and a second explanation would be a second
- * thing to keep true.
- */
-const MISSING =
-  "This printing is not in the card database. It may have been removed by the last " +
-  "card-data sync, or it may return with the next one.";
-
-/**
- * A row whose printing has left `cards` — the shape a LEFT JOIN miss takes.
- *
- * `engine.isOrphan` asks for **four** nulls together (`layout`, `rarity`, `legalities`,
- * `oracleId`), because one of them null is a card and all four null is no card at all. The row's
- * own four columns survive: `deck_cards` denormalises `name`, `set_code`, `collector_number` and
- * `lang` at write time for exactly this day.
- */
-const orphan = (): DeckCard => ({
-  id: 900,
-  cardId: "0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77",
-  zone: "main",
-  quantity: 1,
-  name: "Sword of the Meek",
-  setCode: "dst",
-  collectorNumber: "132",
-  lang: "en",
-  needsReview: MISSING,
-  oracleId: null,
-  manaCost: null,
-  cmc: null,
-  typeLine: null,
-  oracleText: null,
-  colors: null,
-  colorIdentity: null,
-  legalities: null,
-  power: null,
-  toughness: null,
-  layout: null,
-  rarity: null,
-  faces: null,
-  gameChanger: null,
-  everUncommon: false,
-  unitPriceUsd: null,
-  ownedQuantity: 0,
-});
 
 const meta = {
   title: "Decks/ValidationPanel",
@@ -800,7 +703,7 @@ export const CompanionCondition: Story = {
  */
 export const OrphanCard: Story = {
   args: {
-    cards: padWithIslands(60, [...MODERN_SPELLS, orphan()]),
+    cards: padWithIslands(60, [...MODERN_SPELLS, orphanDeckCard()]),
     spec: SPECS.modern,
     buttonRef: chipRef(),
   },

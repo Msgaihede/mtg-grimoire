@@ -2,25 +2,18 @@ import { useCallback, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 import { useAppStore } from "@/lib/store";
-import { CARDS } from "../../../.storybook/fake/cards";
+import { printing } from "../../../.storybook/fake/fixtures";
 import { CardDetailPane } from "./CardDetailPane";
 
 /**
- * A fixture printing's id, addressed the way a reader addresses one — the set code and the
- * collector number printed on the card.
+ * A fixture printing's id — every story on this page is addressed by one, because `cardId` is the
+ * only thing `CardDetailPane` takes.
  *
- * **It throws at module load rather than handing a story an id `cards` has no row for.** The
- * corpus is generated (`scripts/gen-storybook-cards.mjs`) and is meant to be regenerated against
- * a newer sync; a hardcoded UUID would survive that as a story rendering "This printing is not in
- * the card database any more" and passing every check. A lookup fails the whole file instead.
- *
- * Not exported, and duplicated in `AddToCollection.stories.tsx` on purpose: every non-default
- * export of a CSF file is indexed as a **story**, so a story file cannot own shared helpers.
+ * The lookup is the shared one and throws at module load rather than handing a story an id `cards`
+ * has no row for; this wrapper only spares each `args` line a trailing `.id`.
  */
 function printingId(setCode: string, collectorNumber: string): string {
-  const row = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!row) throw new Error(`No fixture printing for ${setCode} ${collectorNumber}`);
-  return row.id;
+  return printing(setCode, collectorNumber).id;
 }
 
 /** Deck 2's `main` slot, the printing in it, and the printing it can be swapped to. */

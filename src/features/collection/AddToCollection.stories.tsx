@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { parseFinishes } from "@/lib/finish";
-import { CARDS } from "../../../.storybook/fake/cards";
+import { printing } from "../../../.storybook/fake/fixtures";
 import { AddToCollectionButton, type AddTarget } from "./AddToCollection";
 
 /**
@@ -14,15 +14,15 @@ import { AddToCollectionButton, type AddTarget } from "./AddToCollection";
  * Derived rather than hand-written, and that is the difference between two of the stories below
  * being claims and being tautologies. {@link FoilOnlyPrinting}'s whole subject is that the popup
  * offers what the *printing* exists in; a literal `finishes: ["foil"]` would prove only that the
- * component renders the array it was handed. It throws at module load if the corpus is
- * regenerated without the row.
+ * component renders the array it was handed. The shared lookup behind it throws at module load if
+ * the corpus is regenerated without the row.
  *
- * Not exported, and duplicated from `CardDetailPane.stories.tsx` on purpose: every non-default
- * export of a CSF file is indexed as a **story**, so a story file cannot own shared helpers.
+ * It stays in this file rather than joining that lookup in `.storybook/fake/fixtures.ts`: an
+ * `AddTarget` is one component's prop, shaped by one call site, and nothing else in the repository
+ * asks for one.
  */
 function target(setCode: string, collectorNumber: string): AddTarget {
-  const row = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!row) throw new Error(`No fixture printing for ${setCode} ${collectorNumber}`);
+  const row = printing(setCode, collectorNumber);
   return {
     cardId: row.id,
     name: row.name,

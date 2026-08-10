@@ -3,8 +3,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, waitFor, within } from "storybook/test";
 import { cardDraggable } from "@/features/decks/dnd";
 import { useAppStore, type ViewId } from "@/lib/store";
-import { CARDS, type FakeCard } from "../../.storybook/fake/cards";
 import { emitFake } from "../../.storybook/fake/event";
+import { printing } from "../../.storybook/fake/fixtures";
 import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
 
 /**
@@ -62,17 +62,6 @@ function Shell({
     if (deckId !== null) store.setOpenDeckId(deckId);
   });
   return <AppShell>{children ?? <ViewStandIn view={view} />}</AppShell>;
-}
-
-/**
- * A fixture printing, by the two columns that identify one — `ValidationPanel.stories.tsx`'s
- * helper, for its reason: `CARDS` is generated and a regeneration may reorder it, so an index
- * would quietly point at a different card and every claim below it would still read as true.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
 }
 
 /** Lightning Bolt's Alpha printing — a card that is really in the seeded database, so the wish

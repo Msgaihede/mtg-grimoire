@@ -4,20 +4,14 @@ import { CONDITION_LABEL } from "@/lib/conditions";
 import { finishPrice, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
-import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
+import type { FakeCard } from "../../../.storybook/fake/cards";
+import { MISSING, printing } from "../../../.storybook/fake/fixtures";
 import { CollectionTable } from "./CollectionTable";
 
-/**
- * A fixture printing, by the two columns that identify one — `CardImage.stories.tsx`'s helper,
- * for its reason: `CARDS` is generated and a regeneration may reorder it, so an index would
- * quietly point at a different card and every claim below it would still read as true.
- */
-function printing(setCode: string, collectorNumber: string): FakeCard {
-  const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
-  if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
-  return card;
-}
-
+/** `collection_entries.id`. Its own counter rather than the shared fixtures' one, because these
+ *  are entries and not deck rows — two tables, two id spaces. Nothing on this page reads it back:
+ *  `CollectionTable.tsx` never touches `row.id` (grepped 2026-08-10), and every control it draws
+ *  is addressed by its accessible name. */
 let nextId = 1;
 
 /**
@@ -104,16 +98,6 @@ const ROWS: CollectionRow[] = [
   entry(printing("c21", "263"), "nonfoil"),
   entry(printing("mh2", "259"), "nonfoil", { quantity: 2 }),
 ];
-
-/**
- * `reconcile::sweep_orphans`' sentence, verbatim (`src-tauri/src/reconcile.rs:633-635`).
- *
- * 131 characters — the band is one line, and the *second* half is what to do about it, which is
- * why the whole sentence rides as the cell's `title` as well.
- */
-const MISSING =
-  "This printing is not in the card database. It may have been removed by the last " +
-  "card-data sync, or it may return with the next one.";
 
 /**
  * `reconcile::flag_unfoldable`'s sentence (`src-tauri/src/reconcile.rs:589-591`), with a card id
