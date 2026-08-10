@@ -20,7 +20,7 @@ function printingId(setCode: string, collectorNumber: string): string {
 const SOL_RING_C21 = printingId("c21", "263");
 
 /**
- * `.storybook/fake/seeds.ts:475`'s `ORPHAN_DECK_CARD_ID`, spelled out because the seed keeps its
+ * `.storybook/fake/seeds.ts:462`'s `ORPHAN_DECK_CARD_ID`, spelled out because the seed keeps its
  * three orphan ids module-private — and deliberately outside the fixture, so `card_detail`
  * answers `null` for it. `world.test.ts` asserts all three are absent from `CARDS`, so a corpus
  * refresh that happened to mint this id fails a test rather than quietly healing it under
@@ -119,8 +119,8 @@ const meta = {
           "clickable. It is also an ordinary element in the app's tree rather than a portal — " +
           "the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects a " +
           "runtime `<style>` the moment it opens.\n\n" +
-          "Driven end to end by `.storybook/fake/`: `card_detail` (`db.ts:1314-1317`) and " +
-          "`card_printings` (`db.ts:1319-1333`), the second **paper only** and newest first.\n\n" +
+          "Driven end to end by `.storybook/fake/`: `card_detail` (`db.ts:1316-1319`) and " +
+          "`card_printings` (`db.ts:1321-1335`), the second **paper only** and newest first.\n\n" +
           "**A finish's price is a lookup in the `prices` blob** — `usd` / `usd_foil` / " +
           "`usd_etched`, with no fallback of any kind (`finish.ts:65-72`). `cards.price_usd` is " +
           "a display and sort chain and is never summed or shown here. `eur_etched` does not " +
@@ -131,7 +131,7 @@ const meta = {
           "`usd` key is null — an **em dash**, never `$0.00` (`prices.ts:15-17`).\n\n" +
           "**Nothing here is `alt`-tested against a URL.** Under Vitest `cardImageUrl` is the " +
           "real one and answers `mtgimg://`, which jsdom never loads; under Storybook the " +
-          "fake answers a synthetic SVG data URI (`.storybook/fake/images.ts:89-104`). A play " +
+          "fake answers a synthetic SVG data URI (`.storybook/fake/images.ts:141-156`). A play " +
           "therefore asserts an image is *present* and what its `alt` says, never its `src`.\n\n" +
           "**Two store facts are the pane's real subject, and both are invisible in a " +
           "screenshot.** `openCardFromDeck` is the *only* writer of `paneDeckContext` " +
@@ -497,7 +497,7 @@ export const NoLegalities: Story = {
  *
  * **The error is fired rather than provoked, because nothing here can fail on its own**: the
  * fake answers every id with a synthetic SVG data URI, which needs no network
- * (`.storybook/fake/images.ts:89-104`). `PrintingPreview`'s `AfterAFailedFetch` stages its
+ * (`.storybook/fake/images.ts:141-156`). `PrintingPreview`'s `AfterAFailedFetch` stages its
  * failure the same way for the same reason.
  *
  * Everything below the frame is untouched — the failure belongs to one `<img>`, not to the card.
@@ -707,7 +707,7 @@ export const DeckGone: Story = {
  *
  * A banner at the top of the pane would be one sentence for forty rows with nothing on screen
  * saying which; the refusal is a `role="alert"` on the row's own action line, which is where the
- * reader is looking. `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised by every write
+ * reader is looking. `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by every write
  * handler and by no read handler — which is why the card, the prices and the printings list
  * underneath are untouched.
  *

@@ -187,7 +187,7 @@ export const Empty: Story = {
  * The seeded orphan is a `collection_entries` row naming an id `cards` has no row for, so its
  * name comes back null and the table draws an em dash under the set and collector number the
  * entry recorded at write time — which is the whole reason those three columns are denormalised.
- * The sentence is `reconcile::sweep_orphans`', copied verbatim into `.storybook/fake/seeds.ts:486`.
+ * The sentence is `reconcile::sweep_orphans`', copied verbatim into `.storybook/fake/seeds.ts:473`.
  */
 export const NeedsReview: Story = {
   args: { view: "table" },
@@ -249,7 +249,7 @@ export const Large: Story = {
 /**
  * A write the database refused, said where the writing happened.
  *
- * `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
+ * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the list underneath is untouched and
  * still counting twelve. The alert is a `role="alert"` of its own rather than a line folded into
  * the status above it: that one describes the list, and this one describes something the reader
@@ -285,12 +285,12 @@ export const Busy: Story = {
  *
  * The clearest demonstration in the app of an asymmetry that is easy to get backwards.
  * `collection_set_quantity(0)` keeps the row with its condition, its purchase price, its tags and
- * its acquisition story (`db.ts:1874-1884`), because the day you own none of a card is not the
+ * its acquisition story (`db.ts:1886-1896`), because the day you own none of a card is not the
  * day the record of having owned it stops mattering. `wishlist_set_quantity(0)` **deletes**
- * (`db.ts:1956-1965`), because a wish for none of something is not a wish.
+ * (`db.ts:1968-1977`), because a wish for none of something is not a wish.
  *
  * The row chosen is the seeded acquisition story — Alpha Lightning Bolt at Heavily Played, bought
- * from Card Kingdom for $450 in 2021 (`.storybook/fake/seeds.ts:229-236`). None of that is a
+ * from Card Kingdom for $450 in 2021 (`.storybook/fake/seeds.ts:216-223`). None of that is a
  * column in this table; what the table *can* show is that the row is still there, still Heavily
  * Played, and now offering the one control that deletes.
  *

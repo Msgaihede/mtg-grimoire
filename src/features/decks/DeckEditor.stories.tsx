@@ -22,7 +22,7 @@ const SOL_RING_SLD = "16a2c470-b2b8-4633-89b1-7b936bcaff8d";
  * (`store.ts:135-136`'s `openCardFromDeck` is the only writer).
  *
  * `deckId: null` means **make one first**, through the same `deck_create` the gallery's New deck
- * form sends — the only way to reach an empty deck, since no seed has one (`seeds.ts:398-452`
+ * form sends — the only way to reach an empty deck, since no seed has one (`seeds.ts:385-439`
  * gives all three seeded decks cards). A `useQuery` rather than an effect with a `setState`: it
  * runs once, it is cached in the story's own client, and `staleTime: Infinity` is what keeps a
  * window refocus in the Storybook browser from creating a second deck.
@@ -207,7 +207,7 @@ export const CommanderDeck: Story = {
  * `maybe` is not a column — it sits under the deck, shut by default, because cards go here to be
  * *thought about*. It counts toward nothing at all: not the size figure, not the copy limits, not
  * the legality check, and the allocator does not claim copies for it. The seeded row is Ancient
- * Tomb, which is `modern: not_legal` **on purpose** (`seeds.ts:372-375`), so a chip still reading
+ * Tomb, which is `modern: not_legal` **on purpose** (`seeds.ts:359-362`), so a chip still reading
  * "No issues · Modern" over an illegal card in the pile is the demonstration.
  *
  * Its `0` owned is by design and not a shortage, which is why the row draws no shortage mark at
@@ -242,7 +242,7 @@ export const MaybePile: Story = {
  *
  * The exact opposite of the collection's asymmetry, and the pair is easy to get backwards.
  * `collection_set_quantity(0)` keeps the row with its condition, its purchase price, its tags and
- * its acquisition story; `deck_set_card_quantity(0)` **deletes** (`db.ts:2106-2110`, mirroring the
+ * its acquisition story; `deck_set_card_quantity(0)` **deletes** (`db.ts:2118-2122`, mirroring the
  * table's `CHECK (quantity > 0)`), because a zone slot holds an intention and nothing else.
  *
  * **There is no remove control here to look for.** The collection grows one on a row it has
@@ -343,7 +343,7 @@ export const EmptyDeck: Story = {
  * A row a sync left a question against — **listed, counted, and asking to be looked at.**
  *
  * The `needsReview` seed puts one orphan in each of the three user card tables; the deck one goes
- * into deck 1's main and takes it to 61 (`seeds.ts:506-508`), which is legal because Modern's
+ * into deck 1's main and takes it to 61 (`seeds.ts:493-495`), which is legal because Modern's
  * `deckMax` is null. Its sentence is `reconcile::merge`'s, copied verbatim: the printing was
  * merged into an id the card database does not have yet.
  *
@@ -374,7 +374,7 @@ export const NeedsReview: Story = {
 /**
  * A write the database refused, said where the writing happened.
  *
- * `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
+ * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the columns underneath are untouched
  * and still counting sixty.
  *
@@ -412,7 +412,7 @@ export const Busy: Story = {
 /**
  * The deck was deleted from somewhere else while this editor was open.
  *
- * The `gone` fault makes `deck_get` answer `null` (`db.ts:1405`), which is a **successful read of
+ * The `gone` fault makes `deck_get` answer `null` (`db.ts:1416`), which is a **successful read of
  * nothing** and not an error — the distinction the editor draws in `DeckEditor.tsx:212`. A failed
  * read says "Could not open this deck" and keeps the deck; this says the deck is not there, and
  * sends the reader back to the gallery, because there is nothing on this screen to fix.

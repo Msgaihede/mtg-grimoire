@@ -366,7 +366,7 @@ export const WishlistMode: Story = {
 /**
  * A write the database refused, **said inside the popup and naming the list it was for**.
  *
- * `db.ts:1467`'s `BUSY` is `collection::BUSY` verbatim, raised at the top of every write handler
+ * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised at the top of every write handler
  * and by no read handler. The sentence is a `role="alert"` of its own and the success region is
  * cleared beside it (`AddToCollection.tsx:404-413`), so the last success is never read back as
  * though it were this one.
