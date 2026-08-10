@@ -10,7 +10,8 @@ Scryfall as the only external dependency.
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 
 ## CI and releases (measured live 2026-08-09)
-- Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `frontend`
+- Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
+  router (below), a `frontend`
   job (`npm run build`/`lint`/`test:run`) and a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
   on both, everything `--locked`). **`ci-ok` is the one protected check** — branch protection
@@ -19,10 +20,37 @@ Scryfall as the only external dependency.
   cannot merge, a direct push to `main` still can, so "Work on `main`" below stays true.
   Proven 2026-08-09 by a deliberate lint error: `frontend` red, both `rust` legs green,
   **`ci-ok` red**. A green pipeline proves nothing about a gate; that run is the proof.
+- **A change only builds the half it touched.** The `changes` job diffs against the base
+  (`git diff --name-only --no-renames`, so it needs `fetch-depth: 0`) and routes each path:
+  `src-tauri/**` → `rust`; `src/**`, `public/**`, `index.html`, the lockfiles and the
+  frontend's configs, plus **`scripts/` because `eslint .` lints it** (its ignore list is
+  `dist/`, `src-tauri/`, `node_modules/` and nothing else) → `frontend`; `ci.yml` itself →
+  both; prose and editor/release bookkeeping → neither; and **anything unrecognised → both**.
+  That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
+  direction — a new root config file or a new top-level directory gets full CI until someone
+  narrows it deliberately. Only the "neither" arm can wrongly skip work, so it stays small.
+- **Three traps in that routing, all measured 2026-08-10 against a fixture repo** (24 path
+  cases + 11 gate combinations, driven through the shipped script text, not a copy of it):
+  (1) a workflow-level `paths:` filter is the obvious implementation and is **wrong** — it
+  skips the whole workflow, `ci-ok` included, and a required check that never reports leaves
+  every PR merge-blocked forever; the filter has to be a per-job `if:`. (2) `git diff
+  --name-only` has rename detection on by default, and it reports a file moved out of `src/`
+  as the **destination path only** — so the move would skip the very job whose file just
+  vanished. `--no-renames` reports both ends. (3) **`ci-ok` reads a `skipped` build job as a
+  pass, so `changes` itself may never be one**: if the router dies both build jobs skip, and
+  without the explicit `needs.changes.result == 'success'` line the gate goes green having run
+  nothing at all.
+- Skipping `frontend` on a Rust-only change gives up nothing CI ever caught: **no test on
+  either side reads a file across the boundary.** The frontend's two source sweeps glob
+  `/src/**` (`layers.test.ts`, `tokens.test.ts`), vitest only collects `src/**/*.test.{ts,tsx}`,
+  and the crate's one `include_str!` is its own `tauri.conf.json`. The TS↔Rust contract in
+  `src/lib/ipc.ts` is hand-mirrored and, in its own words, "can drift silently" — that was
+  already true when both jobs ran on every commit.
 - The `rust` job writes a stub `dist/index.html` first. `tauri-build` reads
   `frontendDist: "../dist"` and fails outright when it is missing, so a Rust-only job cannot
   compile a fresh checkout; the stub is what keeps it parallel with `frontend` instead of
-  serialized behind a full Vite build.
+  serialized behind a full Vite build — and it is also why the `rust` job is safe to run with
+  `frontend` skipped entirely: the frontend it needs is one file it writes itself.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
   guard — so release-please, the build matrix and the publish step are three jobs in one

@@ -14,8 +14,131 @@ permissions:
   contents: read
 
 jobs:
+  # Which halves of the repo this change can possibly have broken. The two build jobs
+  # share no inputs — `npm run build`/`lint`/`test:run` never read `src-tauri/`, and the
+  # Rust job stubs the one frontend artefact it needs (see below) — so a change confined
+  # to one side has nothing to prove on the other.
+  #
+  # Deliberately NOT a workflow-level `paths:` filter: that skips the whole workflow,
+  # `ci-ok` included, and a required check that never reports leaves every PR merge-blocked
+  # forever. Filtering per job keeps `ci-ok` reporting on every push and every PR.
+  changes:
+    name: changes
+    runs-on: ubuntu-22.04
+    outputs:
+      frontend: ${{ steps.classify.outputs.frontend }}
+      rust: ${{ steps.classify.outputs.rust }}
+    steps:
+      # The classification is a diff against the base, so this needs history, not a
+      # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify the changed paths
+        id: classify
+        shell: bash
+        env:
+          # On a PR this is the base branch tip and HEAD is the merge commit, so the diff
+          # is exactly the PR's own changes. On a push it is the previous tip of `main`.
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          frontend=false
+          rust=false
+
+          # A first push to a branch reports an all-zero `before`, and a force-push can
+          # report a commit that no longer exists. Neither can be diffed, so both run
+          # everything rather than guessing.
+          if [ -z "$BASE_SHA" ] \
+            || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "No usable base commit ('$BASE_SHA') — running every job."
+            files=""
+            frontend=true
+            rust=true
+          else
+            # `--no-renames` is load-bearing: with rename detection on (the default since
+            # git 2.9) a file moved out of `src/` into `src-tauri/` is reported as the
+            # destination path *only*, so the frontend job would skip a change that just
+            # deleted one of its own files — a dangling import `tsc` would have caught.
+            # Measured against a fixture repo: the move reports one path with detection on
+            # and both paths with it off.
+            files=$(git diff --name-only --no-renames "$BASE_SHA" HEAD)
+            echo "Changed files vs $BASE_SHA:"
+            echo "$files" | sed 's/^/  /'
+          fi
+
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            case "$file" in
+              # This file. A change to the gate re-runs the whole gate.
+              .github/workflows/ci.yml)
+                frontend=true
+                rust=true
+                ;;
+
+              # Affects neither job. Nothing here is compiled, linted or tested: `eslint .`
+              # never sees a `.md`, `vitest` only collects `src/**/*.test.{ts,tsx}`, and
+              # release-please's own files are read by `release.yml` rather than by this
+              # gate. Keep this list small — it is the only arm that can wrongly skip work.
+              docs/*|*.md) ;;
+              .vscode/*|.gitignore|.gitattributes) ;;
+              .release-please-manifest.json|release-please-config.json) ;;
+              .github/workflows/release.yml) ;;
+
+              # Rust. The crate is self-contained: nothing under `src-tauri/` reads a file
+              # outside it (the one `include_str!` is its own `tauri.conf.json`), and the
+              # `dist/index.html` that `tauri-build` demands is stubbed by the job itself.
+              src-tauri/*)
+                rust=true
+                ;;
+
+              # Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and
+              # `vitest run` actually read. `scripts/` is in the list because `eslint .`
+              # lints it — the ignore list is `dist/`, `src-tauri/`, `node_modules/` and
+              # nothing else.
+              src/*|public/*|index.html)
+                frontend=true
+                ;;
+              package.json|package-lock.json|components.json|.prettierrc)
+                frontend=true
+                ;;
+              tsconfig.json|tsconfig.node.json|vite.config.ts|eslint.config.js)
+                frontend=true
+                ;;
+              scripts/*)
+                frontend=true
+                ;;
+
+              # Anything unrecognised runs everything. This is the fail-safe that makes the
+              # lists above safe to be wrong in the cheap direction: a new root-level config
+              # file, a new top-level directory, a path nobody thought about — all of it
+              # gets full CI until someone deliberately narrows it here.
+              *)
+                frontend=true
+                rust=true
+                ;;
+            esac
+          done <<< "$files"
+
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Changed-path routing"
+            echo
+            echo "| job | runs |"
+            echo "| --- | --- |"
+            echo "| frontend | \`$frontend\` |"
+            echo "| rust | \`$rust\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   frontend:
     name: frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
@@ -38,6 +161,8 @@ jobs:
 
   rust:
     name: rust (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,7 +189,8 @@ jobs:
       # tauri-build reads `frontendDist: "../dist"` and fails outright when the directory
       # is absent, so a Rust-only job cannot compile a fresh checkout. A stub keeps this
       # job parallel with `frontend` instead of serialized behind a full Vite build;
-      # nothing under test reads it.
+      # nothing under test reads it. It is also why this job is safe to run alone: the
+      # frontend it "needs" is one file it writes itself.
       - name: Stub the frontend bundle
         shell: bash
         run: |
@@ -101,12 +227,27 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [frontend, rust]
+    needs: [changes, frontend, rust]
     runs-on: ubuntu-22.04
     steps:
-      - name: Fail unless every dependency succeeded
+      - name: Fail unless every dependency succeeded or was deliberately skipped
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+          RUST: ${{ needs.rust.result }}
         run: |
-          echo "frontend=${{ needs.frontend.result }}"
-          echo "rust=${{ needs.rust.result }}"
-          [ "${{ needs.frontend.result }}" = "success" ] || exit 1
-          [ "${{ needs.rust.result }}" = "success" ] || exit 1
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST"
+
+          # `changes` is the one dependency that may never be skipped or fail. It decides
+          # what the other two do, so if it dies they skip — and a rule that reads a skip
+          # as a pass would take this check green having run nothing at all.
+          [ "$CHANGES" = "success" ] || exit 1
+
+          # A skip here is a deliberate answer from `changes`: that half of the repo did
+          # not change, so it has nothing to prove.
+          for result in "$FRONTEND" "$RUST"; do
+            case "$result" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
+          done
