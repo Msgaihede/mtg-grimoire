@@ -1335,7 +1335,17 @@ describe("the busy fault", () => {
       fault: "busy",
     });
     const w = writeHandlers(db);
-    // Every command in the table except `sync_run`, which does not take the write lock.
+    // Every command in the table except the five that do not take the write lock: `sync_run`
+    // *is* the thing that holds it, and the four update commands take `sync::lock_db`, which
+    // is a blocking lock rather than `db::lock_for`'s bounded one — so a check waits for a
+    // sync instead of being refused by it.
+    const unlocked = [
+      "sync_run",
+      "update_check",
+      "update_download",
+      "update_apply",
+      "update_open_release_page",
+    ];
     const args: Record<string, unknown> = {
       id: 1,
       deckId: 1,
@@ -1351,8 +1361,8 @@ describe("the busy fault", () => {
       deck: { name: "Burn", formatKey: "modern" },
       patch: {},
     };
-    // 17 writes in the table, `sync_run` excluded: it does not take the write lock.
-    const names = Object.keys(w).filter((n) => n !== "sync_run");
+    // 21 commands in the table, the five above excluded: 16 that really take the lock.
+    const names = Object.keys(w).filter((n) => !unlocked.includes(n));
     expect(names).toHaveLength(16);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(

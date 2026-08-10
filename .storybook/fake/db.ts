@@ -78,6 +78,7 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
+import { emitFake } from "./event";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -96,13 +97,17 @@ import type {
   EntryChange,
   EntryInput,
   EntryPatch,
+  InstallKind,
   Printing,
+  ReleaseInfo,
   SearchRequest,
   SearchSortKey,
   SetSummary,
   SwapResult,
   SyncOutcome,
   SyncStatus,
+  UpdateAsset,
+  UpdateStatus,
   WishInput,
   WishRow,
   WishlistQuery,
@@ -204,6 +209,33 @@ export interface FakeDeckCard {
 }
 
 /**
+ * What the updater knows, which is **two `app_meta` rows and one piece of process state** —
+ * plus the one thing the app cannot see, which is what GitHub would answer.
+ *
+ * `update.rs` keeps `update_last_check_at` and `update_latest_seen` in `app_meta` (the
+ * release cached **whether or not** it is newer, so that `status` can re-compare it against
+ * the running build on every read and the notice clears itself after an update lands), and
+ * `Updater::staged`/`Updater::kind` in memory. Every field of `UpdateStatus` is derived from
+ * those by {@link toUpdateStatus} — nothing here stores an `available`, an `asset` or a
+ * `staged` boolean, for the reason this file's header gives about `ownedQuantity`.
+ */
+export interface FakeUpdate {
+  /** `Updater::kind`. Decides which asset a download would pick, and whether there is one. */
+  installKind: InstallKind;
+  /** `app_meta.update_last_check_at`, unix seconds as text. `null` = never checked, which is
+   *  the only thing that tells "nothing newer" from "haven't looked". */
+  lastCheckAt: string | null;
+  /** `app_meta.update_latest_seen` — the release the last check saw, newer or not. */
+  latestSeen: ReleaseInfo | null;
+  /** **Not a row the app has**: the release `api.github.com` would answer the next check
+   *  with. It is the other end of the wire, and it is what makes `update_check` do
+   *  something a story can watch. */
+  remote: ReleaseInfo | null;
+  /** `Updater::staged` — a verified build on disk, one restart away. */
+  staged: { version: string } | null;
+}
+
+/**
  * A state the backend can be in that is not a row.
  *
  * `gone` is the deck a gallery asks for after another view deleted it. `syncError` and
@@ -211,9 +243,26 @@ export interface FakeDeckCard {
  * `busy` is `collection::BUSY` — **and no read here honours it**, deliberately: writes take
  * `AppState.db` and can be refused, reads go through `db_read` and answer through every
  * second of a sync. {@link writeHandlers} is what reads it, all 16 of its writes but
- * `sync_run`, which does not take that lock.
+ * `sync_run` and the four update commands, none of which take that lock.
+ *
+ * The two update states are states rather than errors in the way `gone` is:
+ *
+ * * **`updateAvailable`** — the check spawned at startup found a newer release and wrote it
+ *   to `app_meta` before the window came up, which is the one thing `useUpdate`'s slow poll
+ *   exists to catch (`useUpdate.ts:16`). It is read by {@link seenRelease} and
+ *   {@link seenAt} together, so the world it produces is coherent: a release *and* the check
+ *   that saw it.
+ * * **`updateError`** — GitHub refuses the check, and a download fails its checksum. Two
+ *   sentences rather than one, because they are two different failures and the panel prints
+ *   whichever it got.
  */
-export type Fault = "busy" | "syncError" | "imageFailures" | "gone";
+export type Fault =
+  | "busy"
+  | "syncError"
+  | "imageFailures"
+  | "gone"
+  | "updateAvailable"
+  | "updateError";
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -221,6 +270,7 @@ export interface FakeDb {
   wishlistEntries: FakeWish[];
   decks: FakeDeck[];
   deckCards: FakeDeckCard[];
+  update: FakeUpdate;
   fault: Fault | null;
 }
 
@@ -229,7 +279,8 @@ export interface FakeDb {
  *
  * `cards` is the shared `CARDS` array by reference rather than a copy: `cards` is the sync's
  * table, no write in this fake ever touches it, and a story that wants a different corpus
- * passes its own.
+ * passes its own. {@link defaultUpdate} is a fresh object every call for the opposite
+ * reason — `update_check` and `update_download` write to it.
  */
 export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
   return {
@@ -238,6 +289,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     wishlistEntries: [],
     decks: [],
     deckCards: [],
+    update: defaultUpdate(),
     fault: null,
     ...init,
   };
@@ -1233,6 +1285,207 @@ const SYNC_ERROR = "rate limited by Scryfall; retry after 30s";
 /** Enough to be a number rather than a flag, which is how the ribbon reads it. */
 const IMAGE_STORE_FAILURES = 7;
 
+/* ------------------------------------------------------------------ the updater ------- */
+
+/**
+ * The two versions this fixture is about: what it is running, and what the release it can
+ * see is.
+ *
+ * **A pair of fixture values, not the app's version.** The real one is `CARGO_PKG_VERSION`
+ * and release-please owns it (CLAUDE.md: versions are never typed by hand); nothing here may
+ * pretend to track it, because a fixture that moved with the app would make every update
+ * story render differently after every release. What the pair has to be is *ordered* — the
+ * whole of `update::is_newer` is that comparison — and {@link isNewer} is what decides which
+ * of the two states a world is in, rather than a stored flag.
+ */
+const CURRENT_VERSION = "0.3.0";
+const NEXT_VERSION = "0.4.0";
+
+/** `update::CHECK_INTERVAL_SECS`. Unauthenticated `api.github.com` allows 60 requests/hour
+ *  per IP, so a check is daily and a poll is out of the question. */
+const CHECK_INTERVAL_SECS = 86_400;
+
+/**
+ * `update::PORTABLE_SUFFIX` and `update::NSIS_SUFFIX`, verbatim.
+ *
+ * **Suffixes and never file names**: the version sits in the middle of both, and the name in
+ * front of it changed with the app's (v0.2.0's assets still read `mtg-collection-tracker-…`).
+ * `pick_asset` lowercases the asset name before the test, and so does {@link pickAsset}.
+ */
+const PORTABLE_SUFFIX = "-windows-x64-portable.zip";
+const NSIS_SUFFIX = "_x64-setup.exe";
+
+/** `update::check`'s 403/429 branch, verbatim. */
+const UPDATE_RATE_LIMITED = "GitHub is rate limiting update checks right now. Try again later.";
+/** `update::download`'s two refusals, verbatim. The second is a format string in Rust. */
+const NO_UPDATE = "there is no update to download.";
+const noDownloadFor = (version: string) =>
+  `release ${version} has no download for this kind of install. Open the release page instead.`;
+/** `update::verify_digest`'s failure — the whole of this updater's integrity story, so its
+ *  wording is what a reader gets when the bytes do not match. */
+const CHECKSUM_FAILED =
+  "the download did not match the checksum the release publishes for it. Nothing was installed.";
+/** `update::apply` with an empty `Updater::staged`. */
+const NOTHING_STAGED = "there is no downloaded update to install.";
+
+/**
+ * The release GitHub is serving, with both Windows assets on it.
+ *
+ * Built fresh per call rather than shared, for {@link makeDb}'s reason: `update_check` writes
+ * it into `latestSeen`, and a story that could reach one release object from two worlds is a
+ * story that could see another's edit. Nothing mutates a release today; this costs one
+ * allocation and removes the question.
+ */
+function releaseFor(version: string): ReleaseInfo {
+  const assets: UpdateAsset[] = [
+    {
+      name: `mtg-grimoire-${version}-windows-x64-portable.zip`,
+      url: `https://example.invalid/mtg-grimoire-${version}-windows-x64-portable.zip`,
+      // The Windows artifacts are 4.8–6.5 MB (`update::MAX_ASSET_BYTES`' own note), and the
+      // panel prints this through `formatBytes`, so it wants to be a real-looking figure.
+      size: 6_453_913,
+      digest: "sha256:9f2c1d0b7a5e4c3f8d6b2a19e0f7c4d3b8a5e2c1f0d9b6a3e8c5f2d1b0a7e4c39",
+    },
+    {
+      name: `MTG.Grimoire_${version}_x64-setup.exe`,
+      url: `https://example.invalid/MTG.Grimoire_${version}_x64-setup.exe`,
+      size: 4_812_744,
+      digest: "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+    },
+  ];
+  return {
+    version,
+    tag: `v${version}`,
+    // Plain text, as written. `UpdatePanel` shows it verbatim in a `<pre>` — this app has no
+    // markdown renderer, and the `###` below is the story of that: it stays a `###`.
+    notes:
+      "### Features\n" +
+      "* the deck editor takes a card from anywhere in the window\n" +
+      "* Settings, with the update panel you are reading\n\n" +
+      "### Bug Fixes\n" +
+      "* the wishlist counts a foil wish against foils only",
+    publishedAt: "2026-08-09T04:02:20Z",
+    htmlUrl: `https://github.com/Msgaihede/mtg-grimoire/releases/tag/v${version}`,
+    assets,
+  };
+}
+
+/**
+ * A portable install that checked today and is on the newest release — and a newer one
+ * published since.
+ *
+ * `latestSeen` is the release of the version this fixture *runs*, not `null`, because that is
+ * what `update::check` really stores: it caches whatever GitHub answered whether or not it is
+ * newer, and `status` re-compares on every read. So "up to date" here is a **derived** answer
+ * rather than an absent row, which is the state the app is actually in most of the time.
+ *
+ * `remote` being one version ahead is what makes "Check now" worth pressing in a story: it is
+ * the release published since the last check.
+ */
+export function defaultUpdate(): FakeUpdate {
+  return {
+    installKind: "portable",
+    lastCheckAt: String(CLOCK_BASE),
+    latestSeen: releaseFor(CURRENT_VERSION),
+    remote: releaseFor(NEXT_VERSION),
+    staged: null,
+  };
+}
+
+/** An install that has never asked. `seeds.ts`'s `empty` world — a first run has synced
+ *  nothing and checked nothing, and `lastCheckAt: null` is the only thing that says so. */
+export function neverCheckedUpdate(): FakeUpdate {
+  return { ...defaultUpdate(), lastCheckAt: null, latestSeen: null };
+}
+
+/**
+ * `update::parse_version` — `v0.3.0` → `[0, 3, 0]`.
+ *
+ * Three components and nothing else: a tag with a prerelease or build suffix fails to parse
+ * rather than being ordered by guesswork, which makes an unreadable tag "no update" instead
+ * of "update to something nobody understands".
+ */
+function parseVersion(s: string): [number, number, number] | null {
+  const trimmed = s.trim().replace(/^v/, "");
+  const parts = trimmed.split(".");
+  if (parts.length !== 3) return null;
+  const nums = parts.map((p) => (/^\d+$/.test(p) ? Number(p) : NaN));
+  return nums.some(Number.isNaN) ? null : [nums[0], nums[1], nums[2]];
+}
+
+/** `update::is_newer`. An unparseable version on either side is `false`. */
+export function isNewer(candidate: string, current: string): boolean {
+  const a = parseVersion(candidate);
+  const b = parseVersion(current);
+  if (a === null || b === null) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
+/** `update::pick_asset` — matched on the tail of the name, lowercased. `other` picks
+ *  nothing, which is the whole of what makes an install kind un-updatable. */
+export function pickAsset(assets: UpdateAsset[], kind: InstallKind): UpdateAsset | null {
+  if (kind === "other") return null;
+  const suffix = kind === "portable" ? PORTABLE_SUFFIX : NSIS_SUFFIX;
+  return assets.find((a) => a.name.toLowerCase().endsWith(suffix)) ?? null;
+}
+
+/** `update::should_check`. `force` always wins, and a `last` in the future counts as due
+ *  rather than throttling until the wall clock catches up. */
+export function shouldCheck(last: number | null, now: number, force: boolean): boolean {
+  if (force || last === null) return true;
+  return last > now || now - last >= CHECK_INTERVAL_SECS;
+}
+
+/**
+ * `app_meta.update_latest_seen`, with the `updateAvailable` fault folded in.
+ *
+ * The fault is not a second source of truth: it stands for the check that ran *before the
+ * window opened* — `lib.rs` spawns one at startup, it writes `app_meta` and emits nothing —
+ * so the world it describes is "the row is already there". Read together with {@link seenAt},
+ * which supplies the check that wrote it.
+ */
+function seenRelease(db: FakeDb): ReleaseInfo | null {
+  return db.fault === "updateAvailable" ? db.update.remote : db.update.latestSeen;
+}
+
+/** `app_meta.update_last_check_at`, with the same fault folded in. A release seen by no
+ *  check is a state the app cannot be in, and a panel reading "Not checked yet" over a
+ *  version number would be this fixture inventing one. */
+function seenAt(db: FakeDb): string | null {
+  return db.fault === "updateAvailable" ? String(CLOCK_BASE) : db.update.lastCheckAt;
+}
+
+/**
+ * `update::status` — built from what is already known, touching no network.
+ *
+ * Three fields are derived rather than stored, and each is a rule worth not hard-coding:
+ * `available` is the cached release **re-compared against the running version** (which is
+ * what makes the notice self-clearing after an update lands), `asset` is
+ * {@link pickAsset}'s answer for this install kind, and `staged` is a boolean over an object
+ * that carries a version.
+ *
+ * `busy` is always `false`, for `sync_status`' reason: every handler here is synchronous, so
+ * nothing is ever observably in flight. A download in progress is therefore not reachable
+ * from a seeded world — it is an argument, and `Settings/UpdatePanel`'s `Downloading` story
+ * is where it lives.
+ */
+function toUpdateStatus(db: FakeDb): UpdateStatus {
+  const seen = seenRelease(db);
+  const available = seen !== null && isNewer(seen.version, CURRENT_VERSION) ? seen : null;
+  return {
+    currentVersion: CURRENT_VERSION,
+    installKind: db.update.installKind,
+    available,
+    asset: available === null ? null : pickAsset(available.assets, db.update.installKind),
+    lastCheckAt: seenAt(db),
+    busy: false,
+    staged: db.update.staged !== null,
+  };
+}
+
 /**
  * Every read command, bound to one store.
  *
@@ -1448,6 +1701,13 @@ export function readHandlers(db: FakeDb) {
       syncing: false,
       imageStoreFailures: db.fault === "imageFailures" ? IMAGE_STORE_FAILURES : 0,
     }),
+
+    /**
+     * `update::status`, and the one update command that is a **read** — it touches `app_meta`
+     * and the process's own state and makes no network call, which is why the ribbon can poll
+     * it. Annotated for {@link sync_status}' reason.
+     */
+    update_status: (): UpdateStatus => toUpdateStatus(db),
 
     /**
      * Fire-and-forget in the app, and a no-op here.
@@ -2298,6 +2558,79 @@ export function writeHandlers(db: FakeDb) {
       if (db.fault === "syncError") throw refuse(SYNC_ERROR);
       return { updated: false, cardCount: db.cards.length, updatedAt: null };
     },
+
+    /**
+     * `update::check` — ask GitHub, honouring the 24 h throttle unless `force`.
+     *
+     * The throttle is checked **before** anything else, exactly as the real one is, and a
+     * throttled run is not an error: it answers the status it already had. That is why "Check
+     * now" sends `force: true` (`useUpdate.ts:133`) and why a story that wants the check to
+     * find something must press that button rather than wait for the poll.
+     *
+     * The release is cached **whether or not it is newer**, which is `update::check`'s own
+     * comment: `status` re-compares on every read, so one rule covers both directions and the
+     * cache is correct across an update with no clearing step.
+     *
+     * Like {@link sync_run} it does not honour `busy` — `update::check` takes the write
+     * connection through `sync::lock_db`, which is a *blocking* lock and not
+     * `db::lock_for`'s bounded one, so a check waits for a sync rather than being refused by
+     * it.
+     */
+    update_check: (args: { force: boolean }): UpdateStatus => {
+      const last = db.update.lastCheckAt === null ? null : Number(db.update.lastCheckAt);
+      if (!shouldCheck(last, CLOCK_BASE, args.force)) return toUpdateStatus(db);
+      if (db.fault === "updateError") throw refuse(UPDATE_RATE_LIMITED);
+      db.update.lastCheckAt = String(CLOCK_BASE);
+      db.update.latestSeen = db.update.remote;
+      return toUpdateStatus(db);
+    },
+
+    /**
+     * `update::download` — fetch the asset, verify it against the release's checksum, and
+     * stage it. **Changes nothing about the running app**: it answers with the window still
+     * open and one more file on disk, and installing is a separate, deliberate call.
+     *
+     * The two refusals in front are the real ones and they are different questions: there is
+     * no update at all, or there is one and this install kind has no asset on it (an MSI or a
+     * Linux build, which `pick_asset` answers `None` for). An absent checksum is a failure
+     * rather than a pass in the app, and {@link CHECKSUM_FAILED} is what the `updateError`
+     * fault raises here.
+     *
+     * **The two `update:progress` events bracket a download that takes no time**, which is
+     * the one thing this cannot show. The real one emits every 256 KB while bytes arrive;
+     * this handler is synchronous, so by the time `useUpdate`'s promise settles it has already
+     * cleared `progress` — the bar is on screen for no frame at all. It is emitted anyway
+     * because the event is half the command's contract, and the bar itself is storied where it
+     * is an argument (`Settings/UpdatePanel`'s `Downloading`).
+     */
+    update_download: (): UpdateStatus => {
+      const current = toUpdateStatus(db);
+      const release = current.available;
+      if (release === null) throw refuse(NO_UPDATE);
+      if (current.asset === null) throw refuse(noDownloadFor(release.version));
+      const size = current.asset.size;
+      emitFake("update:progress", { done: 0, total: size });
+      if (db.fault === "updateError") throw refuse(CHECKSUM_FAILED);
+      emitFake("update:progress", { done: size, total: size });
+      db.update.staged = { version: release.version };
+      return toUpdateStatus(db);
+    },
+
+    /**
+     * `update::apply` — swap the staged build in and leave.
+     *
+     * Nothing observable happens here, and that is faithful: the real command answers and the
+     * window closes 200 ms later, so the only outcome a UI ever sees is the refusal below.
+     * The staged build is left in place rather than cleared, because the process that would
+     * have cleared it is the one that no longer exists.
+     */
+    update_apply: (): void => {
+      if (db.update.staged === null) throw refuse(NOTHING_STAGED);
+    },
+
+    /** `lib::update_open_release_page`. A no-op for {@link prefetch_images}' reason: it hands
+     *  a URL to the OS opener, and there is no browser here to answer it. */
+    update_open_release_page: (): void => undefined,
   } satisfies Record<string, CommandHandler>;
 }
 
