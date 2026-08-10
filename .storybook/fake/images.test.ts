@@ -18,6 +18,7 @@ import * as fake from "./images";
 import * as real from "../../src/lib/images";
 import { IMAGE_VARIANTS, type ImageVariant } from "../../src/lib/images";
 import { CARDS, type FakeCard } from "./cards";
+import { installWorld } from "./world";
 
 /** `Variant::dimensions`, `src-tauri/src/images.rs:94-101`. */
 const DIMENSIONS: Record<ImageVariant, [number, number]> = {
@@ -182,5 +183,58 @@ describe("live art", () => {
     expect(cardImageUrl(bolt.id, 0, "grid")).toBe(bolt.normalUrl);
     setArtMode("synthetic");
     expect(svgOf(cardImageUrl(bolt.id, 0, "grid"))).toContain("Black Lotus");
+  });
+});
+
+/**
+ * The `large` seed's 5 200 synthetic printings, which this module could not see at all.
+ *
+ * `BY_ID` was a **module-load snapshot** of `CARDS`, so every id `seeds.ts`'s `largeCards()`
+ * mints missed it and fell through to the no-row placeholder. Measured on this branch before
+ * the fix, by pointing the lookup back at that snapshot and running the first test below: the
+ * `grid` tile for `f0000000-0000-4000-8000-000000000000` draws the literal **"Unknown card"**
+ * over `f0000000`, and Live art draws it too rather than the `normalUrl` the row carries — for
+ * a printing the seeded corpus genuinely has. `SearchPage`'s `large` wall was 5 200 of them.
+ *
+ * A world hands its cards over now (`world.ts`'s `installWorld` → `installCorpus`), which is
+ * why these two go through `installWorld` rather than calling `installCorpus` directly: the
+ * wiring is the half that was missing.
+ */
+describe("the corpus a world installs", () => {
+  /** The first synthetic row of the `large` seed — `cards` is the 43 real rows and then 5 200
+   *  minted ones, so this is index 43 by construction and not by counting. */
+  const firstSynthetic = (world: ReturnType<typeof installWorld>): FakeCard => {
+    const row = world.db.cards[CARDS.length];
+    expect(row.id.startsWith("f0000000")).toBe(true);
+    return row;
+  };
+
+  it("draws a synthetic printing by name, not as an unknown card", () => {
+    const world = installWorld({ seed: "large" });
+    const row = firstSynthetic(world);
+    const svg = svgOf(cardImageUrl(row.id, 0, "grid"));
+    expect(svg).not.toContain("Unknown card");
+    // The name wraps, so the first word is what a single `toContain` can honestly ask for.
+    expect(svg).toContain(row.name.split(" ")[0]);
+    expect(svg).toContain(`${row.setCode.toUpperCase()} · ${row.collectorNumber}`);
+    world.mount()();
+  });
+
+  it("serves a synthetic printing's live art, which it copies from a real row", () => {
+    const world = installWorld({ seed: "large" });
+    const row = firstSynthetic(world);
+    expect(row.normalUrl).toContain("https://cards.scryfall.io/");
+    setArtMode("live");
+    expect(cardImageUrl(row.id, 0, "grid")).toBe(row.normalUrl);
+    setArtMode("synthetic");
+    world.mount()();
+  });
+
+  it("keeps answering for the generated 43 under a seed whose cards table is empty", () => {
+    // `empty` is the only seed with no rows at all, and a story on it can still render a known
+    // printing — the quick-add popup's target, a pane opened on an id. The placeholder should
+    // still say which card that is.
+    installWorld({ seed: "empty" });
+    expect(svgOf(cardImageUrl(card("Black Lotus").id, 0, "grid"))).toContain("Black Lotus");
   });
 });

@@ -1,13 +1,42 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { Decorator, Preview } from "@storybook/react-vite";
-import { freshQueryClient, installWorld, type FakeParams } from "./fake/world";
+import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
 import { setArtMode } from "./fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
 // a Tailwind source, which is the one thing the shipped bundle must not inherit. See its header.
 import "./preview.css";
 import "mana-font/css/mana.css";
 import "keyrune/css/keyrune.css";
+
+/**
+ * Point the fake at this story's world, once per commit, **before the story's own effects
+ * run**.
+ *
+ * Rendered as the story's first sibling and returning `null`, which is what buys the ordering:
+ * React fires effects in fiber-completion order, so a leaf rendered before a subtree runs its
+ * effects before that subtree's. Put the same call in {@link FakeWorld}'s own effect instead
+ * and it would run *after* the story's, because a parent completes after its children — and
+ * the story's mount effects are where `useSyncProgress` subscribes, where `useSync` makes its
+ * first poll and where `CollectionPage` prewarms its images.
+ *
+ * Both phases, with no dependency array, because both exist: `useSyncExternalStore`'s
+ * subscribe — which is what starts TanStack Query's first fetch — runs in the layout phase,
+ * and the app's own `useEffect`s run in the passive one. Neither call is conditional on
+ * anything having changed; re-pointing at the world this story already had is free.
+ *
+ * `src/stories.test.tsx`'s `two stories with different seeds` block is what proves the order
+ * holds; it fails if this element is moved after `{children}`.
+ */
+function Activate({ world }: { world: FakeWorld }) {
+  useLayoutEffect(() => {
+    world.activate();
+  });
+  useEffect(() => {
+    world.activate();
+  });
+  return null;
+}
 
 /**
  * The fake backend, installed around one story.
@@ -18,29 +47,63 @@ import "keyrune/css/keyrune.css";
  * Storybook renders a decorator's result as a component anyway, so this is what was already
  * happening, named.
  *
- * **`useMemo`, not `useEffect`, and one of them rather than two.** An effect runs after the
- * first paint, so the story's opening queries would fire against an empty dispatch table and
- * fail before the handlers existed. And the two jobs share one memo because they share one
- * answer: the query client is only fresh if the world it will cache was installed first, and
- * splitting them would put the same two dependencies on both hooks — which `exhaustive-deps`
- * reads as an unnecessary dependency on the half that does not name them.
+ * **`useMemo`, not `useEffect`.** An effect runs after the first paint, so the story's opening
+ * queries would fire against an empty dispatch table and fail before the handlers existed.
+ *
+ * **The world is an object now, and the memo is what makes it one per story rather than one
+ * per page.** It used to overwrite module globals, which is correct on the canvas — Storybook
+ * unmounts the previous tree before mounting the next — and wrong on an autodocs page, where
+ * every story mounts at once and the last one to render owned the dispatch table, the listener
+ * map and the store for the whole page. `scope.ts` has the four entry points that keep the
+ * pointer right; this component supplies two of them (the memo, and {@link Activate}).
+ *
+ * `mount()` in an effect and not in the memo: it is what makes an emitted event reach this
+ * story, and it is undone by React's own teardown, which is the only thing that knows when a
+ * story on a docs page has gone.
  */
-function FakeWorld({ params, children }: { params: FakeParams; children: ReactNode }) {
+function FakeWorld({
+  params,
+  viewMode,
+  children,
+}: {
+  params: FakeParams;
+  /** `"docs"` when several stories share this page — and therefore share `useAppStore`. */
+  viewMode: string | undefined;
+  children: ReactNode;
+}) {
   const { seed = "starter", fault = null } = params;
-  const client = useMemo(() => {
-    installWorld({ seed, fault });
-    return freshQueryClient();
-  }, [seed, fault]);
+  const world = useMemo(
+    () => installWorld({ seed, fault }, { resetStore: viewMode !== "docs" }),
+    [seed, fault, viewMode],
+  );
 
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  useEffect(() => world.mount(), [world]);
+
+  return (
+    <QueryClientProvider client={world.client}>
+      <Activate world={world} />
+      {children}
+    </QueryClientProvider>
+  );
 }
 
 /**
- * Every story runs against a seeded fake backend, torn down between stories.
+ * Every story runs against a seeded fake backend of its own.
  *
  * `parameters: { fake: { seed: "empty", fault: "busy" } }` picks the world; saying nothing gets
- * `starter` with no fault. What is reset and why lives in `fake/world.ts`, and what is in each
- * world lives in `fake/seeds.ts`.
+ * `starter` with no fault. What a world owns lives in `fake/world.ts`, how the fake is kept
+ * pointed at the right one lives in `fake/scope.ts`, and what is in each world lives in
+ * `fake/seeds.ts`.
+ *
+ * **One global the fake cannot make per-story: `src/lib/store.ts`.** zustand's `create` does
+ * not expose the initializer it was given, and the store's actions close over that one store's
+ * `set`, so a second instance of it cannot be built from `.storybook/` — it would take an edit
+ * to component source, which this branch does not have. So the store is reset per story on the
+ * canvas and left alone on a docs page, and the four story files that **write** it during
+ * render — `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
+ * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
+ * its own module graph. Everything else on every other docs page is isolated in-process, which
+ * is what keeps the catalogue readable: 28 of the 32 story files still render inline.
  */
 const withFake: Decorator = (Story, context) => {
   // **Here and not in `installWorld`, and not inside `FakeWorld`'s memo either.** A global is
@@ -56,7 +119,7 @@ const withFake: Decorator = (Story, context) => {
   // answer to anything that is not the literal `"live"` — it is the mode that needs no network.
   setArtMode(context.globals.art === "live" ? "live" : "synthetic");
   return (
-    <FakeWorld params={(context.parameters.fake ?? {}) as FakeParams}>
+    <FakeWorld params={(context.parameters.fake ?? {}) as FakeParams} viewMode={context.viewMode}>
       <Story />
     </FakeWorld>
   );
