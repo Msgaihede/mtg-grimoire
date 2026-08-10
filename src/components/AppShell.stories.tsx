@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, waitFor, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { cardDraggable } from "@/features/decks/dnd";
+import { SettingsPage } from "@/features/settings/SettingsPage";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { useUpdate } from "@/lib/useUpdate";
 import { emitFake } from "../../.storybook/fake/event";
 import { printing } from "../../.storybook/fake/fixtures";
 import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
@@ -10,11 +12,18 @@ import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
 /**
  * What the app puts inside the shell, reduced to a label.
  *
- * `App.tsx:24`'s `ActiveView` picks one of five real views out of the store, and every one of
- * them is another task's to story — `SearchPage`, `CollectionPage` and `WishlistPage` are Task
- * 13's. What this file is about is the frame: the sidebar, the ribbon, the banner, the overlay
+ * `App.tsx:15`'s `ActiveView` picks one of five real views out of the store, and four of them
+ * are another file's to story — `SearchPage`, `CollectionPage` and `WishlistPage` have their
+ * own. What this file is about is the frame: the sidebar, the ribbon, the banner, the overlay
  * and the two entries a card can be dropped on. A dashed box says which view *would* be here
  * without pulling three connected pages into a story about their container.
+ *
+ * **Settings is the one exception, and it is not an inconsistency.** That view is the *other*
+ * half of the thing this shell owns: `App.tsx` calls `useUpdate` once and hands the result to
+ * both `AppShell` (for the ribbon's button) and `SettingsPage` (for the panel), because two
+ * calls would be two `update:progress` listeners racing to describe one download. A stand-in
+ * there would hide the only arrangement in the app where one hook feeds two surfaces — so
+ * {@link Shell} mirrors `App.tsx` exactly and lets the real page be the child.
  */
 function ViewStandIn({ view }: { view: ViewId }) {
   return (
@@ -45,6 +54,13 @@ function ViewStandIn({ view }: { view: ViewId }) {
  * `react-hooks/void-use-memo` refuses a `useMemo` with nothing to cache, and it is right to. The
  * meta keys its render on the pair below, so changing either in Controls remounts and this runs
  * again rather than writing to the store under a live subscriber.
+ *
+ * **One `useUpdate`, passed to two places**, which is `App.tsx:58`'s arrangement copied rather
+ * than approximated. `AppShell` takes it as a prop now, and so does `SettingsPage`; the hook
+ * registers the app's single `update:progress` listener and polls `update_status`, so a second
+ * call would be a second subscription describing the same download. Everything the ribbon's
+ * gold button says — whether it appears, which of its two labels it wears — is derived from
+ * this one value against the seeded world.
  */
 function Shell({
   view,
@@ -61,7 +77,23 @@ function Shell({
     store.setActiveView(view);
     if (deckId !== null) store.setOpenDeckId(deckId);
   });
-  return <AppShell>{children ?? <ViewStandIn view={view} />}</AppShell>;
+  const update = useUpdate();
+  // **The store, not the `view` arg**, which is `App.tsx:16`'s own choice: `ActiveView`
+  // subscribes, so the body follows every way the view can change — a sidebar entry, and the
+  // ribbon's update button. Pinned to the arg instead, a story that pressed either would show
+  // the frame renaming itself over a body that had not moved, which is a bug this component
+  // does not have.
+  const activeView = useAppStore((s) => s.activeView);
+  return (
+    <AppShell update={update}>
+      {children ??
+        (activeView === "settings" ? (
+          <SettingsPage update={update} />
+        ) : (
+          <ViewStandIn view={activeView} />
+        ))}
+    </AppShell>
+  );
 }
 
 /** Lightning Bolt's Alpha printing — a card that is really in the seeded database, so the wish
@@ -247,14 +279,23 @@ const meta = {
           "registers the app's single `sync:progress` listener, and reads and writes the " +
           "collection through the sidebar's drop targets. So the stories below choose a `seed` " +
           "and a `fault` rather than arguments.\n\n" +
-          "**One thing the fake world cannot show: a sync in flight.** Its `sync_status` answers " +
-          "`syncing: false` always, and its `sync_run` resolves at once, so `busy` is never " +
-          "observably true and neither the mana line's fill nor the first-run progress bar can " +
-          "be reached from here. Both are storied where they are arguments — `Chrome/Ribbon`, " +
-          "`Chrome/SyncProgress` and `Primitives/ManaLine`.\n\n" +
-          "The children are a dashed stand-in on every story. `App.tsx` puts one of five real " +
-          "views there and each is another task's to story; what this page is about is the " +
-          "frame around them.",
+          "**It owns the update the same way it owns the sync**, one step removed: `App.tsx` " +
+          "calls `useUpdate` and hands the answer both to this shell — which draws the ribbon's " +
+          "gold button from it — and to `SettingsPage`, which draws the panel. One hook, " +
+          "because two would be two `update:progress` listeners describing one download. The " +
+          "wrapper below copies that arrangement, so `updateAvailable` is a world rather than " +
+          "an argument here.\n\n" +
+          "**Two things the fake world cannot show, and they are the same thing twice: work in " +
+          "flight.** `sync_status` answers `syncing: false` always and `sync_run` resolves at " +
+          "once; `update_status` answers `busy: false` always and `update_download` is " +
+          "synchronous. So neither the mana line's fill, nor the first-run progress bar, nor " +
+          "the update's download bar can be reached from here. All three are storied where they " +
+          "are arguments — `Chrome/Ribbon`, `Chrome/SyncProgress`, `Primitives/ManaLine` and " +
+          "`Settings/UpdatePanel`.\n\n" +
+          "The children are a dashed stand-in on every story but Settings, which is the one " +
+          "view that is *about* something the shell holds. `App.tsx` puts one of five real " +
+          "views there and the other four have story files of their own; what this page is " +
+          "about is the frame around them.",
       },
     },
   },
@@ -298,9 +339,74 @@ export const Wishlist: Story = { args: { view: "wishlist" } };
  *  sidebar's Decks entry inert for every drag started anywhere else. */
 export const Decks: Story = { args: { view: "decks" } };
 
-/** The one view that is still a placeholder in the app itself: `App.tsx:21` gives Settings a
- *  blurb and nothing more. The frame around it is the same frame. */
-export const Settings: Story = { args: { view: "settings" } };
+/**
+ * The one story whose child is a **real view**, because Settings is where the other half of
+ * `update` comes out.
+ *
+ * `App.tsx:58` calls `useUpdate` once and gives it to the shell and to this page; {@link Shell}
+ * does the same. So what is on screen here is one hook's answer rendered twice — and in the
+ * default world that answer is "you are on the latest version", which is why the ribbon is
+ * quiet. {@link UpdateAvailable} is the other side of it.
+ *
+ * The check the panel reports was not made by this window: the fake's `lastCheckAt` is
+ * `db.ts`'s `CLOCK_BASE`, the same fixed instant `sync_status` reports, so the line under the
+ * version is `formatChecked`'s answer for a check made at a fixed date against a moving clock.
+ * Nothing here asserts its wording — the panel's own stories pin that against an offset from
+ * `Date.now()`, which is the only way that line is stable.
+ */
+export const Settings: Story = {
+  args: { view: "settings" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The world's `update_latest_seen` is the release of the version it is running, so
+    // `available` is derived to null and the panel says so. Nothing was hard-coded to say it:
+    // `db.ts`'s `isNewer` compared two strings.
+    await expect(await canvas.findByText(/You’re on the latest version\./)).toBeInTheDocument();
+    // And the ribbon's gold button is the same fact from the other side — absent, so asserted.
+    await expect(canvas.queryByRole("button", { name: /^Update to/ })).toBeNull();
+  },
+};
+
+/**
+ * A release published since the last check, as the whole window reports it.
+ *
+ * **The gold button is the only thing in the ribbon that is not about the card database**, and
+ * it is before the status line and Refresh because it is the rarer and more consequential thing
+ * on the row. It borrows the accent the mana line two pixels below already owns rather than
+ * inventing a colour for one button.
+ *
+ * Pressing it does not update anything: it opens Settings, where the release notes and the
+ * actual controls are (`AppShell.tsx:125` — `onOpenUpdate` is `setActiveView("settings")` and
+ * nothing else). That is the claim this story exists for, because it is wiring no other story
+ * in the catalogue has: `Chrome/Ribbon` takes `onOpenUpdate` as a prop, and `Settings/Page`
+ * never sees the ribbon.
+ *
+ * The label is `Update to 0.4.0` rather than `0.4.0 available` because the seeded install kind
+ * is `portable`, which `pick_asset` finds an asset for — a control says exactly what happens
+ * when it is used, and an MSI install would get the other label.
+ */
+export const UpdateAvailable: Story = {
+  args: { view: "search" },
+  parameters: { fake: { fault: "updateAvailable" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const button = await canvas.findByRole("button", { name: "Update to 0.4.0" });
+
+    await userEvent.click(button);
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("heading", { level: 1 })).toHaveTextContent("Settings");
+    });
+    // The sidebar agrees, which is the half a screen reader gets: one `NAV` table draws both,
+    // so a view that moved without its entry moving would be two lists disagreeing.
+    await expect(canvas.getByRole("button", { name: "Settings" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    // And the page that opened is the real one, with the release the ribbon was pointing at.
+    await expect(await canvas.findByText("0.4.0")).toBeInTheDocument();
+  },
+};
 
 /**
  * A sync that failed, as the shell reports it: one `role="alert"` band under the ribbon.

@@ -8,7 +8,8 @@
  * * **`empty`** — first run. No cards at all, so every zero state is reachable at once: the
  *   search with nothing to search, the collection with nothing in it, the deck gallery before
  *   there is a deck. It is the only seed whose `cards` is empty, and that is the whole of what
- *   "nothing has been synced yet" means to this app.
+ *   "nothing has been synced yet" means to this app — and the only one that has never asked
+ *   GitHub for a release either.
  * * **`starter`** — the default, and what a story gets when it says nothing. The full 43-row
  *   corpus, twelve collection entries, five wishes and three decks, arranged so that the rows
  *   a screen is *interesting* about all exist somewhere: a row at quantity zero, a graded slab,
@@ -29,7 +30,7 @@
  * because `cards` is the sync's table and **no write in this fake touches it**.
  */
 import { CARDS, type FakeCard } from "./cards";
-import { CLOCK_BASE, makeDb } from "./db";
+import { CLOCK_BASE, makeDb, neverCheckedUpdate } from "./db";
 import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry, FakeWish } from "./db";
 import { printing } from "./fixtures";
 import type { DeckZone } from "@/lib/ipc";
@@ -183,13 +184,17 @@ function deckCard(
 /**
  * First run: the app has never synced.
  *
- * `cards: []` and nothing else, because everything else is already empty in {@link makeDb} —
- * and the empty `cards` is the only part a story cannot get any other way. `sync_status` reads
- * `cardCount` straight off this array, so this seed is also the one that renders the ribbon's
- * "no cards yet" state honestly rather than by faking a number.
+ * `cards: []` and one more thing, because everything else is already empty in {@link makeDb}.
+ * `sync_status` reads `cardCount` straight off this array, so this seed is the one that
+ * renders the ribbon's "no cards yet" state honestly rather than by faking a number.
+ *
+ * {@link neverCheckedUpdate} is the same claim about the *other* thing a first run has not
+ * done. `update_status`' `lastCheckAt` is the only field that tells "nothing newer" from
+ * "haven't looked", and a window that has never reached the network should not be answering
+ * "checked just now" beside a card database it has never filled.
  */
 function emptySeed(): FakeDb {
-  return makeDb({ cards: [] });
+  return makeDb({ cards: [], update: neverCheckedUpdate() });
 }
 
 /* ------------------------------------------------------------------ starter ------------ */
