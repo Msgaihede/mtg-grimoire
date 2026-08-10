@@ -1,0 +1,65 @@
+{
+  "projectId": "6738b546-a180-4c82-9fb9-1a65c739c2c4",
+  "shape": "storybook",
+  "pkg": "mtg-grimoire",
+  "globalName": "MtgGrimoire",
+  "entry": "./.design-sync/entry.ts",
+  "tsconfig": "./.design-sync/tsconfig.json",
+  "storybookConfigDir": ".storybook",
+  "storybookStatic": ".design-sync/sb-reference",
+  "readmeHeader": ".design-sync/conventions.md",
+  "buildCmd": "npx tsc -p .design-sync/tsconfig.dts.json && npx storybook build -c .storybook -o .design-sync/sb-reference",
+  "extraEntries": ["./.design-sync/preview-runtime.tsx"],
+  "provider": { "component": "GrimoirePreviewProvider" },
+  "extraFonts": [
+    "node_modules/mana-font/css/mana.css",
+    "node_modules/keyrune/css/keyrune.css",
+    "node_modules/@fontsource-variable/geist/index.css",
+    "node_modules/@fontsource-variable/geist-mono/index.css",
+    "node_modules/@fontsource/cinzel/400.css",
+    "node_modules/@fontsource/cinzel/600.css"
+  ],
+  "overrides": {
+    "AppShell": {
+      "cardMode": "single",
+      "primaryStory": "Search",
+      "viewport": "1280x800",
+      "skip": ["chrome-appshell--update-available"]
+    },
+    "CardImage": { "skip": ["primitives-cardimage--swap-card"] },
+    "ManaText": { "skip": ["primitives-manatext--nothing"] },
+    "OwnedBadge": { "skip": ["primitives-ownedbadge--nothing"] },
+    "Ribbon": { "cardMode": "column" },
+    "SortableHeader": { "cardMode": "column", "skip": ["table-sortableheader--live"] },
+    "VirtualTable": { "cardMode": "column" },
+    "ToggleChip": {
+      "cardMode": "column",
+      "primaryStory": "Toggle",
+      "skip": ["primitives-filterchips--nothing-to-reset"]
+    },
+    "SyncProgress": { "cardMode": "single", "primaryStory": "Ingesting" }
+  },
+  "storyImports": {
+    "shim": ["/components/FilterChips", "/lib/store", ".storybook/fake/"]
+  },
+  "titleMap": {
+    "FilterChips": "ToggleChip",
+    "Designsystem": null,
+    "DetailPane": null,
+    "PrintingPreview": null,
+    "FilterBar": null,
+    "Page": null,
+    "QuickAdd": null,
+    "SummaryHeader": null,
+    "Table": null,
+    "CardGrid": null,
+    "SetCombobox": null,
+    "UpdatePanel": null,
+    "DeckStats": null,
+    "Editor": null,
+    "Gallery": null,
+    "SearchPanel": null,
+    "ValidationPanel": null,
+    "ZoneColumn": null
+  }
+}
