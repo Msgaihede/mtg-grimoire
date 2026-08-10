@@ -3,6 +3,7 @@ pub mod card_row;
 pub mod collection;
 pub mod db;
 pub mod deck;
+pub mod deck_meta;
 pub mod filters;
 pub mod images;
 pub mod ingest;
@@ -210,6 +211,23 @@ pub fn run() {
             deck::deck_swap_printing,
             deck::deck_missing_to_wishlist,
             deck::format_specs_list,
+            deck_meta::deck_category_list,
+            deck_meta::deck_category_create,
+            deck_meta::deck_category_rename,
+            deck_meta::deck_category_set_active,
+            deck_meta::deck_category_reorder,
+            deck_meta::deck_category_delete,
+            deck_meta::deck_tag_list,
+            deck_meta::deck_tag_create,
+            deck_meta::deck_tag_update,
+            deck_meta::deck_tag_delete,
+            deck_meta::deck_tag_suggestions,
+            deck_meta::deck_card_set_tag,
+            deck_meta::deck_folder_list,
+            deck_meta::deck_folder_create,
+            deck_meta::deck_folder_rename,
+            deck_meta::deck_folder_move,
+            deck_meta::deck_folder_delete,
             update_status,
             update_check,
             update_download,

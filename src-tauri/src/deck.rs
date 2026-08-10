@@ -211,7 +211,12 @@ fn not_the_same_card(from: &str, to: &str) -> String {
 /// surface; and a stale deck id — a gallery that has not refreshed since another view
 /// deleted the deck — is answered with [`GONE`] rather than with a foreign-key error, one
 /// statement before there is an orphan row to worry about.
-fn touch_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
+///
+/// `pub(crate)`, not private: [`crate::deck_meta`]'s category, tag and folder writes open
+/// with it too — a category rename is exactly as much an edit the gallery should surface as
+/// a card add is, and duplicating the UPDATE there would be a second place to keep this in
+/// step with [`GONE`].
+pub(crate) fn touch_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
     let changed = conn
         .execute(
             "UPDATE decks SET updated_at = unixepoch() WHERE id = ?1",
