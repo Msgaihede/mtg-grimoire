@@ -211,22 +211,31 @@ fn owning_deck(conn: &Connection, table: &str, id: i64) -> Result<Option<i64>, S
 // ---------------------------------------------------------------------------------------
 
 /// Create the four non-`main` predefined categories a deck is missing, and leave the ones it
-/// already has untouched. Safe to call on any deck at any time, as many times as asked.
+/// already has untouched. Safe to call on any deck, as many times as asked.
 ///
-/// **Why a deck can be missing them at all**: the v7 migration seeds one category per
-/// `(deck_id, zone)` pair that a `deck_cards` row actually used — a legacy deck with zero
-/// cards came out of that migration owning no categories whatsoever, and every deck created
-/// after the migration (before this function existed to seed it) is in the same position.
-/// This is the backfill for both: call it from a read path and a deck that predates categories
-/// entirely gets them the moment anyone asks to see them, no separate migration required.
+/// **Why a deck can be missing them at all**: the v7 migration's own backfill seeds these for
+/// every deck that existed *at* the migration (including one with no cards — a second pass
+/// added there for exactly that legacy shape), but a deck made afterwards needs the same four
+/// rows made for it too. [`crate::deck::create_deck`] is that call site.
 ///
 /// Idempotent by construction — each of the four kinds is checked before it is inserted, so a
-/// second call finds all four already there and writes nothing — which is what makes "call it
-/// on every read" affordable rather than four wasted INSERTs a request.
+/// second call finds all four already there and writes nothing.
 ///
-/// A deck that does not exist is left alone rather than answering an error: the caller here is
-/// a read ([`list_categories`]), and a stale id from a gallery that has not refreshed should
-/// read back an empty list, not fail loudly over a row that was never going to be found anyway.
+/// A deck that does not exist is left alone rather than answering an error, the same tolerance
+/// [`crate::deck::delete_deck`] shows a stale id.
+///
+/// **Must be called inside the caller's transaction, and never opens one of its own.** It was
+/// briefly called from [`list_categories`] on every read, which is what first justified this —
+/// a read is not the place four INSERTs can be interrupted between and leave a deck with two
+/// or three of its four predefined categories rather than zero or all. It stopped being called
+/// from there (`deck_category_list` now answers straight off `db_read`, never the write
+/// connection: CLAUDE.md's two-connection split is measured to matter, and a deck-open that
+/// contended for the app-wide write mutex behind an ~80 s ingest was exactly the stall that
+/// split exists to prevent) — but the same hazard is true of any caller, so the rule stands:
+/// running this outside a transaction risks a half-seeded deck if it is ever interrupted
+/// between two of the four INSERTs, and the fix is never "wrap it internally," because a
+/// caller that already opened its own transaction (`create_deck`) must not have this open a
+/// second, nested one — `unchecked_transaction` does not nest.
 pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(), String> {
     let deck_exists: bool = conn
         .query_row(
@@ -311,18 +320,17 @@ fn read_category(
 
 /// Every category of one deck, in display order, in the variant asked for.
 ///
-/// **Calls [`ensure_predefined_categories`] first**, which is why this takes `conn` generically
-/// but the command wrapping it ([`deck_category_list`]) has to reach for the *write*
-/// connection rather than `db_read` the way every other list in this app does — a "list" that
-/// silently backfills four rows is still a write, and a read-only handle would fail the INSERT
-/// outright. See the module doc's note on why this module never gets to skip that trade.
+/// **A pure read** — it does not call [`ensure_predefined_categories`], and never has since
+/// the write it would need is [`crate::deck::create_deck`]'s job now (via the v7 migration for
+/// every deck that predates it, and via `create_deck` for every one made since). That is what
+/// lets [`deck_category_list`] answer off `db_read` like every other list in this app, rather
+/// than contending for the write mutex — CLAUDE.md's two-connection split — on every deck open.
 pub fn list_categories(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let variant = valid_variant(variant)?;
-    ensure_predefined_categories(conn, deck_id)?;
     let sql = format!("{CATEGORY_SELECT} WHERE cat.deck_id = ?1 ORDER BY cat.sort_order, cat.id");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -915,8 +923,8 @@ fn unfinished(e: tauri::Error) -> String {
     format!("the deck's categories, tags or folders could not be written: {e}")
 }
 
-/// The category panel. **Write connection**, not `db_read` — see [`list_categories`]'s doc for
-/// why a list that backfills is a write like any other.
+/// The category panel. **Read-only connection** — see [`list_categories`]'s doc: it backfills
+/// nothing any more, so this never needs to contend for the write mutex.
 #[tauri::command]
 pub async fn deck_category_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -925,10 +933,10 @@ pub async fn deck_category_list(
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| list_categories(c, deck_id, &variant))
+        list_categories(&crate::sync::lock_db_read(&state), deck_id, &variant)
     })
     .await
-    .map_err(unfinished)?
+    .map_err(|e| format!("the deck's categories could not be read: {e}"))?
 }
 
 #[tauri::command]
@@ -1001,7 +1009,7 @@ pub async fn deck_category_delete(
     .map_err(unfinished)?
 }
 
-/// **Read-only** connection: unlike the category list, listing tags backfills nothing.
+/// **Read-only** connection, like every list in this module.
 #[tauri::command]
 pub async fn deck_tag_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1089,7 +1097,7 @@ pub async fn deck_card_set_tag(
     .map_err(unfinished)?
 }
 
-/// **Read-only**: folder listing does no backfilling.
+/// **Read-only**, like every list in this module.
 #[tauri::command]
 pub async fn deck_folder_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1317,14 +1325,24 @@ mod tests {
     // -- list_categories / category_for_name ----------------------------------------------
 
     #[test]
-    fn list_categories_backfills_on_the_read_path() {
+    fn list_categories_is_a_pure_read_and_does_not_seed_anything() {
         let conn = conn();
+        // `deck()` inserts straight into `decks`, bypassing both `deck::create_deck` and the
+        // migration — exactly the shape a bare row has before either has run.
         let deck_id = deck(&conn, "Burn");
         let rows = list_categories(&conn, deck_id, "live").unwrap();
         assert_eq!(
             rows.len(),
+            0,
+            "list_categories must not write — a deck with no categories reads back none"
+        );
+
+        ensure_predefined_categories(&conn, deck_id).unwrap();
+        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        assert_eq!(
+            rows.len(),
             4,
-            "a bare deck reads its four predefined categories"
+            "once seeded (by whatever called ensure_predefined_categories), the read finds them"
         );
     }
 
@@ -1417,13 +1435,12 @@ mod tests {
         let row = rows.iter().find(|c| c.id == cat).unwrap();
         assert_eq!(row.total_price_usd, None);
 
-        // And an empty category beside it: nothing filed, nothing priced, same answer. The
-        // read above already backfilled `companion` (this deck had no `companion` row of its
-        // own), so that is the empty one to check rather than inserting a second — a second
-        // `companion` row would collide with `idx_deck_categories_kind`.
-        let empty = rows.iter().find(|c| c.kind == "companion").unwrap();
-        assert_eq!(empty.card_count, 0);
-        assert_eq!(empty.total_price_usd, None);
+        // And an empty category beside it: nothing filed, nothing priced, same answer.
+        let empty = category(&conn, deck_id, "companion", "Companion");
+        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let row = rows.iter().find(|c| c.id == empty).unwrap();
+        assert_eq!(row.card_count, 0);
+        assert_eq!(row.total_price_usd, None);
     }
 
     // -- Rule 1: a predefined category cannot be renamed or deleted; is_active can be set --
@@ -1491,6 +1508,28 @@ mod tests {
         let counters = create_category(&conn, deck_id, "Counters").unwrap();
         let err = rename_category(&conn, counters.id, "Removal").unwrap_err();
         assert_eq!(err, CATEGORY_NAME_TAKEN);
+    }
+
+    #[test]
+    fn deck_category_rename_writes_the_new_name() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let counters = create_category(&conn, deck_id, "Counters").unwrap();
+
+        let returned = rename_category(&conn, counters.id, "Proliferate").unwrap();
+        assert_eq!(returned.name, "Proliferate");
+
+        let stored: String = conn
+            .query_row(
+                "SELECT name FROM deck_categories WHERE id = ?1",
+                params![counters.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, "Proliferate",
+            "the row itself must carry the new name"
+        );
     }
 
     // -- Rule 2: deck_category_delete's move-or-cascade ------------------------------------
@@ -1602,21 +1641,11 @@ mod tests {
         let b = category(&conn, deck_id, "main", "B");
         let c = category(&conn, deck_id, "main", "C");
 
-        // The full list also carries the four predefined categories `reorder_categories`'s
-        // own `list_categories` call backfills — this deck had none — so the assertion reads
-        // `sort_order` for a/b/c directly rather than expecting them to be the whole answer.
-        reorder_categories(&conn, deck_id, &[c, a, b]).unwrap();
-        let sort_order = |id: i64| -> i64 {
-            conn.query_row(
-                "SELECT sort_order FROM deck_categories WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
-        assert_eq!(sort_order(c), 0);
-        assert_eq!(sort_order(a), 1);
-        assert_eq!(sort_order(b), 2);
+        // `list_categories` — what `reorder_categories` reads back with — is a pure read and
+        // seeds nothing, so this deck's answer is exactly the three rows reordered, in order.
+        let rows = reorder_categories(&conn, deck_id, &[c, a, b]).unwrap();
+        let order: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(order, vec![c, a, b]);
     }
 
     // -- Rule 3: deck_folder_move refuses a cycle -------------------------------------------
@@ -1644,6 +1673,99 @@ mod tests {
         let root = create_folder(&conn, None, "Standard").unwrap();
         let err = move_folder(&conn, root.id, Some(root.id)).unwrap_err();
         assert_eq!(err, FOLDER_CYCLE);
+    }
+
+    #[test]
+    fn deck_folder_rename_writes_the_new_name() {
+        let conn = conn();
+        let folder = create_folder(&conn, None, "Standard").unwrap();
+
+        let returned = rename_folder(&conn, folder.id, "Modern").unwrap();
+        assert_eq!(returned.name, "Modern");
+
+        let stored: String = conn
+            .query_row(
+                "SELECT name FROM deck_folders WHERE id = ?1",
+                params![folder.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "Modern", "the row itself must carry the new name");
+    }
+
+    #[test]
+    fn deck_folder_move_moves_to_a_new_parent_and_then_back_to_root() {
+        let conn = conn();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        let eternal = create_folder(&conn, None, "Eternal").unwrap();
+        let burn = create_folder(&conn, Some(standard.id), "Burn").unwrap();
+
+        let moved = move_folder(&conn, burn.id, Some(eternal.id)).unwrap();
+        assert_eq!(
+            moved.parent_id,
+            Some(eternal.id),
+            "the returned row must carry the new parent"
+        );
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM deck_folders WHERE id = ?1",
+                params![burn.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, Some(eternal.id), "and so must the row itself");
+
+        let moved_to_root = move_folder(&conn, burn.id, None).unwrap();
+        assert_eq!(
+            moved_to_root.parent_id, None,
+            "moving to root is `None`, not a special id"
+        );
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM deck_folders WHERE id = ?1",
+                params![burn.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, None, "the row itself must be un-parented too");
+    }
+
+    #[test]
+    fn deck_folder_list_reads_the_tree_shape_and_order() {
+        let conn = conn();
+        let eternal = create_folder(&conn, None, "Eternal").unwrap();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        // Two children of the same parent, so there is a sibling order to check — `sort_order`
+        // is scoped per parent (`create_folder`'s own `WHERE parent_id IS ?1`), so `list_folders`'
+        // flat `ORDER BY sort_order, id` does not by itself group a parent with its children;
+        // what it guarantees is checked per level below rather than as one global sequence.
+        let modern = create_folder(&conn, Some(standard.id), "Modern").unwrap();
+        let legacy = create_folder(&conn, Some(standard.id), "Legacy").unwrap();
+
+        let rows = list_folders(&conn).unwrap();
+        assert_eq!(rows.len(), 4);
+        let by_id = |id: i64| rows.iter().find(|r| r.id == id).unwrap();
+
+        // Shape: every row carries its own parent, which is the whole of what "the tree" is
+        // built from — no separate lookup needed to place a folder.
+        assert_eq!(by_id(eternal.id).parent_id, None);
+        assert_eq!(by_id(standard.id).parent_id, None);
+        assert_eq!(by_id(modern.id).parent_id, Some(standard.id));
+        assert_eq!(by_id(legacy.id).parent_id, Some(standard.id));
+
+        // Order: siblings in creation order, within each parent.
+        let root_order: Vec<i64> = rows
+            .iter()
+            .filter(|r| r.parent_id.is_none())
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(root_order, vec![eternal.id, standard.id]);
+        let child_order: Vec<i64> = rows
+            .iter()
+            .filter(|r| r.parent_id == Some(standard.id))
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(child_order, vec![modern.id, legacy.id]);
     }
 
     #[test]
@@ -1716,6 +1838,30 @@ mod tests {
         create_tag(&conn, deck_id, "Removal", "red").unwrap();
         let err = create_tag(&conn, deck_id, "Removal", "blue").unwrap_err();
         assert_eq!(err, TAG_NAME_TAKEN);
+    }
+
+    #[test]
+    fn deck_tag_update_writes_the_new_name_and_color() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let tag = create_tag(&conn, deck_id, "Removal", "red").unwrap();
+
+        let returned = update_tag(&conn, tag.id, "Interaction", "blue").unwrap();
+        assert_eq!(returned.name, "Interaction");
+        assert_eq!(returned.color, "blue");
+
+        let (stored_name, stored_color): (String, String) = conn
+            .query_row(
+                "SELECT name, color FROM deck_tags WHERE id = ?1",
+                params![tag.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stored_name, "Interaction",
+            "the row itself must carry the new name"
+        );
+        assert_eq!(stored_color, "blue", "and the new colour");
     }
 
     // -- Rule 5: a card carries 0 or 1 tags --------------------------------------------------

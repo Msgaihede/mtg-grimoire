@@ -275,10 +275,17 @@ pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, S
     .map_err(|e| e.to_string())
 }
 
+/// Make a deck, and give it its four predefined categories in the same transaction — a deck
+/// that exists but cannot be filed into anything is a state nothing downstream expects, and
+/// the v7 migration only ever seeded these for decks that existed *at* the migration; a deck
+/// made afterwards needs the same four rows made for it here. `deck_meta::
+/// ensure_predefined_categories` says on its own doc why it takes no transaction of its
+/// own — this is the call that supplies one.
 pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, String> {
     let name = valid_name(&input.name)?;
     let format_key = valid_format(conn, &input.format_key)?;
-    let id: i64 = conn
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let id: i64 = tx
         .query_row(
             "INSERT INTO decks (name, format_key, description, created_at, updated_at)
              VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
@@ -287,6 +294,8 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    crate::deck_meta::ensure_predefined_categories(&tx, id)?;
+    tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 

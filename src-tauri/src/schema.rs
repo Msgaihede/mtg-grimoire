@@ -884,6 +884,41 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                FROM deck_cards dc;",
         )?;
 
+        // The insert above is driven off `deck_cards`, so a deck with an empty list — no
+        // rows in any zone — comes out of it owning no categories at all. That is every
+        // deck that predates this migration and has nothing in it yet, which is not a rare
+        // shape: a deck is created empty and filled in over several sessions. This second
+        // pass closes that gap once, here, rather than leaving it for
+        // `deck_meta::ensure_predefined_categories` to discover on whatever future read
+        // happens to ask first — the whole point of migrating the schema is that a database
+        // brought to head needs nothing more done to it.
+        //
+        // `WHERE NOT EXISTS` is what lets this run unconditionally over every deck without
+        // colliding with the insert just above: a deck that already has a `commander`
+        // category (because it already had a commander card) is skipped for that kind and
+        // topped up for whichever of the other three it is still missing. `main` has no row
+        // here — the four kinds and their `(name, is_active, sort_order)` are
+        // `PREDEFINED_CATEGORIES` spelled out as literals rather than interpolated, for
+        // `CARDS_COLUMNS`'s reason: this step is history the moment it ships, and a later
+        // change to that constant must not silently rewrite what a past migration did.
+        tx.execute_batch(
+            "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+             SELECT d.id, p.name, p.kind, p.is_active, p.sort_order, unixepoch(), unixepoch()
+               FROM decks d
+               JOIN (SELECT 'commander' AS kind, 'Commander' AS name, 1 AS is_active,
+                            0 AS sort_order
+                     UNION ALL
+                     SELECT 'side', 'Sideboard', 1, 2
+                     UNION ALL
+                     SELECT 'companion', 'Companion', 1, 3
+                     UNION ALL
+                     SELECT 'maybe', 'Maybeboard', 0, 4) AS p
+              WHERE NOT EXISTS (
+                    SELECT 1 FROM deck_categories cat
+                     WHERE cat.deck_id = d.id AND cat.kind = p.kind);",
+        )?;
+
         // The rebuild. `category_id` is NOT NULL from the first row, which is only possible
         // because the categories above already exist.
         tx.execute_batch(&format!(
@@ -2602,6 +2637,53 @@ pub(crate) mod tests {
         assert_eq!(cols.iter().find(|(n, _)| n == "category_id").unwrap().1, 1);
         assert!(cols.iter().any(|(n, _)| n == "variant"));
         assert!(cols.iter().any(|(n, _)| n == "tag_id"));
+    }
+
+    /// The gap the second `deck_categories` insert in the v7 step closes: a deck that
+    /// predates categories and has never held a card — no `deck_cards` row in any zone —
+    /// is invisible to the first insert, which is driven entirely off `deck_cards`.
+    /// Without the second pass this deck would come out of `migrate` owning zero
+    /// categories, exactly as every deck made between v7 shipping and
+    /// `deck_meta::ensure_predefined_categories` landing would have, not only the ones a
+    /// human would call "legacy". Built on [`v6_deck_database`] the way
+    /// [`the_v7_step_carries_a_v6_deck_across_into_categories`] is, minus every
+    /// `deck_cards` row.
+    #[test]
+    fn the_v7_step_seeds_predefined_categories_for_a_deck_with_no_cards() {
+        let conn = v6_deck_database();
+        conn.execute(
+            "INSERT INTO decks (name, created_at, updated_at)
+             VALUES ('Empty', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let deck_id = conn.last_insert_rowid();
+
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT kind, name, is_active FROM deck_categories
+                  WHERE deck_id = ?1 ORDER BY kind",
+            )
+            .unwrap();
+        let rows: Vec<(String, String, bool)> = stmt
+            .query_map([deck_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("commander".to_owned(), "Commander".to_owned(), true),
+                ("companion".to_owned(), "Companion".to_owned(), true),
+                ("maybe".to_owned(), "Maybeboard".to_owned(), false),
+                ("side".to_owned(), "Sideboard".to_owned(), true),
+            ],
+            "an empty legacy deck must come out of the migration owning its four \
+             predefined categories, `main` excluded — nothing named it, so nothing seeds it"
+        );
     }
 
     /// A database that stopped at version 6 — decks and their cards in the pre-category
