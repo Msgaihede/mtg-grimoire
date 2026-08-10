@@ -68,6 +68,13 @@ pub struct SearchRequest {
     /// name order when it is not. Keys outside [`SEARCH_SORTS`] are dropped, never
     /// interpolated.
     pub sort: Option<Vec<crate::sorting::SortTerm>>,
+    /// Fold every printing of one card into a single row, represented by the newest
+    /// printing.
+    ///
+    /// Absent means **false** — uncollapsed is what this command has always answered, so
+    /// every caller that does not ask keeps the shape and the behaviour it had. The search
+    /// view sends `true` explicitly.
+    pub collapse: Option<bool>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -138,6 +145,21 @@ pub struct CardSummary {
     pub owned_quantity: i64,
     /// Whether a wish covers this printing — pinned to it, or unpinned on its oracle card.
     pub wishlisted: bool,
+    /// How many printings this row stands for. `1` uncollapsed, always — a row *is* a
+    /// printing then, and `1` is the true answer rather than a filler.
+    ///
+    /// Collapsed, it counts the printings that **matched the filters**, not every printing
+    /// that exists: filters narrow printings first and the survivors are grouped, so a
+    /// search restricted to one set reports how many printings are in that set. The row
+    /// summarises the answer, never the database.
+    pub printings: i64,
+    /// Cheapest and dearest `price_usd` among the printings this row stands for. Both equal
+    /// [`Self::price_usd`] uncollapsed.
+    ///
+    /// [`Self::price_usd`] stays what it always was — the representative printing's own
+    /// value, itself a nonfoil→foil→etched fallback chain that must never be summed.
+    pub price_low: Option<f64>,
+    pub price_high: Option<f64>,
 }
 
 /// A page of results plus the size of the whole match set, for the pager.
@@ -380,6 +402,9 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             finishes: row.get(11).map_err(|e| e.to_string())?,
             owned_quantity: row.get(12).map_err(|e| e.to_string())?,
             wishlisted: row.get(13).map_err(|e| e.to_string())?,
+            printings: 1,
+            price_low: row.get(8).map_err(|e| e.to_string())?,
+            price_high: row.get(8).map_err(|e| e.to_string())?,
         });
     }
     Ok(SearchResponse {
@@ -916,6 +941,9 @@ mod tests {
                 finishes: Some(r#"["nonfoil","foil"]"#.into()),
                 owned_quantity: 0,
                 wishlisted: false,
+                printings: 1,
+                price_low: Some(400.5),
+                price_high: Some(400.5),
             }],
             total: 5000,
             total_is_capped: true,
@@ -930,12 +958,43 @@ mod tests {
                     "collectorNumber": "161", "rarity": null, "typeLine": "Instant",
                     "manaCost": null, "priceUsd": 400.5, "layout": "normal",
                     "oracleId": "o-bolt", "finishes": "[\"nonfoil\",\"foil\"]",
-                    "ownedQuantity": 0, "wishlisted": false
+                    "ownedQuantity": 0, "wishlisted": false,
+                    "printings": 1, "priceLow": 400.5, "priceHigh": 400.5
                 }],
                 "total": 5000,
                 "totalIsCapped": true
             })
         );
+    }
+
+    /// Uncollapsed, a row stands for exactly one printing and its "range" is its own price.
+    /// One DTO shape for both modes, so no consumer has to know which produced a row.
+    #[test]
+    fn an_uncollapsed_row_reports_one_printing_and_a_degenerate_price_range() {
+        let conn = seeded();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("light bol".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let card = &r.items[0];
+        assert_eq!(card.printings, 1);
+        assert_eq!(card.price_low, card.price_usd);
+        assert_eq!(card.price_high, card.price_usd);
+    }
+
+    /// `collapse` is optional in the payload and absent means false, so every existing
+    /// caller sends what it always sent and gets what it always got.
+    #[test]
+    fn collapse_is_absent_by_default_and_parses_when_sent() {
+        let bare: SearchRequest = serde_json::from_str(r#"{"text":"bolt"}"#).unwrap();
+        assert_eq!(bare.collapse, None);
+        let set: SearchRequest = serde_json::from_str(r#"{"collapse":true}"#).unwrap();
+        assert_eq!(set.collapse, Some(true));
     }
 
     /// The set picker goes through the same hand-written mirror, and it is the one of these

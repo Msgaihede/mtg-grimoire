@@ -49,6 +49,9 @@ const BOLT: CardSummary = {
   finishes: `["nonfoil","foil"]`,
   ownedQuantity: 0,
   wishlisted: false,
+  printings: 1,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 /** Every nullable column at once — the shape a token or an unpriced printing arrives in. */
@@ -67,6 +70,9 @@ const SPARSE: CardSummary = {
   finishes: null,
   ownedQuantity: 0,
   wishlisted: false,
+  printings: 1,
+  priceLow: null,
+  priceHigh: null,
 };
 
 const page = (
