@@ -155,17 +155,35 @@ function send(target: Element, type: string, dataTransfer: StoryDataTransfer): v
   target.dispatchEvent(event);
 }
 
-/** One frame, so the library's `requestAnimationFrame`-scheduled `onDragStart` has landed before
- *  the next assertion reads the DOM — it batches that with the drag preview. */
+/**
+ * One frame, so the library's `requestAnimationFrame`-scheduled `onDragStart` has landed before
+ * the next assertion reads the DOM — it batches that with the drag preview.
+ *
+ * **Necessary and not sufficient, and every assertion that reads a drag's result must therefore
+ * go through `waitFor`.** The library schedules its drop-target change on a frame; React's
+ * commit of the state that change sets is a *second* hop, and {@link send} dispatches outside
+ * `act`, so nothing forces the two into one tick. Under a loaded suite they routinely are not:
+ * measured 2026-08-09, the bare `toHaveClass(DROP_OVER)` that used to follow `over()` failed
+ * **5 of 10** runs of this file alone, and passed **10 of 10** wrapped.
+ */
 const frame = () =>
   new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
   });
 
 /**
- * Pick a card up. **Every drag started here must be finished** — the library keeps one global
- * "a drag is active" flag, and a story that walked away holding a card would leave the next one
- * unable to pick one up.
+ * Pick a card up. **Every drag started here must be finished, and a `finally` is what finishes
+ * it** — the library keeps one global "a drag is active" flag, and a story that walked away
+ * holding a card leaves the next one unable to pick one up. That is not a hypothetical: it is
+ * the second half of the flake this file used to have. A failed assertion mid-drag threw past
+ * the `cancel` below, and `DecksDropTargetInert` — the next story on the page — then failed on
+ * a ring that never lit, which is how **one** broken assertion reported **two** failures
+ * (measured 2026-08-09: 5 of 10 runs red, every one of them `2 failed`, never `1`).
+ *
+ * So every `play` here holds its drag inside `try { … } finally { await held.cancel(); }`.
+ * {@link cancel} is idempotent by construction — the library binds its `dragend` handling for
+ * the life of one drag and unbinds on the first one — so the stories that end in a real
+ * {@link drop} pay a no-op for the same guarantee.
  */
 async function pickUp(source: Element) {
   const data = new StoryDataTransfer();
@@ -385,22 +403,35 @@ export const DropTargetsLive: Story = {
     const wishlist = canvas.getByRole("button", { name: "Wishlist" });
 
     const held = await pickUp(canvas.getByText("Lightning Bolt"));
-    await waitFor(async () => {
-      await expect(decks).toHaveClass(DROP_RING);
-    });
-    await expect(wishlist).toHaveClass(DROP_RING);
-    await expect(canvas.getByRole("button", { name: "Collection" })).not.toHaveClass(
-      "ring-accent",
-    );
+    try {
+      await waitFor(async () => {
+        await expect(decks).toHaveClass(DROP_RING);
+      });
+      await expect(wishlist).toHaveClass(DROP_RING);
+      await expect(canvas.getByRole("button", { name: "Collection" })).not.toHaveClass(
+        "ring-accent",
+      );
 
-    await held.over(decks);
-    await expect(decks).toHaveClass(DROP_OVER);
-    await expect(wishlist).not.toHaveClass(DROP_OVER);
+      await held.over(decks);
+      // The positive claim is the one that waits; the negative is read *after* it resolves, on a
+      // DOM that has already committed the change. A `not.` inside a `waitFor` would pass on its
+      // first attempt against a DOM where nothing had happened yet — which is a green assertion
+      // about the past.
+      await waitFor(async () => {
+        await expect(decks).toHaveClass(DROP_OVER);
+      });
+      await expect(wishlist).not.toHaveClass(DROP_OVER);
 
-    // Let go over nothing, which is how a cancelled drag ends, and the ring stands down without
-    // anything here hearing a keypress.
-    await held.cancel();
-    await expect(decks).not.toHaveClass("ring-accent");
+      // Let go over nothing, which is how a cancelled drag ends, and the ring stands down without
+      // anything here hearing a keypress. Waiting for a class to *leave* is the one negative that
+      // belongs in a `waitFor`: the thing it is waiting on is the removal itself.
+      await held.cancel();
+      await waitFor(async () => {
+        await expect(decks).not.toHaveClass("ring-accent");
+      });
+    } finally {
+      await held.cancel();
+    }
   },
 };
 
@@ -425,17 +456,21 @@ export const DecksDropTargetInert: Story = {
     const decks = canvas.getByRole("button", { name: "Decks" });
 
     const held = await pickUp(canvas.getByText("Lightning Bolt"));
-    await waitFor(async () => {
-      await expect(canvas.getByRole("button", { name: "Wishlist" })).toHaveClass(DROP_RING);
-    });
-    await expect(decks).not.toHaveClass("ring-accent");
-    await expect(decks).toHaveAttribute("title", "Open a deck to drop cards into it");
+    try {
+      await waitFor(async () => {
+        await expect(canvas.getByRole("button", { name: "Wishlist" })).toHaveClass(DROP_RING);
+      });
+      await expect(decks).not.toHaveClass("ring-accent");
+      await expect(decks).toHaveAttribute("title", "Open a deck to drop cards into it");
 
-    // And it refuses the card as well as declining to advertise for it: `canDrop` asks the same
-    // question the ring does, so a drop here writes nothing and says nothing.
-    await held.over(decks);
-    await held.drop(decks);
-    await expect(canvas.queryByText(/Added to/)).toBeNull();
+      // And it refuses the card as well as declining to advertise for it: `canDrop` asks the same
+      // question the ring does, so a drop here writes nothing and says nothing.
+      await held.over(decks);
+      await held.drop(decks);
+      await expect(canvas.queryByText(/Added to/)).toBeNull();
+    } finally {
+      await held.cancel();
+    }
   },
 };
 
@@ -458,11 +493,15 @@ export const DroppedOnWishlist: Story = {
     const wishlist = canvas.getByRole("button", { name: "Wishlist" });
 
     const held = await pickUp(canvas.getByText("Lightning Bolt"));
-    await held.over(wishlist);
-    await held.drop(wishlist);
+    try {
+      await held.over(wishlist);
+      await held.drop(wishlist);
 
-    await waitFor(async () => {
-      await expect(canvas.getByText("Added to wishlist.")).toBeInTheDocument();
-    });
+      await waitFor(async () => {
+        await expect(canvas.getByText("Added to wishlist.")).toBeInTheDocument();
+      });
+    } finally {
+      await held.cancel();
+    }
   },
 };
