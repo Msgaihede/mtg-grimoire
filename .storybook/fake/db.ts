@@ -87,6 +87,7 @@ import type {
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
+  CollectionSummary,
   DeckCard,
   DeckInput,
   DeckPatch,
@@ -101,6 +102,7 @@ import type {
   SetSummary,
   SwapResult,
   SyncOutcome,
+  SyncStatus,
   WishInput,
   WishRow,
   WishlistQuery,
@@ -1347,8 +1349,17 @@ export function readHandlers(db: FakeDb) {
       };
     },
 
-    /** `collection::summarise`, over the *same* rows the list is showing. */
-    collection_summary: (args: { query: CollectionQuery }) => {
+    /**
+     * `collection::summarise`, over the *same* rows the list is showing.
+     *
+     * **Annotated rather than inferred, like every handler with a `to*` builder behind it.**
+     * This DTO has no builder — nothing else in the fake constructs a `CollectionSummary` —
+     * so the return type is the only thing binding these ten fields to `ipc.ts`. Without it a
+     * renamed or dropped field on the Rust side would reach `ipc.ts`, fail nothing here, and
+     * leave the fake answering a shape the app no longer reads. Catching that drift is the
+     * whole reason the stories go through `ipc.ts` instead of past it.
+     */
+    collection_summary: (args: { query: CollectionQuery }): CollectionSummary => {
       const rows = collectionScope(db, args.query);
       const priced = rows.map((e) => {
         const card = cardById(db, e.cardId);
@@ -1425,8 +1436,9 @@ export function readHandlers(db: FakeDb) {
      */
     format_specs_list: () => Object.values(SPECS).sort((a, b) => a.sortOrder - b.sortOrder),
 
-    /** `sync::status`. */
-    sync_status: () => ({
+    /** `sync::status`. Annotated for {@link collection_summary}'s reason — the other DTO in
+     *  this file with no `to*` builder to bind it to `ipc.ts`. */
+    sync_status: (): SyncStatus => ({
       cardCount: db.cards.length,
       lastCheckAt: SYNC_LAST_CHECK_AT,
       bulkUpdatedAt: SYNC_BULK_UPDATED_AT,
