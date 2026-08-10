@@ -425,15 +425,29 @@ export const ZeroQuantity: Story = {
     const empty = canvas.getByText("C21 · 263").closest('[role="row"]');
     // Still listed, and still first — a row at zero is a record, not a deletion.
     await expect(empty).toHaveAttribute("aria-rowindex", "2");
-    // **The only Remove button in the table**, and it is on this row. Asserting the whole list
-    // rather than this row is the point: the invisible half of the rule is that the other
-    // three rows do *not* offer one, and on a list that scrolls under the pointer a trash icon
-    // beside a four-copy row would be a one-click way to lose the lot.
-    const removes = canvas.getAllByRole("button", { name: /^Remove/ });
-    await expect(removes).toHaveLength(1);
-    await expect(removes[0]).toHaveAccessibleName(
-      "Remove Sol Ring (Nonfoil, LP) from your collection",
-    );
+    // **The Remove button is on this row, and on none of the rows drawn beside it** — the
+    // invisible half of the rule, because on a list that scrolls under the pointer a trash
+    // icon beside a four-copy row would be a one-click way to lose the lot.
+    //
+    // Read row by row over the rows the virtualiser really drew, never as a count of the
+    // whole canvas. A canvas-wide `toHaveLength(1)` is green when the other three rows were
+    // never rendered at all, which is the failure this file's own header forbids: the window
+    // here is `stories.test.tsx`'s 600px stub and not this app's viewport, so how many rows
+    // are in the DOM is an artefact of that file.
+    await expect(
+      within(empty as HTMLElement).getByRole("button", { name: /^Remove/ }),
+    ).toHaveAccessibleName("Remove Sol Ring (Nonfoil, LP) from your collection");
+    // `aria-rowindex="1"` is the header (`VirtualTable.tsx:190`); everything else with the
+    // attribute is an entry.
+    const others = canvas
+      .getAllByRole("row")
+      .filter((row) => row !== empty && row.getAttribute("aria-rowindex") !== "1");
+    // Without this the loop below is a claim about nothing — which is precisely the way the
+    // count it replaced could pass.
+    await expect(others.length).toBeGreaterThan(0);
+    for (const row of others) {
+      await expect(within(row).queryByRole("button", { name: /^Remove/ })).toBeNull();
+    }
     // The stepper can still be stepped back up — zero is a state it can reach and nothing else
     // can leave.
     await expect(
