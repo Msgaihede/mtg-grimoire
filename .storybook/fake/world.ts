@@ -105,8 +105,11 @@ const BOUND = new WeakSet<object>();
  * Bind one of TanStack Query's two function slots to a world.
  *
  * The wrapper only has to cover the **synchronous** part of the call, and that is enough
- * because every `queryFn` and `mutationFn` in this app calls `ipc.*` as its first statement
- * (measured 2026-08-10 over all 27 of them). `core.ts`'s `invoke` reads the pointer before its
+ * because every `queryFn` and `mutationFn` in this app calls `ipc.*` as its first statement.
+ * **26** of them in `src/` outside tests and stories, plus the two a story file defines for
+ * itself (`DeckEditor.stories.tsx:37`, `DecksPage.stories.tsx:38`) — re-counted 2026-08-10
+ * after merging the update feature, which added none: `useUpdate` is plain hooks, for
+ * `useSync`'s reason. `core.ts`'s `invoke` reads the pointer before its
  * own first `await` and re-points at the way out, so the rest of the chain — including the
  * awaited continuation — stays in this world without the wrapper having to still be on the
  * stack.

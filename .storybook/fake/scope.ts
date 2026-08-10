@@ -16,26 +16,46 @@
  * real call site in this app:
  *
  * 1. **A `queryFn` or a `mutationFn`.** Every `ipc.*` call in the app is inside one, bar the
- *    three named below — measured 2026-08-10 by grepping `ipc\.[a-zA-Z]` across `src/`. The
- *    world's own `QueryClient` wraps both (see `world.ts`'s `worldQueryClient`), so a fetch
- *    is bound to its story whenever it runs: on mount, on a refetch, on a retry, on an
+ *    eleven named below — measured 2026-08-10 by grepping `ipc\.[a-zA-Z]` across `src/`,
+ *    including the five spelled `ipc` newline `.method(…)`, which that pattern alone does not
+ *    find. The world's own `QueryClient` wraps both (see `world.ts`'s `worldQueryClient`), so
+ *    a fetch is bound to its story whenever it runs: on mount, on a refetch, on a retry, on an
  *    invalidation after a mutation. This is the layer that matters most, because those later
  *    fetches happen at times no render phase can cover.
- * 2. **A mount effect.** `useSyncProgress`'s `listen`, `useSync`'s first poll
- *    (`useSync.ts:132`) and `CollectionPage.tsx:202`'s `prewarmCollection` all call straight
- *    into the fake from an effect. {@link runInScope} is applied around them by the
- *    `<Activate>` element `preview.tsx` renders as the story's **first sibling**: React fires
- *    effects in fiber-completion order, so a leaf rendered before the story runs its effect
- *    before the story's — which is what makes "the scope is right during this story's mount"
- *    true rather than hopeful.
+ * 2. **A mount effect** — six of them: `useSyncProgress.ts:44` and `useSyncInvalidation.ts:103`
+ *    subscribe, `useSync.ts:132` and `useUpdate.ts:109` make their first poll,
+ *    `useUpdate.ts:121` registers `update:progress`, and `CollectionPage.tsx:202` prewarms its
+ *    images. {@link runInScope} is applied around them by the `<Activate>` element
+ *    `preview.tsx` renders as the story's **first sibling**: React fires effects in
+ *    fiber-completion order, so a leaf rendered before the story runs its effect before the
+ *    story's — which is what makes "the scope is right during this story's mount" true rather
+ *    than hopeful.
  * 3. **The continuation after an `await`.** `useSync.ts:130` schedules its next poll *after*
  *    `await ipc.syncStatus()` has resolved, so the scope has to survive the microtask hop.
  *    `core.ts`'s `invoke` re-points the pointer at its own scope on the way out, which lands
  *    it before the caller's continuation runs.
  * 4. **A timer.** That next poll fires 30 s later from a bare `setTimeout`, with no render,
- *    no effect and no query behind it. {@link bindTimers} captures the scope at schedule time
- *    and restores it for the callback — the one monkey-patch in the fake, and the one call
- *    site in the app that needs it.
+ *    no effect and no query behind it — and `useUpdate`'s does the same a minute at a time.
+ *    {@link bindTimers} captures the scope at schedule time and restores it for the callback:
+ *    the one monkey-patch in the fake, and the two call sites in the app that need it.
+ *
+ * **The fifth way in is a click handler, and it is the one this file does not cover.** Five
+ * `ipc.*` calls in `src/` are made straight out of an `onClick`, outside every mechanism
+ * above: `useSync.ts:151`'s `syncRun(true)` and `useUpdate.ts`'s `updateCheck` (132),
+ * `updateDownload` (144), `updateApply` (160) and `updateOpenReleasePage` (169). A handler
+ * runs after the last commit on the page, so on a docs page with several stories mounted
+ * inline it reads whichever story committed *last* — press Refresh on the first story and the
+ * fifth story's world answers. Nothing here can fix that: there is no render, no effect and no
+ * timer to hang a scope on, and a fix would have to reach into component source.
+ *
+ * What keeps it from mattering today is that **exactly one story file reaches any of the
+ * five, and it renders in frames**: `AppShell.stories.tsx` is the only file that mounts the
+ * real `useSync`/`useUpdate` (measured 2026-08-10), and it carries `docs.story.inline: false`,
+ * so each of its docs stories has an iframe and a module graph of its own. `Settings/Page` and
+ * `Settings/UpdatePanel` take their `Update` as a **prop** with `fn()` handlers, so their
+ * buttons never reach the fake at all. A new story file that mounts a component driving one of
+ * these five has to make the same choice, and that choice is the one line of this paragraph
+ * worth acting on.
  *
  * What is deliberately **not** scoped: `src/lib/store.ts`'s zustand store. It is created by a
  * `create(...)` call whose initializer the module does not export, so a second instance of it
@@ -157,12 +177,13 @@ let timersBound = false;
 /**
  * Make a `setTimeout` scheduled inside a world fire inside that same world.
  *
- * **The one monkey-patch in the fake, and it has exactly one call site behind it.**
+ * **The one monkey-patch in the fake, and it has exactly two call sites behind it.**
  * `useSync.ts:130` polls `sync_status` on a chain of `setTimeout`s — 30 s apart when idle —
- * and that callback runs with no render, no effect and no query around it. Without this, the
- * eleven `AppShell` stories on one docs page each poll correctly on mount and then, thirty
- * seconds in, all eleven read whichever world was pointed at last: the first-run overlay of
- * the `empty` seed would quietly disappear, on a page nobody was touching.
+ * and `useUpdate.ts:107` polls `update_status` on another, a minute apart. Both callbacks run
+ * with no render, no effect and no query around them. Without this, the twelve `AppShell`
+ * stories on one docs page each poll correctly on mount and then, thirty seconds in, all
+ * twelve read whichever world was pointed at last: the first-run overlay of the `empty` seed
+ * would quietly disappear, on a page nobody was touching.
  *
  * Narrow on purpose. It wraps a **function** handler only (a string one is `eval`, and is
  * nobody's poll), it wraps nothing at all when no world is installed — so a checkout that
