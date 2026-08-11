@@ -7,7 +7,9 @@
  * and whatever comes next, all described the same way and ranked against each other.
  */
 import { createStore } from "zustand/vanilla";
+import type { SyncPhase, SyncProgressEvent, UpdateProgressEvent } from "@/lib/ipc";
 import type { ManaLineSync } from "@/lib/mana";
+import { PHASE_LABEL } from "@/lib/useSyncProgress";
 
 /** One long-running job, as the ribbon needs to describe it. */
 export interface Activity extends ManaLineSync {
@@ -109,4 +111,69 @@ export function topActivity(jobs: readonly Activity[]): Activity | null {
 export function megabytes(done: number, total: number): string {
   const mb = (n: number) => (n / 1_000_000).toFixed(0);
   return `${mb(done)} / ${mb(total)} MB`;
+}
+
+/**
+ * Fold a sync into the job the ribbon describes.
+ *
+ * `busy` decides whether anything is running, never the event: a run inside the 24 h check
+ * window emits nothing at all, and Tauri drops the events emitted before the webview started
+ * listening. `done` and `error` are terminal phases whose event can outlive the run by a poll
+ * interval, so they fall back to the generic sentence and an indeterminate bar rather than
+ * reading as finished — and a failure is reported by the banner and the status poll, which
+ * outlive the event and can say why.
+ */
+export function syncActivity(progress: SyncProgressEvent | null, busy: boolean): Activity | null {
+  if (!busy) return null;
+  const phase: SyncPhase | null =
+    progress && progress.phase !== "done" && progress.phase !== "error" ? progress.phase : null;
+  if (!phase || !progress) {
+    return { key: "sync", rank: RANK.sync, label: "Syncing card data", detail: null, value: null };
+  }
+  return {
+    key: "sync",
+    rank: RANK.sync,
+    label: PHASE_LABEL[phase],
+    detail: syncDetail(phase, progress),
+    value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
+  };
+}
+
+/**
+ * The number under each phase, in the unit that phase is actually counting.
+ *
+ * The ingest gets no denominator: its total is `INGEST_TOTAL_ESTIMATE`, a constant, and a
+ * printed `83,000 / 117,000` would state a figure nobody has counted. The reclaim is the
+ * opposite — the freelist is counted once at entry and only falls — so it is the one phase
+ * whose percentage is exactly true.
+ */
+function syncDetail(phase: SyncPhase, e: SyncProgressEvent): string | null {
+  if (phase === "downloading" && e.total > 0) return megabytes(e.done, e.total);
+  if (phase === "ingesting") return `${e.done.toLocaleString("en-US")} cards`;
+  if (phase === "reclaiming" && e.total > 0) {
+    return `${Math.min(100, Math.round((e.done / e.total) * 100))}%`;
+  }
+  return null;
+}
+
+/**
+ * Fold an update download into a job.
+ *
+ * Takes the two values it needs rather than the whole `Update`, so this module stays free of
+ * a hook's return type and a test can name the case in two arguments. `progress` is non-null
+ * only while a download is in flight — `useUpdate` clears it in the call's `finally` — which
+ * is what keeps a *check*, and a staged build waiting to install, out of the ribbon.
+ */
+export function updateActivity(
+  progress: UpdateProgressEvent | null,
+  version: string | null,
+): Activity | null {
+  if (!progress) return null;
+  return {
+    key: "update-download",
+    rank: RANK.update,
+    label: version ? `Downloading update ${version}` : "Downloading update",
+    detail: progress.total > 0 ? megabytes(progress.done, progress.total) : null,
+    value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
+  };
 }

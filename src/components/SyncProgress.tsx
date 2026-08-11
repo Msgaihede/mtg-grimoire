@@ -1,3 +1,4 @@
+import { megabytes } from "@/lib/activity";
 import type { SyncProgressEvent } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
@@ -9,10 +10,15 @@ function percent(e: SyncProgressEvent): number | null {
   return Math.min(100, Math.round((e.done / e.total) * 100));
 }
 
-/** The numbers under the bar, in the unit the phase is actually counting. */
+/**
+ * The numbers under the bar, in the unit the phase is actually counting.
+ *
+ * Deliberately fewer phases than the ribbon's `syncDetail`: a first run never reaches
+ * `reclaiming` with an empty database behind it. The byte formatter is shared, so the two
+ * surfaces cannot drift apart on the one thing they both show.
+ */
 function detail(e: SyncProgressEvent): string | null {
-  const mb = (n: number) => (n / 1_000_000).toFixed(0);
-  if (e.phase === "downloading" && e.total > 0) return `${mb(e.done)} / ${mb(e.total)} MB`;
+  if (e.phase === "downloading" && e.total > 0) return megabytes(e.done, e.total);
   if (e.phase === "ingesting") return `${e.done.toLocaleString("en-US")} cards`;
   return null;
 }
