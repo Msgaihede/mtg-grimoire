@@ -1,21 +1,50 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Figure, FigureRow } from "@/components/Figure";
-import { ipcError, type DeckCard, type DeckZone } from "@/lib/ipc";
+import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { manaValueOf, SIZE_ZONES } from "./validation/engine";
-import { ZONE_LABEL, groupCards } from "./ZoneColumn";
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
- * control's edge, never a ring (a ring means "state" everywhere else).
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+import { FOCUS } from "./cardControl";
+import { manaValueOf, SIZE_KINDS } from "./validation/engine";
 
 /** The nine curve buckets — 0 through 7 exactly, and 8 open-ended, which is the bucketing the
- *  mana-value filter chips and `ZoneColumn`'s mana-value grouping already use. */
+ *  mana-value filter chips and `grouping.ts`'s mana-value grouping already use. */
 const CURVE_BUCKETS = 9;
+
+/**
+ * The eight card types, in the order they are printed on the type line, and the word each bar
+ * is named by.
+ *
+ * Order is the whole of the rule for a card with two types: an Artifact Creature is a creature
+ * to everyone who has ever built a deck, and `Creature` comes first here. `Land` is last of the
+ * eight for the same reason it is last in a decklist — it is where the counting ends.
+ *
+ * **Deliberately not `autoCategory.ts`'s list, though the eight words are the same.** That one
+ * checks `Land` *first*, because it decides where a card is filed and Dryad Arbor
+ * (`Land Creature — Forest Dryad`) belongs in the lands. These are bars over a curve, where the
+ * question is what a card *does*: an artifact land heads up the Artifact bar and Urza's Saga the
+ * Enchantment bar, which is the reading `isLand` below then contradicts on purpose for every
+ * other chart. That disagreement is named in `isLand`'s doc and pinned by `a land that is not
+ * filed under Land is still a land to every chart but the type bars` — folding the two orders
+ * together breaks whichever job loses.
+ *
+ * This lived in `ZoneColumn.groupCards` while the deck list was a column of type headings.
+ * Schema v8's rebuild draws its headings from `grouping.ts` instead, so this is now one
+ * surface's own bucketing and lives with the surface.
+ */
+const TYPE_BUCKETS = [
+  "Creature",
+  "Planeswalker",
+  "Instant",
+  "Sorcery",
+  "Artifact",
+  "Enchantment",
+  "Battle",
+  "Land",
+] as const;
+
+/** Where a token, a scheme, or a row whose printing has left the card database goes. */
+const OTHER = "Other";
 
 /** The five colours a pip can be, in the order symbols are printed. */
 type PipKey = (typeof MANA_LINE_KEYS)[number];
@@ -41,24 +70,54 @@ export interface TypeCount {
 }
 
 /**
+ * One category's copies.
+ *
+ * Named by the row rather than by a fixed word, which is the whole of schema v8 in this file: a
+ * category is a pile the reader made, named and ordered, so `Removal` and `Sideboard` arrive
+ * here the same way and nothing below knows which is which.
+ */
+export interface CategoryCount {
+  /** `deck_categories.id` — what addresses a pile, since two of them may share a name. */
+  id: number;
+  /** The reader's own word for it, printed verbatim but for the casing the note applies. */
+  name: string;
+  /** Copies, never rows. */
+  quantity: number;
+}
+
+/**
+ * A category while it is still being counted, when it also knows its rules role.
+ *
+ * Narrowed to {@link CategoryCount} on the way out, and that is deliberate rather than
+ * incidental: `kind` and `active` decide which of the two lists an entry lands in, and handing
+ * them on would invite a caller to make that decision a second time and disagree.
+ */
+type Tallied = CategoryCount & { kind: CategoryKind; active: boolean };
+
+/**
  * Everything the strip says about a deck, computed once from the rows the editor already
  * holds.
  *
  * **Copies throughout, never rows.** Four Bolts are four cards in every number here, which is
  * the only reading under which a curve, a price and a deck size can be talked about together.
  *
- * **The scratchpad counts toward nothing** — not size, not price, not the curve — which is the
- * same rule `validateDeck` applies before it judges anything and the reason the allocator
- * never claims a copy for it. Everything else counts: a sideboard is cards you own, sleeve and
- * pay for.
+ * **A switched-off category counts toward nothing** — not size, not price, not the curve —
+ * which is the same line `validateDeck` opens with and the same read the allocator makes, so
+ * "counts toward nothing" and "reserves no copy of anything" cannot come apart. It is
+ * `categoryActive` that says so and never a kind: a Maybeboard the reader switched *on* is
+ * counted like any other pile, and a pile of their own they switched off is not. Everything
+ * else counts: a sideboard is cards you own, sleeve and pay for.
  */
 export interface DeckStatsSummary {
-  /** Copies in every zone but `maybe`. What the deck *costs* and what it is short of are
+  /** Copies in every **active** category. What the deck *costs* and what it is short of are
    *  counted over all of them: a sideboard is cards you own, sleeve and pay for. */
   copies: number;
   /**
-   * Copies in the zones the format's size rule counts — `engine.SIZE_ZONES`, imported rather
-   * than restated.
+   * Copies in the active categories whose *kind* the format's size rule counts —
+   * `engine.SIZE_KINDS`, imported rather than restated.
+   *
+   * Kinds and not categories, because a deck may own any number of `main` piles: what a card is
+   * *for* is the kind, what it is *called* is the reader's.
    *
    * This is the headline figure, and it is a different number from {@link copies} on purpose:
    * the validation chip beside it says "Modern decks need at least 60 cards; you have 59", and
@@ -66,9 +125,26 @@ export interface DeckStatsSummary {
    * never enough — the two have to share the *definition*.
    */
   sized: number;
-  /** Copies per zone, so the headline figure can say where the rest of the deck is. `maybe`
-   *  is in here and in nothing else. */
-  byZone: Record<DeckZone, number>;
+  /**
+   * Copies per category, in the order the rows arrive — which is the read's own order
+   * (category `sortOrder`, then the row's name, then its id).
+   *
+   * One entry per category that holds a card; a category holding none simply has no entry,
+   * where an empty zone used to read `0`. **Counted over every row, switched-off categories
+   * included** — the one number here that is, and the same bargain the zone version made for
+   * the scratchpad: listed, and counted toward nothing else.
+   */
+  byCategory: readonly CategoryCount[];
+  /**
+   * The entries of {@link byCategory} the headline figure does **not** count: the active piles
+   * whose kind is outside `SIZE_KINDS`, in the same order.
+   *
+   * A subset rather than a second derivation, because the note under "Cards" has to account for
+   * exactly {@link copies} − {@link sized}, and a caller applying the size rule a second time is
+   * a caller that can disagree with the figure it is writing under. A switched-off pile is in
+   * neither number and is therefore not in here.
+   */
+  elsewhere: readonly CategoryCount[];
   lands: number;
   nonlands: number;
   /** Nonland copies with no mana value anywhere — an orphaned row has neither a `cmc` nor a
@@ -86,7 +162,8 @@ export interface DeckStatsSummary {
   colorDist: Slice[];
   /** Lands by the basic land types on their front face, summing to {@link lands}. */
   landDist: Slice[];
-  /** The deck list's own type buckets, in its own order (`ZoneColumn.groupCards`). */
+  /** The deck list's own type buckets, in its own order — see `typeBucket` 130 lines above,
+   *  which is where this grouping lives now. */
   typeDist: TypeCount[];
   /** Over nonlands with a mana value, weighted by copies. `null` for a deck of nothing but
    *  lands — an average of no numbers is not 0. */
@@ -166,6 +243,39 @@ function isLand(typeLine: string | null): boolean {
 }
 
 /**
+ * The type bars: one per bucket something is in, in {@link TYPE_BUCKETS}' order.
+ *
+ * Empty buckets are dropped rather than drawn — a deck with no planeswalkers has no
+ * planeswalker bar — which is the same rule {@link drawable} applies to a pie, stated once for
+ * each shape because they are counted differently (copies here, slices there).
+ *
+ * Exported for its test and for nothing else: it is `deckStats`' arithmetic, and a chart is only
+ * as trustworthy as arithmetic somebody has checked.
+ */
+export function typeCounts(cards: readonly DeckCard[]): TypeCount[] {
+  const order = new Map<string, number>();
+  const counts = new Map<string, TypeCount>();
+
+  for (const card of cards) {
+    // The **front** face decides: `type_line` carries both sides of a double-faced card
+    // separated by `//`, and the back of a modal DFC is routinely a land while its front is a
+    // spell. A deck's curve is cast from the front.
+    const label = TYPE_BUCKETS.find((bucket) => front(card.typeLine).includes(bucket)) ?? OTHER;
+    const at = TYPE_BUCKETS.indexOf(label as (typeof TYPE_BUCKETS)[number]);
+    const key = label.toLowerCase();
+
+    const seen = counts.get(key);
+    if (seen) seen.count += card.quantity;
+    else {
+      order.set(key, at < 0 ? TYPE_BUCKETS.length : at);
+      counts.set(key, { key, label, count: card.quantity });
+    }
+  }
+
+  return [...counts.values()].sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+}
+
+/**
  * The buckets a pie can draw: the ones with something in them.
  *
  * Dropped here rather than in the chart so that every distribution this module answers has the
@@ -185,25 +295,44 @@ function drawable(slices: Slice[]): Slice[] {
  * checks.
  */
 export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
-  const counted = cards.filter((c) => c.zone !== "maybe");
+  // One flag rather than the old `zone !== "maybe"`, and it is the same line `validateDeck`
+  // opens with: a pile switched off counts toward nothing whatever it is called and whatever
+  // kind it is.
+  const counted = cards.filter((c) => c.categoryActive);
 
-  // The type bars are the deck list's own headings, read from the deck list's own helper — a
-  // bar and the heading over the rows it counts must never be two derivations of one thing.
-  const groups = groupCards(counted, "type");
+  // The type bars, in this file's own bucketing — see {@link TYPE_BUCKETS} for why it is not
+  // the add path's, and `isLand` below for the one card the two answer differently about.
+  const typeDist = typeCounts(counted);
   // Every other chart asks the type line instead; `isLand` is where that costs and buys.
   const lands = counted.filter((c) => isLand(c.typeLine));
   const nonlands = counted.filter((c) => !isLand(c.typeLine));
 
   const copiesOf = (rows: readonly DeckCard[]) => rows.reduce((n, c) => n + c.quantity, 0);
 
-  const byZone: Record<DeckZone, number> = {
-    main: 0,
-    side: 0,
-    commander: 0,
-    companion: 0,
-    maybe: 0,
-  };
-  for (const card of cards) byZone[card.zone] += card.quantity;
+  // Copies per category, over **every** row — a switched-off pile is counted here and in
+  // nothing else, which is what the zone version did for the scratchpad. A `Map` because the
+  // categories are not a fixed list any more, and because its insertion order is the read's:
+  // a pile appears where its first row does, which is category `sortOrder`.
+  const tally = new Map<number, Tallied>();
+  for (const card of cards) {
+    const at = tally.get(card.categoryId);
+    if (at) {
+      at.quantity += card.quantity;
+      continue;
+    }
+    tally.set(card.categoryId, {
+      id: card.categoryId,
+      name: card.categoryName,
+      kind: card.categoryKind,
+      active: card.categoryActive,
+      quantity: card.quantity,
+    });
+  }
+  const categories = [...tally.values()];
+  /** The three fields a caller gets: a pile's identity and its copies, never its rules role. */
+  const counts = ({ id, name, quantity }: Tallied): CategoryCount => ({ id, name, quantity });
+  /** Whether the headline figure counts this pile — the one reading of the size rule. */
+  const sizes = (category: Tallied) => category.active && SIZE_KINDS.includes(category.kind);
 
   const curve = Array<number>(CURVE_BUCKETS).fill(0);
   let manaValued = 0;
@@ -283,8 +412,9 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
 
   return {
     copies: copiesOf(counted),
-    sized: SIZE_ZONES.reduce((n, zone) => n + byZone[zone], 0),
-    byZone,
+    sized: categories.filter(sizes).reduce((n, category) => n + category.quantity, 0),
+    byCategory: categories.map(counts),
+    elsewhere: categories.filter((category) => category.active && !sizes(category)).map(counts),
     lands: copiesOf(lands),
     nonlands: copiesOf(nonlands),
     unknownManaValue,
@@ -292,7 +422,7 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
     pips,
     colorDist,
     landDist,
-    typeDist: groups.map(({ key, label, count }) => ({ key, label, count })),
+    typeDist,
     averageManaValue: manaValued === 0 ? null : manaValueTotal / manaValued,
     priceUsd: priced === 0 ? null : priceUsd,
     unpriced,
@@ -352,7 +482,7 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
    * the live region — "Added 3 wishes" for a write that did not just happen, over three cards
    * that may not be the ones it was about — with the button claiming they were already wished
    * for. Cleared during render, which is React's own answer to state that has to follow a prop
-   * (`Cover`'s art, the add target's zone).
+   * (`Cover`'s art, the add target's category).
    *
    * **What this deliberately does not close:** press at 3, add a copy, press again at 4, and the
    * original three are folded on top of themselves — 7 wished for a 4-copy shortfall. Knowing
@@ -384,27 +514,33 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
   const added = spent && send.isSuccess ? (send.data ?? 0) : null;
   const failure = send.isError ? ipcError(send.error) : null;
 
-  // Where the rest of the deck is, for the headline figure's note. The zone words are the
-  // editor's own (`ZONE_LABEL`), so the note names the columns the reader is looking at — and
-  // a companion is named as a companion rather than folded into the sideboard, because in the
-  // singleton formats there is no sideboard for it to be part of.
-  const elsewhere = (["side", "companion"] as const)
-    .filter((zone) => stats.byZone[zone] > 0)
-    .map((zone) => `${n(stats.byZone[zone])} ${ZONE_LABEL[zone].toLowerCase()}`)
+  // Where the rest of the deck is, for the headline figure's note. Every pile names itself, so
+  // the note names the columns the reader is looking at — and a companion is named as a
+  // companion rather than folded into the sideboard, because in the singleton formats there is
+  // no sideboard for it to be part of. Which piles those are is `deckStats`'s answer and not a
+  // second reading of the size rule here: the figure above the note counts the others.
+  // Lower-cased, because the note is the tail of a sentence rather than a heading of its own.
+  const elsewhere = stats.elsewhere
+    .map((category) => `${n(category.quantity)} ${category.name.toLowerCase()}`)
     .join(" + ");
 
   return (
     <div className="flex shrink-0 flex-col gap-3">
       <FigureRow>
-        {/* The number the format check is talking about — main deck plus commander, from the
-            engine's own `SIZE_ZONES`. The sideboard and the companion are real cards and are
+        {/* The number the format check is talking about, from the engine's own `SIZE_KINDS` —
+            `main`, `commander` **and `maybe`**, in categories that are switched on. The last of
+            those three is this branch's governing ruling and the one worth saying out loud: an
+            *active* category of kind `maybe` counts toward size exactly like `main`, because
+            the switch is the whole of "counts toward nothing" and the kind is not. (The
+            Maybeboard the migration seeds is switched off, which is why the default deck
+            behaves as a reader expects.) The sideboard and the companion are real cards and are
             counted by the price, the shortfall and every chart; they are just not what "a
             60-card deck" means, and the chip beside this says so in a sentence. */}
         <Figure
           label="Cards"
           value={n(stats.sized)}
           note={elsewhere ? `+ ${elsewhere}` : undefined}
-          title="Main deck and commander — the cards a format's size rule counts."
+          title="The cards a format's size rule counts — every switched-on pile except the sideboard."
         />
         <Figure label="Lands" value={n(stats.lands)} />
         <Figure

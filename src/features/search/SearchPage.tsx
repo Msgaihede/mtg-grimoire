@@ -338,7 +338,7 @@ function Results({ search }: { search: CardSearch }) {
             selectedId={selectedCardId}
             onSelect={selectCard}
             // Spec §1's first drag source: a tile is a printing the reader can carry to a
-            // deck's zone or to the sidebar. The click paths beside it — the quick-add below,
+            // deck's category column or to the sidebar. The click paths beside it — the quick-add below,
             // the pane the art opens — are unchanged; this is speed, not capability.
             dragPayload={tileDrag}
             // Spec §7: "'owned' badges appear in search once a wish is fulfilled." Drawn

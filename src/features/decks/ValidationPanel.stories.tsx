@@ -25,7 +25,7 @@ function chipRef(): RefObject<HTMLButtonElement | null> {
 }
 
 /**
- * Pad the size-counting zones out to `total` with one Alpha Island row.
+ * Pad the size-counting kinds out to `total` with one Alpha Island row.
  *
  * `validation/fixtures.ts`'s `padTo` does the same job for the engine's own tests; this one pads
  * with a **corpus printing** so that every card in every deck below is one the database really
@@ -33,6 +33,10 @@ function chipRef(): RefObject<HTMLButtonElement | null> {
  * fixture convenience with a reason: the corpus is 43 printings, a 100-card singleton deck cannot
  * be built out of it, and this panel renders sentences rather than rows — nothing on screen
  * counts how many rows the padding took.
+ *
+ * It reads `categoryActive` as well as the kind, because the engine's size rule does: a
+ * switched-off pile counts toward nothing there, and a helper that counted it here would pad the
+ * deck short and hand the story the deck-size error it was written to avoid.
  *
  * Islands are safe padding in a way no other card is. Basic lands are exempt from every copy
  * limit (CR 100.2a, `singleton.isBasicLand`), so the padding never manufactures a copy-limit or
@@ -42,7 +46,9 @@ function chipRef(): RefObject<HTMLButtonElement | null> {
  */
 function padWithIslands(total: number, cards: DeckCard[]): DeckCard[] {
   const counted = cards
-    .filter((c) => c.zone === "main" || c.zone === "commander")
+    .filter(
+      (c) => c.categoryActive && (c.categoryKind === "main" || c.categoryKind === "commander"),
+    )
     .reduce((n, c) => n + c.quantity, 0);
   return counted < total
     ? [...cards, deckCard(printing("lea", "288"), { quantity: total - counted })]
@@ -72,14 +78,14 @@ const MODERN_MAIN = padWithIslands(60, MODERN_SPELLS);
 /**
  * A sideboard of `n` cards, from four Modern-legal printings that appear in no main deck here —
  * so a sideboard-size story is never also a copy-limit story (CR 100.4a counts a sideboard's
- * copies toward the same four, and `engine.COPY_ZONES` says so).
+ * copies toward the same four, and `engine.groupCopies` counts every row it is handed).
  */
 function modernSide(n: number): DeckCard[] {
   return [
-    deckCard(printing("gtc", "215"), { zone: "side", quantity: 4 }),
-    deckCard(printing("dom", "168"), { zone: "side", quantity: 4 }),
-    deckCard(printing("apc", "128"), { zone: "side", quantity: 4 }),
-    deckCard(printing("gtc", "148"), { zone: "side", quantity: n - 12 }),
+    deckCard(printing("gtc", "215"), { categoryKind: "side", quantity: 4 }),
+    deckCard(printing("dom", "168"), { categoryKind: "side", quantity: 4 }),
+    deckCard(printing("apc", "128"), { categoryKind: "side", quantity: 4 }),
+    deckCard(printing("gtc", "148"), { categoryKind: "side", quantity: n - 12 }),
   ];
 }
 
@@ -90,7 +96,7 @@ function modernSide(n: number): DeckCard[] {
  * activated abilities put all five colours in his colour identity (`BGRUW` in the fixture), so a
  * story about copy limits or deck size is never also a story about CR 903.5c.
  */
-const kenrith = () => deckCard(printing("eld", "303"), { zone: "commander" });
+const kenrith = () => deckCard(printing("eld", "303"), { categoryKind: "commander" });
 
 /**
  * Eleven singles inside Kenrith's identity — the 99 minus its lands.
@@ -207,8 +213,10 @@ export const Legal: Story = {
  * Forty cards where the format asks for sixty.
  *
  * `deckMin` is read off the seeded row and the sentence quotes it, so a rules change is an
- * UPDATE rather than a release. The number it counts is `engine.SIZE_ZONES` — main plus
- * commander — which is the same definition the stats strip's headline "Cards" figure imports,
+ * UPDATE rather than a release. The number it counts is `engine.SIZE_KINDS` — the `main`,
+ * `commander` **and `maybe`** kinds, in categories that are switched on, so an *active*
+ * Maybeboard is counted by the size rule like any other pile — which is the same definition the
+ * stats strip's headline "Cards" figure imports,
  * because "Modern decks need at least 60 cards; you have 59" under a figure reading 74 would be
  * two numbers for one question.
  */
@@ -237,9 +245,10 @@ export const DeckTooSmall: Story = {
  * Pauper Commander, Duel Commander, PreDH and Tiny Leaders: Reborn
  * (`src-tauri/src/schema.rs:264-275`, read 2026-08-09). So every real format that has a ceiling
  * is *exactly* sized, and
- * `engine.ts:237` answers both directions in one sentence: the same wording says too small and
- * too large, and names the commander as part of the count. `engine.test.ts:80` reaches the other
- * branch with a spec built for the purpose, which is the right place for it.
+ * `deckSizeIssues` (`validation/engine.ts`) answers both directions in one sentence: the same
+ * wording says too small and too large, and names the commander as part of the count.
+ * `engine.test.ts` reaches the other branch with a spec built for the purpose, which is the
+ * right place for it.
  */
 export const DeckTooLarge: Story = {
   args: {
@@ -294,7 +303,8 @@ export const CopyLimit: Story = {
  * in the deck has a different English name — while a limit of four is an arithmetic ceiling.
  * They group under different headings and read as different problems, which is what they are.
  *
- * The commander zone counts toward the same total (`engine.COPY_ZONES`), because CR 903.5a puts
+ * The commander zone counts toward the same total — `engine.groupCopies` counts every row the
+ * engine kept, and it keeps every row in a category that is switched on — because CR 903.5a puts
  * the commander among the hundred: a card held as commander *and* in the 99 is two copies of it.
  */
 export const Singleton: Story = {
@@ -358,9 +368,9 @@ export const RestrictedMaxOne: Story = {
  * was meant to show.
  *
  * Closing this needs a corpus regeneration (`scripts/gen-storybook-cards.mjs`) that deliberately
- * picks up a duel-restricted printing — a change to a fixture **seven other story files** read
- * (grepped 2026-08-09: `CardImage`, `VirtualTable`, `PrintingPreview`, `CollectionSummary`,
- * `CollectionTable`, `ZoneColumn` and `CardGrid`).
+ * picks up a duel-restricted printing — a change to a fixture **six other story files** read
+ * (grepped 2026-08-09, re-checked after the deck rebuild retired `ZoneColumn`: `CardImage`,
+ * `VirtualTable`, `PrintingPreview`, `CollectionSummary`, `CollectionTable` and `CardGrid`).
  */
 export const RestrictedBannedAsCommander: Story = {
   args: {
@@ -501,7 +511,7 @@ export const UnknownLegality: Story = {
 export const ManaValueCap: Story = {
   args: {
     cards: padWithIslands(50, [
-      deckCard(printing("fca", "58"), { zone: "commander" }),
+      deckCard(printing("fca", "58"), { categoryKind: "commander" }),
       deckCard(printing("apc", "128")),
     ]),
     spec: SPECS.tlr,
@@ -545,8 +555,8 @@ export const CommanderCount: Story = {
   args: {
     cards: padWithIslands(100, [
       kenrith(),
-      deckCard(printing("fca", "18"), { zone: "commander" }),
-      deckCard(printing("fca", "58"), { zone: "commander" }),
+      deckCard(printing("fca", "18"), { categoryKind: "commander" }),
+      deckCard(printing("fca", "58"), { categoryKind: "commander" }),
       ...commanderSingles(),
     ]),
     spec: SPECS.commander,
@@ -570,7 +580,7 @@ export const CommanderCount: Story = {
 export const CommanderEligibility: Story = {
   args: {
     cards: padWithIslands(100, [
-      deckCard(printing("wwk", "31"), { zone: "commander" }),
+      deckCard(printing("wwk", "31"), { categoryKind: "commander" }),
       deckCard(printing("mh2", "267")),
       deckCard(printing("isd", "51")),
       deckCard(printing("c21", "263")),
@@ -596,7 +606,7 @@ export const CommanderPartner: Story = {
   args: {
     cards: padWithIslands(100, [
       kenrith(),
-      deckCard(printing("fca", "18"), { zone: "commander" }),
+      deckCard(printing("fca", "18"), { categoryKind: "commander" }),
       ...commanderSingles(),
     ]),
     spec: SPECS.commander,
@@ -634,7 +644,7 @@ export const CommanderPartner: Story = {
 export const ColorIdentity: Story = {
   args: {
     cards: padWithIslands(100, [
-      deckCard(printing("fca", "58"), { zone: "commander" }),
+      deckCard(printing("fca", "58"), { categoryKind: "commander" }),
       deckCard(printing("mh2", "267")),
       deckCard(printing("isd", "51")),
       deckCard(printing("fut", "153")),
@@ -675,7 +685,7 @@ export const ColorIdentity: Story = {
 export const CompanionCondition: Story = {
   args: {
     cards: padWithIslands(60, [
-      deckCard(printing("iko", "226"), { zone: "companion" }),
+      deckCard(printing("iko", "226"), { categoryKind: "companion" }),
       deckCard(printing("c21", "263")),
       deckCard(printing("mh2", "138")),
       deckCard(printing("fut", "153")),

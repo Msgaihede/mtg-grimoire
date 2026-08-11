@@ -3,7 +3,7 @@
  *
  * Pure, because the thing it decides cannot be seen in jsdom: every rectangle there is zero,
  * so a component test of the flip would pass over any arithmetic at all. What clips is a
- * scroller with nothing below it to scroll to — a deck's zone column, the card pane — so a
+ * scroller with nothing below it to scroll to — a deck's category column, the card pane — so a
  * layer opened near the foot of one is simply cut in half.
  *
  * `rowTop` is where a downward layer **starts** and `rowBottom` where an upward one **ends**.
@@ -15,10 +15,13 @@
  * Down wins ties: it is where the reader is looking, and flipping a layer that fits would move
  * it for nothing.
  *
- * Lives in `lib` rather than in the deck editor it was written for because the card pane's
- * printing preview asks the same question of a different scroller — and two copies of six
- * lines of arithmetic is how two surfaces start disagreeing about what "fits" means.
- * `ZoneColumn` re-exports it, so its callers and its tests read unchanged.
+ * **It has exactly one caller today** — `features/card/PrintingPreview.tsx` — and it stays in
+ * `lib/` all the same. It was extracted from the deck editor's row menus, which the rebuild
+ * retired; the arithmetic outlived them because the question is not the editor's. Any layer
+ * anchored to a row inside a scroller asks it, and the two surfaces that have asked so far
+ * were in different features, which is what the folder is for. Its tests came with it
+ * (`shouldFlipUp.test.ts`), and they are the reason it is pure: every rectangle in jsdom is
+ * zero, so a component test of a flip would pass over any arithmetic at all.
  */
 export function shouldFlipUp({
   rowTop,

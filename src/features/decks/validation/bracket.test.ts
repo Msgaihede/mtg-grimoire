@@ -168,15 +168,17 @@ describe("Game Changers", () => {
     expect(estimateBracket([orphan]).gameChangers).toBe(0);
   });
 
-  /** The same card in two zones is one card. */
+  /** The same card in two categories is one card. */
   it("names a card once however many rows hold it", () => {
     const deck = [gameChanger("Rhystic Study"), gameChanger("Rhystic Study", "side")];
 
     expect(estimateBracket(deck).gameChangerNames).toEqual(["Rhystic Study"]);
   });
 
-  /** The scratchpad is not the deck — the engine drops it before every rule and so does this. */
-  it("ignores the maybe pile", () => {
+  /** A pile the user switched off is not the deck — the engine drops it before every rule and
+   *  so does this. The Maybeboard is the commonest of those and is inactive because
+   *  `schema::PREDEFINED_CATEGORIES` seeds it so, not because this file knows the word. */
+  it("ignores an inactive category", () => {
     const deck = [gameChanger("Rhystic Study", "maybe"), islands(60)];
 
     expect(estimateBracket(deck).gameChangers).toBe(0);

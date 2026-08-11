@@ -42,7 +42,7 @@ const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
  * The app's existing vocabulary rather than a new one — gold is interactive emphasis
  * everywhere in this window, and the same ring is the keyboard's focus mark. Deliberate: a
  * drop target lighting up and a control being reachable are the same claim made to two
- * different hands. The zone columns' `DropIndicator` line stays theirs; a line drawn on a nav
+ * different hands. The category columns' `DropIndicator` line stays theirs; a line drawn on a nav
  * entry would promise an insertion point in a list that has none.
  *
  * Instant, with no rule of its own: a ring is a box shadow, and the entry's colour animation

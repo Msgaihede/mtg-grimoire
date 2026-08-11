@@ -107,7 +107,9 @@ const BOUND = new WeakSet<object>();
  * The wrapper only has to cover the **synchronous** part of the call, and that is enough
  * because every `queryFn` and `mutationFn` in this app calls `ipc.*` as its first statement.
  * **26** of them in `src/` outside tests and stories, plus the two a story file defines for
- * itself (`DeckEditor.stories.tsx:37`, `DecksPage.stories.tsx:38`) — re-counted 2026-08-10
+ * itself (`Editor`'s `deckCreate` in `DeckEditor.stories.tsx`, `OrphanedCover`'s `deckUpdate`
+ * in `DecksPage.stories.tsx` — named rather than cited by line, which is what went stale)
+ * — re-counted 2026-08-10
  * after merging the update feature, which added none: `useUpdate` is plain hooks, for
  * `useSync`'s reason. `core.ts`'s `invoke` reads the pointer before its
  * own first `await` and re-points at the way out, so the rest of the chain — including the

@@ -19,8 +19,9 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
  * The gallery, with deck 1's cover pointed at a printing the card database does not hold.
  *
  * **Staged through the command rather than through the UI, because there is no UI path to it** —
- * and that is a fact about the app rather than a shortcut. "Set as cover" is the only control
- * that writes one and it is withheld from an orphaned row (`ZoneColumn.tsx:793`), so a cover only
+ * and that is a fact about the app rather than a shortcut. The settings dialog's art picker is
+ * the only control that writes one, and `coverChoices` (`DeckSettingsDialog.tsx`) drops every
+ * row whose `needsReview` is non-null, so a cover only
  * *becomes* orphaned later, when a sync takes its printing away. `deck_update` validates no cover
  * (`db.ts:2019` is a bare `coalesce`, matching `deck::update_deck`), and `coverArtist` is a
  * lookup on the way out (`db.ts:855`, mirroring the real `LEFT JOIN cards c ON c.id =
@@ -61,21 +62,40 @@ const meta = {
     docs: {
       description: {
         component:
-          "The decks, as a wall of the art they were built around. No summary strip, no filter " +
-          "row, and no colour that is not a card's own: a deck is picked by looking at it.\n\n" +
-          "Driven end to end by `.storybook/fake/`. **The three seeded decks are the three " +
-          'states a gallery has** — measured 2026-08-10 over `readHandlers(seed("starter")).' +
-          "deck_list()`, which answers them in this order: `Modern Goodstuff` (Modern, 60 " +
-          "cards, cover art by Simon Dominic), `Kenrith Two-Drops` (Commander, 100, Kieran " +
-          "Yanner) and `Old School 93/94` (Old School, 22, Christopher Rush), the last one " +
-          "**archived**. `deck::list_decks` sorts archived last, then most recently touched " +
-          "first, so that order is the wall's.\n\n" +
+          "The decks, filed. The folder tree on the left, and on the right the one drawer the " +
+          "reader is standing in — its sub-folders as dashed cards, then its decks as the art " +
+          "they were built around. No colour anywhere that is not a card's own: a deck is " +
+          "picked by looking at it.\n\n" +
+          "**The folder half is real here now.** The fake answers all five `deck_folder_*` " +
+          "commands and `deck_set_folder`, and `seeds.ts` carries two root folders and a child " +
+          "— so the tree, the folder cards and the counts are all driven rather than described. " +
+          "{@link Folders} is the story about the shape; {@link FoldersUnavailable} is the one " +
+          "about a refused read, which now needs the `deckMeta` fault rather than a missing " +
+          "handler.\n\n" +
+          "**A failed read is a `status`; a refused write is an `alert`.** The wall's " +
+          "“Reading your decks…” line and the tree's refusal are the first kind, the " +
+          "“Could not change your decks” banner the second — which is what keeps " +
+          "{@link Busy}'s assertion unambiguous.\n\n" +
+          "Driven end to end by `.storybook/fake/`. **Four seeded decks, and the wall shows " +
+          'three** — measured 2026-08-11 over `readHandlers(seed("starter")).deck_list()`, ' +
+          "which answers them in this order: `Modern Goodstuff` (Modern, 60 cards, cover art " +
+          "by Simon Dominic), `Rhystic Testbed` (Commander, 5, no cover art), `Kenrith " +
+          "Two-Drops` (Commander, 100, Kieran Yanner) and `Old School 93/94` (Old School, 22, " +
+          "Christopher Rush), the last one **archived**. `deck::list_decks` sorts archived " +
+          "last, then most recently touched first, so that order is the wall's. The Testbed is " +
+          "filed under `Constructed › Commander`, so the wall the reader opens on is the other " +
+          "three: **a wall is the drawer you are standing in**, not an inventory.\n\n" +
           "**A tile's count is not the deck's row count.** `cardCount` is summed over " +
-          "`SIZE_ZONES` — main plus commander (`db.ts:837-838`, mirroring `DeckRow.cardCount`) " +
-          "— so the Modern deck's 15 sideboard cards and its 2-card scratchpad are in the " +
-          "editor and not in the caption. The number under a tile is the number the format's " +
-          "size rule is about, which is the same definition the editor's headline figure and " +
-          "the validation chip share.\n\n" +
+          "`SIZE_KINDS` — `main`, `commander` **and `maybe`**, in categories that are switched " +
+          "on (`.storybook/fake/db.ts:1137`, mirroring `DeckRow.cardCount` and " +
+          "`validation/engine.ts:75`) — so the Modern deck's 15 " +
+          "sideboard cards are in the editor and not in the " +
+          "caption, while the 2 in its Maybeboard are left out **only because that pile is " +
+          "switched off**. That is the branch's governing ruling and it is easy to misread: an " +
+          "*active* category of kind `maybe` counts toward size exactly like `main`. The " +
+          "switch is the whole of “counts toward nothing”. The number under a tile is the number " +
+          "the format's size rule is about, which is the same definition the editor's " +
+          "headline figure and the validation chip share.\n\n" +
           "**Archiving is the reversible thing and deleting is not.** The trash control asks " +
           "first, names what would go with the deck, and offers archiving in the same breath " +
           "({@link DeleteAsksFirst}); the archive control is a toggle whose other face is " +
@@ -86,8 +106,9 @@ const meta = {
           'word "null", never a placeholder — and reaching that needs a deck whose ' +
           "`coverCardId` names a printing `cards` does not hold. Measured 2026-08-10: **0 of " +
           "the 43** rows of `.storybook/fake/cards.ts` has a null `artist`, no seed points a " +
-          "cover at a missing id, and the one control that *sets* a cover is withheld from an " +
-          "orphaned row (`ZoneColumn.tsx:793` gates “Set as cover” on `needsReview === null`). " +
+          "cover at a missing id, and the one control that *sets* a cover offers no orphaned " +
+          "row (`coverChoices` in `DeckSettingsDialog.tsx` drops every card whose " +
+          "`needsReview` is non-null). " +
           "So a cover is never orphaned at the moment it is chosen; it becomes orphaned when a " +
           "sync takes its printing away, and it heals on the next one that brings it back. " +
           "A deck with **no cover at all** is the other, separate state, and it is every new " +
@@ -178,7 +199,9 @@ export const Archived: Story = {
     await expect(
       within(canvas.getByRole("list", { name: "Your decks" })).queryByText("Modern Goodstuff"),
     ).toBeNull();
-    // Archiving is not a refusal and says nothing: the tile moving is the whole report.
+    // Archiving is not a refusal and says nothing: the tile moving is the whole report. Still
+    // the *only* alert question worth asking with the tree reporting a refused folder list
+    // beside it, because that one is a failed **read** and is a `status` — see the note above.
     await expect(canvas.queryByRole("alert")).toBeNull();
   },
 };
@@ -225,25 +248,28 @@ export const DeleteAsksFirst: Story = {
 };
 
 /**
- * A cover whose printing has left the card database — **so no illustrator is named, and none is
- * invented.**
+ * A cover whose printing has left the card database — **so no illustrator is named, and the art
+ * is not drawn either.**
  *
- * Scryfall's image policy is why the line is conditional rather than a slot that says something:
- * an art crop carries no printed frame, so the illustrator is credited wherever one is *shown*,
- * and a credit the app cannot substantiate is worse than no credit. The tile draws its art, its
- * name and its caption exactly as its neighbour does; the one line that would have said who
- * painted it is simply not there. **It heals on the next sync that brings the printing back** —
- * `coverArtist` is a lookup at read time (`db.ts:855`, the `LEFT JOIN cards c ON c.id =
- * d.cover_card_id` at `deck.rs:235`), not a stored column, so nothing has to notice.
+ * Scryfall's image policy is the whole of it: an `art` crop carries no printed frame, so the
+ * illustrator must be credited wherever one is *shown* — which means a cover this app cannot name
+ * an artist for cannot be shown at all. Not a picture with the credit line quietly missing; no
+ * picture. `DeckRow.coverArtist`'s doc is where that ruling lives, and `CoverPreview` has always
+ * behaved this way.
  *
- * Told **per tile**, which is the claim: Kenrith Two-Drops keeps its credit in the same wall on
- * the same render. And distinct from {@link NewDeck}: this deck *has* a cover, so the frame does
- * not say "No cover" — "the deck has not picked one" and "the art is not there" are two different
- * things to do something about, and `Cover` tells them apart in as many words.
+ * **So an orphaned cover and an absent one are one state, on purpose**, and they get the same
+ * word: "No cover". That is a deliberate loss of a distinction rather than an oversight — the two
+ * differ only in *why* there is nothing to draw, and neither is something the reader can act on
+ * differently. {@link NewDeck} is the same frame reached the other way.
  *
- * The `needsReview` seed because that is where the orphan id lives, and it is the honest world for
- * this state: the sync that took the printing away is the same sync that flagged the deck row
- * naming it.
+ * **It heals on the next sync that brings the printing back** — `coverArtist` is a lookup at read
+ * time (the `LEFT JOIN cards c ON c.id = d.cover_card_id` in `deck.rs`'s `DECK_SELECT`), not a
+ * stored column, so nothing has to notice.
+ *
+ * Told **per tile**, which is the claim: Kenrith Two-Drops keeps its art and its credit in the
+ * same wall on the same render. The `needsReview` seed because that is where the orphan id lives,
+ * and it is the honest world for this state: the sync that took the printing away is the same
+ * sync that flagged the deck row naming it.
  */
 export const NoCoverArtist: Story = {
   parameters: { fake: { seed: "needsReview" } },
@@ -259,8 +285,12 @@ export const NoCoverArtist: Story = {
     const tile = within(orphaned as HTMLElement);
     // No credit, and no claim that there is nothing to credit: the line is absent, not blank.
     await expect(tile.queryByText(/^Art by/)).toBeNull();
-    // And it is not the empty-cover state — this deck chose a face, the face just is not there.
-    await expect(tile.queryByText("No cover")).toBeNull();
+    // **And the art is not drawn either, so the frame says "No cover".** An orphaned cover and
+    // an absent one are deliberately one state: an `art` crop carries no printed frame, so the
+    // illustrator must be credited wherever one is shown — and a cover this app cannot name an
+    // artist for therefore cannot be shown at all. `DeckRow.coverArtist`'s own doc is the
+    // ruling ("a cover with no artist is **not drawn**"); this tile is what it looks like.
+    await expect(tile.getByText("No cover")).toBeInTheDocument();
 
     // The neighbour, unaffected, on the same render: the rule is a fact about one cover.
     const kept = within(wall)
@@ -268,6 +298,73 @@ export const NoCoverArtist: Story = {
       .closest("li");
     await expect(within(kept as HTMLElement).getByText("Art by Kieran Yanner")).toBeInTheDocument();
     await expect(canvas.getAllByText(/^Art by/)).toHaveLength(1);
+  },
+};
+
+/**
+ * The tree, filed and standing at the root.
+ *
+ * Two roots and a child, and a deck in one of them: `Constructed › Commander` holds the fourth
+ * seeded deck, `Ideas` holds nothing at all. The empty one is not an oversight — a folder starts
+ * empty, and a tree that only ever drew folders with decks in them would never show the state a
+ * reader meets the moment they make one.
+ *
+ * **The wall is the drawer the reader is standing in, not everything they own.** Standing at the
+ * root, `Rhystic Testbed` is not on it — it is inside `Constructed`, which is on it as a dashed
+ * card with its member count. The count in the tree's own root row is the other number, and the
+ * two disagreeing is the whole point of having both.
+ */
+export const Folders: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = await canvas.findByRole("navigation", { name: "Folders" });
+
+    // Every deck the reader has, counted once, whichever drawer it is in.
+    await expect(within(tree).getByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
+    await expect(within(tree).getByRole("button", { name: /^Constructed/ })).toBeVisible();
+    await expect(within(tree).getByRole("button", { name: /^Ideas/ })).toBeVisible();
+
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    // The two unfiled decks, and the folder standing in for the filed one.
+    await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
+    await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
+    await expect(within(wall).queryByText("Rhystic Testbed")).toBeNull();
+    await expect(
+      within(wall).getByRole("button", { name: "Constructed folder, 1 deck" }),
+    ).toBeVisible();
+    // An empty folder says so rather than drawing a blank strip.
+    await expect(within(wall).getByText("Empty")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The folder list refused — **and every deck still on the wall.**
+ *
+ * The state worth pinning: a deck whose `folderId` names a folder this screen does not have is
+ * drawn at the **top level**, the same rule the tree uses for a folder whose parent is missing.
+ * Towards the root, never towards nothing — hiding a tile because its drawer did not load is the
+ * one failure a filing cabinet must not have, and there is nowhere else the tile could be shown.
+ * So the filed deck surfaces here, beside the two that were never filed.
+ *
+ * The tree says what went wrong in its own corner and the wall goes on working. Both halves are
+ * the claim: the sentence, and the three live decks still countable beside it.
+ */
+export const FoldersUnavailable: Story = {
+  parameters: { fake: { fault: "deckMeta" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = canvas.getByRole("navigation", { name: "Folders" });
+    await expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible();
+
+    // Every live deck, at the top level, exactly as it would be with no folders at all —
+    // including the one that *is* filed, whose drawer this screen cannot see.
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
+    await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
+    await expect(within(wall).getByText("Rhystic Testbed")).toBeInTheDocument();
+    await expect(within(tree).getByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
+    // The wall's own refusal line is a different one and is not up: nothing was written.
+    await expect(canvas.queryByText(/Could not change your decks/)).toBeNull();
   },
 };
 

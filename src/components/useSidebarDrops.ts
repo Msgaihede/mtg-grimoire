@@ -129,10 +129,20 @@ export function useSidebarDrops() {
       // on, into a mutation state nothing here draws).
       if (openDeckId === null) return;
       writeToDeck(
-        // `main`, and one copy: the docked panel's Add button's write. A sidebar entry is a
-        // destination rather than a form, and the deck's own columns are where a reader who
-        // means the sideboard drops a card.
-        { cardId: payload.cardId, zone: "main", quantity: 1 },
+        // **No category, and one copy.** A sidebar entry is a destination rather than a form: it
+        // is a nav item several views away from the deck, so there is no column here for a
+        // reader to have pointed at, and the deck's own columns are where somebody who means
+        // the sideboard drops a card. Omitting `categoryId` is what says that — `deck_add_card`
+        // then takes a *name* to find or create, and `useDeck`'s `DEFAULT_CATEGORY_NAME` is the
+        // one it sends: the v8 migration's own word for the pile it filed every legacy main-deck
+        // row into, so a deck that predates categories and one made since agree about where a
+        // plain add goes.
+        //
+        // A placeholder for the rule that is coming, not a decision made here: the spec's answer
+        // is `autoCategoryFor` — one TypeScript rule reading a card's type line and naming the
+        // pile it belongs in — and it is a later task's. When it lands, the name this hook sends
+        // changes on `useDeck`'s single definition and this call site does not move.
+        { cardId: payload.cardId, quantity: 1 },
         {
           // The fallback is the sliver where the editor's read has not landed yet — the drop
           // still writes, and the sentence says what it can.

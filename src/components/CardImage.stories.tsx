@@ -31,8 +31,8 @@ const meta = {
           "React hands the same element a different printing and a bare `<img>` would keep " +
           "the previous card's art under the new card's name for the length of the fetch. " +
           'There are five call sites, and **three of the five pass `alt=""`**: ' +
-          "`PrintingPreview`'s hover preview, `DecksPage`'s cover tile and `ZoneColumn`'s " +
-          "row thumbnail. The two that name the card are `CardGrid`'s tile and " +
+          "`PrintingPreview`'s hover preview, `DecksPage`'s cover tile and the deck views' " +
+          "card art. The two that name the card are `CardGrid`'s tile and " +
           "`CardDetailPane`'s open card. Which is why `alt` is required rather than " +
           "optional — “decorative” has to be a decision someone made rather than a prop " +
           "someone forgot.",
@@ -187,7 +187,7 @@ export const FailedLoad: Story = {
  * the shape three of the five call sites use.
  *
  * The `art` crop rather than the full card, because that is what two of those three draw:
- * `DecksPage`'s cover tile and `ZoneColumn`'s row thumbnail are both art crops beside a name
+ * `DecksPage`'s cover tile and the deck grid view's tile are both art crops beside a name
  * the reader can already read.
  *
  * An empty `alt` takes the image out of the accessibility tree entirely rather than giving it

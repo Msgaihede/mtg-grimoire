@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 import { useAppStore } from "@/lib/store";
 import { printing } from "../../../.storybook/fake/fixtures";
+import { seed } from "../../../.storybook/fake/seeds";
 import { CardDetailPane } from "./CardDetailPane";
 
 /**
@@ -29,6 +30,25 @@ const SOL_RING_C21 = printingId("c21", "263");
 const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
 
 /**
+ * The category a deck holds a printing in — **read out of the seed rather than written down.**
+ *
+ * Schema v8 replaced the fixed five-word zone with a `deck_categories` row, so a
+ * `PaneDeckContext` names an **id** (what the swap is addressed by) and a **name** (what every
+ * "Use this printing" label reads back). The id is minted by the seed's own row numbering and is
+ * not a constant this file may assume; the name is the seed's too. Looking the pair up through
+ * the deck card itself is also the honest staging: it is exactly the slot a reader would have
+ * clicked to open this pane from.
+ *
+ * `null` when that deck does not hold that printing, which is what makes the host below fall
+ * back to opening the card from "somewhere else" rather than inventing a slot.
+ */
+function slotOf(deckId: number, cardId: string) {
+  const db = seed("starter");
+  const row = db.deckCards.find((c) => c.deckId === deckId && c.cardId === cardId);
+  return db.deckCategories.find((c) => c.id === row?.categoryId) ?? null;
+}
+
+/**
  * The pane, opened the way the app opens one — through the store, never through a prop.
  *
  * `CardDetailPane` takes `cardId` and `onClose`, and `App.tsx:79-88` supplies both from
@@ -37,10 +57,11 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
  * remounts the pane, and a host that held the id in its own state would show the second
  * printing inside the first pane's scroll position, face and focus.
  *
- * **`deckId` is what decides whether the swap offers exist at all.** `store.ts:135-136`'s
- * `openCardFromDeck` is the only writer of `paneDeckContext`; `store.ts:133`'s
- * `setSelectedCardId` clears it. One host, two openers, and the difference between
- * {@link FromDeckRow} and {@link FromSearch} is which of the two lines below ran.
+ * **`deckId` is what decides whether the swap offers exist at all.** `store.ts`'s
+ * `openCardFromDeck` is the only writer of `paneDeckContext`; `setSelectedCardId` clears it. One
+ * host, two openers, and the difference between {@link FromDeckRow} and {@link FromSearch} is
+ * which of the two branches below ran. The slot itself comes from {@link slotOf}, because since
+ * schema v8 a context names a category row rather than one of five words.
  *
  * `useState`'s lazy initializer rather than an effect, which is `AppShell.stories.tsx`'s
  * answer and for its reason: an effect runs after the first paint, so a deck-context story
@@ -49,8 +70,19 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
 function Pane({ cardId, deckId }: { cardId: string; deckId: number | null }) {
   useState(() => {
     const store = useAppStore.getState();
-    if (deckId === null) store.setSelectedCardId(cardId);
-    else store.openCardFromDeck({ deckId, zone: "main", cardId });
+    const slot = deckId === null ? null : slotOf(deckId, cardId);
+    if (deckId === null || slot === null) store.setSelectedCardId(cardId);
+    else {
+      store.openCardFromDeck({
+        deckId,
+        categoryId: slot.id,
+        categoryName: slot.name,
+        cardId,
+        // The list the editor would have been drawing. `live` is what every seeded deck's rows
+        // are in, and it is the variant the swap below is addressed to.
+        variant: "live",
+      });
+    }
   });
 
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -571,10 +603,10 @@ export const NotInTheDatabase: Story = {
  * Two things are drawn down the list as one column, and the pair is the design. The row the deck
  * already holds says **"This deck uses this printing"** as static text rather than as a control
  * that cannot be pressed (`CardDetailPane.tsx:915-924`); every other row offers a button whose
- * accessible name carries the printing *and* the zone, because the same printing can sit in the
- * main deck and the sideboard and forty rows otherwise share one visible label.
+ * accessible name carries the printing *and* the category, because the same printing can sit in
+ * the main deck and the sideboard and forty rows otherwise share one visible label.
  *
- * Deck 2 (`Kenrith Two-Drops`) holds Sol Ring `c21 263` in `main`, and `sld 913` is the corpus's
+ * Deck 2 (`Kenrith Two-Drops`) holds Sol Ring `c21 263` in its main category, and `sld 913` is the corpus's
  * only other Sol Ring — measured 2026-08-10 over `deck_get({ id: 2 })` and `card_printings`.
  */
 export const FromDeckRow: Story = {
@@ -630,7 +662,7 @@ export const FromSearch: Story = {
  * precisely to look through the other printings, and the offer would vanish the instant they
  * looked at one.
  *
- * The play walks that path. Open `c21 263` as deck 2's `main` slot, click through to `sld 913` —
+ * The play walks that path. Open `c21 263` as deck 2's main slot, click through to `sld 913` —
  * proven by the handles swapping over, since the open printing is the one row that is static
  * text — and the offer is still on the list, now on the row the pane moved to.
  *

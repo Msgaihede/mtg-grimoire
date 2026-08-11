@@ -1,22 +1,43 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
-import { Archive, ArchiveRestore, ChevronRight, Copy, Plus, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronRight,
+  Copy,
+  FolderInput,
+  Plus,
+  Trash2,
+} from "lucide-react";
+import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
-import { ART_ASPECT, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
+import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
+import { FOCUS } from "./cardControl";
+import {
+  buildFolderTree,
+  deckDraggable,
+  flattenFolders,
+  folderDescendants,
+  FOLDER_ROW_ATTR,
+  FolderTree,
+  MoveToFolder,
+  plural,
+  useDeckDragging,
+  useDeckDropTarget,
+  type DeckDrag,
+  type FolderNaming,
+  type FolderNode,
+} from "./FolderTree";
+import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
 import { useFormatSpecs } from "./useFormatSpecs";
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
- * control's edge, never a ring (a ring means "state" everywhere else).
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
  * The wall.
@@ -27,9 +48,18 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  */
 const GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4";
 
-/** Every icon control on a tile, so three of them are one row rather than three sizes. */
+/** Every icon control on a tile, so four of them are one row rather than four sizes. */
 const ICON_BUTTON = cn(
   "grid size-6 place-items-center rounded-md text-dim",
+  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+  FOCUS,
+);
+
+/** The quiet controls in the wall's heading row — everything that is not "New deck". Same
+ *  height as it, because a row of controls that disagree about their own size reads as two
+ *  rows that happen to be next to each other. */
+const HEADING_BUTTON = cn(
+  "h-9 rounded-md border border-border bg-surface px-3 text-sm text-dim",
   "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
   FOCUS,
 );
@@ -51,41 +81,166 @@ const DEFAULT_FORMAT = "casual";
  */
 const CREDIT = "Card images © Wizards of the Coast · Data © Scryfall";
 
+/** How many member covers a folder card shows. Three, because the strip is 96px tall and a
+ *  fourth crop at that width is a smear rather than a picture. */
+const FOLDER_ARTS = 3;
+
+/**
+ * Which of a deck's two lists exist — the one thing a tile can say about a deck that a
+ * card count cannot.
+ *
+ * Derived rather than stored, from the two fields `deck_list` already answers.
+ * {@link DeckRow.cardCount} counts the **live** list only, so a deck with theory switched on
+ * and nothing live in it is a plan and not yet a deck: `THEORY ONLY`. One derivation, because
+ * a badge and the editor's Live/Theory switch must never disagree about which lists a deck has.
+ */
+export type DeckBadge = "LIVE" | "LIVE + THEORY" | "THEORY ONLY";
+
+export function deckBadge(deck: DeckRow): DeckBadge {
+  if (!deck.theoryEnabled) return "LIVE";
+  return deck.cardCount === 0 ? "THEORY ONLY" : "LIVE + THEORY";
+}
+
 /**
  * The one dismissible layer this view can have open, and there is deliberately only ever one.
  *
  * `useDismissOnEscape` orders exactly two rungs — one capture-phase `"inner"` layer and one
  * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
- * would both close on a single press. Modelling the create form and the delete question as
- * *one* piece of state is what makes "never two" structural rather than remembered.
+ * would both close on a single press. Modelling every panel on this screen as *one* piece of
+ * state is what makes "never two" structural rather than remembered; the tree's create field
+ * is in here for that reason even though it is drawn inline rather than floating.
  */
-type Panel = { kind: "create" } | { kind: "confirm"; deckId: number } | null;
+type Panel =
+  | { kind: "createDeck" }
+  | { kind: "deleteDeck"; deckId: number }
+  | { kind: "moveDeck"; deckId: number }
+  | { kind: "newFolder"; parentId: number | null }
+  | { kind: "renameFolder"; folderId: number }
+  | { kind: "moveFolder"; folderId: number }
+  | { kind: "deleteFolder"; folderId: number }
+  | null;
 
 /**
- * The decks, as a wall of the art they were built around.
+ * The decks, filed.
  *
- * The gallery's whole story is the covers, so there is no summary strip above them and no
- * colour anywhere that is not a card's own: a deck is picked by looking at it. The chrome is
- * one caption, one credit and — on the tile the mouse or the caret is on — three small
- * controls.
+ * Two columns: the folders on the left, and on the right the one folder the reader is standing
+ * in — its sub-folders as dashed cards, then its decks as the art they were built around. The
+ * gallery's whole story is still the covers, so the chrome is a heading, a count, four controls
+ * and one credit line.
  */
 export function DecksPage() {
   const decks = useDecks();
+  const folders = useDeckFolders();
   const { query } = decks;
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
   const [panel, setPanel] = useState<Panel>(null);
   const [showArchived, setShowArchived] = useState(false);
+  /** Which drawer is open. `null` is the top level, which is also where every deck is drawn
+   *  when the folder list could not be read. */
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
   const newDeckRef = useRef<HTMLButtonElement>(null);
   const wallRef = useRef<HTMLElement>(null);
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * The folder row to put the caret back on once the field that replaced it has gone.
+   *
+   * The opener rule's *reason* rather than its letter. A rename field stands where the row
+   * stood, so the row the caret should return to does not exist while the layer is up and is a
+   * **different element** when it comes back — `openerRef.current?.focus()` would be a call on
+   * a detached node and the caret would land on `<body>`. So the id is remembered and the row
+   * is found after the render that redraws it, which is why this is read from an effect and
+   * `dismiss` cannot do it inline.
+   */
+  const refocusFolderRef = useRef<number | null>(null);
 
-  // Coming back from an editor: the caret goes to the tile of the deck that was open. The
-  // tile is not there to be focused until the wall has loaded, which is why this waits for the
-  // query rather than running on mount — and why it clears the note either way once the answer
-  // is in, so a deck deleted from inside its own editor does not leave one pending forever.
+  /** The deck in the air, or `null` — what every drawer that could take *it* lights up for. */
+  const drag = useDeckDragging();
+
+  const setFolder = decks.setFolder;
+
+  /**
+   * The folder a deck is drawn in.
+   *
+   * A `folderId` naming a folder this list does not carry reads as the root — the same rule
+   * `buildFolderTree` uses for a folder whose parent is missing, and the reason a refused
+   * folder list still shows every deck the reader has rather than hiding the filed ones behind
+   * a tree that never arrived.
+   */
+  const known = useMemo(() => new Set(folders.folders.map((f) => f.id)), [folders.folders]);
+  const folderOf = useCallback(
+    (deck: DeckRow) => (deck.folderId !== null && known.has(deck.folderId) ? deck.folderId : null),
+    [known],
+  );
+
+  const nodes = useMemo(
+    () => buildFolderTree(folders.folders, decks.decks),
+    [folders.folders, decks.decks],
+  );
+
+  const live = useMemo(() => decks.decks.filter((d) => !d.archived), [decks.decks]);
+  const archived = useMemo(() => decks.decks.filter((d) => d.archived), [decks.decks]);
+
+  /**
+   * The open drawer, resolved against the tree rather than trusted.
+   *
+   * A folder deleted by this screen or by another surface leaves `selectedFolderId` naming
+   * nothing, and this is where that is corrected — by *deriving* the answer instead of writing
+   * it back. There is no effect, so there is no render where the heading says a folder that is
+   * not there; the stale number simply stops resolving and the reader is at the top level, one
+   * click from anywhere.
+   */
+  const openNode = useMemo(
+    () =>
+      selectedFolderId === null
+        ? null
+        : (flattenFolders(nodes).find((n) => n.folder.id === selectedFolderId) ?? null),
+    [nodes, selectedFolderId],
+  );
+  /** The selection as the wall can honour it: the number above, or the root. */
+  const folderView = openNode?.folder.id ?? null;
+  const childFolders = openNode === null ? nodes : openNode.children;
+
+  const here = useMemo(
+    () => live.filter((d) => folderOf(d) === folderView),
+    [live, folderOf, folderView],
+  );
+  const archivedHere = useMemo(
+    () => archived.filter((d) => folderOf(d) === folderView),
+    [archived, folderOf, folderView],
+  );
+
+  /** The deck an editor just closed on, once the wall has read enough to know where it is
+   *  filed. `null` while the query is out, and for a deck deleted from inside its own editor. */
+  const returningDeck = useMemo(
+    () =>
+      returnToDeckId === null
+        ? null
+        : (decks.decks.find((d) => d.id === returnToDeckId) ?? null),
+    [returnToDeckId, decks.decks],
+  );
+
+  /**
+   * Coming back from an editor opens the drawer the deck is filed in — because a tile in a
+   * folder nobody is standing in is not a tile the caret can be handed back to.
+   *
+   * A **render-phase** adjustment, which is React's own answer to "change some state when
+   * something upstream changes" and not an effect: React throws this render away and restarts
+   * it before committing, so the tile exists in the DOM by the time the focus effect below
+   * runs — one pass, no flash of the wrong wall, and no cascade for the lint rule to object to.
+   * Latched on the deck's id so it happens once per return rather than on every render.
+   */
+  const [returnedFor, setReturnedFor] = useState<number | null>(null);
+  if (returningDeck !== null && returnedFor !== returningDeck.id) {
+    setReturnedFor(returningDeck.id);
+    setSelectedFolderId(folderOf(returningDeck));
+  }
+
+  // …and the hand-back itself. It waits for the query rather than running on mount, and it
+  // clears the note either way once the answer is in, so a deck deleted from inside its own
+  // editor does not leave one pending forever.
   useEffect(() => {
     if (returnToDeckId === null || query.isPending) return;
     wallRef.current
@@ -104,10 +259,22 @@ export function DecksPage() {
   // already somewhere else, and one function wired to both paths breaks it in two visible
   // ways (a Tab forward out of Cancel bounces backwards, and a control that disables itself
   // mid-write blurs into a hand-back nobody asked for).
+  // The rename field is the one layer whose opener is not where the caret should land: it
+  // *replaced* the row, so the row is what it comes back to — see {@link refocusFolderRef}.
   const dismiss = useCallback(() => {
-    openerRef.current?.focus();
+    if (panel?.kind === "renameFolder") refocusFolderRef.current = panel.folderId;
+    else openerRef.current?.focus();
     setPanel(null);
-  }, []);
+  }, [panel]);
+
+  // The other end of that, after the render that redraws the row. No deps: a hand-back owed is
+  // a hand-back owed on whatever render pays it, and the ref is cleared as it is spent.
+  useEffect(() => {
+    const id = refocusFolderRef.current;
+    if (id === null) return;
+    refocusFolderRef.current = null;
+    wallRef.current?.querySelector<HTMLButtonElement>(`[${FOLDER_ROW_ATTR}="${id}"]`)?.focus();
+  });
 
   /** The click-away way out: the layer goes, the caret stays where the reader put it. */
   const close = useCallback(() => setPanel(null), []);
@@ -118,13 +285,24 @@ export function DecksPage() {
     // A refusal from the last attempt is not news about this one.
     decks.create.reset();
     openerRef.current = newDeckRef.current;
-    setPanel({ kind: "create" });
+    setPanel({ kind: "createDeck" });
   }, [decks.create]);
 
-  const askDelete = useCallback((deck: DeckRow, opener: HTMLButtonElement) => {
+  const open = useCallback((next: NonNullable<Panel>, opener: HTMLButtonElement) => {
     openerRef.current = opener;
-    setPanel({ kind: "confirm", deckId: deck.id });
+    setPanel(next);
   }, []);
+
+  const askDelete = useCallback(
+    (deck: DeckRow, opener: HTMLButtonElement) =>
+      open({ kind: "deleteDeck", deckId: deck.id }, opener),
+    [open],
+  );
+
+  const askMove = useCallback(
+    (deck: DeckRow, opener: HTMLButtonElement) => open({ kind: "moveDeck", deckId: deck.id }, opener),
+    [open],
+  );
 
   const confirmDelete = useCallback(
     (deck: DeckRow) => {
@@ -150,139 +328,565 @@ export function DecksPage() {
     [dismiss, setOpenDeckId],
   );
 
-  const live = useMemo(() => decks.decks.filter((d) => !d.archived), [decks.decks]);
-  const archived = useMemo(() => decks.decks.filter((d) => d.archived), [decks.decks]);
+  /**
+   * The tree's one field, answered — whichever of its two jobs it is doing.
+   *
+   * One callback because there is one field: which write a name becomes is a fact about the
+   * open `Panel`, which this component owns, rather than something the tree has to be told
+   * twice and then hand back.
+   */
+  const nameFolder = useCallback(
+    (name: string) => {
+      if (panel?.kind === "newFolder") {
+        folders.create.mutate(
+          { parentId: panel.parentId, name },
+          {
+            onSuccess: (folder) => {
+              // Made in order to put something in it: the new drawer is the one the reader is
+              // standing in when the field closes.
+              setSelectedFolderId(folder.id);
+              dismiss();
+            },
+          },
+        );
+      } else if (panel?.kind === "renameFolder") {
+        folders.rename.mutate({ id: panel.folderId, name }, { onSuccess: dismiss });
+      }
+    },
+    [panel, folders.create, folders.rename, dismiss],
+  );
+
+  const fileDeck = useCallback(
+    (drag: DeckDrag, folderId: number | null) => setFolder.mutate({ id: drag.deckId, folderId }),
+    [setFolder],
+  );
+
+  // Back where it already is is not a move: it would write nothing, bump `updated_at` and
+  // leave the wall exactly as it was — `dropWrite`'s rule about a card dropped in its own
+  // column, one floor up.
+  const canFile = useCallback(
+    (drag: DeckDrag, folderId: number | null) => {
+      const deck = decks.decks.find((d) => d.id === drag.deckId);
+      return deck !== undefined && folderOf(deck) !== folderId;
+    },
+    [decks.decks, folderOf],
+  );
+
+  /**
+   * Renaming, from either route.
+   *
+   * `folders.rename.reset()` for `openCreate`'s reason — a refusal from the last attempt is not
+   * news about this one — and no opener, because the row the field replaces is what the caret
+   * comes back to whichever control started it.
+   */
+  const startRename = useCallback(
+    (folderId: number) => {
+      folders.rename.reset();
+      openerRef.current = null;
+      setPanel({ kind: "renameFolder", folderId });
+    },
+    [folders.rename],
+  );
+
+  /** The tree's one field, as the tree needs to know it. */
+  const naming: FolderNaming | null =
+    panel?.kind === "newFolder"
+      ? { kind: "new", parentId: panel.parentId }
+      : panel?.kind === "renameFolder"
+        ? { kind: "rename", folderId: panel.folderId }
+        : null;
 
   const failure = query.isError ? ipcError(query.error) : null;
   const status = query.isPending ? "Reading your decks…" : failure;
-  // The *latest* of the three, not whichever is still holding an error: a refused archive
-  // used to leave its banner up while the reader went on to duplicate something successfully,
-  // which is an alert about a thing already dealt with (the collection table's lesson).
-  const writes = [decks.update, decks.remove, decks.duplicate];
-  const lastWrite = writes.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
-  const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
+  // The *latest* write on the screen, not whichever is still holding an error: a refused
+  // archive used to leave its banner up while the reader went on to duplicate something
+  // successfully, which is an alert about a thing already dealt with (the collection table's
+  // lesson). The rule itself is `lib/writes.ts`, shared with the three other surfaces that
+  // apply it. The folder writes are in the list because they are writes this screen makes —
+  // including the one refusal that is a sentence worth reading, a folder moved into its own
+  // descendant.
+  const bannerFailure = writeFailure([
+    decks.update,
+    decks.remove,
+    decks.duplicate,
+    setFolder,
+    folders.create,
+    folders.rename,
+    folders.move,
+    folders.remove,
+  ]);
+  // **Where the re-read after a refusal comes from, since it is not here.** The editor keeps a
+  // `refetch` effect keyed on the newest failure's `submittedAt`; this screen does not, because
+  // it would be a second read of a query the refusal has already refetched. Every write in
+  // `useDecks` and `useDeckFolders` invalidates the whole `["decks"]` root **on error as well
+  // as on success**, and `["decks", "list"]` is an active observer for the life of this
+  // component — so a `GONE` from deleting a deck another view already deleted takes the tile
+  // off the wall without anything on this screen asking it to. The rule lives on the mutation
+  // definitions, which is the one place it can be kept.
+
+  const heading = openNode === null ? "All decks" : openNode.folder.name;
+  const counts = [
+    childFolders.length > 0 ? plural(childFolders.length, "folder") : null,
+    plural(here.length, "deck"),
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
 
   return (
-    <section ref={wallRef} className="flex h-full flex-col gap-4">
+    <section ref={wallRef} className="flex h-full flex-col gap-3">
       {/* Not drawn: the ribbon's `h1` already names the view, and a second "Decks" under it
           would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Decks</h2>
 
-      <div className="flex items-center gap-3">
-        <NewDeck
-          buttonRef={newDeckRef}
-          open={panel?.kind === "create"}
-          onOpen={openCreate}
-          onDismiss={dismiss}
-          onClose={close}
-          create={decks.create}
-          onCreated={onCreated}
-        />
-      </div>
-
-      {writeFailure && (
+      {bannerFailure && (
         <p
           role="alert"
           className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
-          Could not change your decks — {writeFailure}
+          Could not change your decks — {bannerFailure}
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        {/* Mounted for the life of the view and swapped into: a live region that appears
-            together with its own text announces nothing, because there was no change for a
-            screen reader to notice. */}
-        <p
-          role="status"
-          className={cn(
-            status && "py-16 text-center text-sm",
-            failure ? "text-destructive" : "text-dim",
-          )}
-        >
-          {status}
-        </p>
+      <div className="flex min-h-0 flex-1 gap-5">
+        <FolderTree
+          nodes={nodes}
+          totalDecks={live.length}
+          selectedId={folderView}
+          onSelect={setSelectedFolderId}
+          drag={drag}
+          canDropIn={canFile}
+          onDropIn={fileDeck}
+          naming={naming}
+          onOpenNew={(parentId, opener) => {
+            folders.create.reset();
+            open({ kind: "newFolder", parentId }, opener);
+          }}
+          onOpenRename={startRename}
+          onCloseNaming={close}
+          onName={nameFolder}
+          busy={folders.create.isPending || folders.rename.isPending}
+          failure={folders.query.isError ? ipcError(folders.query.error) : null}
+          pending={folders.query.isPending}
+        />
 
-        {!status && decks.decks.length === 0 && (
-          <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
-            A deck is a list you build for a format. Start one and the app checks it as you go —
-            deck size, copy limits, the commander's colours — and tells you which of the cards you
-            already own.
-          </p>
-        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            {/* A heading, not a caption: the tree's own `h2` is beside it and the wall is the
+                other half of the same outline. */}
+            <h2 className="font-heading text-xl leading-none">{heading}</h2>
+            <span className="font-mono text-[0.7rem] tabular-nums text-dim">{counts}</span>
 
-        {live.length > 0 && (
-          // Named, the way the search's wall of art is (`CardGrid`'s `role="group"` +
-          // `aria-label`) — but left a list rather than made a group, because these tiles are
-          // countable and a list says how many there are on the way in.
-          <ul aria-label="Your decks" className={GRID}>
-            {live.map((deck) => (
-              <DeckTile
-                key={deck.id}
-                deck={deck}
-                decks={decks}
-                confirming={panel?.kind === "confirm" && panel.deckId === deck.id}
-                onOpen={setOpenDeckId}
-                onAskDelete={askDelete}
-                onConfirmDelete={confirmDelete}
-                onCancelDelete={dismiss}
-                onCloseDelete={close}
-              />
-            ))}
-          </ul>
-        )}
+            <div className="ml-auto flex items-center gap-2">
+              {openNode !== null && (
+                <>
+                  {/* The pointer's route to a rename. The field it opens is in the tree, where
+                      the folder is — the trigger is here because a 208px row with an indent, a
+                      glyph, a name, a count and a "new folder" control has no width left for a
+                      second one, and because this is already where the three things you do
+                      *to* a folder live. F2 on the row is the keyboard's shortcut. */}
+                  {/* The ellipsis is the row's own convention and it is load-bearing here:
+                      each of these three opens something and the thing it opens carries a
+                      control named for the write itself ("Rename folder", "Delete folder"). A
+                      trigger sharing that name would be two controls with one name on screen at
+                      once — which is exactly what a screen reader would have to disambiguate by
+                      position. */}
+                  <button
+                    type="button"
+                    onClick={() => startRename(openNode.folder.id)}
+                    className={HEADING_BUTTON}
+                  >
+                    Rename folder…
+                  </button>
 
-        {!status && live.length === 0 && archived.length > 0 && (
-          <p className="py-8 text-center text-sm text-dim">
-            Nothing here — every deck you have is filed away below.
-          </p>
-        )}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-expanded={panel?.kind === "moveFolder"}
+                      aria-haspopup="dialog"
+                      onClick={(e) =>
+                        panel?.kind === "moveFolder"
+                          ? dismiss()
+                          : open({ kind: "moveFolder", folderId: openNode.folder.id }, e.currentTarget)
+                      }
+                      className={HEADING_BUTTON}
+                    >
+                      Move folder…
+                    </button>
+                    {panel?.kind === "moveFolder" && (
+                      <MoveToFolder
+                        label={`Move ${openNode.folder.name} into a folder`}
+                        nodes={nodes}
+                        currentId={openNode.folder.parentId}
+                        forbidden={
+                          new Set([
+                            openNode.folder.id,
+                            ...folderDescendants(folders.folders, openNode.folder.id),
+                          ])
+                        }
+                        forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
+                        pending={folders.move.isPending}
+                        onPick={(parentId) => {
+                          folders.move.mutate(
+                            { id: openNode.folder.id, parentId },
+                            { onSuccess: dismiss },
+                          );
+                        }}
+                        onClose={close}
+                      />
+                    )}
+                  </div>
 
-        {archived.length > 0 && (
-          <div className={cn(live.length > 0 && "mt-8 border-t border-border pt-4")}>
-            {/* A disclosure rather than a second wall: filed decks are kept, not shown. */}
-            <button
-              type="button"
-              aria-expanded={showArchived}
-              onClick={() => setShowArchived((v) => !v)}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md text-xs text-dim",
-                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                FOCUS,
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-expanded={panel?.kind === "deleteFolder"}
+                      aria-haspopup="dialog"
+                      onClick={(e) =>
+                        panel?.kind === "deleteFolder"
+                          ? dismiss()
+                          : open(
+                              { kind: "deleteFolder", folderId: openNode.folder.id },
+                              e.currentTarget,
+                            )
+                      }
+                      className={cn(HEADING_BUTTON, "hover:text-destructive")}
+                    >
+                      Delete folder…
+                    </button>
+                    {panel?.kind === "deleteFolder" && (
+                      <DeleteFolderConfirm
+                        node={openNode}
+                        pending={folders.remove.isPending}
+                        onConfirm={() =>
+                          folders.remove.mutate(openNode.folder.id, {
+                            onSuccess: () => {
+                              openerRef.current = null;
+                              setPanel(null);
+                              setSelectedFolderId(openNode.folder.parentId);
+                            },
+                          })
+                        }
+                        onCancel={dismiss}
+                        onClose={close}
+                      />
+                    )}
+                  </div>
+                </>
               )}
-            >
-              <ChevronRight
-                className={cn(
-                  "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
-                  showArchived && "rotate-90",
-                )}
-                aria-hidden="true"
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  folders.create.reset();
+                  open({ kind: "newFolder", parentId: folderView }, e.currentTarget);
+                }}
+                className={HEADING_BUTTON}
+              >
+                New folder
+              </button>
+
+              <NewDeck
+                buttonRef={newDeckRef}
+                open={panel?.kind === "createDeck"}
+                onOpen={openCreate}
+                onDismiss={dismiss}
+                onClose={close}
+                create={decks.create}
+                onCreated={onCreated}
               />
-              Archived <span className="font-mono tabular-nums">{archived.length}</span>
-            </button>
-            {showArchived && (
-              <ul aria-label="Archived decks" className={cn(GRID, "mt-3")}>
-                {archived.map((deck) => (
-                  <DeckTile
-                    key={deck.id}
-                    deck={deck}
-                    decks={decks}
-                    confirming={panel?.kind === "confirm" && panel.deckId === deck.id}
-                    onOpen={setOpenDeckId}
-                    onAskDelete={askDelete}
-                    onConfirmDelete={confirmDelete}
-                    onCancelDelete={dismiss}
-                    onCloseDelete={close}
-                  />
-                ))}
-              </ul>
-            )}
+            </div>
           </div>
-        )}
+
+          {/* Mounted for the life of the view and swapped into: a live region that appears
+              together with its own text announces nothing, because there was no change for a
+              screen reader to notice. */}
+          <p
+            role="status"
+            className={cn(
+              status && "py-16 text-center text-sm",
+              failure ? "text-destructive" : "text-dim",
+            )}
+          >
+            {status}
+          </p>
+
+          {!status && decks.decks.length === 0 && (
+            <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
+              A deck is a list you build for a format. Start one and the app checks it as you go —
+              deck size, copy limits, the commander's colours — and tells you which of the cards
+              you already own.
+            </p>
+          )}
+
+          {!status && decks.decks.length > 0 && childFolders.length === 0 && here.length === 0 && (
+            <p className="mx-auto max-w-prose py-12 text-center text-sm text-dim">
+              {openNode === null
+                ? "Every deck you have is filed in a folder. Open one on the left."
+                : `Nothing is filed in ${openNode.folder.name} yet. Drag a deck onto it, or use the Move control on a tile.`}
+            </p>
+          )}
+
+          {(childFolders.length > 0 || here.length > 0) && (
+            // Named, the way the search's wall of art is (`CardGrid`'s `role="group"` +
+            // `aria-label`) — but left a list rather than made a group, because these tiles are
+            // countable and a list says how many there are on the way in.
+            <ul aria-label="Your decks" className={GRID}>
+              {childFolders.map((node) => (
+                <FolderCard
+                  key={node.folder.id}
+                  node={node}
+                  members={decksUnder(node, live, folderOf)}
+                  drag={drag}
+                  canDrop={(d) => canFile(d, node.folder.id)}
+                  onDropDeck={(d) => fileDeck(d, node.folder.id)}
+                  onOpen={setSelectedFolderId}
+                />
+              ))}
+              {here.map((deck) => (
+                <DeckTile
+                  key={deck.id}
+                  deck={deck}
+                  decks={decks}
+                  nodes={nodes}
+                  folderId={folderOf(deck)}
+                  panel={panel}
+                  moving={setFolder.isPending}
+                  onOpen={setOpenDeckId}
+                  onAskDelete={askDelete}
+                  onAskMove={askMove}
+                  onMove={(folderId) =>
+                    setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
+                  }
+                  onConfirmDelete={confirmDelete}
+                  onCancelPanel={dismiss}
+                  onClosePanel={close}
+                />
+              ))}
+            </ul>
+          )}
+
+          {!status && here.length === 0 && archivedHere.length > 0 && (
+            <p className="py-8 text-center text-sm text-dim">
+              Nothing here — every deck in this folder is filed away below.
+            </p>
+          )}
+
+          {archivedHere.length > 0 && (
+            <div className={cn(here.length > 0 && "mt-4 border-t border-border pt-4")}>
+              {/* A disclosure rather than a second wall: filed decks are kept, not shown. */}
+              <button
+                type="button"
+                aria-expanded={showArchived}
+                onClick={() => setShowArchived((v) => !v)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md text-xs text-dim",
+                  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                  FOCUS,
+                )}
+              >
+                <ChevronRight
+                  className={cn(
+                    "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                    showArchived && "rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+                Archived <span className="font-mono tabular-nums">{archivedHere.length}</span>
+              </button>
+              {showArchived && (
+                <ul aria-label="Archived decks" className={cn(GRID, "mt-3")}>
+                  {archivedHere.map((deck) => (
+                    <DeckTile
+                      key={deck.id}
+                      deck={deck}
+                      decks={decks}
+                      nodes={nodes}
+                      folderId={folderOf(deck)}
+                      panel={panel}
+                      moving={setFolder.isPending}
+                      onOpen={setOpenDeckId}
+                      onAskDelete={askDelete}
+                      onAskMove={askMove}
+                      onMove={(folderId) =>
+                        setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
+                      }
+                      onConfirmDelete={confirmDelete}
+                      onCancelPanel={dismiss}
+                      onClosePanel={close}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <p className="text-[0.7rem] text-dim">{CREDIT}</p>
     </section>
+  );
+}
+
+/**
+ * Which of a deck's two covers is showing, as a URL — or `null` when it has neither.
+ *
+ * **`coverKind` is the one answer, and reading either id instead is the bug this exists to
+ * close.** A deck usually carries both at once: `deckSetCoverImage` leaves `coverCardId` alone
+ * and picking a card leaves the file on disk, so "has a custom cover" and "is showing one" are
+ * different questions. The gallery used to ask only for `coverCardId`, which meant a custom
+ * cover was never drawn *anywhere* on this screen — measured in the live window, where the tile
+ * said "No cover" while the route answered the file 626×457 in 2 ms.
+ *
+ * **A card cover this app cannot credit is not drawn at all.** Scryfall's image policy is that
+ * an `art` crop, having no printed frame, may be shown only where the illustrator is named — so
+ * if the credit cannot be shown, neither can the crop. `DeckRow.coverArtist` is `null` exactly
+ * when the printing has left `cards`, and it comes back on the next sync that brings the
+ * printing back, so this is a state that heals itself and never a picture permanently withheld.
+ * The frame then says "No cover" rather than claiming a failure, because from the reader's side
+ * that is what it is: nothing to show yet.
+ *
+ * **The rule belongs to the card-art arm and must never be moved onto the custom one.** The
+ * policy is about *Scryfall's* pictures. A file the reader uploaded is theirs, carries no
+ * Scryfall artist, and needs no credit — so a `coverArtist === null` test on that arm would
+ * hide every custom cover, and it would read like a missing guard rather than the bug it is.
+ *
+ * `DeckSettingsDialog`'s `CoverPreview` makes the same two decisions in the same words, which is
+ * the point: the gallery and the dialog draw one picture and used to disagree about this exact
+ * case. If a third surface ever draws a cover, these four lines want a shared home rather than
+ * a third copy.
+ */
+function coverUrl(deck: DeckRow): string | null {
+  if (deck.coverKind === "custom") return deckCoverUrl(deck.id);
+  return deck.coverCardId !== null && deck.coverArtist !== null
+    ? cardImageUrl(deck.coverCardId, 0, "art")
+    : null;
+}
+
+/** Every live deck filed in a folder **or in anything under it** — what a folder card draws
+ *  its strip of art from, in `deck_list`'s own order (most recently touched first). */
+function decksUnder(
+  node: FolderNode,
+  live: readonly DeckRow[],
+  folderOf: (deck: DeckRow) => number | null,
+): DeckRow[] {
+  const ids = new Set(flattenFolders([node]).map((n) => n.folder.id));
+  return live.filter((deck) => {
+    const id = folderOf(deck);
+    return id !== null && ids.has(id);
+  });
+}
+
+/**
+ * A folder on the wall: what is in it, drawn from the art of the decks it holds.
+ *
+ * Dashed, where a deck tile is not — and that dash is the screen's one visual rule: **dashed
+ * means provisional**. A folder is a container rather than a thing you can play, and a deck
+ * that exists only as a theory list is a plan rather than a deck. Both wear it; nothing else
+ * does.
+ */
+function FolderCard({
+  node,
+  members,
+  drag,
+  canDrop,
+  onDropDeck,
+  onOpen,
+}: {
+  node: FolderNode;
+  members: readonly DeckRow[];
+  drag: DeckDrag | null;
+  canDrop: (drag: DeckDrag) => boolean;
+  onDropDeck: (drag: DeckDrag) => void;
+  onOpen: (id: number) => void;
+}) {
+  const ref = useRef<HTMLLIElement>(null);
+  const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
+  const eligible = drag !== null && canDrop(drag);
+
+  // Scryfall's image policy, applied to a strip exactly as it is to a cover: an `art` crop has
+  // no printed frame, so a cover this app cannot name an illustrator for is not drawn.
+  //
+  // **This excludes a custom cover, and that is deliberate — do not "fix" it.** A deck wearing
+  // the reader's own picture therefore contributes its *card* art here (or nothing, if it has
+  // none), which is a small inconsistency with its own tile and the cheaper of the two
+  // mistakes. The strip is a sample of member card art under **one** credit line; letting an
+  // uploaded picture in would make that line cover something it cannot speak for, and the
+  // alternative — a credit line that names artists for some tiles in the strip and not others —
+  // is worse than the inconsistency. Ruled 2026-08-11 rather than left as an oversight.
+  const arts = members
+    .flatMap((deck) =>
+      deck.coverCardId !== null && deck.coverArtist !== null
+        ? [{ id: deck.id, cardId: deck.coverCardId, artist: deck.coverArtist }]
+        : [],
+    )
+    .slice(0, FOLDER_ARTS);
+  const artists = [...new Set(arts.map((art) => art.artist))].join(", ");
+
+  return (
+    <li ref={ref} className={cn("group relative rounded-xl", eligible && DROP_RING)}>
+      <button
+        type="button"
+        // Starts with the visible label, then says the two things the card's marks say — WCAG
+        // 2.5.3, and the reason the count is not spliced into the middle of the name.
+        aria-label={`${node.folder.name} folder, ${plural(node.deckCount, "deck")}`}
+        onClick={() => onOpen(node.folder.id)}
+        className={cn(
+          "block w-full rounded-xl border border-dashed border-border p-2.5 text-left",
+          "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+          over && cn("border-accent", DROP_OVER),
+          FOCUS,
+        )}
+      >
+        <span className="flex h-24 gap-[3px] overflow-hidden rounded-md bg-surface">
+          {arts.length === 0 ? (
+            <span
+              aria-hidden="true"
+              className="grid w-full place-items-center text-[0.7rem] text-dim"
+            >
+              {node.deckCount === 0 ? "Empty" : "No cover art"}
+            </span>
+          ) : (
+            arts.map((art) => <MemberArt key={art.id} cardId={art.cardId} />)
+          )}
+        </span>
+        <span className="mt-2 flex items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm">{node.folder.name}</span>
+          <span className="flex-none font-mono text-[0.7rem] tabular-nums text-dim">
+            {node.deckCount}
+          </span>
+        </span>
+        <span className="mt-0.5 block text-xs text-dim">Folder</span>
+      </button>
+
+      {/* The price of the crop, per folder card, exactly as it is per tile: an art crop carries
+          no printed frame, so every illustrator whose work is on this card is named. */}
+      {artists && (
+        <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={artists}>
+          Art by {artists}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** One member cover in a folder card's strip. Its own component because {@link useImageRetry}
+ *  is a hook and a strip is a loop. */
+function MemberArt({ cardId }: { cardId: string }) {
+  const image = useImageRetry(cardImageUrl(cardId, 0, "art"));
+  return (
+    <span className="min-w-0 flex-1 overflow-hidden bg-surface">
+      {image.src && (
+        <CardImage
+          // Decorative: the folder's name is under it, and the credit is its own line.
+          alt=""
+          src={image.src}
+          loading="lazy"
+          decoding="async"
+          onError={image.onError}
+          className="size-full object-cover"
+        />
+      )}
+    </span>
   );
 }
 
@@ -297,28 +901,55 @@ export function DecksPage() {
 function DeckTile({
   deck,
   decks,
-  confirming,
+  nodes,
+  folderId,
+  panel,
+  moving,
   onOpen,
   onAskDelete,
+  onAskMove,
+  onMove,
   onConfirmDelete,
-  onCancelDelete,
-  onCloseDelete,
+  onCancelPanel,
+  onClosePanel,
 }: {
   deck: DeckRow;
   decks: Decks;
-  confirming: boolean;
+  nodes: readonly FolderNode[];
+  /** The folder it is in now, normalised through the folder list this screen actually has. */
+  folderId: number | null;
+  panel: Panel;
+  moving: boolean;
   onOpen: (id: number) => void;
   onAskDelete: (deck: DeckRow, opener: HTMLButtonElement) => void;
+  onAskMove: (deck: DeckRow, opener: HTMLButtonElement) => void;
+  onMove: (folderId: number | null) => void;
   onConfirmDelete: (deck: DeckRow) => void;
   /** Cancel: a control *in* the layer, so the caret goes back to what opened it. */
-  onCancelDelete: () => void;
+  onCancelPanel: () => void;
   /** Clicked or tabbed away: the layer goes and the caret stays where it went. */
-  onCloseDelete: () => void;
+  onClosePanel: () => void;
 }) {
+  const ref = useRef<HTMLLIElement>(null);
+  const { id, name } = deck;
+
+  // The gesture half of filing. The whole tile is the handle — the art is the deck — and the
+  // controls in the corner mark themselves `data-no-drag` so a press on Delete is a press on
+  // Delete rather than the first five pixels of a drag.
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return deckDraggable({ element, payload: () => ({ deckId: id, name }) });
+  }, [id, name]);
+
   /** One derivation of the plural, for the caption and the question that quotes it. */
   const unit = deck.cardCount === 1 ? "card" : "cards";
+  const badge = deckBadge(deck);
+  const confirming = panel?.kind === "deleteDeck" && panel.deckId === deck.id;
+  const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
+
   return (
-    <li className="group relative">
+    <li ref={ref} className="group relative">
       {/* The art and the caption are one button — a deck is picked by looking at it, and a
           reader who aims at the name should not miss. The controls below are siblings of it
           rather than children: a button inside a button is invalid HTML. */}
@@ -331,7 +962,7 @@ function DeckTile({
         data-deck-id={deck.id}
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
-        <Cover cardId={deck.coverCardId} />
+        <Cover deck={deck} />
         <span className="mt-2 block truncate text-sm">{deck.name}</span>
         <span className="mt-0.5 block truncate text-xs text-dim">
           {deck.formatName ?? deck.formatKey} ·{" "}
@@ -339,10 +970,32 @@ function DeckTile({
         </span>
       </button>
 
+      {/* Which lists this deck has, over its own art. Outside the button rather than in it:
+          `aria-label` would otherwise read the badge before the name, and the tile is named
+          for its deck. `pointer-events-none` so a corner of the picture is not a dead spot. */}
+      <span
+        className={cn(
+          "pointer-events-none absolute left-1.5 top-1.5 rounded-sm border bg-bg/70 px-1.5",
+          "font-mono text-[0.6rem] leading-4 tracking-wide",
+          badge === "LIVE" ? "border-border text-dim" : "border-accent text-accent",
+          // Dashed means provisional, here as on a folder card: a theory list is a plan.
+          badge === "THEORY ONLY" && "border-dashed",
+        )}
+      >
+        {badge}
+      </span>
+
       {/* Scryfall's image policy, per tile — and the plan's ruling: a cover whose artist is
           unknown draws no line at all, never the word "null" and never a placeholder. An
-          orphaned cover heals itself on the next sync. */}
-      {deck.coverArtist && (
+          orphaned cover heals itself on the next sync.
+
+          `coverKind` is in the condition because `coverArtist` is a lookup on `coverCardId`
+          and nothing else — the backend's `LEFT JOIN cards c ON c.id = d.cover_card_id`, which
+          does not know or care which cover is showing. A deck carrying both (the ordinary case
+          after an upload) therefore answers an artist while wearing the reader's own picture,
+          and crediting an illustrator whose work is *not on screen* is the one thing this line
+          must never do. `DeckSettingsDialog`'s `CoverPreview` guards the same way. */}
+      {deck.coverKind === "card_art" && deck.coverArtist && (
         <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={deck.coverArtist}>
           Art by {deck.coverArtist}
         </p>
@@ -366,6 +1019,19 @@ function DeckTile({
       >
         <button
           type="button"
+          data-no-drag=""
+          aria-label={`Move ${deck.name} to a folder`}
+          aria-expanded={choosingFolder}
+          aria-haspopup="dialog"
+          title="Move to a folder"
+          onClick={(e) => (choosingFolder ? onCancelPanel() : onAskMove(deck, e.currentTarget))}
+          className={ICON_BUTTON}
+        >
+          <FolderInput className="size-3.5" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          data-no-drag=""
           aria-label={`Duplicate ${deck.name}`}
           title="Duplicate"
           onClick={() => decks.duplicate.mutate(deck.id)}
@@ -375,6 +1041,7 @@ function DeckTile({
         </button>
         <button
           type="button"
+          data-no-drag=""
           aria-label={`${deck.archived ? "Restore" : "Archive"} ${deck.name}`}
           title={deck.archived ? "Restore" : "Archive"}
           onClick={() => decks.update.mutate({ id: deck.id, patch: { archived: !deck.archived } })}
@@ -388,6 +1055,7 @@ function DeckTile({
         </button>
         <button
           type="button"
+          data-no-drag=""
           aria-label={`Delete ${deck.name}`}
           title="Delete"
           onClick={(e) => onAskDelete(deck, e.currentTarget)}
@@ -397,14 +1065,25 @@ function DeckTile({
         </button>
       </div>
 
+      {choosingFolder && (
+        <MoveToFolder
+          label={`Move ${deck.name} to a folder`}
+          nodes={nodes}
+          currentId={folderId}
+          pending={moving}
+          onPick={onMove}
+          onClose={onClosePanel}
+        />
+      )}
+
       {confirming && (
         <DeleteConfirm
           deck={deck}
           cards={`${deck.cardCount} ${unit}`}
           pending={decks.remove.isPending}
           onConfirm={() => onConfirmDelete(deck)}
-          onCancel={onCancelDelete}
-          onClose={onCloseDelete}
+          onCancel={onCancelPanel}
+          onClose={onClosePanel}
         />
       )}
     </li>
@@ -420,10 +1099,17 @@ function DeckTile({
  * a third thing to say, "No cover", which is not a failure at all. What is shared is
  * {@link useImageRetry}: the schedule, and the reason for it. A deck that changes its cover
  * hands this component a different id without remounting it, which is exactly the reset the
- * hook does — latent until Task 12's "Set as cover", and a divergence here would bite there.
+ * hook does — and that reset is what lets one frame serve **both** kinds of cover
+ * ({@link coverUrl}), because switching a deck from card art to its own picture changes the URL
+ * and nothing else.
+ *
+ * A missing custom file is a **404**, never a placeholder — `images.rs` chose that deliberately
+ * so the fault is visible rather than hidden behind a grey rectangle that looks like a picture.
+ * It arrives here as an `<img>` error like any other, so it lands in the same three sentences
+ * below and never as a broken-image glyph.
  */
-function Cover({ cardId }: { cardId: string | null }) {
-  const url = cardId ? cardImageUrl(cardId, 0, "art") : null;
+function Cover({ deck }: { deck: DeckRow }) {
+  const url = coverUrl(deck);
   const image = useImageRetry(url);
 
   return (
@@ -502,6 +1188,7 @@ function DeleteConfirm({
       tabIndex={-1}
       role="dialog"
       aria-label={`Delete ${deck.name}`}
+      data-no-drag=""
       // Anchored to the tile, not portalled: the shipped CSP is `style-src 'self'` and every
       // overlay primitive in reach injects a runtime <style> the moment it opens — fine under
       // `tauri dev`, blank in a packaged build. `SetCombobox`'s decision, for its reason. Not
@@ -564,6 +1251,92 @@ function DeleteConfirm({
   );
 }
 
+/**
+ * The other question, and the one whose answer a reader will guess wrong.
+ *
+ * **Deleting a folder does not delete the decks in it.** `decks.folder_id` is
+ * `ON DELETE SET NULL`, so they surface at the top level, filed nowhere and otherwise exactly
+ * as they were. `deck_folders.parent_id` is `ON DELETE CASCADE` on itself, so the folders
+ * inside *do* go. The two cascades point opposite ways and the confirmation says both, in that
+ * order — the reassuring half first, because the fear is what stops the press.
+ */
+function DeleteFolderConfirm({
+  node,
+  pending,
+  onConfirm,
+  onCancel,
+  onClose,
+}: {
+  node: FolderNode;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
+  const inside = flattenFolders(node.children).length;
+
+  return (
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      role="dialog"
+      aria-label={`Delete ${node.folder.name}`}
+      className={cn(
+        "absolute right-0 top-9 w-72 rounded-lg border border-border bg-bg/95 p-2",
+        "text-xs shadow-lg",
+        LAYER.popup,
+        FOCUS,
+      )}
+      onBlur={(e) => {
+        if (pending) return;
+        if (!panelRef.current?.contains(e.relatedTarget)) onClose();
+      }}
+    >
+      <p>Delete “{node.folder.name}”?</p>
+      <p className="mt-1 leading-relaxed text-dim">
+        {node.deckCount === 0
+          ? "It holds no decks."
+          : `The ${plural(node.deckCount, "deck")} in it ${
+              node.deckCount === 1 ? "is" : "are"
+            } kept — ${node.deckCount === 1 ? "it moves" : "they move"} to the top level.`}
+        {inside > 0 &&
+          ` The ${plural(inside, "folder")} inside ${inside === 1 ? "goes" : "go"} with it.`}
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={pending}
+          className={cn(
+            "rounded-md border border-destructive px-2 py-1 text-destructive",
+            "transition-colors duration-150 hover:bg-destructive hover:text-bg",
+            "disabled:opacity-50 motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Delete folder
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className={cn(
+            "rounded-md border border-border px-2 py-1 text-dim",
+            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The view's one primary action, and the form behind it. */
 function NewDeck({
   buttonRef,
@@ -605,7 +1378,7 @@ function NewDeck({
       // a disabled control with no `relatedTarget` at all, and this handler would read the
       // press as the reader leaving — closing the form *as if it had worked*. It is worse here
       // than there, because this form is the only place a refusal can be read: `writeFailure`
-      // above covers the three writes a tile makes, not this one, and reopening the form calls
+      // above covers the writes a tile makes, not this one, and reopening the form calls
       // `create.reset()`. So a refused create would leave no deck and no sentence saying why.
       onBlur={(e) => {
         if (create.isPending) return;
@@ -667,9 +1440,12 @@ function CreateDeckForm({
       role="dialog"
       aria-label="New deck"
       // Anchored rather than portalled, and not `aria-modal`: `SetCombobox`'s decision, for
-      // its reason — `style-src 'self'` refuses what every overlay library injects.
+      // its reason — `style-src 'self'` refuses what every overlay library injects. Pinned to
+      // the trigger's **right** edge, because nothing clips these popups and this one opens at
+      // the end of the heading row: a 288px panel hanging off the right of a 1280px window
+      // scrolls the whole app sideways rather than being cut off.
       className={cn(
-        "absolute left-0 top-11 w-72 rounded-lg border border-border bg-surface p-3",
+        "absolute right-0 top-11 w-72 rounded-lg border border-border bg-surface p-3",
         "shadow-lg",
         LAYER.popup,
       )}

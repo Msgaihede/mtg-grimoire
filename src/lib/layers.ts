@@ -37,6 +37,25 @@ export const LAYER = {
    * it is expanded. Written out whole; see the note above.
    */
   raisedWhenPopupOpen: "has-[[aria-expanded=true]]:z-10",
+  /**
+   * The deck stack's lift: a card comes forward while the pointer is on it, and the stack it
+   * is in comes forward with it.
+   *
+   * A stacked card overlaps its neighbours by design, and while one is lifted the cards
+   * *after* it slide down out of the group's fixed height — so both the card (over the cards
+   * before it) and the whole list (over the groups below it in the column) have to leave the
+   * flow's paint order. Still at `raised`: the editor's toolbar and its popups are above.
+   */
+  raisedOnHover: "hover:z-10",
+  /**
+   * The same lift, for the caret. A stack only a mouse can read is a stack half the readers
+   * cannot — so focus does what hover does, here as everywhere in this component.
+   *
+   * `focus-within` rather than `focus`, because the thing that takes focus is the card's own
+   * button and the thing that has to come forward is the list item around it. Written out
+   * whole for the reason above.
+   */
+  raisedOnFocus: "focus-within:z-10",
   /** A table's sticky header row, over the rows scrolling under it. */
   header: "z-20",
   /** Anchored to a control and floating over the page: pickers, quick-adds, menus, previews. */
@@ -47,6 +66,24 @@ export const LAYER = {
    * pointer is being carried to.
    */
   dragTray: "z-40",
+  /**
+   * A full-window layer a view opens over everything it owns: the deck editor's categories
+   * drawer, its history drawer, its theory difference dialog and its settings dialog.
+   *
+   * **One rung for a drawer *and* a modal, deliberately, where two looks more careful.** The
+   * four surfaces above are held in one piece of state (`DeckEditor`'s `Layer` union), because
+   * `useDismissOnEscape` orders exactly two rungs and two `"inner"` peers open at once are not
+   * ordered at all. At most one of the four is ever mounted — so there is no pair for a second
+   * number to order, and inventing one would be a claim about a stack that cannot occur. If a
+   * layer ever has to open *over* one of these, that is the day the rung splits, and the split
+   * will have a real overlap to point at.
+   *
+   * Above `dragTray`, which is the top of what a *view* draws, and below `gate`: a sync taking
+   * the window over covers a deck dialog, never the other way round. The four used to borrow
+   * `gate` and `dragTray` two apiece — each right in effect and wrong in name, which is exactly
+   * the reading a `LAYER` entry exists to make impossible.
+   */
+  overlay: "z-45",
   /** `SyncProgress`'s full-window takeover, over everything. */
   gate: "z-50",
 } as const;

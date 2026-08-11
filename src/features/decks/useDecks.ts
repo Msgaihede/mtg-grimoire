@@ -5,7 +5,7 @@ import { ipc, type DeckInput, type DeckPatch, type DeckRow } from "@/lib/ipc";
 const NONE: readonly DeckRow[] = [];
 
 /**
- * The deck gallery, and the four writes that are about a deck rather than about a card in
+ * The deck gallery, and the five writes that are about a deck rather than about a card in
  * one.
  *
  * The list is `["decks", "list"]` under the `["decks"]` root every write in the app
@@ -37,14 +37,27 @@ export function useDecks() {
    */
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["decks"] });
 
+  /**
+   * **On error as well as on success, on all five, and kept on the single definition rather
+   * than on a call site** — `useDeck`'s rule, and `useDeckMeta`'s and `useDeckFolders`'.
+   *
+   * Every refusal in this file is either a busy database or a deck another surface has already
+   * deleted, and the second must not leave a tile painted in a gallery that has lost it. Four
+   * of these five carried `onSuccess` alone while the fifth documented the rule six lines
+   * below, which is exactly the shape "two definitions are two places to keep one rule" warns
+   * about: a `GONE` from deleting a deck the editor had already deleted left the tile on
+   * screen and the gallery never learned.
+   */
+  const writes = { onSuccess: invalidate, onError: invalidate };
+
   const create = useMutation({
     mutationFn: (deck: DeckInput) => ipc.deckCreate(deck),
-    onSuccess: invalidate,
+    ...writes,
   });
 
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: DeckPatch }) => ipc.deckUpdate(id, patch),
-    onSuccess: invalidate,
+    ...writes,
   });
 
   /**
@@ -56,12 +69,30 @@ export function useDecks() {
    */
   const remove = useMutation({
     mutationFn: (id: number) => ipc.deckDelete(id),
-    onSuccess: invalidate,
+    ...writes,
   });
 
   const duplicate = useMutation({
     mutationFn: (id: number) => ipc.deckDuplicate(id),
-    onSuccess: invalidate,
+    ...writes,
+  });
+
+  /**
+   * File the deck under a folder — or, with `folderId: null`, back at the **root** of the tree.
+   *
+   * **A command of its own, and not a {@link DeckPatch} field.** `update` above writes every
+   * column with `coalesce(?n, column)`, so a bound NULL there reads as "leave it alone": there
+   * is no patch that can un-file a deck, and a drag out of a folder written as one is a write
+   * that silently does nothing. Here `null` is an argument with a meaning.
+   *
+   * Invalidates on **error** as well as on success, like every other write here: a refusal is a
+   * busy database or a deck (or a folder) another surface has already deleted, and the second
+   * must not leave a tile painted in a drawer it is not in.
+   */
+  const setFolder = useMutation({
+    mutationFn: ({ id, folderId }: { id: number; folderId: number | null }) =>
+      ipc.deckSetFolder(id, folderId),
+    ...writes,
   });
 
   return {
@@ -74,6 +105,7 @@ export function useDecks() {
     update,
     remove,
     duplicate,
+    setFolder,
   };
 }
 
