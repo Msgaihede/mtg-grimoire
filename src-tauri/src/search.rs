@@ -245,8 +245,7 @@ const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
 ///
 /// A **ranking** term and never a filter — every printing that matched is still returned, in
 /// both modes. This only decides what a relevance-ranked page puts first.
-const NON_CARD_LAYOUTS: &str =
-    "('art_series','front_card','token','double_faced_token','emblem')";
+const NON_CARD_LAYOUTS: &str = "('art_series','front_card','token','double_faced_token','emblem')";
 
 /// 1 for a non-card, 0 for a card — the first term of the relevance fallback.
 ///
@@ -1269,7 +1268,10 @@ mod tests {
         let shocks: Vec<&CardSummary> = r.items.iter().filter(|c| c.name == "Shock").collect();
         assert_eq!(shocks.len(), 1, "three printings, one row");
         assert_eq!(shocks[0].printings, 3);
-        assert_eq!(shocks[0].id, "b3", "the newest printing represents the card");
+        assert_eq!(
+            shocks[0].id, "b3",
+            "the newest printing represents the card"
+        );
         assert_eq!(shocks[0].price_low, Some(3.0));
         assert_eq!(shocks[0].price_high, Some(400.0));
     }
@@ -1560,7 +1562,11 @@ mod tests {
             .iter()
             .filter_map(|c| c.rarity.as_deref())
             .collect();
-        assert_eq!(rarities, ["rare", "mythic"], "the second page of the rank order");
+        assert_eq!(
+            rarities,
+            ["rare", "mythic"],
+            "the second page of the rank order"
+        );
     }
 
     /// A collapsed text search is still ranked by relevance, the group taking the best score
