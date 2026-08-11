@@ -848,24 +848,36 @@ async fn do_sync(
             return Err(e.to_string());
         }
     };
-    let _ = std::fs::remove_file(&gz);
-
-    // **The swap has landed, so the facet index is now a liar — go cold immediately.**
-    // `swap_staging` dropped and recreated `cards`, which renumbers every rowid, and the
-    // index is nothing but rowids: left published it would count *other cards* into every
-    // facet, greying out options the search would happily return printings for. The rebuild
-    // does not follow until the end of the run (below), because two things between here and
-    // there move the ground again — `reconcile_ids` can repoint a collection row onto another
-    // printing, and `compact_once`'s one-time `VACUUM` renumbers the rowids a second time.
-    // For those few seconds the app answers `ready: false` and every control stays live,
-    // which is the honest answer and the safe one.
+    // **The swap has landed, so the facet index is now a liar — go cold immediately, before
+    // anything else in this function gets a turn.** `swap_staging` dropped and recreated
+    // `cards`, which renumbers every rowid, and the index is nothing but rowids: left
+    // published it would count *other cards* into every facet, greying out options the search
+    // would happily return printings for. The rebuild does not follow until the end of the run
+    // (below), because two things between here and there move the ground again —
+    // `reconcile_ids` can repoint a collection row onto another printing, and `compact_once`'s
+    // one-time `VACUUM` renumbers the rowids a second time. For those few seconds the app
+    // answers `ready: false` and every control stays live, which is the honest answer and the
+    // safe one.
     //
-    // A run that dies between here and there — the `/sets` call is the one that reaches the
+    // A run that dies **after** this line — the `/sets` call is the one that reaches the
     // network again — leaves the index cold until the next launch or sync. That is the
     // degradation this whole module is built to make safe (no facet counts, every filter
     // live, nothing else changed), and it is strictly better than the alternative on offer,
     // which is counts about a corpus that no longer exists.
+    //
+    // **A run that dies *before* it does not, and that gap is open.** The two `Err` arms above
+    // return early, so a death between `swap_staging`'s commit and this line — the blocking
+    // task panicking on its way out, or the runtime shutting down under it — leaves the
+    // *previous* index published over the new rowids, which is the one state this module says
+    // must never exist. It is bounded (the next launch or sync rebuilds it) and it is not
+    // closed here, because clearing in those arms needs a `spawn_build` decision to go with
+    // it: a clear on a failed ingest with nothing scheduled leaves the app cold for the rest
+    // of the session. Named rather than fixed.
     crate::index::lifecycle::clear(state);
+
+    // Only now the unlink. 77 MB of blocking I/O, and until this line moved above it, it sat
+    // inside the window the paragraph above is about.
+    let _ = std::fs::remove_file(&gz);
 
     reclaim_freed_pages(state, app).await;
 
