@@ -51,25 +51,32 @@ describe("sortCards", () => {
     expect(names(sorted)).toEqual(["Mana Crypt", "Sol Ring", "Arcane Signet", "Orphan"]);
   });
 
-  /** One vocabulary: the type order is `AUTO_CATEGORIES`, the same list the add path files
-   *  an uncategorised card by, so a "sort by type" and a "group by type" cannot disagree. */
-  it("orders by type in the auto-category order, then by name", () => {
+  /**
+   * One vocabulary with the add path and the type grouping, and the **reading** order of it:
+   * Land last, as in every decklist ever written down. What a card *is* comes from
+   * `autoCategoryFor`'s matching order (which checks Land first, for Dryad Arbor's sake);
+   * where that answer *sits* comes from `AUTO_CATEGORY_DISPLAY_ORDER`.
+   */
+  it("orders by type in the reading order, lands last, then by name", () => {
     const sorted = sortCards(
       [
         card({ name: "Lightning Bolt", typeLine: "Instant" }),
         card({ name: "Forest", typeLine: "Basic Land — Forest" }),
         card({ name: "Grizzly Bears", typeLine: "Creature — Bear" }),
         card({ name: "Ancient Tomb", typeLine: "Land" }),
+        card({ name: "Dryad Arbor", typeLine: "Land Creature — Forest Dryad" }),
         card({ name: "Orphan", typeLine: null }),
       ],
       "type",
     );
 
     expect(names(sorted)).toEqual([
-      "Ancient Tomb",
-      "Forest",
       "Grizzly Bears",
       "Lightning Bolt",
+      // The three lands together at the foot — Dryad Arbor among them, not up with the bear.
+      "Ancient Tomb",
+      "Dryad Arbor",
+      "Forest",
       "Orphan",
     ]);
   });

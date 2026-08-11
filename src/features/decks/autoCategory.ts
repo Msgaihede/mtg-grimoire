@@ -18,15 +18,18 @@ import type { DeckCard } from "@/lib/ipc";
  * The eight buckets, **in match order** — first one whose word appears on the front face
  * wins, and the order is the whole of the rule for a card with two types.
  *
- * `Land` leads because a land is a land before it is anything else: an artifact land is
- * where your mana comes from, and Dryad Arbor is not a creature you would find in the
- * creature column. `Creature` comes next for the same reason from the other side — an
- * Artifact Creature is a creature to everyone who has ever built a deck. A Legendary Creature
- * that is *the commander* was placed explicitly and never reaches here.
+ * `Land` leads because a land is a land before it is anything else. **Dryad Arbor** is the
+ * case that makes this non-obvious and the reason this comment names it: its type line is
+ * `Land Creature — Forest Dryad`, and a list that checked `Creature` first would file it in
+ * the creature column, where no decklist has ever put it. Every artifact land is the same
+ * card. `Creature` comes next for the reason from the other side — an Artifact Creature is a
+ * creature to everyone who has ever built a deck. A Legendary Creature that is *the
+ * commander* was placed explicitly and never reaches here.
  *
- * Exported because it is also the app's type **order**: `sorting.ts` sorts by it and
- * `grouping.ts` groups by it, so a "sort by type" and a "group by type" cannot disagree
- * about what a type is or which comes first.
+ * **This is the matching order and only the matching order.** What a reader sees is
+ * {@link AUTO_CATEGORY_DISPLAY_ORDER}, which is this list with Land moved to the end — the
+ * two genuinely want opposite answers about Land, and folding them back into one constant
+ * breaks whichever job loses.
  */
 export const AUTO_CATEGORIES = [
   "Land",
@@ -40,6 +43,29 @@ export const AUTO_CATEGORIES = [
 ] as const;
 
 export type AutoCategory = (typeof AUTO_CATEGORIES)[number];
+
+/**
+ * The same eight buckets **in reading order** — Land last, as it is in every decklist ever
+ * written down, because the lands are where the counting ends.
+ *
+ * This is what a reader sees: `grouping.ts` orders its `type` groups by it and `sorting.ts`
+ * sorts by it, so a "group by type" and a "sort by type" cannot disagree.
+ *
+ * **Derived, never typed out a second time.** Two hand-written lists are two lists to keep in
+ * step, and the day they drift the symptom is a Sorcery heading between two Instants. The one
+ * transformation is stated here and nowhere else: take {@link AUTO_CATEGORIES} and move Land
+ * to the end.
+ *
+ * The two orders differ **only** about Land, and that is not an oversight in either of them.
+ * The matching order has to check Land first or Dryad Arbor (`Land Creature — Forest Dryad`)
+ * is filed as a creature; the reading order has to draw it last or the decklist starts with
+ * its mana base. One constant cannot be both, which is why "tidying" these back together is
+ * the change to refuse.
+ */
+export const AUTO_CATEGORY_DISPLAY_ORDER: readonly string[] = [
+  ...AUTO_CATEGORIES.filter((bucket) => bucket !== "Land"),
+  "Land",
+];
 
 /**
  * Where a card with no type line goes — an orphan whose printing has left `cards`, or a
@@ -93,13 +119,17 @@ export function autoCategoryFor(card: Pick<DeckCard, "typeLine">): string {
 }
 
 /**
- * Where a name sorts in {@link AUTO_CATEGORIES}, with the fallback last.
+ * Where a bucket sorts **on screen** — {@link AUTO_CATEGORY_DISPLAY_ORDER}, with the fallback
+ * last.
  *
- * One function so the sort and the grouping share an order as well as a vocabulary. A name
- * this list has never heard of sorts with the fallback rather than at the head, which is
- * where an unknown belongs.
+ * One function so the sort and the grouping share an order as well as a vocabulary.
+ * {@link UNCATEGORISED}, and any name this list has never heard of, sorts with the unknowns
+ * at the foot rather than at the head, which is where an unknown belongs.
+ *
+ * There is deliberately **no** exported "matching order" equivalent: the match order is
+ * `autoCategoryFor`'s alone and nothing else has any business reading it.
  */
-export function autoCategoryOrder(name: string): number {
-  const at = (AUTO_CATEGORIES as readonly string[]).indexOf(name);
-  return at < 0 ? AUTO_CATEGORIES.length : at;
+export function autoCategoryDisplayOrder(name: string): number {
+  const at = AUTO_CATEGORY_DISPLAY_ORDER.indexOf(name);
+  return at < 0 ? AUTO_CATEGORY_DISPLAY_ORDER.length : at;
 }

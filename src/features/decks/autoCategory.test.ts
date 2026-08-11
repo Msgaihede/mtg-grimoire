@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { card } from "./validation/fixtures";
 import {
   AUTO_CATEGORIES,
+  AUTO_CATEGORY_DISPLAY_ORDER,
+  autoCategoryDisplayOrder,
   autoCategoryFor,
   AUTO_CATEGORY_NAMES,
   PREDEFINED_CATEGORY_NAMES,
@@ -102,5 +104,55 @@ describe("autoCategoryFor", () => {
       "Companion",
       "Maybeboard",
     ]);
+  });
+});
+
+describe("the matching order and the reading order", () => {
+  /**
+   * The two lists are the same eight words and differ **only** about Land, and both answers
+   * are deliberate. Written as a test rather than left to a comment because the obvious
+   * tidy-up — folding them back into one constant — passes type-checking and breaks whichever
+   * job loses.
+   */
+  it("holds the same eight buckets, and differs only about where Land goes", () => {
+    expect([...AUTO_CATEGORY_DISPLAY_ORDER].sort()).toEqual([...AUTO_CATEGORIES].sort());
+    expect(AUTO_CATEGORIES[0]).toBe("Land");
+    expect(AUTO_CATEGORY_DISPLAY_ORDER[AUTO_CATEGORY_DISPLAY_ORDER.length - 1]).toBe("Land");
+    // Everything else is in the order it was written in.
+    expect(AUTO_CATEGORY_DISPLAY_ORDER.slice(0, -1)).toEqual(
+      AUTO_CATEGORIES.filter((bucket) => bucket !== "Land"),
+    );
+  });
+
+  /**
+   * **Dryad Arbor is why the matching order checks Land first.** Its type line is
+   * `Land Creature — Forest Dryad`; a list that checked `Creature` first would file it in the
+   * creature column, where no decklist has ever put it, and every artifact land is the same
+   * card.
+   *
+   * And it is filed under a heading that is drawn **last**, which is the other half: the
+   * lands are where a decklist stops counting.
+   */
+  it("files Dryad Arbor as a land, and draws lands last", () => {
+    expect(autoCategoryFor(card({ typeLine: "Land Creature — Forest Dryad" }))).toBe("Land");
+    expect(autoCategoryDisplayOrder("Land")).toBeGreaterThan(autoCategoryDisplayOrder("Creature"));
+    expect(autoCategoryDisplayOrder("Land")).toBe(AUTO_CATEGORIES.length - 1);
+  });
+
+  /** An unknown sorts with the unknowns at the foot, not at the head — including the
+   *  fallback the orphan gets. */
+  it("sorts the fallback and anything it has never heard of after every bucket", () => {
+    expect(autoCategoryDisplayOrder(UNCATEGORISED)).toBe(AUTO_CATEGORIES.length);
+    expect(autoCategoryDisplayOrder("Dungeon")).toBe(AUTO_CATEGORIES.length);
+    expect(autoCategoryDisplayOrder(UNCATEGORISED)).toBeGreaterThan(
+      autoCategoryDisplayOrder("Land"),
+    );
+  });
+
+  /** The reading order is the eight buckets and nothing else — the fallback earns its place
+   *  at the foot by being absent from the list, not by being written into the end of it. */
+  it("keeps the fallback out of the reading order entirely", () => {
+    expect(AUTO_CATEGORY_DISPLAY_ORDER).not.toContain(UNCATEGORISED);
+    expect(AUTO_CATEGORY_DISPLAY_ORDER).toHaveLength(AUTO_CATEGORIES.length);
   });
 });

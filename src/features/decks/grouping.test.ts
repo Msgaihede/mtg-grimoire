@@ -234,6 +234,29 @@ describe("buildGroups by a derived key", () => {
     expect(groups.every((g) => g.cards.length > 0)).toBe(true);
   });
 
+  /**
+   * The type headings are drawn in the **reading** order — Land last, as in every decklist —
+   * while `autoCategoryFor` matches in an order that checks Land *first*. The two differ only
+   * about Land and both answers are deliberate; `autoCategory.ts` names Dryad Arbor as the
+   * reason.
+   */
+  it("heads the type groups in reading order, with the lands last", () => {
+    const groups = buildGroups(
+      [
+        card({ name: "Lightning Bolt", typeLine: "Instant" }),
+        card({ name: "Forest", typeLine: "Basic Land — Forest" }),
+        card({ name: "Grizzly Bears", typeLine: "Creature — Bear" }),
+        card({ name: "Sol Ring", typeLine: "Artifact" }),
+        card({ name: "Orphan", typeLine: null }),
+      ],
+      [MAIN],
+      "type",
+      "alphabetical",
+    );
+
+    expect(names(groups)).toEqual(["Creature", "Artifact", "Instant", "Land", "Uncategorised"]);
+  });
+
   it("buckets mana value 0 through 7 exactly, 8 and up together, and unknown last", () => {
     const groups = buildGroups(
       [

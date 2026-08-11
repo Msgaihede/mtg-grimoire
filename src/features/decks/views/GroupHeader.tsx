@@ -14,13 +14,31 @@ import type { CardGroup } from "../grouping";
 
 /**
  * The kinds whose pile the format's rules read **by name**: a commander zone, a sideboard, a
- * companion. Those three cannot be renamed or deleted, and the `RULE` marker says so.
+ * companion. That is what `RULE` means, and it is the marker's whole definition.
  *
- * `main` is not here because a deck may own any number of `main` categories and they are the
- * reader's to name. Neither is `maybe`, which reads oddly until you write out what it is: a
- * Maybeboard is a pile whose *switch* is off, and `SIZE_KINDS` counts an active one exactly
- * like a `main` one. Being switched off is the whole of what it is — which is what `INACTIVE`
- * says, and saying `RULE` as well would claim a rules role it does not have.
+ * ## The wrong reading, named so the next person does not have it
+ *
+ * **`RULE` does not mean "predefined and undeletable."** It is the plausible reading — all
+ * three of these *are* predefined — and it is wrong, because it would put the marker on the
+ * Maybeboard too. `RULE` and `INACTIVE` answer **different questions**, and a pile can carry
+ * both:
+ *
+ * * `RULE` — *does the ruleset name this pile?* The commander zone, the sideboard and the
+ *   companion slot are things a format has an opinion about, which is why they cannot be
+ *   renamed or removed. A category the reader made is theirs.
+ * * `INACTIVE` — *is the switch off?* Nothing in here counts toward size, copy limits or
+ *   legality, and the allocator reserves nothing for it.
+ *
+ * A reader who switches the Sideboard off gets a pile marked `RULE INACTIVE`, and both words
+ * are true of it.
+ *
+ * So `maybe` is deliberately absent. A Maybeboard is not a rules role — `SIZE_KINDS` counts
+ * an *active* one exactly like a `main` pile — it is a pile seeded with its switch off, and
+ * being switched off is the whole of what it is. `INACTIVE` already says that; `RULE` beside
+ * it would claim a rules role the format has never heard of.
+ *
+ * (Checked against the design canvas, which draws `RULE` on the Commander and `INACTIVE` on
+ * the Maybeboard, and confirmed as the intended reading.)
  */
 const RULE_KINDS: readonly CategoryKind[] = ["commander", "side", "companion"];
 

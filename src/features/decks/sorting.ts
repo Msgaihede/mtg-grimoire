@@ -12,7 +12,7 @@
  * down over a card the last sync could not keep.
  */
 import type { DeckCard } from "@/lib/ipc";
-import { autoCategoryFor, autoCategoryOrder } from "./autoCategory";
+import { autoCategoryDisplayOrder, autoCategoryFor } from "./autoCategory";
 
 export type SortBy = "alphabetical" | "manaCost" | "price" | "type";
 
@@ -66,13 +66,15 @@ export function sortCards(cards: readonly DeckCard[], sortBy: SortBy): DeckCard[
     // the unpriced rows, which stay at the foot either way.
     case "price":
       return copy.sort((a, b) => nullsLast(a.unitPriceUsd, b.unitPriceUsd, true) || byName(a, b));
-    // One vocabulary with the add path and the type grouping: `AUTO_CATEGORIES`, in its own
-    // order, so "sort by type" and "group by type" cannot disagree about what a type is.
+    // One vocabulary with the add path and the type grouping, and the **reading** order of
+    // it: Land last, as in every decklist. `autoCategoryFor` decides what a card is;
+    // `autoCategoryDisplayOrder` decides where that answer sits — the two lists differ only
+    // about Land, and `autoCategory.ts` says why.
     case "type":
       return copy.sort(
         (a, b) =>
-          autoCategoryOrder(autoCategoryFor(a)) - autoCategoryOrder(autoCategoryFor(b)) ||
-          byName(a, b),
+          autoCategoryDisplayOrder(autoCategoryFor(a)) -
+            autoCategoryDisplayOrder(autoCategoryFor(b)) || byName(a, b),
       );
   }
 }

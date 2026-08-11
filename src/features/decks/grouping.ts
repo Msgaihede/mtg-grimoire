@@ -15,7 +15,11 @@
  * itself, unchanged, in `sortOrder`.
  */
 import type { CategoryKind, DeckCard, DeckCategory } from "@/lib/ipc";
-import { autoCategoryFor, autoCategoryOrder, PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
+import {
+  autoCategoryDisplayOrder,
+  autoCategoryFor,
+  PREDEFINED_CATEGORY_NAMES,
+} from "./autoCategory";
 import { sortCards, type SortBy } from "./sorting";
 
 export type GroupBy = "category" | "manaValue" | "type";
@@ -193,8 +197,11 @@ export function buildGroups(
       groupBy === "manaValue"
         ? manaValueBucket(card.cmc)
         : (() => {
+            // What the card *is* comes from the matching order; where its heading *sits*
+            // comes from the reading order, which puts Land last. See `autoCategory.ts` for
+            // why those are two lists and must stay two.
             const name = autoCategoryFor(card);
-            return { key: `type-${name}`, name, order: autoCategoryOrder(name) };
+            return { key: `type-${name}`, name, order: autoCategoryDisplayOrder(name) };
           })();
 
     const seen = derived.get(bucket.key);
