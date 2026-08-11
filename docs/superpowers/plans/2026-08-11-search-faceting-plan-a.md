@@ -437,6 +437,134 @@ git commit -m "feat(search): add legal_mask and widen the collapse index to cove
 
 ---
 
+### Task 2b: Make the format filter use the mask
+
+> **Added mid-execution, 2026-08-11.** Task 2's implementer noticed that `filters.rs` still
+> filters format with `json_extract`, and it is right: **the widened index delivers nothing
+> until the query stops parsing JSON.** Measured against the live corpus with the widened
+> index already in place, a format-filtered collapsed browse is **40.6 ms** via `legal_mask`
+> and **591 ms** via `json_extract` — slightly *worse* than the 505 ms before widening,
+> because the wider index is a larger thing to scan when the predicate cannot use it. Plan A
+> as first written would have shipped the whole cost of the index and none of its benefit.
+
+**Files:**
+- Modify: `src-tauri/src/filters.rs` (the `format` predicate in `push_card_filters`)
+- Modify: `src-tauri/src/schema.rs` (the v8 step's `ALTER TABLE`)
+
+**Interfaces:**
+- Consumes: `legalities::bit(key) -> Option<u64>` (Task 1), `cards.legal_mask` (Task 2).
+- Produces: no new symbols. `push_card_filters`'s emitted SQL changes shape.
+
+**Two changes, and the second is why the first is safe.**
+
+- [ ] **Step 1: Write the failing tests**
+
+In `filters.rs`'s tests (or `search.rs`'s, wherever the format filter is currently covered —
+find the existing coverage first and extend it rather than starting a parallel set):
+
+```rust
+/// The filter has to reach the index, and it cannot while it parses JSON per row. Measured
+/// on the live corpus with the widened `idx_cards_collapse` in place: 40.6 ms through the
+/// mask against 591 ms through `json_extract`.
+#[test]
+fn the_format_filter_tests_the_mask_rather_than_parsing_json() {
+    let mut p = Predicates::default();
+    let f = CardFilters { format: Some("modern".into()), ..Default::default() };
+    push_card_filters(&mut p, &f, "c", None);
+    let sql = p.where_sql();
+    assert!(sql.contains("legal_mask"), "{sql}");
+    assert!(!sql.contains("json_extract"), "{sql}");
+}
+
+/// `restricted` counts as playable — a Vintage search that hid Black Lotus would be wrong.
+/// This survived the rewrite because the *mask* encodes it, not the SQL.
+#[test]
+fn the_mask_filter_still_admits_restricted_cards() {
+    // Seed Black Lotus with vintage=restricted, run a search with format=vintage,
+    // assert it comes back. Reuse `search::tests::seeded()`, which already has one.
+}
+
+/// A format this build has never heard of matched nothing before — `json_extract` of an
+/// absent key is NULL, and `NULL IN (…)` is NULL. It must still match nothing, rather than
+/// matching everything or erroring.
+#[test]
+fn a_format_the_build_does_not_know_matches_nothing() {
+    // run_search with format: Some("some_format_scryfall_invented") — expect total 0.
+}
+
+/// An orphaned collection row has no card row to answer for it, so the LEFT JOIN gives a
+/// NULL alias. `NULL & ? != 0` is NULL, which fails the filter exactly as
+/// `json_extract(NULL, …)` did — the orphan still fails a format filter rather than
+/// silently passing it.
+#[test]
+fn an_orphan_still_fails_a_format_filter() {
+    // Collection list with a card_id no `cards` row has, plus format=modern: not returned.
+}
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd src-tauri && cargo test format`
+Expected: FAIL — the emitted SQL still says `json_extract`.
+
+- [ ] **Step 3: Implement**
+
+In `filters.rs`, replace the format arm:
+
+```rust
+    // **The mask, not `json_extract`.** A JSON path cannot be indexed, so the old form
+    // knocked the collapsed browse's scan off `idx_cards_collapse` and into a row lookup per
+    // card: 591 ms against 40.6 ms through the mask, measured 2026-08-11 over the live corpus
+    // with the widened index in place. [`crate::legalities`] exists for this.
+    //
+    // `restricted` still counts as playable — that lives in the mask now rather than in this
+    // SQL, which is why the predicate no longer says so.
+    //
+    // A key this build has never heard of matches nothing, which is what the old form did
+    // too: `json_extract` of an absent key is NULL and `NULL IN (…)` is NULL. Spelled `0`
+    // rather than left out, because leaving it out would turn an unknown format into "no
+    // filter at all" and quietly return the whole corpus.
+    if let Some(v) = nonblank(&f.format) {
+        match crate::legalities::bit(v) {
+            Some(b) => p.push(
+                format!("({alias}.legal_mask & ?) != 0"),
+                Box::new(b as i64),
+            ),
+            None => p.wheres.push("0".to_owned()),
+        }
+    }
+```
+
+In `schema.rs`'s v8 step, tighten the column:
+
+```rust
+        tx.execute_batch("ALTER TABLE cards ADD COLUMN legal_mask INTEGER NOT NULL DEFAULT 0;")?;
+```
+
+with the reason written down: the filter above is `legal_mask & ? != 0`, and a NULL there
+drops the row silently rather than reading as "legal nowhere". No NULL can reach production
+today — `mask_sql` answers `0` for a NULL `legalities`, and `STAGING_INSERT` names the column
+so the ingest always binds it — but the column permitted one, and this closes it while v8 is
+still unshipped. `cards_column_defs` reproduces both `NOT NULL` and `DEFAULT`, so staging
+carries them and the swap survives.
+
+- [ ] **Step 4: Run the full Rust suite**
+
+Run: `cd src-tauri && cargo test`
+Expected: PASS. Watch for existing format-filter tests in `search.rs` and `collection.rs`
+that assert on SQL text rather than on results — those are the ones this can break.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `npm run verify`
+
+```bash
+git add src-tauri/src/filters.rs src-tauri/src/schema.rs
+git commit -m "perf(search): filter format through the mask so it can use the index"
+```
+
+---
+
 ### Task 3: The bitset
 
 **Files:**
