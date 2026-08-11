@@ -5,7 +5,7 @@ import { ipc, type DeckInput, type DeckPatch, type DeckRow } from "@/lib/ipc";
 const NONE: readonly DeckRow[] = [];
 
 /**
- * The deck gallery, and the four writes that are about a deck rather than about a card in
+ * The deck gallery, and the five writes that are about a deck rather than about a card in
  * one.
  *
  * The list is `["decks", "list"]` under the `["decks"]` root every write in the app
@@ -64,6 +64,26 @@ export function useDecks() {
     onSuccess: invalidate,
   });
 
+  /**
+   * File the deck under a folder — or, with `folderId: null`, back at the **root** of the tree.
+   *
+   * **A command of its own, and not a {@link DeckPatch} field.** `update` above writes every
+   * column with `coalesce(?n, column)`, so a bound NULL there reads as "leave it alone": there
+   * is no patch that can un-file a deck, and a drag out of a folder written as one is a write
+   * that silently does nothing. Here `null` is an argument with a meaning.
+   *
+   * Invalidates on **error** as well as on success — `useDeck`'s rule, kept on the single
+   * definition rather than on a call site, because two definitions are two places to keep one
+   * rule. A refusal here is a busy database or a deck (or a folder) another surface has already
+   * deleted, and the second must not leave a tile painted in a drawer it is not in.
+   */
+  const setFolder = useMutation({
+    mutationFn: ({ id, folderId }: { id: number; folderId: number | null }) =>
+      ipc.deckSetFolder(id, folderId),
+    onSuccess: invalidate,
+    onError: invalidate,
+  });
+
   return {
     query,
     /** Every deck, archived last and most recently touched first. Empty until the first
@@ -74,6 +94,7 @@ export function useDecks() {
     update,
     remove,
     duplicate,
+    setFolder,
   };
 }
 

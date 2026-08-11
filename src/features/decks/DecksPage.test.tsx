@@ -15,6 +15,7 @@ const deckDuplicate = vi.hoisted(() => vi.fn());
 const deckSetFolder = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 const deckFolderCreate = vi.hoisted(() => vi.fn());
+const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
@@ -29,6 +30,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSetFolder,
     deckFolderList,
     deckFolderCreate,
+    deckFolderRename,
     deckFolderMove,
     deckFolderDelete,
     formatSpecs,
@@ -141,6 +143,7 @@ beforeEach(() => {
   // below that is about filing says so by overriding this.
   deckFolderList.mockReset().mockResolvedValue([]);
   deckFolderCreate.mockReset().mockResolvedValue(LEGENDS);
+  deckFolderRename.mockReset().mockResolvedValue({ ...EDH, name: "EDH" });
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
@@ -659,6 +662,77 @@ describe("DecksPage folders", () => {
   });
 
   /**
+   * Renamed **in place**, at the indent it already has — the field stands where the folder is.
+   * The trigger is in the wall's heading row beside the other two things you do to a folder,
+   * because a 208px row has no width for a second control; `F2` below is the keyboard's own
+   * route, and a rename only a mouse can reach would be half a feature.
+   *
+   * The current name arrives **selected**, `CategoriesPanel`'s ruling for its reason: the
+   * commonest rename replaces the word rather than edits inside it.
+   */
+  it("renames a folder in place, from the wall's own control", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder…" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Commander");
+    // The row it replaced is gone while the field is up: this is in place, not beside.
+    expect(screen.queryByRole("button", { name: "Commander, 2 decks" })).not.toBeInTheDocument();
+
+    // `keyboard`, not `type`: `type` clicks the field first and a click collapses the
+    // selection — and the selection is the claim. A reader who opens a rename and starts
+    // typing replaces the name rather than appending to it; this is that reader.
+    await userEvent.keyboard("EDH");
+    expect(field).toHaveValue("EDH");
+
+    // The field's own control, named for the write. The trigger that opened it is
+    // "Rename folder…" — the ellipsis is what keeps two controls with one name off the screen.
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+
+    expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH");
+  });
+
+  /** F2 renames the row the caret is on — the file manager's key, and a rename that never
+   *  needs the pointer. */
+  it("renames the row the caret is on when F2 is pressed", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    const row = await screen.findByRole("button", { name: "Legends, 1 deck" });
+    row.focus();
+    await userEvent.keyboard("{F2}");
+
+    expect(await screen.findByLabelText("Rename Legends")).toHaveValue("Legends");
+    // Not a selection: F2 renames the row, it does not open the drawer.
+    expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
+  });
+
+  /**
+   * The field replaced the row, so the row is what the caret comes back to — the opener rule's
+   * *reason* rather than its letter. `openerRef.current?.focus()` cannot serve here: the row is
+   * a different element by the time the field is gone, and focusing a detached node drops the
+   * caret onto `<body>`.
+   */
+  it("hands the caret back to the row when a rename is cancelled", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder…" }));
+    await screen.findByLabelText("Rename Commander");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commander, 2 decks" })).toHaveFocus();
+    expect(deckFolderRename).not.toHaveBeenCalled();
+  });
+
+  /**
    * The opposite of what a reader will fear. `decks.folder_id` is `ON DELETE SET NULL`, so the
    * decks inside surface at the top level; `deck_folders.parent_id` cascades onto itself, so
    * the folders inside do go. The confirmation says both, reassuring half first.
@@ -668,7 +742,7 @@ describe("DecksPage folders", () => {
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
-    await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete folder…" }));
 
     const confirm = screen.getByRole("dialog", { name: "Delete Commander" });
     expect(confirm).toHaveTextContent("The 2 decks in it are kept — they move to the top level.");

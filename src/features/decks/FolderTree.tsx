@@ -297,10 +297,22 @@ export function useDeckDropTarget({
   return over;
 }
 
-/** Where a new folder is being made: `null` is the top level, a number is inside that folder. */
-export interface NewFolderAt {
-  parentId: number | null;
-}
+/**
+ * The one folder field that may be open, and what it is for.
+ *
+ * One shape for both jobs, because there is only ever one field: a folder is named in the tree
+ * whether it is being made or being corrected, and the page holds this as part of its single
+ * `Panel` so the Escape handshake has exactly one rung to order. `"new"` opens a row at the
+ * indent the folder *will* have; `"rename"` replaces the row the folder already has.
+ */
+export type FolderNaming =
+  | { kind: "new"; parentId: number | null }
+  | { kind: "rename"; folderId: number };
+
+/** How the page finds a folder's row to hand the caret back to after the field it replaced
+ *  closes. An attribute for `data-deck-id`'s reason: the row the layer replaced is a *different
+ *  element* by the time the layer is gone, so a ref taken when it opened points at nothing. */
+export const FOLDER_ROW_ATTR = "data-folder-id";
 
 export interface FolderTreeProps {
   nodes: readonly FolderNode[];
@@ -313,14 +325,20 @@ export interface FolderTreeProps {
   drag: DeckDrag | null;
   canDropIn: (drag: DeckDrag, folderId: number | null) => boolean;
   onDropIn: (drag: DeckDrag, folderId: number | null) => void;
-  /** The one open create form, or `null`. Held by the page so it is the page's single
-   *  dismissible layer — two Escape peers are not ordered by the handshake at all. */
-  creatingAt: NewFolderAt | null;
-  onOpenCreate: (parentId: number | null, opener: HTMLButtonElement) => void;
-  /** Focus left the form on its own: it closes and hands nothing back. */
-  onCloseCreate: () => void;
-  onCreate: (parentId: number | null, name: string) => void;
-  creating: boolean;
+  /** The one open field, or `null`. Held by the page so it is the page's single dismissible
+   *  layer — two Escape peers are not ordered by the handshake at all. */
+  naming: FolderNaming | null;
+  onOpenNew: (parentId: number | null, opener: HTMLButtonElement) => void;
+  /** F2 on a row. There is no trigger *on* the row: a 208px column with an indent, a glyph, a
+   *  name, a count and a "new folder" control has no width left for a second one, so the
+   *  pointer's route is the wall's own "Rename folder" and this is the keyboard's. */
+  onOpenRename: (folderId: number) => void;
+  /** Focus left the field on its own: it closes and hands nothing back. */
+  onCloseNaming: () => void;
+  /** Whatever the open field is for — the page knows which from its own `Panel`. */
+  onName: (name: string) => void;
+  /** The create-or-rename write is in flight. */
+  busy: boolean;
   /** The folder list itself was refused. The tree says so and the wall goes on working. */
   failure: string | null;
   pending: boolean;
@@ -338,16 +356,18 @@ export function FolderTree({
   drag,
   canDropIn,
   onDropIn,
-  creatingAt,
-  onOpenCreate,
-  onCloseCreate,
-  onCreate,
-  creating,
+  naming,
+  onOpenNew,
+  onOpenRename,
+  onCloseNaming,
+  onName,
+  busy,
   failure,
   pending,
 }: FolderTreeProps) {
   const flat = flattenFolders(nodes);
-  const addRootRef = useRef<HTMLButtonElement>(null);
+  /** Where a "new folder" field is open, or `undefined` when the open field is a rename. */
+  const newAt = naming?.kind === "new" ? naming.parentId : undefined;
 
   return (
     <nav
@@ -357,12 +377,11 @@ export function FolderTree({
       <div className="flex items-center justify-between px-1 pb-2">
         <h2 className="font-heading text-lg leading-none">Folders</h2>
         <button
-          ref={addRootRef}
           type="button"
           aria-label="New folder at the top level"
-          aria-expanded={creatingAt?.parentId === null}
+          aria-expanded={newAt === null}
           title="New folder"
-          onClick={(e) => onOpenCreate(null, e.currentTarget)}
+          onClick={(e) => onOpenNew(null, e.currentTarget)}
           className={cn(
             "grid size-6 place-items-center rounded-md border border-border text-dim",
             "transition-colors duration-150 hover:border-accent hover:text-accent",
@@ -398,46 +417,68 @@ export function FolderTree({
           onSelect={() => onSelect(null)}
         />
 
-        {flat.map((node) => (
-          <FolderRow
-            key={node.folder.id}
-            label={node.folder.name}
-            count={node.deckCount}
-            depth={node.depth + 1}
-            selected={selectedId === node.folder.id}
-            Glyph={selectedId === node.folder.id ? FolderOpen : Folder}
-            drag={drag}
-            canDrop={(d) => canDropIn(d, node.folder.id)}
-            onDropDeck={(d) => onDropIn(d, node.folder.id)}
-            onSelect={() => onSelect(node.folder.id)}
-            onNewChild={(opener) => onOpenCreate(node.folder.id, opener)}
-            addingChild={creatingAt?.parentId === node.folder.id}
-          >
-            {creatingAt?.parentId === node.folder.id && (
-              <NewFolderField
-                depth={node.depth + 2}
-                where={`in ${node.folder.name}`}
-                pending={creating}
-                onCancel={onCloseCreate}
-                onSubmit={(name) => onCreate(node.folder.id, name)}
+        {flat.map((node) =>
+          // Renaming replaces the row rather than opening a field under it: the folder already
+          // has a place in the tree, and correcting its name is not a new thing arriving.
+          naming?.kind === "rename" && naming.folderId === node.folder.id ? (
+            <li key={node.folder.id}>
+              <FolderNameField
+                depth={node.depth + 1}
+                initial={node.folder.name}
+                label={`Rename ${node.folder.name}`}
+                submitLabel="Rename folder"
+                pending={busy}
+                onCancel={onCloseNaming}
+                onSubmit={onName}
               />
-            )}
-          </FolderRow>
-        ))}
+            </li>
+          ) : (
+            <FolderRow
+              key={node.folder.id}
+              folderId={node.folder.id}
+              label={node.folder.name}
+              count={node.deckCount}
+              depth={node.depth + 1}
+              selected={selectedId === node.folder.id}
+              Glyph={selectedId === node.folder.id ? FolderOpen : Folder}
+              drag={drag}
+              canDrop={(d) => canDropIn(d, node.folder.id)}
+              onDropDeck={(d) => onDropIn(d, node.folder.id)}
+              onSelect={() => onSelect(node.folder.id)}
+              onRename={() => onOpenRename(node.folder.id)}
+              onNewChild={(opener) => onOpenNew(node.folder.id, opener)}
+              addingChild={newAt === node.folder.id}
+            >
+              {newAt === node.folder.id && (
+                <FolderNameField
+                  depth={node.depth + 2}
+                  where={`in ${node.folder.name}`}
+                  label="New folder name"
+                  submitLabel="Create folder"
+                  pending={busy}
+                  onCancel={onCloseNaming}
+                  onSubmit={onName}
+                />
+              )}
+            </FolderRow>
+          ),
+        )}
 
-        {creatingAt?.parentId === null && (
+        {newAt === null && (
           <li>
-            <NewFolderField
+            <FolderNameField
               depth={1}
               where="at the top level"
-              pending={creating}
-              onCancel={onCloseCreate}
-              onSubmit={(name) => onCreate(null, name)}
+              label="New folder name"
+              submitLabel="Create folder"
+              pending={busy}
+              onCancel={onCloseNaming}
+              onSubmit={onName}
             />
           </li>
         )}
 
-        {!pending && !failure && flat.length === 0 && creatingAt === null && (
+        {!pending && !failure && flat.length === 0 && naming === null && (
           <li className="px-1 pt-2 text-[0.7rem] leading-relaxed text-dim">
             Folders file decks the way drawers file paper. Make one, then drag a deck onto it.
           </li>
@@ -454,6 +495,7 @@ export function FolderTree({
  * one the wall is showing.
  */
 function FolderRow({
+  folderId,
   label,
   count,
   depth,
@@ -463,10 +505,13 @@ function FolderRow({
   canDrop,
   onDropDeck,
   onSelect,
+  onRename,
   onNewChild,
   addingChild = false,
   children,
 }: {
+  /** Absent on "All decks", which is the tree's root and not a folder. */
+  folderId?: number;
   label: string;
   count: number;
   depth: number;
@@ -476,6 +521,8 @@ function FolderRow({
   canDrop: (drag: DeckDrag) => boolean;
   onDropDeck: (drag: DeckDrag) => void;
   onSelect: () => void;
+  /** F2, the file manager's own key. Absent on "All decks". */
+  onRename?: () => void;
   /** Absent on "All decks": the header's own control already makes a folder there. */
   onNewChild?: (opener: HTMLButtonElement) => void;
   addingChild?: boolean;
@@ -497,12 +544,23 @@ function FolderRow({
       >
         <button
           type="button"
+          // How the page hands the caret back to this row after the rename field that replaced
+          // it closes. See {@link FOLDER_ROW_ATTR}.
+          {...(folderId === undefined ? {} : { [FOLDER_ROW_ATTR]: folderId })}
           // The count is drawn as a figure and said as a sentence: a bare "2" after a folder's
           // name tells a screen reader nothing about what two of. The visible label is the
           // prefix, which is what WCAG 2.5.3 asks of a control labelled on screen.
           aria-label={`${label}, ${plural(count, "deck")}`}
           aria-current={selected ? "true" : undefined}
           onClick={onSelect}
+          // F2 renames the row the caret is on — the file manager's key, and the keyboard's
+          // route to a rename whose pointer route is the wall's "Rename folder". A shortcut
+          // rather than the only way in: nothing here is reachable by this key alone.
+          onKeyDown={(e) => {
+            if (e.key !== "F2" || onRename === undefined) return;
+            e.preventDefault();
+            onRename();
+          }}
           style={indent(depth)}
           className={cn(
             "flex w-full items-center gap-2 rounded-md py-1.5 pr-8 text-left text-sm",
@@ -543,32 +601,61 @@ function FolderRow({
 }
 
 /**
- * What a folder is called — asked **in the tree**, at the indent the folder will have.
+ * What a folder is called — asked **in the tree**, at the indent the folder has or will have.
  *
- * A popup would have had to say where the folder was going in words. A row in the tree at the
- * right depth says it by being there, and the line under it names the parent for a reader who
- * cannot see the indent.
+ * One field for both jobs. A popup would have had to say where the folder was going in words; a
+ * row in the tree at the right depth says it by being there, and the line under it names the
+ * parent for a reader who cannot see the indent. A rename needs no such line at all, because
+ * the field is standing exactly where the folder was.
+ *
+ * `CategoriesPanel`'s `RenameField` decided the two details that matter and they are kept here:
+ * the current name arrives **selected**, because the commonest rename replaces the word rather
+ * than edits inside it, and Escape's job is left to the page — a second Escape rung inside an
+ * `"inner"` layer is the case `useDismissOnEscape` explicitly does not order.
+ *
+ * What is *not* kept is that field's visible Cancel: at 208px less an indent there is no room
+ * for two text buttons beside the input, and this screen's other half-made decisions (the new
+ * deck form, the delete question, both move pickers) are all discarded the same two ways —
+ * Escape, or looking away.
  */
-function NewFolderField({
+function FolderNameField({
   depth,
   where,
+  label,
+  submitLabel,
+  initial = "",
   pending,
   onCancel,
   onSubmit,
 }: {
   depth: number;
-  /** "in Commander" / "at the top level" — where this folder will land, in words. */
-  where: string;
+  /** "in Commander" / "at the top level" — where this folder will land, in words. Absent for a
+   *  rename: the field is standing where the folder already is. */
+  where?: string;
+  /** The input's accessible name — "New folder name", or "Rename Commander". */
+  label: string;
+  /** The submit control's, which is the only place the two jobs read differently to a mouse. */
+  submitLabel: string;
+  initial?: string;
   pending: boolean;
   onCancel: () => void;
   onSubmit: (name: string) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initial);
 
   useEffect(() => {
-    inputRef.current?.focus();
+    const input = inputRef.current;
+    if (input === null) return;
+    // Both, and in this order. `select()` alone is what a browser makes look sufficient —
+    // Chromium focuses an input it selects — but the spec says `select()` only sets the
+    // selection, and jsdom implements the spec: the caret never arrives and the reader's first
+    // keystroke goes to the page. Measured here as a failing `toHaveFocus`.
+    input.focus();
+    // On a rename this is the difference between typing a new name and typing into the old
+    // one; on an empty field it does nothing at all.
+    input.select();
   }, []);
 
   const trimmed = name.trim();
@@ -597,7 +684,7 @@ function NewFolderField({
       >
         <input
           ref={inputRef}
-          aria-label="New folder name"
+          aria-label={label}
           value={name}
           onChange={(e) => setName(e.target.value)}
           className={cn(
@@ -607,8 +694,8 @@ function NewFolderField({
         />
         <button
           type="submit"
-          aria-label="Create folder"
-          title="Create folder"
+          aria-label={submitLabel}
+          title={submitLabel}
           disabled={!trimmed || pending}
           className={cn(
             "grid size-7 flex-none place-items-center rounded-md border border-accent text-accent",
@@ -621,7 +708,7 @@ function NewFolderField({
           <Check className="size-3.5" aria-hidden="true" />
         </button>
       </form>
-      <p className="mt-1 text-[0.7rem] text-dim">{where}</p>
+      {where && <p className="mt-1 text-[0.7rem] text-dim">{where}</p>}
     </div>
   );
 }
