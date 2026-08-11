@@ -255,6 +255,15 @@ pub const PREDEFINED_CATEGORIES: [(&str, &str, bool); 4] = [
 /// `variant` is new in v8 and widens the grain again: the same printing can sit in the
 /// `live` deck and the `theory` one at once, and an edit made while trying out a change must
 /// never fold into the row the deck is actually sleeved as.
+///
+/// **No migration step reads this, or any other grain constant.** Every grain index in the
+/// DDL is spelled out as a literal, because a step is history the day it ships and must keep
+/// building the index it built then — this constant has already changed once (v8 is the
+/// change) and, until v5 was frozen, that rewrote what v5 had built. What holds the constant
+/// and the head schema's index together is
+/// `every_plain_grain_constant_names_the_index_the_head_schema_carries`, plus every
+/// `ON CONFLICT ({DECK_CARD_GRAIN})` target in [`crate::deck`], [`crate::deck_meta`] and
+/// [`crate::deck_theory`] — a target matching no index is a runtime error at the first write.
 pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id";
 
 /// What makes two category rows the same row: one name per deck. This is a different
@@ -262,11 +271,16 @@ pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id";
 /// kind per deck" (`idx_deck_categories_kind`, a *partial* index over `kind <> 'main'`) — a
 /// user is free to name a category of their own "Sideboard" too, and that collides with
 /// nothing on this grain, because the predefined Sideboard was never named by the user.
+///
+/// Read by no SQL at all — see [`DECK_CARD_GRAIN`] for why the v8 DDL spells its index out,
+/// and for the test that keeps this constant honest about what that index holds.
 pub const DECK_CATEGORY_GRAIN: &str = "deck_id, name";
 
 /// What makes two tag rows the same row: one name per deck, [`DECK_CATEGORY_GRAIN`]'s shape
 /// for the same reason. A tag is picked by name from the app's fixed colour palette, and a
 /// deck cannot hold two tags called the same thing.
+///
+/// Read by no SQL at all, like [`DECK_CATEGORY_GRAIN`].
 pub const DECK_TAG_GRAIN: &str = "deck_id, name";
 
 /// The two decks every deck secretly is: `live`, what is actually sleeved up and playable,
@@ -288,6 +302,8 @@ pub const AUDIT_KINDS: [&str; 9] = [
 /// One deck's claim on one collection entry. Both columns are `NOT NULL` enforced foreign
 /// keys, so the grain is the pair and nothing else: a deck reserves copies *of a collection
 /// row*, and a second claim on the same row by the same deck is the same claim.
+///
+/// Read by no SQL at all, like [`DECK_CATEGORY_GRAIN`].
 pub const ALLOCATION_GRAIN: &str = "deck_id, collection_entry_id";
 
 /// The format rules as DATA (spec §6), so a rules change is an UPDATE and not a release,
@@ -483,7 +499,15 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // None of these tables is `cards`, so `CARDS_INDEXES` is not involved: their
         // indexes are created here and nothing drops them. Nothing here reads `raw`
         // either, so [`json_raw`] has no part to play — these tables are not sync data.
-        tx.execute_batch(&format!(
+        //
+        // **Both grains below are spelled out rather than interpolated from
+        // [`COLLECTION_GRAIN`]/[`WISHLIST_GRAIN`]**, for the reason the v5 and v8 steps give
+        // in full: a migration step is history the day it ships, and a step that reads a live
+        // constant builds a *different* index on a fresh install than it built on every
+        // database that already ran it. The constants stay the single source for everything
+        // that is not history — every `ON CONFLICT` target below, and the head schema a fresh
+        // v1 install never sees.
+        tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS collection_entries (
                 id INTEGER PRIMARY KEY,
                 -- Soft reference. No REFERENCES clause, deliberately and permanently.
@@ -526,7 +550,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 signed INTEGER NOT NULL DEFAULT 0,
                 proxy INTEGER NOT NULL DEFAULT 0,
                 misprint INTEGER NOT NULL DEFAULT 0,
-                -- {{company, grade, cert}}. JSON because the shape differs per grader
+                -- {company, grade, cert}. JSON because the shape differs per grader
                 -- (CGC has two grades numbered 10; PSA has no 9.5) and a column per
                 -- grader is a migration per grader.
                 grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
@@ -540,7 +564,9 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 updated_at INTEGER NOT NULL
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_grain
-                ON collection_entries ({grain});
+                ON collection_entries (card_id, finish, condition, lang, altered, signed,
+                                       proxy, misprint, coalesce(serial_number, ''),
+                                       coalesce(grading, ''));
              CREATE INDEX IF NOT EXISTS idx_collection_card
                 ON collection_entries (card_id);
              CREATE INDEX IF NOT EXISTS idx_collection_review
@@ -575,7 +601,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_wishlist_grain
-                ON wishlist_entries ({wish});
+                ON wishlist_entries (coalesce(oracle_id, ''), coalesce(card_id, ''),
+                                     coalesce(preferred_finish, ''));
              CREATE INDEX IF NOT EXISTS idx_wishlist_card ON wishlist_entries (card_id);
              CREATE INDEX IF NOT EXISTS idx_wishlist_oracle ON wishlist_entries (oracle_id);
 
@@ -592,9 +619,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              );
              CREATE INDEX IF NOT EXISTS idx_card_migrations_old
                 ON card_migrations (old_card_id);",
-            grain = COLLECTION_GRAIN,
-            wish = WISHLIST_GRAIN
-        ))?;
+        )?;
         // Literal `4`, for the same reason v3 writes a literal `3`: this step is what makes
         // a database version 4, and the step after it makes head 5. Writing
         // `SCHEMA_VERSION` would commit "migrated" before that step had run — and it would
@@ -621,7 +646,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //   delete, `remove_entry`), and made safe for the one non-user delete (the
         //   reconciler's fold) by `reconcile::fold_into_existing` repointing allocations
         //   BEFORE it deletes.
-        tx.execute_batch(&format!(
+        //
+        // Every index below is a literal, `idx_deck_allocations_grain` included — see the
+        // note on `idx_deck_cards_grain` further down, which is the one that learned it.
+        tx.execute_batch(
             "ALTER TABLE cards ADD COLUMN power TEXT;
              ALTER TABLE cards ADD COLUMN toughness TEXT;
 
@@ -683,7 +711,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 updated_at INTEGER NOT NULL
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_allocations_grain
-                ON deck_allocations ({alloc_grain});
+                ON deck_allocations (deck_id, collection_entry_id);
              -- The child index a CASCADE scans: without it every `remove_entry` is a
              -- full table scan of the allocations, and the reconciler's fold repoints
              -- through the same column.
@@ -718,8 +746,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 allows_companion INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL
              );",
-            alloc_grain = ALLOCATION_GRAIN
-        ))?;
+        )?;
 
         // The backfill, THROUGH [`json_raw`] — `raw` is a gzip BLOB on every database that
         // has synced since v3, and an unguarded `json_extract` there is a hard error that
@@ -813,7 +840,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // `zone` cannot be dropped in place: it is inside a CHECK and inside the unique index,
         // and SQLite refuses `DROP COLUMN` for either. The table is rebuilt, which is also how
         // `category_id` gets to be `NOT NULL` rather than nullable-with-a-promise.
-        tx.execute_batch(&format!(
+        //
+        // Every grain below is a literal — see `idx_deck_cards_grain` in the rebuild further
+        // down, and the note the v5 step carries above it.
+        tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS deck_folders (
                 id INTEGER PRIMARY KEY,
                 -- User↔user, CASCADE: deleting a folder deletes the folders inside it. The
@@ -843,7 +873,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 updated_at INTEGER NOT NULL
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_categories_grain
-                ON deck_categories ({category_grain});
+                ON deck_categories (deck_id, name);
              -- At most one predefined category per kind per deck. Partial, because 'main' is
              -- the kind every user category has and there may be forty of them.
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_categories_kind
@@ -860,7 +890,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 updated_at INTEGER NOT NULL
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_tags_grain
-                ON deck_tags ({tag_grain});
+                ON deck_tags (deck_id, name);
 
              CREATE TABLE IF NOT EXISTS deck_audit (
                 id INTEGER PRIMARY KEY,
@@ -877,7 +907,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 -- The facts the sentence is built from. Rust records WHAT happened; the
                 -- webview writes the sentence, because a sentence is domain logic and this
                 -- table has to survive the day the wording changes.
-                payload TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(payload)),
+                payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
                 -- Signed copies, for the day header's '+7 / -6' roll-up.
                 delta INTEGER NOT NULL DEFAULT 0
              );
@@ -887,9 +917,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 REFERENCES deck_folders(id) ON DELETE SET NULL;
              ALTER TABLE decks ADD COLUMN notes TEXT;
              ALTER TABLE decks ADD COLUMN theory_enabled INTEGER NOT NULL DEFAULT 0;",
-            category_grain = DECK_CATEGORY_GRAIN,
-            tag_grain = DECK_TAG_GRAIN,
-        ))?;
+        )?;
 
         // One category per (deck, zone) that actually holds cards, named and flagged from
         // PREDEFINED_CATEGORIES — except 'main', whose legacy rows all land in one category
@@ -951,7 +979,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         // The rebuild. `category_id` is NOT NULL from the first row, which is only possible
         // because the categories above already exist.
-        tx.execute_batch(&format!(
+        tx.execute_batch(
             "CREATE TABLE deck_cards_v8 (
                 id INTEGER PRIMARY KEY,
                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
@@ -995,12 +1023,21 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              DROP TABLE deck_cards;
              ALTER TABLE deck_cards_v8 RENAME TO deck_cards;
 
+             -- Frozen as a literal, exactly as the v5 step froze the index this one replaces,
+             -- and for the same reason turned one step forward: **this step is history the
+             -- day it ships.** `DECK_CARD_GRAIN` has already been changed once on this
+             -- branch — v8 is what changed it — and the change silently rewrote what v5 had
+             -- built until v5 was frozen. A v9 that widens the grain again would make this
+             -- step build an index over a column that does not exist at v8: a hard failure on
+             -- a **new** install and invisible on every upgraded one, because an upgraded
+             -- database ran this step before the column was named. The constant is for
+             -- everything that is not history — the `ON CONFLICT` targets in `deck.rs` and
+             -- `deck_theory.rs`, which must match whatever index the *head* schema carries.
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_cards_grain
-                ON deck_cards ({deck_grain});
+                ON deck_cards (deck_id, variant, category_id, card_id);
              CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards (card_id);
              CREATE INDEX IF NOT EXISTS idx_deck_cards_category ON deck_cards (category_id);",
-            deck_grain = DECK_CARD_GRAIN,
-        ))?;
+        )?;
 
         // Literal `8`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 8;")?;
@@ -1284,6 +1321,51 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!((rows, qty), (1, 2));
+    }
+
+    /// The fence the frozen migration steps need, and the one thing freezing them costs.
+    ///
+    /// Every grain index in the DDL is now a **literal**, because a migration step is history
+    /// and must keep building the index it built the day it shipped. The price is that three
+    /// of the six grain constants — [`ALLOCATION_GRAIN`], [`DECK_CATEGORY_GRAIN`] and
+    /// [`DECK_TAG_GRAIN`] — are read by no SQL at all any more, and a constant nothing reads
+    /// is a constant that can drift from the index it claims to describe without anything
+    /// saying so. [`COLLECTION_GRAIN`], [`WISHLIST_GRAIN`] and [`DECK_CARD_GRAIN`] are held
+    /// to their indexes by their `ON CONFLICT` targets (the test above, and every deck-card
+    /// upsert); these four are held here.
+    ///
+    /// Read through `PRAGMA index_info` rather than by comparing DDL text, which is the whole
+    /// point: it answers the *parsed* column list, so the literal in the migration is free to
+    /// be wrapped and indented however it reads best. The two grains with `coalesce(…)` in
+    /// them cannot be checked this way — an expression column comes back with a NULL name —
+    /// and do not need to be, since a mismatched conflict target is a hard error at the first
+    /// write.
+    #[test]
+    fn every_plain_grain_constant_names_the_index_the_head_schema_carries() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        for (index, grain) in [
+            ("idx_deck_cards_grain", DECK_CARD_GRAIN),
+            ("idx_deck_categories_grain", DECK_CATEGORY_GRAIN),
+            ("idx_deck_tags_grain", DECK_TAG_GRAIN),
+            ("idx_deck_allocations_grain", ALLOCATION_GRAIN),
+        ] {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA index_info({index})"))
+                .unwrap_or_else(|e| panic!("`{index}` must exist at head: {e}"));
+            let columns: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, Option<String>>(2))
+                .unwrap()
+                .map(|c| c.unwrap().expect("a plain grain has no expression column"))
+                .collect();
+            let want: Vec<String> = grain.split(", ").map(str::to_owned).collect();
+            assert!(!columns.is_empty(), "`{index}` must exist at head");
+            assert_eq!(
+                columns, want,
+                "`{index}` and its grain constant have drifted apart"
+            );
+        }
     }
 
     /// A killed sync leaves a *committed* staging table now that the ingest chunks its
