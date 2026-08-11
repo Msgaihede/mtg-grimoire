@@ -7,7 +7,6 @@
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { CardImage } from "@/components/CardImage";
 import { FoilOverlay } from "@/components/CardArt";
-import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
@@ -15,9 +14,9 @@ import type { DeckCard } from "@/lib/ipc";
 import { usdPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { identityTint } from "../CardStack";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "../CardMarks";
 import {
+  DECK_CARD_VARIANT,
   deckCardName,
   deckCardProps,
   DeckCardControls,
@@ -118,12 +117,17 @@ function GridGroup({
 }
 
 /**
- * One card as a 150px tile: a title bar, its art, and a data line.
+ * One card as a 150px tile: **the whole card**, with the app's marks over it.
  *
- * The stack's card at 42 % — the same three bands, so a reader switching views is looking at
- * the same object rather than learning a second one. What it drops is the set line and the
- * shortage figure, which do not survive being that small; what it keeps is everything that
- * makes a card worth stopping at.
+ * The stack's card at 71 % — the same object, so a reader switching views is not learning a
+ * second one. What it drops is the set line and the shortage figure, which do not survive being
+ * that small; what it keeps is the card itself and how many copies are in the deck.
+ *
+ * **No name line, and that is the app's existing answer rather than a new one.** A 150px card's
+ * printed name is a few pixels tall — but `CardGrid`'s search wall already draws whole `grid`
+ * cards at 150–170px and a reader identifies them by frame and art, so a caption here would be a
+ * second answer to a question this app has already settled. The button's accessible name still
+ * carries the whole sentence, and `GroupHeader` still names the pile.
  */
 function GridCard({
   card,
@@ -137,10 +141,11 @@ function GridCard({
   actions?: DeckCardActions;
 }) {
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
-  // The `art` crop, not the whole card: the title bar above is this frame's own, so a full
-  // card face would print the name twice. `null` for an orphan — nothing fetches a picture of
-  // a card that is not in the database.
-  const art = useImageRetry(card.needsReview === null ? cardImageUrl(card.cardId, 0, "art") : null);
+  // The whole card, the same `grid` variant the stack draws. `null` for an orphan — nothing
+  // fetches a picture of a card that is not in the database.
+  const face = useImageRetry(
+    card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
+  );
 
   return (
     <li
@@ -159,24 +164,12 @@ function GridCard({
         // corners, and an outline standing off its edge is never drawn at all.
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
       >
-        {/* The same colour-identity tint the stacked card's title bar carries — this tile *is*
-            the stacked card at 42 %, so a reader switching views is looking at one object. */}
-        <span
-          style={{ backgroundImage: identityTint(card.colorIdentity) }}
-          className="flex h-6 items-center gap-1 px-1"
-        >
-          <span className="shrink-0 rounded-sm bg-accent px-1 font-mono text-[0.5625rem] tabular-nums text-accent-fg">
-            {card.quantity}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[0.59375rem] font-medium">{card.name}</span>
-          {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
-          <ManaText source={card.manaCost} className="shrink-0 text-[0.5rem]" />
-        </span>
-
-        <span className="relative block h-[124px] overflow-hidden bg-surface">
-          {art.src && !art.failed ? (
+        {/* 150 × 680/488, the whole card at this tile's width — `aspect-[488/680]` rather than a
+            pixel height, because unlike the stack nothing here does arithmetic on it. */}
+        <span className="relative block aspect-[488/680] overflow-hidden bg-surface">
+          {face.src && !face.failed ? (
             <CardImage
-              src={art.src}
+              src={face.src}
               alt=""
               draggable={false}
               // A wall of a hundred tiles is a hundred mounted images — this is a plain
@@ -184,22 +177,32 @@ function GridCard({
               // thing bounding what they ask for.
               loading="lazy"
               decoding="async"
-              onError={art.onError}
+              onError={face.onError}
               className="size-full object-cover"
             />
           ) : (
-            <span className="flex size-full items-center justify-center px-1 text-center text-[0.625rem] text-dim">
-              {art.retrying ? "Retrying…" : card.needsReview !== null ? "No card" : "No image"}
+            // The card's name, which the tile has nowhere else to say it now: the title bar that
+            // carried it is gone, and a picture that has not arrived says nothing on its own.
+            <span className="flex size-full flex-col items-center justify-center gap-0.5 px-1 text-center">
+              <span className="text-[0.59375rem] font-medium">{card.name}</span>
+              <span className="text-[0.5625rem] text-dim">
+                {face.retrying ? "Retrying…" : card.needsReview !== null ? "No card" : "No image"}
+              </span>
             </span>
           )}
 
           <FoilOverlay finish={soleFinish(card.finishes)} />
 
-          {/* Top-right and bottom-left: the two marks never share a corner, in this view or
-              in the stack. */}
-          {card.gameChanger === true && (
-            <GameChangerBadge className="absolute top-1 right-1 bg-bg/60" />
-          )}
+          {/* The reveal strip's marks, in the stack's own arrangement and for its reasons: right
+              over the card's printed title bar, so the printed name stays readable. */}
+          <span className="absolute inset-x-0 top-0 flex items-center justify-end gap-1 bg-gradient-to-b from-bg/70 to-transparent px-1 py-0.5">
+            {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
+            {card.gameChanger === true && <GameChangerBadge />}
+            <span className="shrink-0 rounded-sm bg-accent px-1 font-mono text-[0.5625rem] tabular-nums text-accent-fg">
+              {card.quantity}
+            </span>
+          </span>
+
           {ruleBreakText !== null && (
             <RuleBreakMark text={ruleBreakText} className="absolute bottom-1 left-1" />
           )}

@@ -19,7 +19,12 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import { AuditDrawer } from "./AuditDrawer";
-import { focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
+import {
+  DECK_CARD_VARIANT,
+  focusDeckGroup,
+  FOCUS,
+  type DeckCardActions,
+} from "./cardControl";
 import { CategoriesPanel } from "./CategoriesPanel";
 import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -349,24 +354,28 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     editorRef.current?.focus();
   }, [loading]);
 
-  // Warm the art this deck's own views draw, exactly as `SearchPage` warms its wall.
+  // Warm the pictures this deck's own views draw, exactly as `SearchPage` warms its wall.
   //
-  // Every deck surface renders `cardImageUrl(…, "art")`, which is a *different URL on the
-  // CDN* from the `grid` the search wall and the collection use — so a warm `grid` cache
-  // contributes nothing here. Without this, opening a deck fetches every tile cold, from
-  // plain scrollers that mount every row at once rather than a virtualiser that mounts two
-  // dozen. `prewarm_collection` covers the same cards on its own slower schedule; this is
-  // what makes the deck you just opened warm rather than the deck you opened yesterday.
-  const artKey = deck.cards.map((c) => c.cardId).join(",");
+  // {@link DECK_CARD_VARIANT}, which is what the stack and the grid render — and the variant is
+  // the whole point of this effect rather than an incidental argument, because a warm cache of
+  // the *wrong* one contributes nothing at all: each is a different URL on the CDN. Without this,
+  // opening a deck fetches every tile cold, from plain scrollers that mount every row at once
+  // rather than a virtualiser that mounts two dozen.
+  //
+  // It is `grid` now, which is what the collection and the search wall use — so this and
+  // `prewarm_collection` warm the same key for a card that is both owned and in a deck, where
+  // they used to warm two. That makes this effect cheaper rather than redundant: it is still what
+  // makes the deck you just opened warm rather than the deck you opened yesterday.
+  const faceKey = deck.cards.map((c) => c.cardId).join(",");
   useEffect(() => {
-    if (artKey === "") return;
+    if (faceKey === "") return;
     // Fire-and-forget by design: the command resolves as soon as the work is queued, and a
     // tile whose prefetch failed simply fetches when it renders.
-    void ipc.prefetchImages([...new Set(artKey.split(","))], "art").catch(() => {});
-    // `deck.cards` is a fresh array on every render; `artKey` is the part that means "this
+    void ipc.prefetchImages([...new Set(faceKey.split(","))], DECK_CARD_VARIANT).catch(() => {});
+    // `deck.cards` is a fresh array on every render; `faceKey` is the part that means "this
     // deck is showing a different set of cards now" — including after a variant switch,
     // which is a different list under a different query key.
-  }, [artKey]);
+  }, [faceKey]);
 
   // How much room the three things on the desk have between them, and how tall they are. A
   // window resize changes it, and so does the card pane opening and closing beside the whole

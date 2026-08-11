@@ -14,6 +14,7 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { dragOnto, startDrag } from "@/test-drag";
+import { DECK_CARD_VARIANT } from "./cardControl";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -301,21 +302,24 @@ beforeEach(() => {
 
 describe("DeckEditor", () => {
   /**
-   * The deck's own images are warmed as `art`, and that is the whole of the fix.
+   * The deck warms **the variant its own views draw**, and the variant is the point of the effect
+   * rather than an incidental argument: each is a different URL on the CDN, so a fully warm cache
+   * of the wrong one contributes nothing at all and the builder fetches every tile cold. Measured
+   * against the live database on 2026-08-11, when the two disagreed: all 17 deck cards had a
+   * `grid` row, 12 had an `art` one, and the deck arm of the pre-warm was the only work there was.
    *
-   * Every deck surface renders `cardImageUrl(…, "art")` while both warming paths used to
-   * produce `grid` — a different URL on the CDN, so a fully warm `grid` cache contributed
-   * nothing here and the builder fetched every tile cold. Measured against the live database
-   * on 2026-08-11: all 17 deck cards had a `grid` row, 12 had an `art` one, and the deck arm
-   * of the pre-warm was the only work there was to do.
+   * Asserted through `DECK_CARD_VARIANT` rather than against the word, because the contract is
+   * that this effect and the views agree — spelling the variant out here would let them drift
+   * apart and still pass. It is `grid` today, which is what the collection and the search wall
+   * warm too, so a card that is both owned and in a deck is one cache key rather than two.
    */
-  it("warms the art its own views draw, not the grid the search wall uses", async () => {
+  it("warms the variant its own card views draw", async () => {
     await open();
 
     await waitFor(() =>
       expect(prefetchImages).toHaveBeenCalledWith(
         expect.arrayContaining(["c-Lightning Bolt", "c-Bear"]),
-        "art",
+        DECK_CARD_VARIANT,
       ),
     );
   });

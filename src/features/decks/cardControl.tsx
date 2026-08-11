@@ -28,6 +28,7 @@ import {
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { QuantityStepper } from "@/components/QuantityStepper";
+import type { ImageVariant } from "@/lib/images";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import {
@@ -46,6 +47,25 @@ import {
  * For a control with room around it. A control that **fills** a clipped box wants
  * {@link FOCUS_INSET} instead.
  */
+/**
+ * The image variant a deck card draws: **the whole card**, not the art crop.
+ *
+ * One constant because two surfaces draw one object — `CardStack` and `views/GridView` — and
+ * because a third thing has to agree with them: `images::DECK_PREWARM` warms exactly this
+ * variant, and warming the wrong one is invisible (the pre-warm reports every deck card as
+ * warmed and the builder then fetches every tile cold). It is `grid`, which is what
+ * `COLLECTION_PREWARM` is, so a card that is both owned and in a deck is one cache key rather
+ * than two.
+ *
+ * `grid` rather than `display`: at the stack's 210px and the grid tile's 150px, 488px of width is
+ * already a 2× downscale, and `display` would be 672 for no visible gain.
+ *
+ * The surfaces that draw a **cover** stay on `art` and are not this — a cover is 626×457 by
+ * construction, because `images::encode_cover` re-encodes a user's own file to that exact shape so
+ * the two kinds are interchangeable in one tile.
+ */
+export const DECK_CARD_VARIANT: ImageVariant = "grid";
+
 export const FOCUS =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
