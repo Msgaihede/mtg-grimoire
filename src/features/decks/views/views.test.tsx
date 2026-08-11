@@ -140,6 +140,53 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
     expect(screen.getAllByText("INACTIVE")).toHaveLength(1);
     expect(screen.getByText("INACTIVE").getAttribute("title")).toContain("counts toward");
   });
+
+  /**
+   * **A card is something the keyboard can reach**, in every view — the claim that stands
+   * behind `deckCardName`, the focus recipe and `onSelect` alike, and the one this file had no
+   * assertion of anywhere.
+   *
+   * Reached with `user.tab()` and never with `.focus()`: placing the caret by hand would make
+   * this pass on a view that had stopped drawing a control at all, which is exactly the shape
+   * `CategoriesPanel.test.tsx` records as self-repairing. Tab from `<body>` walks the document
+   * in order, so what it lands on is the view's own first stop.
+   */
+  it("puts a deck card in the tab order", async () => {
+    setup();
+    const user = userEvent.setup();
+
+    // Enough presses to clear whatever a view puts in front of its first card — a table's
+    // header row has none, and the wall's first stop *is* a card.
+    let landed: HTMLElement | null = null;
+    for (let i = 0; i < 12 && landed === null; i += 1) {
+      await user.tab();
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== document.body && active.closest(`[${DECK_CARD_ATTR}]`)) {
+        landed = active;
+      }
+    }
+    expect(landed).not.toBeNull();
+  });
+
+  /**
+   * And a **group** is not one, in any of them.
+   *
+   * `deckGroupProps` gives every category `tabIndex={-1}` so the editor can hand the caret to a
+   * pile after a card leaves it — a place focus can be *put*, never a stop Tab travels through.
+   * A deck with fifteen piles would otherwise be fifteen extra presses on the way to the cards.
+   * Asserted by walking, not by reading the attribute (which `$name editing` already does):
+   * this is the consequence, and it is what a reader would notice.
+   */
+  it("does not make a category group a stop on the way", async () => {
+    setup();
+    const user = userEvent.setup();
+
+    for (let i = 0; i < 12; i += 1) {
+      await user.tab();
+      const active = document.activeElement as HTMLElement | null;
+      expect(active?.hasAttribute(DECK_GROUP_ATTR)).not.toBe(true);
+    }
+  });
 });
 
 /**
@@ -541,10 +588,22 @@ describe("TableView", () => {
   /**
    * The deck's order is the toolbar's — one Group by and one Sort — so a header that
    * re-sorted would give one list two orders with no way to see which was in force.
+   *
+   * **Asserted as "no button in the header row", not as "no button named /sort/".** A sortable
+   * header's accessible name is the column's own label (`SortableHeader.tsx`) — the
+   * `sort priority N` suffix appears only in a multi-key sort, which `sort={[]}` makes
+   * unreachable here — so the old regex matched nothing whatever this table did. Give all nine
+   * columns a `sortKey` and it still answered zero.
    */
   it("has no sortable header, because the toolbar owns the order", () => {
     setup();
-    expect(screen.queryAllByRole("button", { name: /sort/i })).toHaveLength(0);
+    // The header is `aria-rowindex={1}`, which is `VirtualTable`'s own contract for it.
+    const header = screen
+      .getAllByRole("row")
+      .find((r) => r.getAttribute("aria-rowindex") === "1") as HTMLElement;
+    expect(header).toBeDefined();
+    expect(within(header).getAllByRole("columnheader").length).toBeGreaterThan(1);
+    expect(within(header).queryAllByRole("button")).toHaveLength(0);
   });
 
   /** A row is the control here, not a button inside it — which is `VirtualTable`'s

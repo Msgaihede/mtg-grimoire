@@ -326,15 +326,29 @@ describe("AuditDrawer", () => {
       expect(onDismiss).not.toHaveBeenCalled();
     });
 
-    /** The ✕ is *inside* the layer that is about to unmount, so it hands the caret back like
-     *  Escape does rather than dropping it on `<body>`. */
-    it("hands focus back when its own close button is pressed", async () => {
+    /**
+     * The ✕ takes the **dismiss** route, which is the one that hands the caret back.
+     *
+     * Named for what this file can actually check. The hand-back itself is the *opener's* — the
+     * drawer is handed two callbacks and calling the right one is the whole of its part — so
+     * "hands focus back" is asserted where the opener lives, in
+     * `DeckEditor.test.tsx`'s `closes it on its own ✕, caret back on the trigger`. What matters
+     * here is the pair of conditions that make a hand-back possible at all: `onDismiss` and not
+     * `onClose`, and the drawer **still mounted** when it fires, since focusing a detached node
+     * lands the caret on `<body>`.
+     */
+    it("takes the dismiss route on its own close button, while still mounted", async () => {
       const { onDismiss, onClose } = await drawn();
+      let mountedAtDismiss = false;
+      onDismiss.mockImplementation(() => {
+        mountedAtDismiss = screen.queryByRole("dialog", { name: "Deck history" }) !== null;
+      });
 
       await userEvent.click(screen.getByRole("button", { name: "Close the history" }));
 
       expect(onDismiss).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
+      expect(mountedAtDismiss).toBe(true);
     });
 
     /** The scrim is the outside click, and it moves no focus — the reader is already

@@ -1146,6 +1146,32 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * The other way out of a layer, and the one no test covered: its own ✕.
+   *
+   * The ✕ is *inside* the layer that is about to unmount, so it is the reader saying "put me
+   * back" exactly as Escape is — the drawer calls `onDismiss`, and the editor's `dismiss`
+   * focuses the trigger *before* the close, while the trigger is still mounted. Asserted here
+   * rather than in each layer's own test file, because the hand-back is the **opener's** half
+   * of the contract: a layer handed two callbacks can only be checked for calling the right one
+   * (which `AuditDrawer.test.tsx` does), and where the caret lands is decided out here.
+   */
+  it.each([
+    ["Categories & tags", "Categories and tags", "Close categories and tags"],
+    ["History", "Deck history", "Close the history"],
+  ])("closes %s on its own ✕, caret back on the trigger", async (button, dialog, close) => {
+    await open();
+    const trigger = screen.getByRole("button", { name: button });
+
+    await userEvent.click(trigger);
+    const layer = await screen.findByRole("dialog", { name: dialog });
+
+    await userEvent.click(within(layer).getByRole("button", { name: close }));
+
+    expect(screen.queryByRole("dialog", { name: dialog })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  /**
    * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
    * would consume one press — so the editor holds *one* piece of state for all five, and
    * opening any of them takes whichever was up down with it.
