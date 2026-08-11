@@ -6,6 +6,7 @@ pub mod deck;
 pub mod filters;
 pub mod images;
 pub mod ingest;
+pub mod legalities;
 pub mod maintenance;
 pub mod paths;
 pub mod reconcile;
