@@ -4,13 +4,8 @@ import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
+import { FOCUS } from "./cardControl";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
- * control's edge, never a ring (a ring means "state" everywhere else).
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /** The nine curve buckets — 0 through 7 exactly, and 8 open-ended, which is the bucketing the
  *  mana-value filter chips and `grouping.ts`'s mana-value grouping already use. */
@@ -167,7 +162,8 @@ export interface DeckStatsSummary {
   colorDist: Slice[];
   /** Lands by the basic land types on their front face, summing to {@link lands}. */
   landDist: Slice[];
-  /** The deck list's own type buckets, in its own order (`ZoneColumn.groupCards`). */
+  /** The deck list's own type buckets, in its own order — see `typeBucket` 130 lines above,
+   *  which is where this grouping lives now. */
   typeDist: TypeCount[];
   /** Over nonlands with a mana value, weighted by copies. `null` for a deck of nothing but
    *  lands — an average of no numbers is not 0. */
@@ -531,15 +527,20 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
   return (
     <div className="flex shrink-0 flex-col gap-3">
       <FigureRow>
-        {/* The number the format check is talking about — main deck plus commander, from the
-            engine's own `SIZE_KINDS`. The sideboard and the companion are real cards and are
+        {/* The number the format check is talking about, from the engine's own `SIZE_KINDS` —
+            `main`, `commander` **and `maybe`**, in categories that are switched on. The last of
+            those three is this branch's governing ruling and the one worth saying out loud: an
+            *active* category of kind `maybe` counts toward size exactly like `main`, because
+            the switch is the whole of "counts toward nothing" and the kind is not. (The
+            Maybeboard the migration seeds is switched off, which is why the default deck
+            behaves as a reader expects.) The sideboard and the companion are real cards and are
             counted by the price, the shortfall and every chart; they are just not what "a
             60-card deck" means, and the chip beside this says so in a sentence. */}
         <Figure
           label="Cards"
           value={n(stats.sized)}
           note={elsewhere ? `+ ${elsewhere}` : undefined}
-          title="Main deck and commander — the cards a format's size rule counts."
+          title="The cards a format's size rule counts — every switched-on pile except the sideboard."
         />
         <Figure label="Lands" value={n(stats.lands)} />
         <Figure

@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type JSX,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
@@ -22,9 +21,11 @@ import {
   type DeckRow,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
+import { writeFailure } from "@/lib/writes";
 import { FOCUS, FOCUS_INSET } from "./cardControl";
 import { useDeck } from "./useDeck";
 import { useDeckFolders } from "./useDeckFolders";
@@ -38,22 +39,6 @@ const FIELD = cn(
   "w-full rounded-md border border-border bg-bg px-2.5 text-sm text-text",
   "focus:border-accent focus:outline-none",
 );
-
-/**
- * What Tab may land on inside the panel.
- *
- * The panel itself is deliberately not in it — `tabIndex={-1}` is excluded by the last clause,
- * which is what lets the trap below treat "the caret is on the panel" as "before the first
- * stop" rather than as a stop of its own.
- */
-const FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(", ");
 
 /** How deep a folder path is walked before the walk is called a cycle. */
 const MAX_FOLDER_DEPTH = 32;
@@ -193,11 +178,9 @@ function Settings({
   const gone = !loading && !deck.query.isError && deck.query.data === null;
 
   /** The most recently *started* of the writes this dialog speaks for — the one whose refusal
-   *  is still news. `DeckEditor`'s rule: a refused move must not leave its sentence up while
-   *  the reader goes on to rename the deck successfully. */
-  const writes = [deck.update, setFolder, setCoverImage];
-  const lastWrite = writes.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
-  const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
+   *  is still news. `lib/writes.ts`, the one definition of that rule: a refused move must not
+   *  leave its sentence up while the reader goes on to rename the deck successfully. */
+  const bannerFailure = writeFailure([deck.update, setFolder, setCoverImage]);
 
   return (
     <div
@@ -306,9 +289,9 @@ function Settings({
                   />
                 </div>
 
-                {writeFailure !== null && (
+                {bannerFailure !== null && (
                   <p role="alert" className="text-xs text-destructive">
-                    Could not save that change — {writeFailure}
+                    Could not save that change — {bannerFailure}
                   </p>
                 )}
               </div>
@@ -318,45 +301,6 @@ function Settings({
       </div>
     </div>
   );
-}
-
-/**
- * Keep Tab inside the panel.
- *
- * The half that makes `aria-modal` true. Written out rather than pulled from a focus-trap
- * library for the reason every overlay decision in this app gives: the shipped CSP is
- * `style-src 'self'`, and the packages that do this reliably also want to inject a runtime
- * `<style>` and a portal.
- *
- * The caret sitting on the panel itself counts as *before* the first stop, which is where the
- * opening effect leaves it: Shift+Tab from there wraps to the last control rather than falling
- * out of the dialog on the very first keystroke.
- *
- * The panel is read off `e.currentTarget` rather than out of a ref, which is not only tidier:
- * the handler is registered *on* the panel, so the two can never disagree — and a ref passed
- * into a function called during render is exactly what `react-hooks/refs` refuses.
- */
-function trapTab(e: ReactKeyboardEvent<HTMLDivElement>) {
-  if (e.key !== "Tab") return;
-  const panel = e.currentTarget;
-  const stops = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
-  if (stops.length === 0) {
-    // Nothing to Tab to — a deck that is loading, or gone. The press is still ours, or it
-    // would carry the caret out of a dialog that claims to be modal.
-    e.preventDefault();
-    panel.focus();
-    return;
-  }
-  const first = stops[0];
-  const last = stops[stops.length - 1];
-  const at = document.activeElement;
-  if (e.shiftKey && (at === first || at === panel)) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && at === last) {
-    e.preventDefault();
-    first.focus();
-  }
 }
 
 /**
@@ -540,10 +484,13 @@ function CoverPreview({ deck }: { deck: DeckRow }) {
  * The `art` crop, at the shape a cover is: this is a picture of what pressing it would do, and
  * a 5:7 card face here would be a preview of a different picture.
  *
- * **A known gap against CLAUDE.md's stated rule, recorded here rather than quietly inherited.**
- * That rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
- * illustrator must be credited — and these tiles do not credit one. Neither do `ZoneColumn`,
- * `CardStack` or `GridView`, which draw the same crop for every row and tile in the editor;
+ * **A known gap against the art-credit rule, recorded here rather than quietly inherited.**
+ * The rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
+ * illustrator must be credited — and it lives in **CLAUDE.md's decks section** and on
+ * {@link DeckRow.coverArtist}'s own doc, with the original statement in
+ * `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md`. These tiles do not credit
+ * one. Nor do `CardStack` (the stacked card), `views/GridView` (the wall tile) or
+ * `TheoryDiffDialog` (the diff row), which draw the same crop everywhere else in the editor;
  * this follows those three deliberately, because a picker that was stricter than the views it
  * picks *from* would be an inconsistency a reader could see, where this one is one only a
  * lawyer can. What holds it together is that each crop sits inside a control that **names the
@@ -552,7 +499,8 @@ function CoverPreview({ deck }: { deck: DeckRow }) {
  * The way to close it for all four at once is a per-row `artist`, which `DeckCard` does not
  * carry; the alternative here alone is the `grid` variant, whose printed frame carries the
  * credit, at the cost of the cover-shaped tile. The **cover preview** above is strict either
- * way: an unknown artist is not drawn at all, which is `DeckRow.coverArtist`'s own ruling.
+ * way: an unknown artist is not drawn at all, which is `DeckRow.coverArtist`'s own ruling, and
+ * `DecksPage`'s gallery tile makes the same refusal.
  */
 function ChoiceTile({
   card,

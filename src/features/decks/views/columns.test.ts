@@ -15,12 +15,17 @@ describe("packColumns", () => {
    * The whole constraint. A balanced packer fits more into fewer columns and puts the
    * Sideboard between Ramp and Removal — a deck list nobody can find anything in. The order
    * is the reader's `sortOrder`, so it survives.
+   *
+   * **The input is deliberately not in descending order**, which is the whole of what makes
+   * this test able to fail. `[200, 90, 90]` is *already* what a first-fit-**decreasing** packer
+   * would sort it into, so that adversary — the one the sentence above names — produces the
+   * same answer and the assertion holds against it. `[90, 200, 90]` separates them: in order it
+   * costs three columns, and any packer that sorts by height gets two.
    */
   it("never reorders, even when reordering would pack better", () => {
-    // Greedy in order: 200 fills the first column, then 90 + 90 share the second. A packer
-    // that sorted by height would put the two 90s first and fit all three in two columns of
-    // very different shape — and would move the Sideboard.
-    expect(packColumns([200, 90, 90], (h) => h, 200)).toEqual([[200], [90, 90]]);
+    // Greedy in order: 90 alone (200 will not join it), then 200 alone, then the last 90.
+    // Three columns for something that fits in two, and the three are in the reader's order.
+    expect(packColumns([90, 200, 90], (h) => h, 200)).toEqual([[90], [200], [90]]);
   });
 
   /** A ninety-card main deck is a real pile. One that vanished for being too big would be

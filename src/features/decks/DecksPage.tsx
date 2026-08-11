@@ -13,6 +13,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
+import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -400,10 +401,11 @@ export function DecksPage() {
   // The *latest* write on the screen, not whichever is still holding an error: a refused
   // archive used to leave its banner up while the reader went on to duplicate something
   // successfully, which is an alert about a thing already dealt with (the collection table's
-  // lesson). The folder writes are in the list because they are writes this screen makes —
+  // lesson). The rule itself is `lib/writes.ts`, shared with the three other surfaces that
+  // apply it. The folder writes are in the list because they are writes this screen makes —
   // including the one refusal that is a sentence worth reading, a folder moved into its own
   // descendant.
-  const writes = [
+  const bannerFailure = writeFailure([
     decks.update,
     decks.remove,
     decks.duplicate,
@@ -412,9 +414,15 @@ export function DecksPage() {
     folders.rename,
     folders.move,
     folders.remove,
-  ];
-  const lastWrite = writes.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
-  const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
+  ]);
+  // **Where the re-read after a refusal comes from, since it is not here.** The editor keeps a
+  // `refetch` effect keyed on the newest failure's `submittedAt`; this screen does not, because
+  // it would be a second read of a query the refusal has already refetched. Every write in
+  // `useDecks` and `useDeckFolders` invalidates the whole `["decks"]` root **on error as well
+  // as on success**, and `["decks", "list"]` is an active observer for the life of this
+  // component — so a `GONE` from deleting a deck another view already deleted takes the tile
+  // off the wall without anything on this screen asking it to. The rule lives on the mutation
+  // definitions, which is the one place it can be kept.
 
   const heading = openNode === null ? "All decks" : openNode.folder.name;
   const counts = [
@@ -430,12 +438,12 @@ export function DecksPage() {
           would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Decks</h2>
 
-      {writeFailure && (
+      {bannerFailure && (
         <p
           role="alert"
           className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
-          Could not change your decks — {writeFailure}
+          Could not change your decks — {bannerFailure}
         </p>
       )}
 

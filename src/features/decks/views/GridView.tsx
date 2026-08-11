@@ -4,6 +4,7 @@
  * The stack's opposite. A stack is for reading *down* a category; this is for seeing a whole
  * deck at once — which is what you want the moment before you cut something.
  */
+import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { CardImage } from "@/components/CardImage";
 import { FoilOverlay } from "@/components/CardArt";
 import { ManaText } from "@/components/ManaText";
@@ -77,14 +78,16 @@ function GridGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
-  const { attach, over } = useCategoryDrop(group.categoryId, actions?.drop);
+  const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
 
   return (
     <section
       ref={attach}
       aria-labelledby={`grid-group-${group.key}`}
       {...deckGroupProps(group.categoryId)}
-      className={cn("relative", over && "rounded-md ring-1 ring-accent")}
+      // The sidebar's pair, said here — one vocabulary for "this can take the card you are
+      // holding" and "and it is this one" across the four views and the two screens.
+      className={cn("relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
     >
       {over && <DropIndicator />}
       {/* `tight`, because this section is as wide as the window: counts pushed to the far

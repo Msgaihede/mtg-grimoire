@@ -213,9 +213,10 @@ export const Legal: Story = {
  * Forty cards where the format asks for sixty.
  *
  * `deckMin` is read off the seeded row and the sentence quotes it, so a rules change is an
- * UPDATE rather than a release. The number it counts is `engine.SIZE_KINDS` — the `main` and
- * `commander` kinds, in categories that are switched on — which is the same definition the stats
- * strip's headline "Cards" figure imports,
+ * UPDATE rather than a release. The number it counts is `engine.SIZE_KINDS` — the `main`,
+ * `commander` **and `maybe`** kinds, in categories that are switched on, so an *active*
+ * Maybeboard is counted by the size rule like any other pile — which is the same definition the
+ * stats strip's headline "Cards" figure imports,
  * because "Modern decks need at least 60 cards; you have 59" under a figure reading 74 would be
  * two numbers for one question.
  */
@@ -244,9 +245,10 @@ export const DeckTooSmall: Story = {
  * Pauper Commander, Duel Commander, PreDH and Tiny Leaders: Reborn
  * (`src-tauri/src/schema.rs:264-275`, read 2026-08-09). So every real format that has a ceiling
  * is *exactly* sized, and
- * `engine.ts:237` answers both directions in one sentence: the same wording says too small and
- * too large, and names the commander as part of the count. `engine.test.ts:80` reaches the other
- * branch with a spec built for the purpose, which is the right place for it.
+ * `deckSizeIssues` (`validation/engine.ts`) answers both directions in one sentence: the same
+ * wording says too small and too large, and names the commander as part of the count.
+ * `engine.test.ts` reaches the other branch with a spec built for the purpose, which is the
+ * right place for it.
  */
 export const DeckTooLarge: Story = {
   args: {
@@ -366,9 +368,9 @@ export const RestrictedMaxOne: Story = {
  * was meant to show.
  *
  * Closing this needs a corpus regeneration (`scripts/gen-storybook-cards.mjs`) that deliberately
- * picks up a duel-restricted printing — a change to a fixture **seven other story files** read
- * (grepped 2026-08-09: `CardImage`, `VirtualTable`, `PrintingPreview`, `CollectionSummary`,
- * `CollectionTable`, `ZoneColumn` and `CardGrid`).
+ * picks up a duel-restricted printing — a change to a fixture **six other story files** read
+ * (grepped 2026-08-09, re-checked after the deck rebuild retired `ZoneColumn`: `CardImage`,
+ * `VirtualTable`, `PrintingPreview`, `CollectionSummary`, `CollectionTable` and `CardGrid`).
  */
 export const RestrictedBannedAsCommander: Story = {
   args: {

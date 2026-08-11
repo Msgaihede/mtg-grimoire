@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ipc,
@@ -65,6 +66,47 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
     queryFn: () => ipc.deckTagList(opened(deckId), variant),
     enabled: deckId !== null,
   });
+
+  /**
+   * The **other** list's tag counts, for the one control that needs a number the variant does
+   * not scope: a tag delete.
+   *
+   * `deck_cards.tag_id` is `ON DELETE SET NULL` across **both** variants, so deleting a tag
+   * takes the label off the theory rows wearing it as surely as off the live ones — while
+   * {@link DeckTag.cardCount} is scoped to the one list on screen and is right to be, because
+   * that is the list the reader is editing. Quoting it in the confirmation is the mistake
+   * `DeckCategory.cardCountAllVariants` was added to the backend to stop, one row up.
+   *
+   * **A second read rather than a second field, and that is a deliberate difference from the
+   * category.** `deck_tag_list` already takes the variant, so the number is one call away;
+   * `DECK_VARIANTS` has exactly two members, so the two reads *are* every variant. And it costs
+   * nothing after the first switch: the key is `tagsQuery`'s own for the other variant, so
+   * flipping Live↔Theory finds both answers already in the cache.
+   */
+  const otherVariant: DeckVariant = variant === "live" ? "theory" : "live";
+  const otherTagsQuery = useQuery({
+    queryKey: ["decks", "tags", deckId, otherVariant],
+    queryFn: () => ipc.deckTagList(opened(deckId), otherVariant),
+    enabled: deckId !== null,
+  });
+
+  /**
+   * Tag id → copies wearing it across **both** lists, or `null` while the other list has not
+   * answered.
+   *
+   * `null` rather than a fallback to the scoped count, because those are different statements
+   * and only one of them is true: a confirmation that quoted the on-screen number while the
+   * other read was in flight would understate its reach in exactly the way this exists to stop.
+   * The dialog says what it can with no number instead.
+   */
+  const tagCardCountsAllVariants = useMemo<ReadonlyMap<number, number> | null>(() => {
+    const here = tagsQuery.data;
+    const there = otherTagsQuery.data;
+    if (here === undefined || there === undefined) return null;
+    const totals = new Map(here.map((t) => [t.id, t.cardCount]));
+    for (const t of there) totals.set(t.id, (totals.get(t.id) ?? 0) + t.cardCount);
+    return totals;
+  }, [tagsQuery.data, otherTagsQuery.data]);
 
   /**
    * The autocomplete palette for a "New tag" dialog: every name and colour used across **every**
@@ -259,6 +301,9 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
     categories: categoriesQuery.data ?? NO_CATEGORIES,
     /** Every tag of the deck, alphabetically. */
     tags: tagsQuery.data ?? NO_TAGS,
+    /** Copies wearing each tag across **both** lists — what a delete confirmation quotes.
+     *  `null` until the other list has answered; see the query above. */
+    tagCardCountsAllVariants,
     /** The app-wide tag palette, most-used first — not this deck's tags. */
     suggestions: suggestionsQuery.data ?? NO_SUGGESTIONS,
     createCategory,

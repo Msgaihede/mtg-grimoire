@@ -233,8 +233,9 @@ export const MISSING =
  * so an orphaned deck row still knows what it is called.
  *
  * What it has lost is its type line, its mana cost, its rarity, its price and its art, and each of
- * those is a hole something draws differently: `ZoneColumn` files it under `Other` and fetches no
- * picture for it, and `DeckStats` shows three at once — a card with no mana value is counted out
+ * those is a hole something draws differently: the views draw no picture for a row whose
+ * `needsReview` is set (`GridView`'s `art` is fed `null` outright), `grouping.ts` files it under
+ * `Other` when the deck is grouped by type, and `DeckStats` shows three at once — a card with no mana value is counted out
  * of the curve rather than filed under 0, a card with no type line lands in that same `Other`
  * bucket, and a card with no price is counted as unpriced rather than as free.
  *

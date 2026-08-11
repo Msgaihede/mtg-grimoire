@@ -38,8 +38,13 @@ export const Default: Story = {
     // Named rather than counted: the story runner's viewport is a number and not this app's
     // window, so how many rows a virtualiser mounts is not a fact worth asserting.
     expect(canvas.getByText("Ramp")).toBeInTheDocument();
-    // No sortable header anywhere.
-    expect(canvas.queryAllByRole("button", { name: /sort/i })).toHaveLength(0);
+    // No sortable header anywhere — asked as "no button in the header row", because a sortable
+    // header is named for its **column** and a name-matched query would find nothing however
+    // many of them there were. `views.test.tsx` carries the same assertion and the same note.
+    const header = canvas
+      .getAllByRole("row")
+      .find((r) => r.getAttribute("aria-rowindex") === "1") as HTMLElement;
+    expect(within(header).queryAllByRole("button")).toHaveLength(0);
   },
 };
 

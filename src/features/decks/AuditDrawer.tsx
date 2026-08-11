@@ -6,7 +6,7 @@ import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { auditSentence, type AuditDay } from "./auditText";
-import { FOCUS } from "./cardControl";
+import { FOCUS, FOCUS_INSET } from "./cardControl";
 import { useDeckAudit } from "./useDeckAudit";
 
 /**
@@ -219,7 +219,11 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
     // is positioned — an `absolute` inset with no positioned ancestor lands somewhere nobody
     // chose.
     <div
-      onClick={(e) => {
+      // `onMouseDown`, not `onClick`, for the reason both dialogs write out: a click fires on
+      // the nearest common ancestor of press and release, so a selection that starts on a
+      // history line and ends past the drawer's edge would be a "click" on the scrim and would
+      // close the layer under the reader. This drawer is nothing but selectable text.
+      onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
       // `LAYER.overlay`: the rung the editor's four full-window surfaces share. Above every
@@ -238,7 +242,12 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
         // be able to go and fix it without dismissing what told them about it.
         className={cn(
           "flex h-full w-[40rem] max-w-full flex-col border-l border-border bg-bg shadow-2xl",
-          FOCUS,
+          // Inside, not off the edge — `CategoriesPanel`'s measured case on the sibling drawer:
+          // this panel is flush against the window's right edge, and the open effect above
+          // focuses it, so a keyboard-opened drawer matches `:focus-visible` and an outline
+          // standing 2px *off* it is painted off-screen. That is a WCAG 2.4.7 failure nobody
+          // testing with a mouse ever sees.
+          FOCUS_INSET,
         )}
       >
         <div className="flex flex-shrink-0 items-center gap-3 border-b border-border px-5 py-4">

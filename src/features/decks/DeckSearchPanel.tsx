@@ -9,11 +9,9 @@ import { useCardSearch } from "@/features/search/useCardSearch";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { FOCUS } from "./cardControl";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
-
-/** The shared focus recipe: a gold outline standing off the control, never a ring. */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /** Why the disclosure will not open, said where it is refused. */
 const NO_ROOM = "Not enough room — close the card details or widen the window";
@@ -53,8 +51,8 @@ const TILE_FLOOR = 150;
 export interface DeckSearchPanelProps {
   /**
    * The editor's own `useDeck().addCard`, handed down rather than mounted again here — the
-   * shape every other control in this editor takes (`ZoneColumn` is given `onSetQuantity`,
-   * `onMove`, `onSetCover` and reaches for no hook of its own).
+   * shape every other control in this editor takes: the four views are handed a
+   * `DeckCardActions` of plain callbacks (`cardControl.tsx`) and reach for no hook of their own.
    *
    * Handed down rather than re-mounted for a measured reason: `useDeck` carries the deck's
    * *read* with it, and a second observer of `["decks","detail",id]` subscribing after the

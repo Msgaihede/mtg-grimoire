@@ -5,15 +5,10 @@ import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { FOCUS } from "./cardControl";
 import { estimateBracket } from "./validation/bracket";
 import { validateDeck } from "./validation/engine";
 import type { ValidationIssue } from "./validation/types";
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
- * control's edge, never a ring (a ring means "state" everywhere else).
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
  * What each of the engine's `code`s is called on screen.

@@ -14,6 +14,7 @@
  * answered.
  */
 import { useCallback, useMemo } from "react";
+import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
@@ -34,6 +35,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
@@ -301,7 +303,7 @@ function DeckTableRow({
   actions?: DeckCardActions;
   onDrop?: DeckCardActions["drop"];
 }) {
-  const { attach, over } = useCategoryDrop(row.group.categoryId, onDrop);
+  const { attach, over, eligible } = useCategoryDrop(row.group.categoryId, onDrop);
   const dragRef = useDeckCardDrag(
     row.kind === "card" ? row.card : EMPTY_CARD,
     row.kind === "card" && actions?.drop !== undefined,
@@ -321,7 +323,7 @@ function DeckTableRow({
     [dragRef, attach],
   );
 
-  if (row.kind === "group") return bandRow(props, row.group, columns, ref, over);
+  if (row.kind === "group") return bandRow(props, row.group, columns, ref, over, eligible);
 
   return (
     <div
@@ -330,8 +332,18 @@ function DeckTableRow({
       // The caret's way home after a printing swap, on the row because the row is what takes
       // focus in this table (`VirtualTable` owns the click, Enter and Space on it).
       {...deckCardProps(row.card)}
-      className={cn(props.className, over && "ring-1 ring-inset ring-accent")}
-    />
+      // The shared pair, as in the other three views. `ring-inset` on top of it because a row
+      // here is absolutely positioned inside a scroller and an outset ring is drawn over its
+      // neighbours; the colour and the weight are `AppShell`'s.
+      className={cn(props.className, eligible && DROP_RING, "ring-inset", over && DROP_OVER)}
+    >
+      {props.children}
+      {/* The table's own drop mark, which it alone was missing — the same line the other three
+          views draw on the edge of the category that would take the card. Every row of a group
+          is a target here, so the line lands on the row under the pointer rather than on the
+          band; that is what this view has instead of a column edge. */}
+      {over && <DropIndicator />}
+    </div>
   );
 }
 
@@ -359,6 +371,7 @@ function bandRow(
   columns: number,
   ref: (element: HTMLDivElement | null) => void,
   over: boolean,
+  eligible: boolean,
 ) {
   return (
     <div
@@ -374,11 +387,18 @@ function bandRow(
       // template is the whole of what makes this row one cell wide, and adding a second
       // display utility beside it would leave which one wins to the class sorter.
       style={{ ...props.style, gridTemplateColumns: "minmax(0,1fr)" }}
-      className={cn(props.className, "bg-surface", over && "ring-1 ring-inset ring-accent")}
+      className={cn(
+        props.className,
+        "bg-surface",
+        eligible && DROP_RING,
+        "ring-inset",
+        over && DROP_OVER,
+      )}
     >
       <span role="cell" aria-colspan={columns} className="flex min-w-0 items-center">
         <GroupHeader group={group} className="w-full" />
       </span>
+      {over && <DropIndicator />}
     </div>
   );
 }

@@ -42,6 +42,7 @@ import {
   type FormEvent,
   type JSX,
   type ReactNode,
+  type Ref,
 } from "react";
 import { GripVertical, X } from "lucide-react";
 import {
@@ -60,6 +61,7 @@ import {
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { writeFailure, type Write } from "@/lib/writes";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
 import { FOCUS, FOCUS_INSET } from "./cardControl";
 import type { CardGroup } from "./grouping";
@@ -162,7 +164,12 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
       // The scrim. A press that lands on it and not on the drawer is the reader leaving:
       // `onClose`, which closes without yanking the caret back — the outside-click half of the
       // Escape contract, and deliberately not the same answer as the ✕.
-      onClick={(e) => {
+      //
+      // `onMouseDown`, not `onClick`, and the two dialogs document why: a click fires on the
+      // nearest common ancestor of press and release, so a text selection that starts on a
+      // sentence in the drawer and ends past its edge is a "click" out here — and this drawer
+      // is full of selectable text. Where the press *lands* is unambiguous.
+      onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
       className={cn(
@@ -289,13 +296,15 @@ function Categories({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[
     meta.createCategory.mutate(trimmed, { onSuccess: () => setName("") });
   };
 
-  const failure = firstFailure(
-    meta.createCategory.error,
-    meta.renameCategory.error,
-    meta.setCategoryActive.error,
-    meta.reorderCategories.error,
-    meta.deleteCategory.error,
-    categoriesQuery.error,
+  const failure = sectionFailure(
+    [
+      meta.createCategory,
+      meta.renameCategory,
+      meta.setCategoryActive,
+      meta.reorderCategories,
+      meta.deleteCategory,
+    ],
+    categoriesQuery,
   );
 
   return (
@@ -415,8 +424,21 @@ function CategoryRow({
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
+  const deleteRef = useRef<HTMLButtonElement>(null);
+  const owedFocus = useRef(false);
   const [over, setOver] = useState(false);
   const group = groupOf(category);
+
+  // The other end of the hand-back, and it has to be an effect for `DecksPage`'s
+  // `refocusFolderRef` reason: the trigger is **disabled** while the question is up, so
+  // focusing it from the Cancel handler would be a call on a control the browser still skips.
+  // It is re-enabled by the render this effect runs after. Only after a cancel — a delete that
+  // went through takes the row with it, and there is nothing left to hand back to.
+  useEffect(() => {
+    if (confirming || !owedFocus.current) return;
+    owedFocus.current = false;
+    deleteRef.current?.focus();
+  }, [confirming]);
 
   useEffect(() => {
     const row = rowRef.current;
@@ -511,7 +533,7 @@ function CategoryRow({
           </RowAction>
         )}
         {!group.isPredefined && (
-          <RowAction onClick={onConfirm} disabled={confirming} destructive>
+          <RowAction ref={deleteRef} onClick={onConfirm} disabled={confirming} destructive>
             Delete
           </RowAction>
         )}
@@ -546,7 +568,12 @@ function CategoryRow({
           category={category}
           others={others}
           meta={meta}
-          onCancel={onDone}
+          // "Keep it" is the reader saying put me back, so it does — the same split every
+          // other layer here makes between a Cancel control and a click somewhere else.
+          onCancel={() => {
+            owedFocus.current = true;
+            onDone();
+          }}
           onDeleted={onDone}
         />
       )}
@@ -595,6 +622,18 @@ function DeleteCategory({
     // cards. Reaching the destructive one takes a deliberate pick.
     others.length > 0 ? String(others[0].id) : "delete",
   );
+  const ref = useRef<HTMLDivElement>(null);
+
+  // The caret moves into the question, as it does for every other layer in this app
+  // (`DecksPage`'s `DeleteConfirm`, `FolderTree`'s, both drawers). **The row's Delete trigger
+  // is `disabled` the moment this opens**, and Chromium blurs a control it disables — so
+  // without this the caret is on `<body>` and the next Tab restarts at the top of the document,
+  // which is the bug commit `10761c1` fixed for `RenameField` eight lines of this file away.
+  // The panel and not a button: the reader has not decided yet, and a stray Enter must not
+  // decide for them.
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
   // Both lists, because both go. See this component's doc.
   const cards = category.cardCountAllVariants;
   const count = `${cards} ${cards === 1 ? "card" : "cards"}`;
@@ -617,7 +656,13 @@ function DeleteCategory({
   const losing = cards > 0 && moveTo === null;
 
   return (
-    <div role="group" aria-label={`Delete ${category.name}`} className="mt-2 border-t border-border pt-2">
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="group"
+      aria-label={`Delete ${category.name}`}
+      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
+    >
       <p className="text-xs">Delete “{category.name}”?</p>
 
       {choosing && (
@@ -752,12 +797,7 @@ function Tags({ meta }: { meta: DeckMeta }) {
     [suggestions, taken],
   );
 
-  const failure = firstFailure(
-    meta.createTag.error,
-    meta.updateTag.error,
-    meta.deleteTag.error,
-    tagsQuery.error,
-  );
+  const failure = sectionFailure([meta.createTag, meta.updateTag, meta.deleteTag], tagsQuery);
 
   return (
     <section aria-labelledby="deck-tags-heading">
@@ -780,6 +820,9 @@ function Tags({ meta }: { meta: DeckMeta }) {
             <TagRow
               key={tag.id}
               tag={tag}
+              // Both lists, for the confirmation only — the row above it keeps the scoped
+              // count. See `DeleteTag`.
+              cardsAllVariants={meta.tagCardCountsAllVariants?.get(tag.id) ?? null}
               meta={meta}
               renaming={renaming === tag.id}
               onRename={() => setRenaming(tag.id)}
@@ -876,6 +919,7 @@ function Tags({ meta }: { meta: DeckMeta }) {
 
 function TagRow({
   tag,
+  cardsAllVariants,
   meta,
   renaming,
   onRename,
@@ -884,6 +928,9 @@ function TagRow({
   onDone,
 }: {
   tag: DeckTag;
+  /** Copies wearing this tag in **both** lists, or `null` while the other one is still being
+   *  read. Only the confirmation uses it. */
+  cardsAllVariants: number | null;
   meta: DeckMeta;
   renaming: boolean;
   onRename: () => void;
@@ -892,19 +939,30 @@ function TagRow({
   onDone: () => void;
 }) {
   const [color, setColor] = useState<TagColor>(tag.color);
+  const deleteRef = useRef<HTMLButtonElement>(null);
+  const owedFocus = useRef(false);
+
+  // `CategoryRow`'s hand-back, on the sibling control and for the identical reason.
+  useEffect(() => {
+    if (confirming || !owedFocus.current) return;
+    owedFocus.current = false;
+    deleteRef.current?.focus();
+  }, [confirming]);
 
   return (
     <li className="rounded-md border border-border px-2 py-1.5">
       <div className="flex items-center gap-2.5">
         <Swatch color={tag.color} />
         <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{tag.name}</span>
+        {/* The list on screen, and right to be: this row is the list the reader is editing.
+            Only the confirmation below changes scope — see `DeleteTag`. */}
         <span className="shrink-0 font-mono text-[0.625rem] tabular-nums text-dim">
           {tag.cardCount} {tag.cardCount === 1 ? "card" : "cards"}
         </span>
         <RowAction onClick={onRename} disabled={renaming}>
           Rename
         </RowAction>
-        <RowAction onClick={onConfirm} disabled={confirming} destructive>
+        <RowAction ref={deleteRef} onClick={onConfirm} disabled={confirming} destructive>
           Delete
         </RowAction>
       </div>
@@ -928,46 +986,113 @@ function TagRow({
       )}
 
       {confirming && (
-        <div
-          role="group"
-          aria-label={`Delete ${tag.name}`}
-          className="mt-2 border-t border-border pt-2"
-        >
-          <p className="text-xs">Delete “{tag.name}”?</p>
-          <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-            {tag.cardCount === 0
-              ? "No card is wearing it."
-              : `Its ${tag.cardCount} ${tag.cardCount === 1 ? "card stays" : "cards stay"} in the deck and lose the label.`}
-          </p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              disabled={meta.deleteTag.isPending}
-              onClick={() => meta.deleteTag.mutate(tag.id, { onSuccess: onDone })}
-              className={cn(
-                "rounded-md border border-destructive px-2 py-1 text-xs text-destructive",
-                "transition-colors duration-150 hover:bg-destructive hover:text-bg",
-                "disabled:opacity-50 motion-reduce:transition-none",
-                FOCUS,
-              )}
-            >
-              Delete tag
-            </button>
-            <button
-              type="button"
-              onClick={onDone}
-              className={cn(
-                "rounded-md border border-border px-2 py-1 text-xs text-dim",
-                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                FOCUS,
-              )}
-            >
-              Keep it
-            </button>
-          </div>
-        </div>
+        <DeleteTag
+          tag={tag}
+          cardsAllVariants={cardsAllVariants}
+          meta={meta}
+          onCancel={() => {
+            owedFocus.current = true;
+            onDone();
+          }}
+          onDeleted={onDone}
+        />
       )}
     </li>
+  );
+}
+
+/**
+ * Delete a label, and say how many cards lose it.
+ *
+ * **The number is both lists, never {@link DeckTag.cardCount}** — the same correction
+ * {@link DeleteCategory} carries, for the same reason one floor down: `deck_cards.tag_id` is
+ * `ON DELETE SET NULL`, and a tag is not per-variant, so the label comes off the theory rows
+ * wearing it as surely as off the live ones. Viewing Live, a tag worn by 2 live and 5 theory
+ * rows used to say "Its 2 cards stay in the deck and lose the label" — and, worse, a tag worn
+ * by nothing on screen and five cards off it said flatly **"No card is wearing it."** A
+ * confirmation is the one place a reader is entitled to the whole reach of the press.
+ *
+ * Where the category gets its total from a backend column (`cardCountAllVariants`), this gets
+ * it from a second `deck_tag_list` — see {@link useDeckMeta}. That read can be in flight, which
+ * is what the `null` arm is: no number, and the sentence still names both lists, because
+ * "unknown" must never be spelled as the smaller of the two.
+ *
+ * Nothing is destroyed here, so there is no picker and no choice — a tag delete has one
+ * outcome, and the whole of the dialog is saying what it is.
+ */
+function DeleteTag({
+  tag,
+  cardsAllVariants,
+  meta,
+  onCancel,
+  onDeleted,
+}: {
+  tag: DeckTag;
+  cardsAllVariants: number | null;
+  meta: DeckMeta;
+  onCancel: () => void;
+  onDeleted: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // The caret comes into the question, for {@link DeleteCategory}'s reason.
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  /** Copies in the list the reader is **not** looking at. `> 0` is exactly the condition for
+   *  mentioning the other list: a deck whose theory list wears this label nowhere has one list
+   *  to talk about, and a sentence about two would be chrome. */
+  const elsewhere = cardsAllVariants === null ? 0 : cardsAllVariants - tag.cardCount;
+  const bothLists =
+    elsewhere > 0 ? " — that is both the live and theory lists, not just the one on screen" : "";
+  const wearing =
+    cardsAllVariants === 1
+      ? "Its 1 card stays in the deck and loses the label"
+      : `Its ${cardsAllVariants} cards stay in the deck and lose the label`;
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="group"
+      aria-label={`Delete ${tag.name}`}
+      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
+    >
+      <p className="text-xs">Delete “{tag.name}”?</p>
+      <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
+        {cardsAllVariants === null
+          ? "Every card wearing it stays in the deck and loses the label, in the live list and the theory list alike."
+          : cardsAllVariants === 0
+            ? "No card in either list is wearing it."
+            : `${wearing}${bothLists}.`}
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          disabled={meta.deleteTag.isPending}
+          onClick={() => meta.deleteTag.mutate(tag.id, { onSuccess: onDeleted })}
+          className={cn(
+            "rounded-md border border-destructive px-2 py-1 text-xs text-destructive",
+            "transition-colors duration-150 hover:bg-destructive hover:text-bg",
+            "disabled:opacity-50 motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Delete tag
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className={cn(
+            "rounded-md border border-border px-2 py-1 text-xs text-dim",
+            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Keep it
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1024,14 +1149,19 @@ function RowAction({
   onClick,
   disabled,
   destructive,
+  ref,
 }: {
   children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   destructive?: boolean;
+  /** So the row can put the caret back on the control that opened a confirmation — which it
+   *  cannot do until the render that re-enables it. See `CategoryRow`'s effect. */
+  ref?: Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       disabled={disabled}
@@ -1133,13 +1263,24 @@ function RenameField({
 }
 
 /**
- * The first refusal any of a section's writes is holding, as a sentence.
+ * The refusal a section is still owed a sentence about.
  *
  * One line per section rather than one per control: every refusal here is either a busy
  * database or a category, tag or deck another surface has deleted, and both are facts about the
  * section rather than about the button that happened to hit them.
+ *
+ * **The newest write, never the first one still holding an error** — {@link writeFailure}, the
+ * rule the editor, the gallery and the settings dialog all follow. This drawer used to pick the
+ * first non-null error in an argument list, which is the opposite: a refused reorder would sit
+ * on screen while the reader went on to rename a pile successfully.
+ *
+ * The read comes last and only when no write refused. A failed `deck_category_list` is a
+ * different kind of news and outranks nothing: if a write has just been refused, that is what
+ * the reader pressed.
  */
-function firstFailure(...errors: unknown[]): string | null {
-  const found = errors.find((e) => e !== null && e !== undefined);
-  return found === undefined ? null : ipcError(found);
+function sectionFailure(
+  writes: readonly [Write, ...Write[]],
+  read: { isError: boolean; error: unknown },
+): string | null {
+  return writeFailure(writes) ?? (read.isError ? ipcError(read.error) : null);
 }

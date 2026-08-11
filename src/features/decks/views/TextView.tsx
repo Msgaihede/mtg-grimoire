@@ -5,6 +5,7 @@
  * this deck" rather than "what does this card do". No art at all — a line is a quantity, a
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
+import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import type { DeckCard } from "@/lib/ipc";
 import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
@@ -94,14 +95,15 @@ function TextGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
-  const { attach, over } = useCategoryDrop(group.categoryId, actions?.drop);
+  const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
 
   return (
     <section
       ref={attach}
       aria-labelledby={`text-group-${group.key}`}
       {...deckGroupProps(group.categoryId)}
-      className={cn("relative", over && "rounded-sm ring-1 ring-accent")}
+      // `AppShell`'s pair, as in the other three views: one vocabulary for a drop target.
+      className={cn("relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
     >
       {over && <DropIndicator />}
       <GroupHeader

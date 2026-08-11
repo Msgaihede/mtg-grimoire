@@ -81,6 +81,16 @@ const TAGS: DeckTag[] = [
   { id: 11, deckId: 1, name: "Playtest", color: "azure", cardCount: 0 },
 ];
 
+/**
+ * The **theory** list's tag counts, which the drawer reads as well — see
+ * {@link useDeckMeta}'s second `deck_tag_list`.
+ *
+ * Empty by default, so these fixtures are single-list decks and a confirmation's number equals
+ * the row's. The tests that make them differ are the point, exactly as the category fixture's
+ * `cardCountAllVariants` default is.
+ */
+const NO_THEORY_TAGS: DeckTag[] = [];
+
 const SUGGESTIONS: TagSuggestion[] = [
   { name: "Cut candidate", color: "ember" },
   { name: "Budget swap", color: "moss" },
@@ -138,7 +148,12 @@ function row(name: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   deckCategoryList.mockResolvedValue(CATEGORIES);
-  deckTagList.mockResolvedValue(TAGS);
+  // Variant-aware, because the drawer asks twice: the list on screen and the other one. A mock
+  // that answered the same rows to both would make every tag's two counts agree by accident,
+  // which is the fixture shape that let the undercount through in the first place.
+  deckTagList.mockImplementation((_deckId: number, variant: string) =>
+    Promise.resolve(variant === "live" ? TAGS : NO_THEORY_TAGS),
+  );
   deckTagSuggestions.mockResolvedValue(SUGGESTIONS);
   deckGet.mockResolvedValue(DECK);
   deckCategoryCreate.mockResolvedValue(category({ id: 6, name: "Draw" }));
@@ -193,6 +208,11 @@ describe("CategoriesPanel", () => {
     await screen.findByText("Ramp");
     expect(deckCategoryList).toHaveBeenCalledWith(1, "theory");
     expect(deckTagList).toHaveBeenCalledWith(1, "theory");
+    // And the tags of the **other** variant too, which is a different question and has one
+    // consumer: the delete confirmation, whose reach is not scoped by the variant on screen.
+    // Categories need no second read — the backend answers their both-lists count as a column.
+    expect(deckTagList).toHaveBeenCalledWith(1, "live");
+    expect(deckCategoryList).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -495,6 +515,42 @@ describe("categories", () => {
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, null);
   });
 
+  /**
+   * The caret goes into the question, and comes back to the control that asked it.
+   *
+   * The row **disables** its Delete trigger the moment the confirmation opens, and Chromium
+   * blurs a control it disables — so without the effect this asserts, the caret is on `<body>`
+   * and the next Tab restarts at the top of the document. That is the bug commit `10761c1`
+   * fixed for this file's rename field; this is the same one on the sibling control.
+   *
+   * `toHaveFocus` **plus a real Tab**, never a hand-placed focus: the assertion pair is what
+   * makes this discriminate. `user.tab()` from `<body>` would land on the drawer's ✕ (the first
+   * stop in the document), so the second expectation fails on the broken code even if the first
+   * somehow did not — and no line here reaches for the element it goes on to assert about.
+   */
+  it("puts the caret in the delete question, and hands it back on Keep it", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+    const trigger = within(row("Ramp")).getByRole("button", { name: "Delete" });
+
+    await user.click(trigger);
+    const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
+    expect(dialog).toHaveFocus();
+    expect(trigger).toBeDisabled();
+
+    // From the panel, the first stop is the panel's own first control — which is only true if
+    // the caret is inside the layer.
+    await user.tab();
+    expect(within(dialog).getByLabelText("Its 12 cards")).toHaveFocus();
+
+    // "Keep it" is a control, and a control hands the caret back. It cannot do so until the
+    // render that re-enables the trigger, which is why the component owes this to an effect.
+    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
+    const back = within(row("Ramp")).getByRole("button", { name: "Delete" });
+    await waitFor(() => expect(back).toHaveFocus());
+  });
+
   it("says the cards go too when the reader picks the destructive answer", async () => {
     mount();
     await screen.findByText("Ramp");
@@ -592,6 +648,93 @@ describe("tags", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Delete tag" }));
     expect(deckTagDelete).toHaveBeenCalledWith(10);
+  });
+
+  /**
+   * The confirmation counts **both lists**, because `deck_cards.tag_id` is `ON DELETE SET NULL`
+   * across both — the same correction the category delete already carries, on the control 250
+   * lines below it in the same file.
+   *
+   * **The fixture makes the two numbers differ on purpose**, and that is the whole of why this
+   * test can fail: with an empty theory list, `cardCount` and the both-lists total are the same
+   * number, so a dialog reading the wrong one still prints the right answer. Every other tag
+   * test here has them equal, which is exactly how the bug survived a suite.
+   */
+  it("quotes the copies wearing a tag in both lists, not just the one on screen", async () => {
+    deckTagList.mockImplementation((_deckId: number, variant: string) =>
+      Promise.resolve(
+        variant === "live"
+          ? [{ id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 2 }]
+          : [{ id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 5 }],
+      ),
+    );
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
+
+    // The row is still the list being edited, and is right to be. Only the confirmation
+    // changes scope.
+    expect(within(li).getByText("2 cards")).toBeInTheDocument();
+
+    await user.click(within(li).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
+
+    expect(within(dialog).getByText(/^Its 7 cards stay in the deck/)).toHaveTextContent(
+      "both the live and theory lists, not just the one on screen",
+    );
+  });
+
+  /**
+   * The zero arm, which is the one that read as a flat falsehood: "No card is wearing it" over
+   * a theory list with five. Its own test, because it is a different sentence and because the
+   * arm that says "nothing will happen" is the one a reader presses through without reading.
+   */
+  it("does not say a tag is worn by nothing when the other list wears it", async () => {
+    deckTagList.mockImplementation((_deckId: number, variant: string) =>
+      Promise.resolve([
+        {
+          id: 10,
+          deckId: 1,
+          name: "Cut candidate",
+          color: "ember",
+          cardCount: variant === "live" ? 0 : 5,
+        },
+      ]),
+    );
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
+
+    await user.click(within(li).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
+
+    expect(within(dialog).queryByText(/No card in either list is wearing it/)).toBeNull();
+    expect(within(dialog).getByText(/^Its 5 cards stay in the deck/)).toHaveTextContent(
+      "both the live and theory lists",
+    );
+  });
+
+  /** `CategoryRow`'s caret contract, on the tag row. Same pair, same reason — see the category
+   *  test's doc for why either half alone would pass against the broken code. */
+  it("puts the caret in the tag delete question, and hands it back on Keep it", async () => {
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
+
+    await user.click(within(li).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
+    expect(dialog).toHaveFocus();
+
+    await user.tab();
+    expect(within(dialog).getByRole("button", { name: "Delete tag" })).toHaveFocus();
+
+    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
+    await waitFor(() =>
+      expect(within(li).getByRole("button", { name: "Delete" })).toHaveFocus(),
+    );
   });
 
   it("makes a tag of this deck from a suggestion, and offers no name it already has", async () => {

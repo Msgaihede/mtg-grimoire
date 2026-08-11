@@ -128,6 +128,50 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
+   * The caret starts on the panel, which is what makes Shift+Tab wrap rather than fall out.
+   *
+   * `tabIndex={-1}` keeps the panel out of its own cycle, so "the caret is on the panel" counts
+   * as *before* the first stop.
+   */
+  it("takes the caret when it opens", async () => {
+    open();
+    const dialog = await loaded();
+
+    await waitFor(() => expect(dialog).toHaveFocus());
+  });
+
+  /**
+   * **The trap, which had no test at all** — `trapTab` could be deleted whole and this file
+   * stayed green, while the panel went on claiming `aria-modal="true"`. An untested trap is a
+   * promise with no evidence, and the promise is made to assistive tech only: the app behind a
+   * scrim is unreachable to a pointer and perfectly reachable to Tab.
+   *
+   * Both ends, because they fail separately. Forward from the last stop must wrap to the first;
+   * backward from the panel (where the open effect leaves the caret) must wrap to the **last**,
+   * and that one is the keystroke a reader makes immediately after opening the dialog.
+   */
+  it("keeps Tab inside itself, both ways round", async () => {
+    open();
+    const dialog = await loaded();
+    const stops = within(dialog).getAllByRole("button");
+    const first = stops[0];
+    // The end of the cycle is the last focusable of any kind, not the last button.
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    const last = [...focusable].filter((el) => !el.hasAttribute("disabled")).pop() as HTMLElement;
+
+    // Backward from the panel: the wrap a reader meets first.
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await userEvent.tab({ shift: true });
+    expect(last).toHaveFocus();
+
+    // And forward off the end.
+    await userEvent.tab();
+    expect(first).toHaveFocus();
+  });
+
+  /**
    * A press on the scrim closes; a press on the panel does not.
    *
    * The `mouseDown`-with-target-check is the whole mechanism — a `click` handler would close

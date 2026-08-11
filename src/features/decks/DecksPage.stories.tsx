@@ -19,8 +19,9 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
  * The gallery, with deck 1's cover pointed at a printing the card database does not hold.
  *
  * **Staged through the command rather than through the UI, because there is no UI path to it** —
- * and that is a fact about the app rather than a shortcut. "Set as cover" is the only control
- * that writes one and it is withheld from an orphaned row (`ZoneColumn.tsx:801`), so a cover only
+ * and that is a fact about the app rather than a shortcut. The settings dialog's art picker is
+ * the only control that writes one, and `coverChoices` (`DeckSettingsDialog.tsx`) drops every
+ * row whose `needsReview` is non-null, so a cover only
  * *becomes* orphaned later, when a sync takes its printing away. `deck_update` validates no cover
  * (`db.ts:2019` is a bare `coalesce`, matching `deck::update_deck`), and `coverArtist` is a
  * lookup on the way out (`db.ts:855`, mirroring the real `LEFT JOIN cards c ON c.id =
@@ -85,11 +86,14 @@ const meta = {
           "filed under `Constructed › Commander`, so the wall the reader opens on is the other " +
           "three: **a wall is the drawer you are standing in**, not an inventory.\n\n" +
           "**A tile's count is not the deck's row count.** `cardCount` is summed over " +
-          "`SIZE_KINDS` — the `main` and `commander` kinds, in categories that are switched " +
-          "on (`db.ts:1017-1023`, mirroring `DeckRow.cardCount`) — so the Modern deck's 15 " +
-          "sideboard cards and the 2 in its Maybeboard are in the editor and not in the " +
-          "caption. A switched-off pile is left out whatever it is called, which is how the " +
-          "Maybeboard stays out without being named. The number under a tile is the number " +
+          "`SIZE_KINDS` — `main`, `commander` **and `maybe`**, in categories that are switched " +
+          "on (`.storybook/fake/db.ts:1137`, mirroring `DeckRow.cardCount` and " +
+          "`validation/engine.ts:75`) — so the Modern deck's 15 " +
+          "sideboard cards are in the editor and not in the " +
+          "caption, while the 2 in its Maybeboard are left out **only because that pile is " +
+          "switched off**. That is the branch's governing ruling and it is easy to misread: an " +
+          "*active* category of kind `maybe` counts toward size exactly like `main`. The " +
+          "switch is the whole of “counts toward nothing”. The number under a tile is the number " +
           "the format's size rule is about, which is the same definition the editor's " +
           "headline figure and the validation chip share.\n\n" +
           "**Archiving is the reversible thing and deleting is not.** The trash control asks " +
@@ -102,8 +106,9 @@ const meta = {
           'word "null", never a placeholder — and reaching that needs a deck whose ' +
           "`coverCardId` names a printing `cards` does not hold. Measured 2026-08-10: **0 of " +
           "the 43** rows of `.storybook/fake/cards.ts` has a null `artist`, no seed points a " +
-          "cover at a missing id, and the one control that *sets* a cover is withheld from an " +
-          "orphaned row (`ZoneColumn.tsx:801` gates “Set as cover” on `needsReview === null`). " +
+          "cover at a missing id, and the one control that *sets* a cover offers no orphaned " +
+          "row (`coverChoices` in `DeckSettingsDialog.tsx` drops every card whose " +
+          "`needsReview` is non-null). " +
           "So a cover is never orphaned at the moment it is chosen; it becomes orphaned when a " +
           "sync takes its printing away, and it heals on the next one that brings it back. " +
           "A deck with **no cover at all** is the other, separate state, and it is every new " +
