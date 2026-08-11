@@ -272,6 +272,33 @@ describe("deckStats", () => {
     expect(stats.elsewhere).toEqual([]);
   });
 
+  /**
+   * The other direction, and the third reader of one definition.
+   *
+   * `SIZE_KINDS` is `main`, `commander` **and `maybe`** — the switch decides whether a pile
+   * counts at all, the kind decides only whether it is played *beside* the deck or *in* it,
+   * and only `side` and `companion` are beside it. So a Maybeboard the reader switched on is a
+   * pile of the deck and this strip sizes it, exactly as `validateDeck` and `DeckRow.cardCount`
+   * do. Three surfaces, one rule; a strip that disagreed would print a headline the panel
+   * beside it contradicts.
+   */
+  it("sizes a Maybeboard the reader switched on, like any other pile of the deck", () => {
+    const parked = spell("Ghost", 5, {
+      categoryKind: "maybe",
+      categoryActive: false,
+      quantity: 9,
+    });
+    const played = { ...parked, categoryActive: true };
+
+    expect(deckStats([spell("Bolt", 1, { quantity: 4 }), parked]).sized).toBe(4);
+
+    const on = deckStats([spell("Bolt", 1, { quantity: 4 }), played]);
+    expect(on.sized).toBe(13);
+    expect(on.curve[5]).toBe(9);
+    // In the size, so *not* in the note that accounts for what the size left out.
+    expect(on.elsewhere).toEqual([]);
+  });
+
   /** The sideboard is part of what a deck costs and what it is short of: it is cards you
    *  own, sleeve and pay for. */
   it("counts every active category", () => {

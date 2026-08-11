@@ -43,17 +43,36 @@ import { companionIssues } from "./companions";
  * "exactly 60 incl Oathbreaker + signature spell" (both of those live in a `commander`
  * category).
  *
+ * **The rule, in one sentence: the switch decides whether a pile counts at all; the kind
+ * decides only whether the pile is played *beside* the deck or *in* it — and only `side` and
+ * `companion` are beside it.** So `deck.filter((c) => c.categoryActive)` has already dropped
+ * everything switched off before this list is consulted, and this list drops the two kinds
+ * that are played beside the deck: the sideboard (CR 100.4a) and the companion, which EDH
+ * calls "effectively a 101st card" — exactly the card a "100-card deck" figure must not add.
+ * Everything else that is switched on is in the deck.
+ *
+ * **That is why `maybe` is here**, which reads odd until the alternative is written out.
+ * Leaving it off put an *active* Maybeboard inside the format's card pool and inside the
+ * binder's reservations but outside the deck's size — so a second Sol Ring in one raised a
+ * singleton error under a size figure that still read 100, which is two answers to one
+ * question. Kind `maybe` now exists for exactly one reason, to name the predefined Maybeboard
+ * and seed it inactive, and that is honest: being switched off is the whole of what the
+ * Maybeboard is.
+ *
  * Kinds and not categories, because a deck may own any number of `main` categories — the user
  * names and orders them — and a size rule that had to be told about each one would be a rule
  * the user could break by making a pile. What a card is *for* is the kind; what it is *called*
- * is theirs.
+ * is theirs. A **sixth** kind added to the schema therefore has to be placed here deliberately;
+ * it will not fall in by accident, which is the trade this positive list buys over spelling the
+ * rule as `!== "side" && !== "companion"`.
  *
  * Exported because the deck editor's stats strip prints the same total beside this file's
  * sentence about it: "Modern decks need at least 60 cards; you have 59" under a headline
  * figure counting the sideboard too is two numbers for one question. Reading one query is not
- * enough to make two surfaces agree — they have to read one definition.
+ * enough to make two surfaces agree — they have to read one definition. `DeckRow.cardCount` is
+ * the third reader and is these three words again, in SQL (`deck.rs`'s `DECK_SELECT`).
  */
-export const SIZE_KINDS: readonly CategoryKind[] = ["main", "commander"];
+export const SIZE_KINDS: readonly CategoryKind[] = ["main", "commander", "maybe"];
 
 /**
  * Everything wrong with this deck under this format, worst-first by rule rather than by

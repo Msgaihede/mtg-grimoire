@@ -958,9 +958,20 @@ const LIVE = VARIANTS[0];
  */
 const KIND_PRIORITY: CategoryKind[] = ["commander", "main", "side", "companion", "maybe"];
 
-/** `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim. It is a *kind*
- *  filter and therefore only half of the count — see {@link toDeckRow}. */
-const SIZE_KINDS: CategoryKind[] = ["main", "commander"];
+/**
+ * `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim — a third copy of
+ * three words that must stay one rule (`engine.ts`, `deck.rs`'s `DECK_SELECT`, here).
+ *
+ * The switch decides whether a pile counts at all; the kind decides only whether it is played
+ * *beside* the deck or *in* it, and only `side` and `companion` are beside it — CR 100.4a and
+ * EDH's "effectively a 101st card". `maybe` is on the list for that reason and not by
+ * oversight: an *active* Maybeboard is a pile the reader deliberately switched on, and leaving
+ * it out of the size while the copy and legality rules counted it gave two answers to one
+ * question.
+ *
+ * A *kind* filter and therefore only half of the count — see {@link toDeckRow}.
+ */
+const SIZE_KINDS: CategoryKind[] = ["main", "commander", "maybe"];
 
 /**
  * `schema::PREDEFINED_CATEGORIES` as `(kind, name, isActive)` — the categories every deck is
@@ -1004,11 +1015,11 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     isBuilt: d.isBuilt,
     archived: d.archived,
     // `DECK_SELECT`'s subquery, and three exclusions rather than one. The sideboard and the
-    // companion are not the deck; a **theory** row is a plan and belongs on no tile; and an
-    // **inactive** category counts toward nothing whatever its kind, which is how the
-    // Maybeboard stays out of this without being named here. Its `JOIN deck_categories` is an
-    // *inner* join — `category_id` is NOT NULL with an enforced foreign key — which is what
-    // the `undefined` check is.
+    // companion are played *beside* the deck rather than in it; a **theory** row is a plan and
+    // belongs on no tile; and an **inactive** category counts toward nothing whatever its
+    // kind, which is how the Maybeboard stays out of this without being named here — and how
+    // an active one gets *in*. Its `JOIN deck_categories` is an *inner* join — `category_id`
+    // is NOT NULL with an enforced foreign key — which is what the `undefined` check is.
     cardCount: db.deckCards
       .filter((dc) => {
         if (dc.deckId !== d.id || dc.variant !== LIVE) return false;
@@ -1050,17 +1061,20 @@ function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): 
   };
 }
 
-/** `deck_meta::list_tags`' row. Its `cardCount` reads `READBACK_VARIANT` — the **live** list,
- *  always: that command takes no variant of its own to scope by, the way the category list's
- *  does. */
-function toDeckTag(db: FakeDb, t: FakeDeckTag): DeckTag {
+/**
+ * `deck_meta::list_tags`' row, counted over the **variant that was asked for** — exactly as
+ * {@link toDeckCategory} is, and for the reason the two of them are answered by one read: they
+ * describe one list of cards. Scoping one and not the other is how a Theory read came back
+ * once with Theory category counts beside Live tag counts.
+ */
+function toDeckTag(db: FakeDb, t: FakeDeckTag, variant: DeckVariant): DeckTag {
   return {
     id: t.id,
     deckId: t.deckId,
     name: t.name,
     color: t.color,
     cardCount: db.deckCards
-      .filter((dc) => dc.tagId === t.id && dc.variant === LIVE)
+      .filter((dc) => dc.tagId === t.id && dc.variant === variant)
       .reduce((n, dc) => n + dc.quantity, 0),
   };
 }
@@ -1870,7 +1884,7 @@ export function readHandlers(db: FakeDb) {
       const tags: DeckTag[] = db.deckTags
         .filter((t) => t.deckId === deck.id)
         .sort((a, b) => cmp(a.name, b.name) || a.id - b.id)
-        .map((t) => toDeckTag(db, t));
+        .map((t) => toDeckTag(db, t, variant));
       return { deck: toDeckRow(db, deck), cards, categories, tags };
     },
 

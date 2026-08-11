@@ -890,19 +890,74 @@ describe("the deck read", () => {
     expect(detail.tags).toEqual([]);
   });
 
-  it("prices a deck card at the printing's nonfoil usd, and counts only main + commander", () => {
+  /**
+   * A tag's `cardCount` is scoped to the variant asked for, exactly as a category's is.
+   *
+   * They are answered by one read and describe one list of cards, so scoping one and not the
+   * other is a read that contradicts itself — which is what the Rust did once: `get_deck`
+   * threaded its variant into `list_categories` and not into `list_tags`, so a Theory read
+   * came back with Theory category counts beside Live tag counts.
+   */
+  it("counts a tag over the variant that was asked for, like a category", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckTags: [{ id: 1, deckId: 1, name: "Flex", color: "amber" }],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3, tagId: 1 }),
+        deckCard({
+          id: 2,
+          cardId: BOLT.id,
+          categoryKind: "main",
+          variant: "theory",
+          quantity: 7,
+          tagId: 1,
+        }),
+      ],
+    });
+
+    expect(liveDeck(db)!.tags).toEqual([
+      { id: 1, deckId: 1, name: "Flex", color: "amber", cardCount: 3 },
+    ]);
+    expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.tags[0].cardCount).toBe(7);
+  });
+
+  it("prices a deck card at the printing's nonfoil usd, and leaves the piles beside the deck out of its size", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
         deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3 }),
         deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 2 }),
         deckCard({ id: 3, cardId: BOLT.id, categoryKind: "commander", quantity: 1 }),
+        deckCard({ id: 4, cardId: BOLT.id, categoryKind: "companion", quantity: 1 }),
       ],
     });
     const detail = liveDeck(db)!;
     // `lea 161`'s blob is `usd` 620.00 with both foil keys null.
     expect(detail.cards[0].unitPriceUsd).toBe(620);
+    // CR 100.4a for the sideboard, EDH's "effectively a 101st card" for the companion.
     expect(detail.deck.cardCount).toBe(4);
+  });
+
+  /**
+   * The switch decides whether a pile counts at all; the kind decides only whether it is
+   * played *beside* the deck or *in* it, and only `side` and `companion` are beside it. So an
+   * active Maybeboard is part of the deck's size — the same sentence `engine.ts`'s
+   * `SIZE_KINDS` and `deck.rs`'s `DECK_SELECT` are written from, and a fake that disagreed
+   * would story a deck the app would count differently.
+   */
+  it("sizes a Maybeboard the reader switched on, and not one left switched off", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "maybe", quantity: 5 }),
+      ],
+    });
+    expect(liveDeck(db)!.deck.cardCount).toBe(3);
+
+    const scratch = db.deckCategories.find((c) => c.kind === "maybe")!;
+    scratch.isActive = true;
+    expect(liveDeck(db)!.deck.cardCount).toBe(8);
   });
 
   it("reads everUncommon off the column, not off the 43 rows the fixture happens to hold", () => {

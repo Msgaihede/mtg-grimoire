@@ -139,7 +139,14 @@ pub struct DeckTagRow {
     pub name: String,
     pub color: String,
     /// Copies carrying this tag, `sum(quantity)` for [`DeckCategoryRow::card_count`]'s reason,
-    /// scoped to [`READBACK_VARIANT`] — [`list_tags`] takes no variant of its own to scope by.
+    /// scoped to the one `variant` the caller asked by — exactly as that field is.
+    ///
+    /// The two have to agree, and briefly did not: [`crate::deck::get_deck`] threaded its
+    /// variant into [`list_categories`] and not into [`list_tags`], so a Theory read came back
+    /// with Theory category counts beside **Live** tag counts. Nothing drew the number yet, so
+    /// nothing was visibly wrong; the contract was, which is the cheaper thing to fix.
+    /// A write's own readback still uses [`READBACK_VARIANT`] — a rename carries no variant of
+    /// its own, and `live` is the one the editor opens on.
     pub card_count: i64,
 }
 
@@ -351,9 +358,31 @@ pub fn list_categories(
         .map_err(|e| e.to_string())
 }
 
-/// Find a `kind = 'main'` category by name, or make one. The add path's "find its card
-/// category or create it" — unlike [`create_category`], which refuses a name already taken,
-/// this is meant to be handed the same name over and over and answer the same id every time.
+/// Find a category by name, or make one — a **new one is always `kind = 'main'`**, but the
+/// lookup is by name alone and will happily answer with a predefined category. The add path's
+/// "find its card category or create it"; unlike [`create_category`], which refuses a name
+/// already taken, this is meant to be handed the same name over and over and answer the same
+/// id every time.
+///
+/// **The lookup cannot be narrowed to `kind = 'main'`, and this is the trap.**
+/// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, name)` — one name
+/// per deck, whatever its kind — so a `kind = 'main'` lookup would miss the deck's predefined
+/// `Sideboard` and then fail the INSERT below on a UNIQUE violation rather than answering an
+/// id. Finding it is the only thing this function *can* do.
+///
+/// So a caller whose computed name collides with a predefined one files the card into that
+/// predefined category. For `Commander`, `Sideboard` and `Companion` that is arguably what the
+/// reader meant. For **`Maybeboard` it is not**: that one is seeded `is_active = 0`, so a card
+/// filed there counts toward nothing at all — not the deck's size, not its copy limits, not
+/// its legality, and the allocator reserves no copy for it. A card can vanish from every
+/// number the editor shows without vanishing from the deck.
+///
+/// The one caller that computes a name is [`crate::deck::add_card`]'s `categoryName` arm, fed
+/// by TypeScript's `autoCategoryFor`. **That rule is where the collision has to be settled** —
+/// it is domain logic, and the answer ("never return a predefined name", or "return
+/// `Maybeboard` only when the reader asked for it") is a product decision this module cannot
+/// make on its own. Nothing here refuses the collision, because refusing would break the
+/// legitimate case of a reader dragging a card onto their own Sideboard.
 ///
 /// Deliberately takes no lock of its own and opens no transaction: it is a helper for a
 /// caller that already has both (the way [`crate::deck::printing_of`] is), never a command in
@@ -630,13 +659,19 @@ fn read_tag(conn: &Connection, id: i64) -> Result<Option<DeckTagRow>, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Every tag of one deck, alphabetically. `card_count` reads [`READBACK_VARIANT`] — this
-/// command carries no variant of its own to scope by, the way [`list_categories`]'s does.
-pub fn list_tags(conn: &Connection, deck_id: i64) -> Result<Vec<DeckTagRow>, String> {
+/// Every tag of one deck, alphabetically, with its counts in the variant asked for —
+/// [`list_categories`]'s signature, for [`DeckTagRow::card_count`]'s reason: the two lists
+/// come back from one read and must be counted over one list of cards.
+pub fn list_tags(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+) -> Result<Vec<DeckTagRow>, String> {
+    let variant = valid_variant(variant)?;
     let sql = format!("{TAG_SELECT} WHERE t.deck_id = ?1 ORDER BY t.name");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![deck_id, READBACK_VARIANT], tag_row)
+        .query_map(params![deck_id, variant], tag_row)
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
@@ -1036,10 +1071,11 @@ pub async fn deck_category_delete(
 pub async fn deck_tag_list(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
+    variant: String,
 ) -> Result<Vec<DeckTagRow>, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        list_tags(&crate::sync::lock_db_read(&state), deck_id)
+        list_tags(&crate::sync::lock_db_read(&state), deck_id, &variant)
     })
     .await
     .map_err(|e| format!("the deck's tags could not be read: {e}"))?

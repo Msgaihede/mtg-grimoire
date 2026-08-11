@@ -144,12 +144,11 @@ describe("what counts is the category's switch, not its kind", () => {
 
   /**
    * And the converse: a Maybeboard the user switched **on** is an ordinary pile of the deck.
-   * Same card, same five copies, same ban — and every rule that reads the pile at all fires.
-   *
-   * Deck size is not one of them, and that is a different question rather than an exception:
-   * size counts `SIZE_KINDS`, which is `main` + `commander`, and the `maybe` kind was
-   * never in it. What the switch decides is whether the pile is looked at, not which totals it
-   * lands in.
+   * Same card, same five copies, same ban — and every rule that reads the pile at all fires,
+   * **deck size included**. See `counts an active Maybeboard toward deck size` below for the
+   * size half, which needs a format with a maximum to be visible at all: Modern has a minimum
+   * and no maximum (CR 100.5), so 65 cards is as legal as 60 and this deck says nothing about
+   * the size rule either way.
    */
   it("counts a category the user switched on, though its kind is maybe", () => {
     const deck = [
@@ -177,6 +176,54 @@ describe("what counts is the category's switch, not its kind", () => {
         cardIds: ["c-Sol Ring"],
       },
     ]);
+  });
+
+  /**
+   * **The size half of the switch, and the reason `maybe` is in `SIZE_KINDS` at all.**
+   *
+   * The rule: the switch decides whether a pile counts at all; the kind decides only whether
+   * it is played *beside* the deck or *in* it, and only `side` and `companion` are beside it.
+   * So an active Maybeboard sizes exactly like a `main` pile, and an inactive one sizes like
+   * nothing.
+   *
+   * Measured on Commander because it is exactly-100 in both directions — Modern's "at least
+   * 60, no maximum" cannot see the difference between 100 and 101, which is why the
+   * switched-on test above says nothing about size.
+   *
+   * The pair matters. Leaving `maybe` out of `SIZE_KINDS` is not a smaller version of this
+   * rule, it is an incoherent one: the copy limits and the legality check already counted the
+   * active Maybeboard, so a 101st card in it was a singleton error reported under a size
+   * figure that still read 100. Two answers to one question, from one read.
+   */
+  it("counts an active Maybeboard toward deck size and an inactive one not at all", () => {
+    const hundred = [commander(), islands(99)];
+    expect(validateDeck(hundred, spec("commander"))).toEqual([]);
+
+    const extra = card({ name: "Sol Ring", categoryKind: "maybe", categoryActive: true });
+    expect(validateDeck([...hundred, extra], spec("commander"))).toEqual([
+      {
+        severity: "error",
+        code: "deck-size",
+        message: "Commander decks are exactly 100 cards including the commander; you have 101.",
+      },
+    ]);
+
+    // Switched off, the same card is not in the deck at all — and this is the ordinary case,
+    // because `PREDEFINED_CATEGORIES` seeds the Maybeboard that way.
+    const parked = card({ name: "Sol Ring", categoryKind: "maybe", categoryActive: false });
+    expect(validateDeck([...hundred, parked], spec("commander"))).toEqual([]);
+
+    // The two kinds that really are played beside the deck stay out however they are switched:
+    // CR 100.4a for the sideboard, and EDH's "effectively a 101st card" for the companion.
+    const beside = [
+      card({ name: "Ancient Tomb", categoryKind: "side", categoryActive: true }),
+      card({ name: "Lurrus", categoryKind: "companion", categoryActive: true }),
+    ];
+    expect(
+      validateDeck([...hundred, ...beside], spec("commander")).filter(
+        (issue) => issue.code === "deck-size",
+      ),
+    ).toEqual([]);
   });
 });
 

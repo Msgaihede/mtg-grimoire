@@ -110,16 +110,25 @@ pub struct DeckRow {
     pub cover_artist: Option<String>,
     pub is_built: bool,
     pub archived: bool,
-    /// `live` copies in **active** categories of kind `main` + `commander` — what "a 60-card
-    /// deck" means in a caption, and **the same cards the validation engine sizes a deck by**
-    /// (`SIZE_KINDS` in `engine.ts`). One definition, because a tile that says 101 beside a
-    /// panel that says "exactly 100 incl cmdr; you have 100" is two answers to one question.
+    /// `live` copies in **active** categories of kind `main`, `commander` or `maybe` — what "a
+    /// 60-card deck" means in a caption, and **the same cards the validation engine sizes a
+    /// deck by** (`SIZE_KINDS` in `engine.ts`). One definition, because a tile that says 101
+    /// beside a panel that says "exactly 100 incl cmdr; you have 100" is two answers to one
+    /// question. The kind list here and that constant are the same three words, and a change to
+    /// one is a change to both.
     ///
-    /// Three exclusions, each for its own reason. The sideboard is not the deck (CR 100.4a).
-    /// A companion is not in the deck it is played beside — EDH calls one "effectively a 101st
-    /// card", which is exactly the card this count must not add. And an **inactive** category
-    /// counts toward nothing whatever its kind, which is how the Maybeboard stays out without
-    /// being named here: it is seeded `is_active = 0` like any category the user switches off.
+    /// **The switch decides whether a pile counts at all; the kind decides only whether it is
+    /// played *beside* the deck or *in* it — and only `side` and `companion` are beside it.**
+    /// So the sideboard is out (CR 100.4a) and the companion is out (EDH calls one "effectively
+    /// a 101st card", which is exactly the card this must not add), and everything else that is
+    /// switched on is in.
+    ///
+    /// That is why `maybe` is on the list, which reads odd until the alternative is written
+    /// out: leaving it off made an *active* Maybeboard part of the format's card pool and part
+    /// of the binder's reservations but not part of the deck's size — so a second Sol Ring in
+    /// one was a singleton error reported under a size figure that still read 100. Kind `maybe`
+    /// now exists for exactly one reason, to name the predefined Maybeboard and seed it
+    /// inactive, and that is honest: being switched off is the whole of what the Maybeboard is.
     pub card_count: i64,
     pub updated_at: i64,
 }
@@ -278,13 +287,16 @@ fn category_of_deck(conn: &Connection, deck_id: i64, category_id: i64) -> Result
 /// specs no longer carry must never hide a deck from its owner.
 ///
 /// The subquery is [`DeckRow::card_count`]'s definition, and it is the engine's `SIZE_KINDS`
-/// (`main` + `commander`) verbatim — see that field's doc. Its `JOIN deck_categories` is an
-/// *inner* join, unlike the two above it, because `deck_cards.category_id` is `NOT NULL` with
-/// an enforced foreign key: a card with no category is a row the schema cannot hold.
+/// (`main`, `commander`, `maybe`) verbatim — see that field's doc for why `maybe` is on the
+/// list. Its `JOIN deck_categories` is an *inner* join, unlike the two above it, because
+/// `deck_cards.category_id` is `NOT NULL` with an enforced foreign key: a card with no category
+/// is a row the schema cannot hold.
 ///
-/// `'live'` is spelled out rather than interpolated from [`LIVE`] because this is a `const`
-/// and there is nothing to interpolate with; `the_gallery_count_reads_only_the_live_variant`
-/// is what keeps the literal honest.
+/// `'live'` is spelled out rather than interpolated from [`LIVE`] because this is a `const` and
+/// there is nothing to interpolate with;
+/// `the_gallery_count_reads_only_live_rows_in_active_categories` is what keeps the literal
+/// honest, and `an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not` is what
+/// keeps the kind list in step with `SIZE_KINDS`.
 const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
             d.cover_card_id, c.artist, d.is_built, d.archived,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
@@ -292,7 +304,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                        WHERE dc.deck_id = d.id
                          AND dc.variant = 'live'
                          AND cat.is_active = 1
-                         AND cat.kind IN ('main','commander')), 0),
+                         AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1178,9 +1190,13 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
 /// legality panel from another, an owned badge from a third and its column headings from a
 /// fourth is a screen whose answers can disagree.
 ///
-/// **`variant` scopes the cards and nothing else.** The categories and tags come back whole
-/// (see [`DeckDetail::categories`]), so switching between the live deck and the theory one
-/// changes what is in the columns and never which columns there are.
+/// **`variant` scopes the cards, and every number counted over them.** *Which* categories and
+/// *which* tags come back does not depend on it (see [`DeckDetail::categories`]), so switching
+/// between the live deck and the theory one changes what is in the columns and never which
+/// columns there are — but a category's and a tag's `card_count` both count the variant that
+/// was asked for, because all three parts of this answer describe one list of cards. Threading
+/// it into [`crate::deck_meta::list_categories`] and not into
+/// [`crate::deck_meta::list_tags`] is exactly how they came to disagree once.
 pub fn get_deck(conn: &Connection, id: i64, variant: &str) -> Result<Option<DeckDetail>, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
     let Some(deck) = read_deck(conn, id)? else {
@@ -1190,7 +1206,7 @@ pub fn get_deck(conn: &Connection, id: i64, variant: &str) -> Result<Option<Deck
     fill_unknown_power_toughness(conn, &mut cards)?;
     attribute_owned(&mut cards, &owned_by_oracle(conn, id)?);
     let categories = crate::deck_meta::list_categories(conn, id, variant)?;
-    let tags = crate::deck_meta::list_tags(conn, id)?;
+    let tags = crate::deck_meta::list_tags(conn, id, variant)?;
     Ok(Some(DeckDetail {
         deck,
         cards,
@@ -2955,6 +2971,60 @@ mod tests {
         assert_eq!(read_deck(&conn, deck.id).unwrap().unwrap().card_count, 4);
     }
 
+    /// **The switch decides whether a pile counts at all; the kind decides only whether it is
+    /// played *beside* the deck or *in* it, and only `side` and `companion` are beside it.**
+    ///
+    /// So an active Maybeboard is part of the deck's size and an inactive one is not — the
+    /// same sentence as every other category, which is the point. The alternative was measured
+    /// and rejected: with `maybe` left out of the size list, an active Maybeboard was inside
+    /// the format's card pool and inside the binder's reservations but outside the size, so a
+    /// second Sol Ring in one raised a singleton error under a figure that still read 100.
+    ///
+    /// Paired with `SIZE_KINDS` in `engine.ts`, which is these three words and must stay them:
+    /// [`DeckRow::card_count`] and the validation panel answer one question, and two answers to
+    /// it is the bug this whole definition exists to prevent.
+    #[test]
+    fn an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let scratch = kind_of(&conn, deck.id, "maybe");
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "bolt-jp", scratch, 3);
+
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().card_count,
+            4,
+            "the Maybeboard is seeded off, so it counts toward nothing — including the size"
+        );
+
+        crate::deck_meta::set_category_active(&conn, scratch, true).unwrap();
+
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().card_count,
+            7,
+            "switched on, it is a pile played *in* the deck like any other, so it sizes"
+        );
+
+        // And the two kinds that really are played beside the deck stay out either way —
+        // CR 100.4a for the sideboard, and EDH's "effectively a 101st card" for the companion.
+        add(
+            &conn,
+            deck.id,
+            "serra-lea",
+            kind_of(&conn, deck.id, "side"),
+            15,
+        );
+        add(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            kind_of(&conn, deck.id, "companion"),
+            1,
+        );
+        assert_eq!(read_deck(&conn, deck.id).unwrap().unwrap().card_count, 7);
+    }
+
     #[test]
     fn a_card_id_that_does_not_resolve_is_refused() {
         let conn = seeded();
@@ -3516,6 +3586,8 @@ mod tests {
         add_card(&conn, deck.id, "serra-8ed", Some(main), None, THEORY, 7).unwrap();
         crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, Some(tag.id))
             .unwrap();
+        crate::deck_meta::set_card_tag(&conn, deck.id, "serra-8ed", main, THEORY, Some(tag.id))
+            .unwrap();
 
         let live = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
 
@@ -3603,6 +3675,20 @@ mod tests {
                 .card_count,
             7,
             "with the counts of the variant that was asked for"
+        );
+        // **And the tags are counted over that same variant**, which they briefly were not:
+        // `get_deck` threaded its variant into the category list and not into the tag list, so
+        // a Theory read came back with Theory category counts beside Live tag counts. Live has
+        // 4 tagged copies and Theory has 7, so a leak reads 4 here — a number belonging to a
+        // list this answer is not about.
+        assert_eq!(
+            theory
+                .tags
+                .iter()
+                .map(|t| (t.name.as_str(), t.card_count))
+                .collect::<Vec<_>>(),
+            vec![("Flex", 7), ("Unworn", 0)],
+            "one read, one list of cards, one variant — on all three of its parts"
         );
     }
 
