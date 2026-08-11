@@ -1966,8 +1966,13 @@ Add to `readHandlers`'s returned object, after `search_cards`:
       const manaValues: Record<string, number> = {};
       const manaBase = base("mana");
       for (let v = 0; v <= 8; v++) {
+        // **Exact equality below 8, a range at 8** — mirroring `push_card_filters`, which
+        // spells chips 0–7 as `cmc IN (0.0, …)` and chip 8 as `cmc >= 8.0`. So a fractional
+        // cost belongs to no chip below 8 but *does* belong to chip 8: `Math.trunc` here
+        // would count `Little Girl` (cmc 0.5, the corpus' only fractional printing) under
+        // chip 0, which the search would then not return.
         manaValues[String(v)] = manaBase.filter((c) =>
-          c.cmc === null ? false : v === 8 ? c.cmc >= 8 : Math.trunc(c.cmc) === v,
+          c.cmc === null ? false : v === 8 ? c.cmc >= 8 : c.cmc === v,
         ).length;
       }
 
