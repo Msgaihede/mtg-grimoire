@@ -92,6 +92,27 @@ const STATS_WIDTH = "w-70";
 /** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
 const NO_TAGS: readonly number[] = [];
 
+/**
+ * The narrowest the deck's name field may be squeezed to.
+ *
+ * 10rem, which at the field's `text-xl` is about thirteen characters — enough to tell two decks
+ * apart, and enough that the caret has somewhere to go. Below that the field stops being a
+ * field: measured in the shipped window, with nothing holding it, it collapsed to **18px**,
+ * which draws as a sliver with no glyph in it at all.
+ *
+ * A floor rather than a fixed width, because the field is still the row's flexible child: it
+ * takes every pixel the chrome beside it does not need, and 10rem is only what it falls back on
+ * when there are none. At the app's own 1280×800 it is never reached — the field measures 238px
+ * there — which is the point of the number: **10rem is the largest floor that still lets the
+ * whole header sit on one line at 1280.** At 12rem the row wrapped even with the Theory switch
+ * off, costing 44px of deck height in the common case to protect a width that was never at
+ * risk. Measured both ways; see the report.
+ *
+ * Written out whole rather than built from a constant — Tailwind scans source text for class
+ * names, and one assembled at runtime emits no rule at all.
+ */
+const NAME_FLOOR = "min-w-40";
+
 /** How a deck is drawn, and what the switch calls each one. */
 type DeckView = "stacks" | "table" | "text" | "grid";
 const VIEWS: readonly { id: DeckView; label: string }[] = [
@@ -761,9 +782,34 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             {/* The document's heading for this state of the view. Drawn as the field beside it
                 rather than twice — the ribbon's `h1` says "Decks", and this says which one. */}
             <h2 className="sr-only">{row.name}</h2>
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            {/**
+             * The deck's identity: what it is called, which of its two lists is being read, and
+             * how far apart they are.
+             *
+             * **`flex-wrap` and a floor on the field, because this row overflowed in the shipped
+             * window and no test could see it.** Measured over CDP with Theory on: the field was
+             * the only shrinkable child between two `shrink-0` siblings, so it collapsed to its
+             * intrinsic minimum — **18px at 1100, 1200 and 1280** — while the switch and the
+             * readout beside it spilled 180px / 80px out of this box and over the actions. At
+             * 1200 the last pixels of the difference readout hit-tested to the *format select*:
+             * a reader aiming at "0 cards differ" re-formatted their deck.
+             *
+             * So the narrowest things yield first, which is `DECK_FLOOR`'s rule one row up. The
+             * field keeps {@link NAME_FLOOR}; the switch and the readout drop to a second line
+             * when they no longer fit beside it. Nothing overlaps at any width, because nothing
+             * is squeezed past its own content any more.
+             */}
+            <div className="flex flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5">
               <input
                 aria-label="Deck name"
+                // **`size={1}` is load-bearing, and it is not about the drawn width.** A text
+                // input with no `size` defaults to 20 characters, and *that* is what a flex
+                // container reports as its min-content — at this field's `text-xl` it measured
+                // over 240px, which is what pushed the whole row of deck controls onto a second
+                // line at 1280 even with the Theory switch off. With `size={1}` the intrinsic
+                // width is a character and {@link NAME_FLOOR} is the only floor left, which is
+                // the one this file actually chose. The width you see is the flex layout's.
+                size={1}
                 value={nameDraft ?? row.name}
                 onChange={(e) => typeName(e.target.value)}
                 onBlur={commitName}
@@ -792,7 +838,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 // Cinzel is also drawn in caps — which in a field you type into means the
                 // letters never match the ones being typed.
                 className={cn(
-                  "min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1",
+                  "flex-1 rounded-md border border-transparent bg-transparent px-2 py-1",
+                  NAME_FLOOR,
                   "text-xl font-medium leading-tight",
                   "transition-colors duration-150 hover:border-border motion-reduce:transition-none",
                   FOCUS,
@@ -858,7 +905,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               )}
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {/**
+             * The deck's controls. **Not `shrink-0`**, which is what made the row above
+             * collapse: `flex-shrink: 0` on a `flex-wrap` container pins it at its
+             * *max-content* width — measured at **692px, at every window size** — so it never
+             * wrapped and every pixel of the squeeze fell on the deck's name instead.
+             *
+             * Shrinkable and wrapping, it gives way when there is nothing left to give: the
+             * chips fold onto a second line rather than pushing the name out of the window.
+             * `justify-end` so a folded line stays against the edge it belongs to.
+             */}
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <select
                 // "Deck format", not "Format": the docked search panel offers a format *filter*
                 // of its own, and two controls called Format in one view are two controls a

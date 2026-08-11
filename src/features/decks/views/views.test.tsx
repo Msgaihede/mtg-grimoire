@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
@@ -495,6 +495,46 @@ describe("TableView", () => {
     expect(
       screen.getByRole("columnheader", { name: `Price. ${PRICES_AS_OF}` }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **The card name gets a floor and the largest share, and the fixed columns pay for it.**
+   *
+   * Measured in the shipped window before this: seven fixed columns took 696px of an 843px
+   * grid, so the two flexible ones split 147px and the card name got **84px** — about ten
+   * characters — while the usually-empty Tags column held 112. A deck list whose card names are
+   * unreadable is not a deck list.
+   *
+   * The template is an inline style, so this is one of the few layout facts jsdom really can
+   * see. `minmax(0,1fr)` on Type is the half that matters most: it lets the name reach its
+   * floor by taking from the column beside it rather than by pushing the grid into a horizontal
+   * scroll.
+   */
+  it("gives the card name a floor and the largest share of the free space", () => {
+    setup();
+
+    const row = screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement;
+    const tracks = row.style.gridTemplateColumns.split(" ");
+    expect(tracks[1]).toBe("minmax(12rem,3fr)");
+    expect(tracks[3]).toBe("minmax(0,1fr)");
+    // Every other column is a fixed rem width, and together they are the budget the name is
+    // measured against: 3 + 5 + 5 + 4 + 5 + 5 + 5 = 32rem read-only. An editable table spends
+    // 8rem more on the Qty column, which is where the stepper and the move control live.
+    const fixed = (el: HTMLElement) =>
+      el.style.gridTemplateColumns
+        .split(" ")
+        .filter((t) => t.endsWith("rem"))
+        .reduce((n, t) => n + Number.parseFloat(t), 0);
+    expect(fixed(row)).toBe(32);
+
+    cleanup();
+    render(
+      <TableView
+        groups={GROUPS}
+        actions={{ setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop: vi.fn() }}
+      />,
+    );
+    expect(fixed(screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement)).toBe(40);
   });
 
   /**
