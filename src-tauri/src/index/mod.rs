@@ -25,6 +25,12 @@ pub mod lifecycle;
 use bitset::BitSet;
 use rusqlite::Connection;
 
+// `Clone` is for exactly one caller: `lifecycle::invalidate_owned`, which copies the
+// published index, re-reads `owned` into the copy and publishes that. Copy-on-write rather
+// than mutation because readers hold the live one behind an `Arc` — there is no `&mut` to be
+// had, and there should not be. It is a deep copy of every bitset and ordinal (~1 MB over the
+// live corpus, all of it memcpy), which is the price of not blocking them.
+#[derive(Clone)]
 pub struct CardIndex {
     /// Rowid ceiling every bitset here was built against, **rounded up to a whole word** —
     /// see `build`. Every sibling array indexed by a doc id is this long.
@@ -88,6 +94,21 @@ impl CardIndex {
     /// `AppState.db_read` for it would stall every search behind it at launch, which is the
     /// exact failure that second connection exists to prevent.
     pub fn build(conn: &Connection) -> rusqlite::Result<CardIndex> {
+        // **One read transaction over both halves of the build.** The corpus scan and the
+        // `rebuild_owned` that follows it are two statements, and in autocommit they are two
+        // snapshots: a swap landing between them leaves the bitsets describing one generation
+        // of rowids and `owned` describing the next, which is an index that says the user
+        // owns cards they have never seen. The post-swap rebuild repairs that a few seconds
+        // later, so it was only ever a window — but a window is not a guarantee, and one
+        // `BEGIN` makes it structural. Deferred, so it takes SQLite's read snapshot at the
+        // first statement and releases it on drop without ever writing anything.
+        //
+        // `unchecked_transaction` because `build` takes `&Connection` (the caller's handle is
+        // read-only and shared); it would refuse a connection already inside a transaction,
+        // and no caller here is.
+        let tx = conn.unchecked_transaction()?;
+        let conn = &*tx;
+
         let highest = conn.query_row("SELECT coalesce(max(rowid), 0) + 1 FROM cards", [], |r| {
             r.get::<_, i64>(0)
         })? as usize;
@@ -258,6 +279,15 @@ pub(crate) mod fixtures {
     pub(crate) fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
+        seed(&conn);
+        conn
+    }
+
+    /// The same four rows into a connection someone else opened — which is the whole reason
+    /// this is split out of [`seeded`]: [`state_with_seeded_cards`] needs them in a **file**
+    /// database, and an in-memory one cannot be reached by the second connection the
+    /// lifecycle opens for itself.
+    pub(crate) fn seed(conn: &Connection) {
         let modern = crate::legalities::bit("modern").unwrap() as i64;
         let rows: [Printing; 4] = [
             ("1", "Lightning Bolt", "lea", Some(1.0), "R", 1, modern),
@@ -274,7 +304,38 @@ pub(crate) mod fixtures {
             )
             .unwrap();
         }
-        conn
+    }
+
+    /// The same four printings on a **file** database, inside the [`crate::sync::AppState`]
+    /// the app runs on — `update::tests::file_state`'s arrangement, for its reason.
+    ///
+    /// A file and not `:memory:`, because [`super::lifecycle::build_now`] opens a read-only
+    /// connection of its **own** from `data_dir`: two in-memory connections are two different
+    /// databases, so an in-memory state would build an index over an empty corpus and every
+    /// count here would be zero.
+    ///
+    /// `name` is per test rather than one shared directory because `cargo test` runs these in
+    /// parallel — the brief's parameterless version had five tests sharing one path, where
+    /// each one's first act is to delete the directory the others are mid-build over.
+    pub(crate) fn state_with_seeded_cards(name: &str) -> std::sync::Arc<crate::sync::AppState> {
+        let dir = std::env::temp_dir().join(format!("mtgtest-lifecycle-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mtg.db");
+        let conn = crate::db::open(&path).unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        seed(&conn);
+        let read = crate::db::open_read_only(&path).unwrap();
+        std::sync::Arc::new(crate::sync::AppState {
+            db: std::sync::Mutex::new(conn),
+            db_read: std::sync::Mutex::new(read),
+            data_dir: dir.clone(),
+            syncing: std::sync::atomic::AtomicBool::new(false),
+            // Never called: nothing in the lifecycle reaches the network or an image.
+            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            images: crate::images::Cache::new(dir.join("images")),
+            index: std::sync::RwLock::new(None),
+        })
     }
 
     /// A collection entry for one printing. `set_code`/`collector_number` are denormalized

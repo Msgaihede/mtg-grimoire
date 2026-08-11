@@ -1299,6 +1299,7 @@ mod tests {
                 syncing: AtomicBool::new(false),
                 client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
                 images: crate::images::Cache::new(dir.join("images")),
+                index: std::sync::RwLock::new(None),
             }),
             dir,
         )

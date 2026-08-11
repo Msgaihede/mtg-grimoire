@@ -259,6 +259,16 @@ pub fn run() {
             let state = Arc::new(init_state(app).inspect_err(|e| eprintln!("{e}"))?);
             app.manage(state.clone());
 
+            // Warm the facet index: ~767 ms of full table scan on its own thread and its own
+            // read-only connection, so the window comes up now and the first searches answer
+            // out of `db_read` untouched. Here rather than inside `init_state` because that
+            // returns an `AppState` and this needs the `Arc` — and because it must run after
+            // `prepare_database`, which is the last thing that can change what `cards` is.
+            // Until it lands, `facet_cards` answers `ready: false` and every filter control
+            // stays live. Nothing about it is fatal; the handle is dropped and the thread
+            // runs detached.
+            index::lifecycle::spawn_build(&state);
+
             // Here rather than before the builder, and the difference is one rare bug: this
             // deletes a staged build, and the second instance of a double-click would
             // otherwise delete the *first* instance's staged update on its way to being
@@ -407,6 +417,9 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         syncing: AtomicBool::new(false),
         client: scryfall::Client::new(SCRYFALL_API.to_owned()),
         images,
+        // Cold, and built by `setup` the moment this state is in an `Arc` — see there for
+        // why the build cannot be started from in here.
+        index: std::sync::RwLock::new(None),
     })
 }
 

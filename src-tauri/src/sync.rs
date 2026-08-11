@@ -86,6 +86,13 @@ pub struct AppState {
     /// The image cache. Lives here so the `mtgimg://` handler can reach it from an
     /// `AppHandle` — that handle is the only state the handler is given.
     pub images: crate::images::Cache,
+    /// The in-memory facet index, or `None` while it is cold — which is a supported state
+    /// and not an error: see [`crate::index::lifecycle`].
+    ///
+    /// `RwLock` and not `Mutex`: every facet request reads it and only a sync or a collection
+    /// write replaces it. `Arc` so a reader clones the handle and lets the lock go at once —
+    /// a facet pass must never hold a lock a sync's rebuild is waiting on.
+    pub index: std::sync::RwLock<Option<std::sync::Arc<crate::index::CardIndex>>>,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -530,7 +537,13 @@ async fn finish_unchanged(
     // reconcile that only ran after an ingest would run about as often as Scryfall rotates
     // its bulk file — while `/migrations` grows on its own schedule.
     reconcile_ids(state, app).await;
-    compact_once(state, app).await;
+    // Nothing on this path replaced `cards` — that is what "unchanged" means — so the facet
+    // index is still true and is deliberately left alone. The one exception is the once-ever
+    // conversion, whose `VACUUM` renumbers the rowids the index is made of; it says so, and
+    // then this is the rebuild it owes.
+    if compact_once(state, app).await {
+        crate::index::lifecycle::spawn_build(state);
+    }
     emit_done(app, card_count, None);
     Ok(unchanged(card_count))
 }
@@ -565,14 +578,24 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
     // On a blocking thread, and taking the write lock inside it, for the reason the whole
     // module repeats: the lock is never held across an `.await`, and a pass over the log is
     // synchronous SQLite work.
-    let state = state.clone();
+    // Its own handle rather than shadowing `state`, because the arm below still needs the
+    // caller's — a moved clone would take the state the index refresh reads from with it.
+    let worker = state.clone();
     let applied = tauri::async_runtime::spawn_blocking(move || {
-        let mut conn = lock_db(&state);
+        let mut conn = lock_db(&worker);
         crate::reconcile::apply(&mut conn, &migrations)
     })
     .await;
     match applied {
         Ok(Ok(stats)) if stats.repointed + stats.folded + stats.flagged > 0 => {
+            // A repoint or a fold moves a collection row onto a different `card_id`, which
+            // is a different rowid, which is a different bit in the index's `owned` set. The
+            // cheap dimension refresh rather than a rebuild — the corpus did not move — and
+            // a no-op on the ingest path, where the swap has already taken the index cold.
+            // The arm is shared with a pass that only *flagged* rows, which moves no id at
+            // all: that costs one re-read the app did not need, on the rare pass that has
+            // already found something to tell the user about.
+            crate::index::lifecycle::invalidate_owned(state);
             // Only when something moved. A pass that skipped every already-applied
             // migration — which is every pass after the first — has nothing to tell anyone.
             let _ = app.emit(
@@ -651,7 +674,12 @@ async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
 /// next Refresh of the session. The connection that ran the `VACUUM` is the one that knows.
 /// Pinned by
 /// `maintenance::tests::a_read_only_handle_reports_a_stale_auto_vacuum_after_a_conversion`.
-async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
+///
+/// Answers **whether it took the facet index cold**, which is to say whether a `VACUUM` was
+/// attempted: a caller that hears `true` owes a rebuild whatever the outcome, because a
+/// conversion that failed still leaves the index cleared and cold is not a state to settle
+/// into either.
+async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     let (convert, rebuild) = {
         let conn = lock_db(state);
         (
@@ -663,9 +691,19 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
         )
     };
     if !convert && !rebuild {
-        return;
+        return false;
     }
     emit(app, "compacting", 0, 0);
+    if convert {
+        // **A `VACUUM` renumbers rowids**, which is exactly what desyncs `cards_fts` two
+        // paragraphs up — and the facet index is rowids and nothing else. Cleared here rather
+        // than left to the caller because this is the only place that knows a `VACUUM` is
+        // coming, and because [`finish_unchanged`] reaches it too: on that path nothing else
+        // in the run touches `cards`, so without this a legacy database would carry an index
+        // pointing at pre-`VACUUM` rowids for the rest of the session. The rebuild is the
+        // caller's, which is what the return value is for.
+        crate::index::lifecycle::clear(state);
+    }
     let state = state.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_db(&state);
@@ -692,6 +730,7 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) {
         Ok(Err(e)) => eprintln!("database compaction failed: {e}"),
         Err(e) => eprintln!("database compaction task failed: {e}"),
     }
+    convert
 }
 
 async fn do_sync(
@@ -810,6 +849,23 @@ async fn do_sync(
     };
     let _ = std::fs::remove_file(&gz);
 
+    // **The swap has landed, so the facet index is now a liar — go cold immediately.**
+    // `swap_staging` dropped and recreated `cards`, which renumbers every rowid, and the
+    // index is nothing but rowids: left published it would count *other cards* into every
+    // facet, greying out options the search would happily return printings for. The rebuild
+    // does not follow until the end of the run (below), because two things between here and
+    // there move the ground again — `reconcile_ids` can repoint a collection row onto another
+    // printing, and `compact_once`'s one-time `VACUUM` renumbers the rowids a second time.
+    // For those few seconds the app answers `ready: false` and every control stays live,
+    // which is the honest answer and the safe one.
+    //
+    // A run that dies between here and there — the `/sets` call is the one that reaches the
+    // network again — leaves the index cold until the next launch or sync. That is the
+    // degradation this whole module is built to make safe (no facet counts, every filter
+    // live, nothing else changed), and it is strictly better than the alternative on offer,
+    // which is counts about a corpus that no longer exists.
+    crate::index::lifecycle::clear(state);
+
     reclaim_freed_pages(state, app).await;
 
     {
@@ -861,7 +917,13 @@ async fn do_sync(
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
     reconcile_ids(state, app).await;
-    compact_once(state, app).await;
+    // Its answer is ignored on purpose: this path swapped `cards`, so it owes a rebuild
+    // whether or not a conversion also ran.
+    let _ = compact_once(state, app).await;
+    // Last, and only now: everything that could still move a rowid or a `card_id` has run,
+    // so this build reads the generation the app will keep. ~767 ms on its own thread — the
+    // sync is finished either way and nothing waits for it.
+    crate::index::lifecycle::spawn_build(state);
     emit_done(app, card_count, Some(stats.skipped));
     Ok(SyncOutcome {
         updated: true,
@@ -949,6 +1011,7 @@ mod tests {
                 // Never touched either — a `Cache` creates nothing until it is asked for
                 // an image, so this directory does not have to exist.
                 images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
+                index: std::sync::RwLock::new(None),
             },
             dir,
         )

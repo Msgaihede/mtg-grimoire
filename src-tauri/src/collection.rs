@@ -510,13 +510,37 @@ fn with_write<T>(
     }
 }
 
+/// [`with_write`], plus the facet index's `owned` dimension re-read afterwards.
+///
+/// Every command in this module that changes what the user owns goes through here, because
+/// `owned` is the one index dimension a user moves without a sync — and an index that
+/// disagrees with the collection greys out "Owned" for a card they have just added.
+///
+/// **After the write lock is gone, never inside it.** [`with_write`] returns before this runs,
+/// which is the house rule that a command must not do its remaining work while holding its own
+/// guard: 10–23 ms of re-read under the write connection is 10–23 ms of every other writer
+/// waiting, for work that reads through a connection of its own and needs no lock at all.
+///
+/// Only on success. A refusal — [`BUSY`], [`GONE`], a rejected quantity — changed nothing, and
+/// re-reading after one would be a copy of the whole index to arrive at the same answer.
+fn with_write_owned<T>(
+    state: &Arc<AppState>,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let answer = with_write(state, f);
+    if answer.is_ok() {
+        crate::index::lifecycle::invalidate_owned(state);
+    }
+    answer
+}
+
 #[tauri::command]
 pub async fn collection_add(
     state: tauri::State<'_, Arc<AppState>>,
     entry: EntryInput,
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| add_entry(c, &entry)))
+    tauri::async_runtime::spawn_blocking(move || with_write_owned(&state, |c| add_entry(c, &entry)))
         .await
         .map_err(|e| format!("the collection could not be written: {e}"))?
 }
@@ -529,7 +553,7 @@ pub async fn collection_set_quantity(
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| set_quantity(c, id, quantity))
+        with_write_owned(&state, |c| set_quantity(c, id, quantity))
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -543,7 +567,7 @@ pub async fn collection_update(
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| update_entry(c, id, &patch))
+        with_write_owned(&state, |c| update_entry(c, id, &patch))
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -555,7 +579,7 @@ pub async fn collection_remove(
     id: i64,
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| remove_entry(c, id)))
+    tauri::async_runtime::spawn_blocking(move || with_write_owned(&state, |c| remove_entry(c, id)))
         .await
         .map_err(|e| format!("the collection could not be written: {e}"))?
 }
@@ -1735,6 +1759,7 @@ mod tests {
             // Neither is ever touched: this test stops at the lock.
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
             images: crate::images::Cache::new(std::path::PathBuf::from("D:\\app\\data\\images")),
+            index: std::sync::RwLock::new(None),
         });
 
         let held = crate::db::lock_blocking(&state.db);
@@ -1758,6 +1783,44 @@ mod tests {
                 .map(|_| ()))
             .is_err()
         );
+    }
+
+    /// Every write in this module goes through [`with_write_owned`], and this is what that
+    /// buys: the facet index's `owned` dimension is true again by the time the command
+    /// answers, so the panel the user is looking at does not grey out "Owned" for a card they
+    /// have just added.
+    ///
+    /// And **only on success**, which is asserted on the published `Arc`'s identity rather
+    /// than on its contents: a refusal changed no rows, so a refresh after one arrives at the
+    /// same counts and a count is therefore blind to whether the work was done. A new `Arc` is
+    /// the only visible trace of ~1 MB of index copied to learn nothing. (Measured: with the
+    /// `is_ok` guard removed, the count assertion still passes and this one fails.)
+    ///
+    /// The refusal is [`GONE`] rather than [`BUSY`]: a busy write would need the lock held
+    /// from another thread, and the point being pinned is the same either way.
+    #[test]
+    fn a_write_that_lands_refreshes_the_owned_facet_and_one_that_is_refused_does_not() {
+        let state = crate::index::fixtures::state_with_seeded_cards("collection-owned");
+        crate::index::lifecycle::build_now(&state).unwrap();
+        let before = crate::index::lifecycle::current(&state).unwrap();
+        assert_eq!(before.owned.count(), 0);
+
+        with_write_owned(&state, |c| add_entry(c, &input("1", "nonfoil", 2))).unwrap();
+        let refreshed = crate::index::lifecycle::current(&state).unwrap();
+        assert_eq!(
+            refreshed.owned.count(),
+            1,
+            "the index has to know about the row the command just wrote"
+        );
+
+        let refused = with_write_owned(&state, |c| set_quantity(c, 4_242, 3));
+        assert_eq!(refused.unwrap_err(), GONE);
+        let after = crate::index::lifecycle::current(&state).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&refreshed, &after),
+            "a refused write must not republish the index at all"
+        );
+        assert_eq!(after.owned.count(), 1);
     }
 
     /// Money, per finish, out of the blob. The fixture is built so that using `price_usd`
