@@ -62,6 +62,7 @@ const BOLT: DeckCard = {
   rarity: "common",
   faces: null,
   gameChanger: false,
+  finishes: null,
   everUncommon: false,
   unitPriceUsd: 4.5,
   ownedQuantity: 2,

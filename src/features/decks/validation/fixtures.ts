@@ -298,6 +298,8 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
     rarity: "common",
     faces: null,
     gameChanger: false,
+    // A printing fact the engine never reads -- it is here so the row is a whole DeckCard.
+    finishes: null,
     everUncommon: false,
     unitPriceUsd: null,
     ownedQuantity: 0,

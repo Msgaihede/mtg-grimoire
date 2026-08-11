@@ -110,6 +110,7 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     rarity: card.rarity,
     faces: card.faces,
     gameChanger: card.gameChanger,
+    finishes: card.finishes,
     everUncommon: card.everUncommon,
     unitPriceUsd: finishPrice(card.prices, "nonfoil"),
     // An **allocation**, never a decrement — how many copies this deck has reserved out of the
@@ -179,6 +180,7 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     rarity: null,
     faces: null,
     gameChanger: null,
+    finishes: null,
     // `false` for an orphan, because nothing is known about a card that is not there.
     everUncommon: false,
     unitPriceUsd: null,

@@ -1,11 +1,12 @@
 import { useEffect } from "react";
+import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
-import { parseFinishes } from "@/lib/finish";
+import { parseFinishes, soleFinish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
@@ -48,6 +49,9 @@ const COLUMNS: TableColumn<CardSummary>[] = [
             because they are facts about the *card*, and the table's other five columns are
             about the printing. One truth, stated the same way in both layouts. */}
         <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
+        {/* The table shows no art, so the glyph carries the whole of what the wall's sheen
+            says: this printing exists in one finish and it is not the assumed one. */}
+        {tileFinish(card) && <FinishMark finish={tileFinish(card)!} />}
         {/* What a collapsed row stands for. Drawn only past one, because "×1 printings" on
             the 17 588 cards that have a single printing — and on *every* row once All
             printings is on — would be a column of noise saying nothing. */}
@@ -155,6 +159,14 @@ const tileDrag = (card: CardSummary): DragPayload => ({
   cardId: card.id,
   name: card.name,
 });
+
+/**
+ * The finish a result row's printing *is*, for the sheen over its art.
+ *
+ * Only the printings that leave no choice — foil-only and etched-only. Module scope for
+ * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes.
+ */
+const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
 
 /**
  * Card search: a filter bar, and every match in one scroll.
@@ -336,6 +348,9 @@ function Results({ search }: { search: CardSearch }) {
             // How many printings this tile stands for, opposite the owned badge. Past one
             // only: on a wall where every tile said "×1" the mark would be chrome.
             topLeft={(card) => (card.printings > 1 ? <>×{card.printings}</> : null)}
+            // The 12 366 foil-only and 892 etched-only printings, which Scryfall's art has
+            // no way to show — see `soleFinish`.
+            finish={tileFinish}
             // The tile's one control, built from the row it is about: the popup offers the
             // finishes this printing exists in — a foil-only card must not take a nonfoil
             // entry — and a wish made here can be for the card rather than for this piece of

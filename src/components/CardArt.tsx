@@ -1,7 +1,25 @@
 import { CardImage } from "@/components/CardImage";
+import { FinishMark } from "@/components/FinishMark";
+import type { Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
+
+/**
+ * The holo sweep laid over a foil card's art.
+ *
+ * A real foil card is a diffraction grating: it throws a different hue at every angle, which
+ * is exactly what a multi-stop gradient across the frame approximates. Scryfall's photography
+ * has none of it — the art of a foil-only printing is byte-identical to a nonfoil one — so
+ * without this the app has no way to show that 12 366 of its printings are foil.
+ *
+ * `overlay` blend and 12 % opacity: it *tints* the art and never covers it, which is the
+ * brief's one hard requirement. A screenshot is the acceptance test — whether 12 % over a dark
+ * Phyrexian artwork is still legible is not something an assertion can answer.
+ */
+const FOIL_SHEEN =
+  "linear-gradient(115deg, #ff5f6d 0%, #ffc371 20%, #47e5bc 40%, " +
+  "#3b8beb 60%, #a95fe8 80%, #ff5f6d 100%)";
 
 /**
  * One card's art in its 5:7 frame — the picture, its retry, and what is drawn when there is
@@ -28,6 +46,7 @@ export function CardArt({
   variant = "grid",
   selected = false,
   hoverZoom = false,
+  finish = null,
   className,
 }: {
   /**
@@ -58,6 +77,16 @@ export function CardArt({
    * a 40px deck-row thumbnail does not, and neither does a static pane.
    */
   hoverZoom?: boolean;
+  /**
+   * The finish this object *is*, drawn as a holo sheen and a corner chip. `null` — the
+   * default — draws neither.
+   *
+   * "Is", not "could be": a printing sold in both finishes passes `null`, because the mark
+   * describes the cardboard and not a choice at the checkout. `soleFinish` in `@/lib/finish`
+   * is what a printing-shaped caller derives this with; a collection row passes its entry's
+   * own stored finish, which is the one place the answer is known outright.
+   */
+  finish?: Finish | null;
   className?: string;
 }) {
   // The self-healing half of the rate limit, and the reset that goes with it: this component
@@ -113,6 +142,45 @@ export function CardArt({
           </span>
         </span>
       )}
+
+      <FoilOverlay finish={finish} />
     </span>
+  );
+}
+
+/**
+ * The sheen and the chip that say a card is foil, over whatever frame encloses them.
+ *
+ * Its own component because the card detail pane's main art is **not** a `CardArt`: it keeps
+ * a flip fade, a bespoke "no image yet" panel and no retry hook, and routing it through the
+ * shared frame would trade three deliberate behaviours for one shared one. What the two must
+ * agree on is the marking, so that is what is shared.
+ *
+ * The enclosing element needs `relative` and `overflow-hidden`; `CardArt` has both.
+ */
+export function FoilOverlay({ finish }: { finish: Finish | null }) {
+  if (!finish) return null;
+  return (
+    <>
+      {/* `aria-hidden` because the chip beside it already says the word, and a screen reader
+          does not need it twice. `pointer-events-none` because the frame is usually inside a
+          button and a full-bleed overlay would swallow every click on it. */}
+      <span
+        data-foil-sheen
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-[0.12] mix-blend-overlay"
+        style={{ backgroundImage: FOIL_SHEEN }}
+      />
+      {/* The chip is what *says* foil; the sheen is what *looks* foil. Neither is asked to do
+          the other's job — a sheen alone is ambiguous at a glance on dark art, and a chip
+          alone says nothing about the object being a different physical thing.
+
+          Top-right, because a tile's other two corners are spoken for: bottom-left the owned
+          badge, top-left the printing count. The backing is the app's own table felt at 85 %,
+          matching those two exactly. */}
+      <span className="pointer-events-none absolute top-1 right-1 flex items-center rounded bg-bg/85 px-1 py-0.5">
+        <FinishMark finish={finish} />
+      </span>
+    </>
   );
 }
