@@ -1370,8 +1370,13 @@ fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
 ///
 /// `min(a.quantity, e.quantity)` is the clamp and it is per claim, not per total: a deck that
 /// reserved four copies of a row the user has since stepped to one owns one of them. The
-/// stored claim is left alone — the next zone write recomputes it — because a read is not
+/// stored claim is left alone — the next card write recomputes it — because a read is not
 /// the place to discover that the world moved.
+///
+/// **`deck_allocations` carries no variant, and does not need one**: [`allocate_deck`] only
+/// ever writes claims for the `live` list, so every row here is a live claim by construction.
+/// What that means for a `theory` read is [`attribute_owned`]'s to decide, and it decides it
+/// explicitly rather than by accident.
 fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i64>, String> {
     let mut stmt = conn
         .prepare(
@@ -1401,10 +1406,14 @@ fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i6
 /// shows must not depend on how it was displayed. `get_deck` is the only caller and hands the
 /// rows straight over.
 ///
-/// **A row in an inactive category is passed over rather than served last.** The allocator
-/// claimed nothing for it (see [`allocate_deck`]), so there is nothing of its to hand out —
-/// and letting it take from the pool would move copies off the rows that *are* the deck onto
-/// a scratchpad that reserves none of them.
+/// **A row the allocator did not claim for is passed over rather than served last**, and there
+/// are two of those. A row in an **inactive** category: the allocator claimed nothing for it
+/// (see [`allocate_deck`]), so there is nothing of its to hand out, and letting it take from
+/// the pool would move copies off the rows that *are* the deck onto a scratchpad that reserves
+/// none of them. And a row in the **theory** list, which is the subtler one: `deck_allocations`
+/// carries no variant, so a theory read walks the *live* deck's claims and would otherwise hand
+/// a plan the copies the sleeved deck reserved. A plan reserves nothing and must say so —
+/// pinned by `the_allocator_claims_nothing_for_the_theory_variant`.
 ///
 /// This walk and [`allocate_deck`]'s are deliberately **not** the same order — the allocator
 /// spends copies in [`KIND_PRIORITY`], and this hands them out in the user's own category
@@ -1416,7 +1425,8 @@ fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i6
 fn attribute_owned(rows: &mut [DeckCardRow], owned_by_oracle: &HashMap<String, i64>) {
     let mut left = owned_by_oracle.clone();
     for row in rows.iter_mut() {
-        let Some(oracle) = row.oracle_id.clone().filter(|_| row.category_active) else {
+        let claimed_for = row.category_active && row.variant == LIVE;
+        let Some(oracle) = row.oracle_id.clone().filter(|_| claimed_for) else {
             row.owned_quantity = 0;
             continue;
         };
@@ -3352,10 +3362,19 @@ mod tests {
             "and it says so rather than borrowing the live deck's answer"
         );
 
-        // The same printing, the same category, in the live deck: that one claims.
+        // The same printing, the same category, in the live deck: that one claims — and the
+        // theory row beside it *still* reads 0. This is the half a naive read gets wrong:
+        // `deck_allocations` carries no variant, so a theory read walks the live deck's stored
+        // claims and would hand the plan the four copies the sleeved deck reserved.
         add(&conn, deck.id, "bolt-lea", main, 4);
         assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
+        let theory = get_deck(&conn, deck.id, THEORY).unwrap().unwrap();
+        assert_eq!(
+            card_row(&theory, "bolt-lea", main).owned_quantity,
+            0,
+            "a plan reserves nothing even when the deck it is a plan for reserves everything"
+        );
     }
 
     /// The read clamps: the allocation says 4, the entry has since been stepped to 1 →
