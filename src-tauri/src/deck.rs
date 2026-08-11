@@ -28,12 +28,18 @@
 //! Every card command takes a `variant` ([`crate::schema::DECK_VARIANTS`]) as well, because
 //! v8 widened the grain: `live` is what is sleeved up, `theory` is what the deck is being
 //! built toward, and an edit tried out in one must never fold into the other's row.
+//!
+//! And every write here leaves a line in [`crate::deck_audit`], **inside its own transaction**
+//! — so a change that rolls back takes its history with it. The two exceptions say why on
+//! their own docs: [`delete_deck`] (the row would CASCADE away with the deck it describes) and
+//! [`missing_to_wishlist`] (it changes the wishlist, not the deck).
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
 use crate::deck_meta::{DeckCategoryRow, DeckTagRow};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -83,6 +89,14 @@ pub struct DeckInput {
 }
 
 /// An edit to one deck. Every field is optional: absent means "leave it".
+///
+/// **Absent is the only way to say "leave it", so `null` cannot say "clear it".** Every column
+/// below is written with `coalesce(?n, column)`, which reads a bound NULL as "unchanged" — so
+/// there is no patch that files a deck back at the root of the folder tree, and none that
+/// clears a cover or a description either. That is the shape this struct has had since v5 and
+/// [`DeckPatch::folder_id`] joins it rather than inventing a second convention; un-filing a
+/// deck wants a double-`Option` (absent versus null) across the whole struct, which is a
+/// change to make once and deliberately, not as a side effect of adding a column.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeckPatch {
@@ -92,6 +106,9 @@ pub struct DeckPatch {
     pub cover_card_id: Option<String>,
     pub is_built: Option<bool>,
     pub archived: Option<bool>,
+    /// Which folder the deck is filed in. `decks.folder_id` is `ON DELETE SET NULL`, so a
+    /// folder the user deletes surfaces its decks at the root rather than taking them with it.
+    pub folder_id: Option<i64>,
 }
 
 /// One deck as the gallery shows it.
@@ -358,13 +375,47 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
         )
         .map_err(|e| e.to_string())?;
     crate::deck_meta::ensure_predefined_categories(&tx, id)?;
+    // The first line of the deck's history, and the one place a `deck` row carries a `from` of
+    // null: there was no previous name, because there was no deck. Recorded here rather than
+    // left out so that a drawer scrolled to the bottom ends at the deck's own beginning
+    // instead of at whatever edit happens to be oldest.
+    crate::deck_audit::record(
+        &tx,
+        id,
+        crate::deck_audit::DECK_LEVEL,
+        crate::deck_audit::DECK,
+        None,
+        &json!({ "field": "name", "from": null, "to": name }),
+        0,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 
+/// One `decks` row as it was before an edit — every column [`DeckPatch`] can reach, read
+/// inside the transaction so the `from` side of a history row is the value the UPDATE is
+/// actually about to replace.
+struct DeckBefore {
+    name: String,
+    format_key: String,
+    description: Option<String>,
+    cover_card_id: Option<String>,
+    is_built: bool,
+    archived: bool,
+    folder_id: Option<i64>,
+}
+
 /// Apply an edit. Absent fields are left alone (`coalesce(?n, column)`), which is what
 /// makes this usable from a form that only sends what it changed — `collection::update_entry`
-/// verbatim. Rename, re-format, cover, build and archive all arrive here.
+/// verbatim. Rename, re-format, cover, build, archive and filing all arrive here.
+///
+/// **One history row per field that actually changed**, which is a narrower rule than "one per
+/// call" and a wider one than "one per press". A patch that asks for the value a field already
+/// has changed nothing and records nothing — otherwise every Save on an untouched form would
+/// fill the drawer with edits nobody made. A patch that changes two fields is two facts, and
+/// the `deck` payload names one field: the alternative would be choosing which half of the
+/// user's edit is remembered. The editor sends one field at a time, which is why
+/// `every_deck_write_leaves_exactly_one_audit_row` counts one here.
 pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<DeckRow, String> {
     let name = match patch.name.as_deref() {
         Some(n) => Some(valid_name(n)?.to_owned()),
@@ -381,6 +432,29 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // fact and are written as one. Every other allocation site already had a transaction to
     // join; this is the only one that had to open its own.
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Read before write, so the history's `from` side is what this UPDATE is about to replace.
+    // Inside the transaction, because a value read outside one could have moved by the time
+    // the UPDATE ran and the row would then record a change that never happened.
+    let before: DeckBefore = tx
+        .query_row(
+            "SELECT name, format_key, description, cover_card_id, is_built, archived, folder_id
+               FROM decks WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(DeckBefore {
+                    name: r.get(0)?,
+                    format_key: r.get(1)?,
+                    description: r.get(2)?,
+                    cover_card_id: r.get(3)?,
+                    is_built: r.get(4)?,
+                    archived: r.get(5)?,
+                    folder_id: r.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| GONE.to_owned())?;
     let changed = tx
         .execute(
             "UPDATE decks SET
@@ -390,6 +464,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 cover_card_id = coalesce(?5, cover_card_id),
                 is_built = coalesce(?6, is_built),
                 archived = coalesce(?7, archived),
+                folder_id = coalesce(?8, folder_id),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -400,12 +475,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.cover_card_id,
                 patch.is_built,
                 patch.archived,
+                patch.folder_id,
             ],
         )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(GONE.to_owned());
     }
+    record_deck_edit(&tx, id, patch, &name, &format_key, &before)?;
     // Sleeving a deck up (or taking it apart) is the one edit here that changes what is
     // available, so it is the one that reallocates. **This deck only:** every other deck's
     // claims are recomputed the next time it is touched, because walking the whole gallery
@@ -417,6 +494,114 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 
+/// Write [`update_deck`]'s history: one row per field whose value actually moved.
+///
+/// `name` and `format_key` arrive already validated and canonicalised (a blank format key is
+/// [`DEFAULT_FORMAT`] by then), so what is compared here is what was written and not what was
+/// typed — a patch that sends `"  Burn  "` for a deck already called `Burn` records nothing,
+/// which is the honest answer.
+///
+/// **Filing a deck is a `folder` row, not a `deck` one**, and that is the one asymmetry worth
+/// naming: `deck_folders` is the only thing a deck can point at that has a *name of its own*,
+/// and a bare folder id in a `deck` row's `to` would be a number no reader could resolve once
+/// the folder was renamed. The path is resolved here, at the moment it is true.
+fn record_deck_edit(
+    tx: &Connection,
+    id: i64,
+    patch: &DeckPatch,
+    name: &Option<String>,
+    format_key: &Option<String>,
+    before: &DeckBefore,
+) -> Result<(), String> {
+    let field = |field: &str, from: serde_json::Value, to: serde_json::Value| {
+        crate::deck_audit::record(
+            tx,
+            id,
+            crate::deck_audit::DECK_LEVEL,
+            crate::deck_audit::DECK,
+            None,
+            &json!({ "field": field, "from": from, "to": to }),
+            0,
+        )
+    };
+    if let Some(to) = name.as_deref().filter(|n| *n != before.name) {
+        field("name", json!(before.name), json!(to))?;
+    }
+    if let Some(to) = format_key.as_deref().filter(|k| *k != before.format_key) {
+        field("format", json!(before.format_key), json!(to))?;
+    }
+    if let Some(to) = patch
+        .description
+        .as_deref()
+        .filter(|d| Some(*d) != before.description.as_deref())
+    {
+        field("description", json!(before.description), json!(to))?;
+    }
+    if let Some(to) = patch
+        .cover_card_id
+        .as_deref()
+        .filter(|c| Some(*c) != before.cover_card_id.as_deref())
+    {
+        field("cover", json!(before.cover_card_id), json!(to))?;
+    }
+    if let Some(to) = patch.is_built.filter(|b| *b != before.is_built) {
+        field("built", json!(before.is_built), json!(to))?;
+    }
+    if let Some(to) = patch.archived.filter(|a| *a != before.archived) {
+        field("archived", json!(before.archived), json!(to))?;
+    }
+    if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
+        crate::deck_audit::record(
+            tx,
+            id,
+            crate::deck_audit::DECK_LEVEL,
+            crate::deck_audit::FOLDER,
+            None,
+            &json!({ "action": "move", "folder": folder_path(tx, to)? }),
+            0,
+        )?;
+    }
+    Ok(())
+}
+
+/// A folder's full path, root first, joined with ` › ` — `"Commander › Legends"`.
+///
+/// Resolved at write time and stored in the history row, which is deliberate and is the
+/// opposite of what every other reference in this schema does: a `folder_id` would be the
+/// normalised thing to keep, and it would be **wrong here**, because a history says what was
+/// true then. A folder renamed or deleted afterwards must not rewrite the line that recorded
+/// the move.
+///
+/// Walks `parent_id` upward with a hop budget rather than an unbounded loop: `move_folder`
+/// refuses a cycle, so the tree cannot hold one — but this walk runs over data, and a walk
+/// over data that trusts an invariant is a walk that hangs the day the invariant is wrong. A
+/// path that exceeds the budget is answered as far as it was read.
+fn folder_path(conn: &Connection, folder_id: i64) -> Result<String, String> {
+    /// Deep enough that no filing anyone does by hand reaches it.
+    const MAX_DEPTH: usize = 64;
+
+    let mut names: Vec<String> = Vec::new();
+    let mut cursor = Some(folder_id);
+    while let Some(id) = cursor {
+        if names.len() >= MAX_DEPTH {
+            break;
+        }
+        let row: Option<(String, Option<i64>)> = conn
+            .query_row(
+                "SELECT name, parent_id FROM deck_folders WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((name, parent)) = row else { break };
+        names.push(name);
+        cursor = parent;
+    }
+    names.reverse();
+    Ok(names.join(" › "))
+}
+
 /// Delete the deck outright.
 ///
 /// **This one really deletes**, unlike anything in [`crate::reconcile`]: a deck is the
@@ -426,6 +611,13 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
 ///
 /// Like [`crate::collection::remove_entry`], an id that resolves to nothing is a success:
 /// the caller wanted that deck gone, and it is gone.
+///
+/// **Records nothing**, and cannot: `deck_audit.deck_id` is `NOT NULL` and CASCADEs from
+/// `decks`, so a row written to say "this deck was deleted" would be removed by the very
+/// statement that made it true. It is the one deck write with no history, because it is the
+/// one deck write with nothing left to file a history under —
+/// `deleting_a_deck_takes_its_history_with_it` pins that this is a property of the schema and
+/// not an omission.
 pub fn delete_deck(conn: &Connection, id: i64) -> Result<(), String> {
     conn.execute("DELETE FROM decks WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -478,7 +670,7 @@ struct CopiedCard {
 /// already holds.
 pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let copy: Option<i64> = tx
+    let copy: Option<(i64, String)> = tx
         .query_row(
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 cover_image_path, folder_id, notes, theory_enabled,
@@ -487,13 +679,13 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
                     cover_image_path, folder_id, notes, theory_enabled,
                     0, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
-             RETURNING id",
+             RETURNING id, name",
             params![id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some(copy) = copy else {
+    let Some((copy, copy_name)) = copy else {
         return Err(GONE.to_owned());
     };
 
@@ -596,6 +788,20 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    // **The copy's history, not the original's, and one line rather than one per card.** The
+    // copy is a new deck and its history begins the way [`create_deck`]'s does; the cards it
+    // arrived with are not edits anyone made to it, and N `add` rows for one press would read
+    // as a deck someone typed out. The original is untouched and records nothing at all — it
+    // was not changed.
+    crate::deck_audit::record(
+        &tx,
+        copy,
+        crate::deck_audit::DECK_LEVEL,
+        crate::deck_audit::DECK,
+        None,
+        &json!({ "field": "name", "from": null, "to": copy_name }),
+        0,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, copy)?.ok_or_else(|| GONE.to_owned())
 }
@@ -643,11 +849,14 @@ pub fn add_card(
     touch_deck(&tx, deck_id)?;
     // Inside the transaction because the name arm *writes*: a category nobody has made yet is
     // made here, and it must not survive a card insert that fails after it.
-    let category_id = match category_id {
-        Some(id) => {
-            category_of_deck(&tx, deck_id, id)?;
-            id
-        }
+    //
+    // Both arms answer the category's **name** as well as its id, because the history row
+    // below names the pile the card went into and a number nobody chose says nothing. The id
+    // arm gets it free from the fence it runs anyway; the name arm trims the caller's string
+    // the way `category_for_name` did before storing it, so the two arms record the same word
+    // for the same category.
+    let (category_id, category) = match category_id {
+        Some(id) => (id, category_of_deck(&tx, deck_id, id)?),
         // Unreachable past the guard above, and written as a second refusal rather than an
         // `expect` so that an edit which ever drops that guard answers the sentence instead
         // of panicking in a user's face.
@@ -655,7 +864,10 @@ pub fn add_card(
             let Some(name) = category_name else {
                 return Err(NO_CATEGORY.to_owned());
             };
-            crate::deck_meta::category_for_name(&tx, deck_id, name)?
+            (
+                crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+                name.trim().to_owned(),
+            )
         }
     };
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index
@@ -674,7 +886,7 @@ pub fn add_card(
          RETURNING id, quantity",
         grain = crate::schema::DECK_CARD_GRAIN
     );
-    let (id, quantity): (i64, i64) = tx
+    let (id, landed): (i64, i64) = tx
         .query_row(
             &sql,
             params![
@@ -691,11 +903,23 @@ pub fn add_card(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| e.to_string())?;
+    // The copies **added**, never the total the row landed on: the history is a list of
+    // changes, and `delta` is what the day header adds up. A fold that took a row from 2 to 3
+    // is one copy of history, not three.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::ADD,
+        Some((card_id, &name)),
+        &json!({ "category": category, "quantity": quantity }),
+        quantity,
+    )?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
-        quantity,
+        quantity: landed,
         removed: false,
     })
 }
@@ -725,42 +949,77 @@ pub fn set_card_quantity(
     touch_deck(&tx, deck_id)?;
     let category = category_of_deck(&tx, deck_id, category_id)?;
 
+    // The row as it is now, read before either branch writes. The history needs all three
+    // columns — the count it is moving *from*, and the name the line will be read by once the
+    // row is gone — and reading them once here is also what lets the `quantity` branch report
+    // both numbers, which `RETURNING` cannot: SQLite's `RETURNING` on an UPDATE answers the
+    // **new** row, so the old value is unrecoverable a statement later.
+    let current: Option<(i64, i64, String)> = tx
+        .query_row(
+            "SELECT id, quantity, name FROM deck_cards
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
+            params![deck_id, card_id, category_id, variant],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
     if quantity == 0 {
-        let id: Option<i64> = tx
-            .query_row(
+        if let Some((_, was, name)) = &current {
+            tx.execute(
                 "DELETE FROM deck_cards
-                  WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
-                 RETURNING id",
+                  WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
                 params![deck_id, card_id, category_id, variant],
-                |r| r.get(0),
             )
-            .optional()
             .map_err(|e| e.to_string())?;
+            // `reason` is null and stays null from here: the reconciler is the only writer
+            // that could ever have one to give, and it does not delete — it flags. The key is
+            // in the shape so a later caller that *does* remove a card for a stated reason has
+            // somewhere to put it, rather than a second payload shape for one kind.
+            crate::deck_audit::record(
+                &tx,
+                deck_id,
+                variant,
+                crate::deck_audit::REMOVE,
+                Some((card_id, name)),
+                &json!({ "category": category, "quantity": was, "reason": null }),
+                -was,
+            )?;
+        }
+        // A stepper that lands on a slot already empty removed nothing, so it records nothing:
+        // this is the one place the "every write records a row" rule gives way, and it gives
+        // way to the truth. A `remove` of zero copies would be a history of a change that
+        // never happened.
         allocate_deck(&tx, deck_id)?;
         tx.commit().map_err(|e| e.to_string())?;
         // A slot the caller wanted empty and that is empty: like `remove_entry`, a delete
         // that finds nothing already has what it wanted. There is no row left to name, so
         // the id is 0 — the only thing this path reports is that the slot is gone.
         return Ok(EntryChange {
-            id: id.unwrap_or(0),
+            id: current.map_or(0, |(id, ..)| id),
             quantity: 0,
             removed: true,
         });
     }
 
-    let id: Option<i64> = tx
-        .query_row(
-            "UPDATE deck_cards SET quantity = ?5, updated_at = unixepoch()
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
-             RETURNING id",
-            params![deck_id, card_id, category_id, variant, quantity],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
     // The [`crate::collection::GONE`] asymmetry: an *adjustment* to a row that is not there
     // could not do what it was asked. Putting a card into a category is [`add_card`].
-    let id = id.ok_or_else(|| card_gone(&category))?;
+    let (id, was, name) = current.ok_or_else(|| card_gone(&category))?;
+    tx.execute(
+        "UPDATE deck_cards SET quantity = ?5, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
+        params![deck_id, card_id, category_id, variant, quantity],
+    )
+    .map_err(|e| e.to_string())?;
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::QUANTITY,
+        Some((card_id, &name)),
+        &json!({ "category": category, "from": was, "to": quantity }),
+        quantity - was,
+    )?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -796,7 +1055,26 @@ pub fn move_card(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
     let from = category_of_deck(&tx, deck_id, from_category_id)?;
-    category_of_deck(&tx, deck_id, to_category_id)?;
+    let to = category_of_deck(&tx, deck_id, to_category_id)?;
+    // The moved row's own denormalized name, read before the move folds it into whatever the
+    // target already held — and it is the row's name rather than a fresh `cards` lookup for
+    // the reason the identity below travels from the row: an orphan is exactly the card most
+    // likely to be getting tidied, and it has no `cards` row left to be named by.
+    //
+    // This read is also the "is there a row to move" fence, which used to be the `INSERT`'s own
+    // affected-row count. Same `WHERE`, same answer, one statement earlier — and earlier is
+    // where it belongs, because the alternative is running an INSERT … SELECT that is known to
+    // select nothing before discovering it.
+    let moved_name: String = tx
+        .query_row(
+            "SELECT name FROM deck_cards
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
+            params![deck_id, card_id, from_category_id, variant],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| card_gone(&from))?;
     // `INSERT … SELECT … ON CONFLICT` over the same table: the `WHERE` is what makes it
     // unambiguous to parse, and it is here anyway. `needs_review` comes across with a row
     // that lands in an empty category and is left alone where the target row already exists —
@@ -814,21 +1092,28 @@ pub fn move_card(
             updated_at = unixepoch()",
         grain = crate::schema::DECK_CARD_GRAIN
     );
-    let moved = tx
-        .execute(
-            &sql,
-            params![deck_id, card_id, to_category_id, from_category_id, variant],
-        )
-        .map_err(|e| e.to_string())?;
-    if moved == 0 {
-        return Err(card_gone(&from));
-    }
+    tx.execute(
+        &sql,
+        params![deck_id, card_id, to_category_id, from_category_id, variant],
+    )
+    .map_err(|e| e.to_string())?;
     tx.execute(
         "DELETE FROM deck_cards
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
         params![deck_id, card_id, from_category_id, variant],
     )
     .map_err(|e| e.to_string())?;
+    // `delta` 0: a move changes no count. The copies are in the deck before and after, and a
+    // day roll-up that charged them twice would report a tidy-up as a shopping trip.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::MOVE,
+        Some((card_id, &moved_name)),
+        &json!({ "from": from, "to": to }),
+        0,
+    )?;
     // A move changes what is claimed even though nothing was added or removed: an inactive
     // category reserves nothing, so a card dragged into or out of one is a claim released or
     // made.
@@ -895,13 +1180,16 @@ pub fn swap_printing(
     let category = category_of_deck(&tx, deck_id, category_id)?;
 
     // The name comes across with the quantity because a refusal below has to say what is in
-    // the deck, and the row's own denormalized name is what the deck list is showing.
-    let (quantity, from_name): (i64, String) = tx
+    // the deck, and the row's own denormalized name is what the deck list is showing. The set
+    // code comes across for the history: "swapped `lea` for `m10`" is the whole of what a
+    // reader wants from this line, and the row about to be deleted is the only place the
+    // *old* one is still written down.
+    let (quantity, from_name, from_set): (i64, String, String) = tx
         .query_row(
-            "SELECT quantity, name FROM deck_cards
+            "SELECT quantity, name, set_code FROM deck_cards
               WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
             params![deck_id, from_card_id, category_id, variant],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -969,16 +1257,35 @@ pub fn swap_printing(
     )
     .map_err(|e| e.to_string())?;
 
+    // `deck_cards.quantity` carries `CHECK (quantity > 0)`, so a row that was already there
+    // contributed at least one copy: the landed total is strictly greater than what was moved
+    // exactly when the insert folded. No second read needed to know it.
+    let folded = landed > quantity;
+    // `delta` 0 and the **new** printing's id: the deck holds the same number of the same card
+    // and a different printing of it, so the line the history draws is about the row that
+    // exists now. `folded` rides along because a deck list that silently loses a line reads
+    // like a bug, and the history is the one place that can say it did not.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::SWAP,
+        Some((to_card_id, &name)),
+        &json!({
+            "category": category,
+            "fromSet": from_set,
+            "toSet": set_code,
+            "folded": folded,
+        }),
+        0,
+    )?;
     // The deck wants a different printing than it did a statement ago, and the allocator
     // takes the exact printing first — so the copies it reserves can change even though the
     // count did not.
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(SwapResult {
-        // `deck_cards.quantity` carries `CHECK (quantity > 0)`, so a row that was already
-        // there contributed at least one copy: the landed total is strictly greater than
-        // what was moved exactly when the insert folded. No second read needed to know it.
-        folded: landed > quantity,
+        folded,
         quantity: landed,
     })
 }
@@ -1618,6 +1925,10 @@ pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
 ///
 /// An orphaned row is skipped: a wish needs an oracle card or a printing that resolves, and
 /// an orphan has neither. It is already carrying a `needs_review` sentence that says so.
+///
+/// **Records no history**, and it is the one card-adjacent command that does not: nothing about
+/// the deck changed. It writes the wishlist and it rewrites this deck's claims, and neither is
+/// a change to what the deck plays — the drawer would be reporting a shopping trip as an edit.
 pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     allocate_deck(&tx, deck_id)?;

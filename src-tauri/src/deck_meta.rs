@@ -15,7 +15,14 @@
 //!   files files, and `decks.folder_id` is `ON DELETE SET NULL` rather than the CASCADE every
 //!   category and tag write takes. A folder write therefore touches no deck's `updated_at`
 //!   and records nothing in `deck_audit` (which is `deck_id NOT NULL` — a folder edit has no
-//!   deck to name).
+//!   deck to name). The `folder` audit *kind* is not about folder CRUD at all: it records a
+//!   **deck being filed**, and it is written by `deck::update_deck`.
+//!
+//! Every category and tag write records one [`crate::deck_audit`] row inside its own
+//! transaction, so a refused write leaves no history. The `tag` kind covers two events and
+//! `card_id` is what tells them apart: a card wearing a label (`set_card_tag`, `card_id` set)
+//! and the label itself being made, renamed or deleted (`card_id` NULL, and an `action` verb —
+//! without one a delete would read as a labelling).
 //!
 //! **Two of these writes reallocate, and the rest deliberately do not.** `is_active` is what
 //! decides whether a card is allocated for at all ([`crate::deck::allocate_deck`]'s own doc),
@@ -30,6 +37,7 @@
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use serde_json::json;
 use std::sync::Arc;
 
 /// What an *adjustment* to a category says when the id it names is not there — the same
@@ -458,8 +466,43 @@ pub fn create_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    record_category(&tx, deck_id, &json!({ "action": "create", "name": name }))?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
+}
+
+/// One `category`-kind history row, with the four constants every caller here would otherwise
+/// repeat. A category change is about no card and moves no copies, so `card_id` is NULL and
+/// `delta` is 0 at every one of the six call sites — the payload's `action` is the whole of
+/// what differs.
+fn record_category(
+    tx: &Connection,
+    deck_id: i64,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
+    crate::deck_audit::record(
+        tx,
+        deck_id,
+        crate::deck_audit::DECK_LEVEL,
+        crate::deck_audit::CATEGORY,
+        None,
+        payload,
+        0,
+    )
+}
+
+/// One `tag`-kind history row **about the label itself** — created, renamed or deleted. No
+/// card, and an `action` verb: see the module doc for why the two halves of this kind share it.
+fn record_tag(tx: &Connection, deck_id: i64, payload: &serde_json::Value) -> Result<(), String> {
+    crate::deck_audit::record(
+        tx,
+        deck_id,
+        crate::deck_audit::DECK_LEVEL,
+        crate::deck_audit::TAG,
+        None,
+        payload,
+        0,
+    )
 }
 
 /// Rename a `kind = 'main'` category. Refuses a predefined one
@@ -496,6 +539,11 @@ pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCat
         params![id, name],
     )
     .map_err(|e| e.to_string())?;
+    record_category(
+        &tx,
+        deck_id,
+        &json!({ "action": "rename", "name": name, "previousName": current_name }),
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
@@ -513,21 +561,28 @@ pub fn set_category_active(
     is_active: bool,
 ) -> Result<DeckCategoryRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let deck_id: Option<i64> = tx
+    // The name comes back with the deck id for the history's sake: a row that said only
+    // "deactivated category 41" is a row nobody can read once the panel is closed.
+    let category: Option<(i64, String)> = tx
         .query_row(
-            "SELECT deck_id FROM deck_categories WHERE id = ?1",
+            "SELECT deck_id, name FROM deck_categories WHERE id = ?1",
             params![id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let deck_id = deck_id.ok_or_else(|| CATEGORY_GONE.to_owned())?;
+    let (deck_id, name) = category.ok_or_else(|| CATEGORY_GONE.to_owned())?;
     crate::deck::touch_deck(&tx, deck_id)?;
     tx.execute(
         "UPDATE deck_categories SET is_active = ?2, updated_at = unixepoch() WHERE id = ?1",
         params![id, is_active],
     )
     .map_err(|e| e.to_string())?;
+    // Two verbs rather than one with a boolean, because that is what the change *is* — and a
+    // renderer that had to read `{"active": false}` to write "switched off" would be deriving
+    // the sentence from a field whose name is about state rather than about what happened.
+    let action = if is_active { "activate" } else { "deactivate" };
+    record_category(&tx, deck_id, &json!({ "action": action, "name": name }))?;
     crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
@@ -551,6 +606,10 @@ pub fn reorder_categories(
         )
         .map_err(|e| e.to_string())?;
     }
+    // A reorder names no category, because every one of them moved: there is no "from" and no
+    // "to" that is about one pile, and listing the whole order would be storing the state
+    // rather than the change.
+    record_category(&tx, deck_id, &json!({ "action": "reorder" }))?;
     tx.commit().map_err(|e| e.to_string())?;
     list_categories(conn, deck_id, READBACK_VARIANT)
 }
@@ -597,6 +656,18 @@ pub fn delete_category(
         }
     }
     crate::deck::touch_deck(&tx, deck_id)?;
+    // Counted **before** anything moves or cascades, and in copies rather than rows — two
+    // printings at 2 and 3 is 5 cards, which is what the confirm dialog warned about and the
+    // only part of a deleted category a reader cannot get back. Both variants, because the
+    // CASCADE takes both: a category is not variant-scoped, and a theory row filed here dies
+    // with it exactly as a live one does.
+    let cards: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM deck_cards WHERE category_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
@@ -621,6 +692,11 @@ pub fn delete_category(
     }
     tx.execute("DELETE FROM deck_categories WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
+    record_category(
+        &tx,
+        deck_id,
+        &json!({ "action": "delete", "name": name, "cards": cards }),
+    )?;
     // Reallocates for [`set_category_active`]'s reason at one remove: the cards either left
     // the deck with the category (the CASCADE) or landed under one whose `is_active` may
     // differ from the one they came from. Either way this deck wants something different
@@ -707,6 +783,11 @@ pub fn create_tag(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    record_tag(
+        &tx,
+        deck_id,
+        &json!({ "action": "create", "tag": name, "previous": null }),
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
 }
@@ -721,15 +802,17 @@ pub fn update_tag(
     let name = valid_name(name, "A tag")?;
     let color = valid_color(color)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let deck_id: Option<i64> = tx
+    // The old name travels with the deck id, for the history: `previous` is what makes a
+    // rename readable, and this statement is the last moment the old name exists.
+    let tag: Option<(i64, String)> = tx
         .query_row(
-            "SELECT deck_id FROM deck_tags WHERE id = ?1",
+            "SELECT deck_id, name FROM deck_tags WHERE id = ?1",
             params![id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let deck_id = deck_id.ok_or_else(|| TAG_GONE.to_owned())?;
+    let (deck_id, previous) = tag.ok_or_else(|| TAG_GONE.to_owned())?;
     let exists: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM deck_tags WHERE deck_id = ?1 AND name = ?2 AND id <> ?3)",
@@ -746,6 +829,14 @@ pub fn update_tag(
         params![id, name, color],
     )
     .map_err(|e| e.to_string())?;
+    // `rename` covers a recolour too, which is the honest simplification: the colour is a
+    // token from a fixed palette and never appears in a history line, so a second verb would
+    // name a distinction no reader could see.
+    record_tag(
+        &tx,
+        deck_id,
+        &json!({ "action": "rename", "tag": name, "previous": previous }),
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
 }
@@ -755,13 +846,31 @@ pub fn update_tag(
 /// [`crate::deck::delete_deck`], an id that resolves to nothing is a success: the caller
 /// wanted that tag gone, and it is gone (and touches no deck, having none left to touch).
 pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), String> {
-    let Some(deck_id) = owning_deck(conn, "deck_tags", id)? else {
+    // Read rather than `owning_deck`, because the history needs the name as well as the owner
+    // — and this is the last statement in which either is knowable.
+    let tag: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT deck_id, name FROM deck_tags WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((deck_id, name)) = tag else {
         return Ok(());
     };
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
     tx.execute("DELETE FROM deck_tags WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
+    // `previous` is null: this row is about the label, and the label it is about is `tag`.
+    // `previous` carries the *former* name of a renamed one and nothing else, so filling it
+    // here would make a delete read as a rename that went nowhere.
+    record_tag(
+        &tx,
+        deck_id,
+        &json!({ "action": "delete", "tag": name, "previous": null }),
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -811,24 +920,61 @@ pub fn set_card_tag(
 ) -> Result<(), String> {
     let variant = valid_variant(variant)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    if let Some(tag) = tag_id {
-        match owning_deck(&tx, "deck_tags", tag)? {
-            Some(d) if d == deck_id => {}
-            Some(_) => return Err(TAG_WRONG_DECK.to_owned()),
-            None => return Err(TAG_GONE.to_owned()),
+    // The new label's own name, gathered by the ownership fence rather than by a second query:
+    // the fence has to read the row anyway, and the history needs the word rather than the id.
+    let applied: Option<String> = match tag_id {
+        Some(tag) => {
+            let row: Option<(i64, String)> = tx
+                .query_row(
+                    "SELECT deck_id, name FROM deck_tags WHERE id = ?1",
+                    params![tag],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            match row {
+                Some((d, name)) if d == deck_id => Some(name),
+                Some(_) => return Err(TAG_WRONG_DECK.to_owned()),
+                None => return Err(TAG_GONE.to_owned()),
+            }
         }
-    }
+        None => None,
+    };
     crate::deck::touch_deck(&tx, deck_id)?;
-    let changed = tx
-        .execute(
-            "UPDATE deck_cards SET tag_id = ?5, updated_at = unixepoch()
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-            params![deck_id, card_id, category_id, variant, tag_id],
+    // The card's name and the label it is wearing *now*, read before the UPDATE replaces one
+    // of them. This is also the "is there a row" fence — `DECK_CARD_GRAIN` exactly, so at most
+    // one row can match, and a stale editor is refused here rather than by an UPDATE that
+    // touched nothing.
+    let card: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT dc.name, t.name
+               FROM deck_cards dc LEFT JOIN deck_tags t ON t.id = dc.tag_id
+              WHERE dc.deck_id = ?1 AND dc.card_id = ?2 AND dc.category_id = ?3
+                AND dc.variant = ?4",
+            params![deck_id, card_id, category_id, variant],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
+        .optional()
         .map_err(|e| e.to_string())?;
-    if changed == 0 {
-        return Err(CARD_NOT_IN_CATEGORY.to_owned());
-    }
+    let (card_name, previous) = card.ok_or_else(|| CARD_NOT_IN_CATEGORY.to_owned())?;
+    tx.execute(
+        "UPDATE deck_cards SET tag_id = ?5, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
+        params![deck_id, card_id, category_id, variant, tag_id],
+    )
+    .map_err(|e| e.to_string())?;
+    // `card_id` set is what marks this the *card's* half of the `tag` kind, and `tag: null` is
+    // how a row says the card wears nothing now — clearing a label is as much a change as
+    // applying one, and `previous` is the only place the label it lost is written down.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::TAG,
+        Some((card_id, &card_name)),
+        &json!({ "tag": applied, "previous": previous }),
+        0,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }

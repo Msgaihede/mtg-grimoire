@@ -3,6 +3,7 @@ pub mod card_row;
 pub mod collection;
 pub mod db;
 pub mod deck;
+pub mod deck_audit;
 pub mod deck_meta;
 pub mod filters;
 pub mod images;
@@ -228,6 +229,7 @@ pub fn run() {
             deck_meta::deck_folder_rename,
             deck_meta::deck_folder_move,
             deck_meta::deck_folder_delete,
+            deck_audit::deck_audit_list,
             update_status,
             update_check,
             update_download,
