@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CardImage } from "@/components/CardImage";
+import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
-import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
-import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
 
@@ -327,12 +325,6 @@ function Tile<T extends GridCard>({
   const mark = badge?.(card);
   const corner = topLeft?.(card);
 
-  // The self-healing half of the rate limit, and the reset that goes with it: this component
-  // belongs to a *slot* in the grid rather than to a card, so a new search hands it a
-  // different card without remounting it, and the last card's failure must not be the new
-  // card's. Both live in the hook — see it for why a failed image comes back twice.
-  const image = useImageRetry(cardImageUrl(card.id, 0, "grid"));
-
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
   // every render of a tile, and this wall re-renders on every scrolled row. Which is also why
@@ -375,52 +367,11 @@ function Tile<T extends GridCard>({
           // buttons a screen reader cannot tell apart in a wall of forty.
           className={cn("block w-full rounded-lg text-left", FOCUS)}
         >
-          <span
-            className={cn(
-              "block w-full overflow-hidden rounded-lg bg-surface",
-              // Which card the open pane is about. A ring, because gold says "focus" as an
-              // outline and "state" as a ring everywhere else in the app — and it hugs the
-              // art rather than standing off it, so the wall keeps its rhythm.
-              selected && "ring-2 ring-accent",
-            )}
-            style={{ aspectRatio: CARD_ASPECT }}
-          >
-            {image.src ? (
-              <CardImage
-                // The name, not "card image": this string is what a screen reader announces
-                // and what shows when a fetch fails, and both readers want the card.
-                alt={card.name}
-                src={image.src}
-                // No `loading="lazy"`. It was here against "117 k results is 117 k requests
-                // if every mounted tile fetches eagerly", and that is not what happens: the
-                // virtualizer bounds the mounted tiles to the rows on screen plus two, so
-                // eager is already bounded at about two dozen images. What the browser's own
-                // intersection gate added on top was a second wait — and a lazy image is
-                // fetched at low priority, after layout, outside the preload scanner — on
-                // exactly the two dozen pictures the reader is about to look at.
-                decoding="async"
-                // An `<img>` is draggable by default, and the browser picks the *nearest*
-                // draggable ancestor as a drag's source — so the art would start a drag of
-                // itself and the tile's own drag (the deck editor's, through `tileRef`) would
-                // never begin. Off here rather than at the caller, because the caller is
-                // handed the tile and cannot reach this. Nothing is lost: an `mtgimg:` URL
-                // means nothing outside this window.
-                draggable={false}
-                onError={image.onError}
-                className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-              />
-            ) : (
-              // A tile with no art is still a card. The name is what the reader came for and
-              // it is known without the image, so a rate-limited screen reads as a list of
-              // cards rather than a wall of broken-image icons.
-              <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
-                <span className="line-clamp-3 text-xs">{card.name}</span>
-                <span className="text-[0.7rem] text-dim">
-                  {image.retrying ? "Retrying…" : "No image"}
-                </span>
-              </span>
-            )}
-          </span>
+          {/* The frame, the picture, its retry and the no-art fallback all live in
+              `CardArt` — five surfaces draw a card and this is the one definition of what
+              that looks like. The button, the focus ring and the caption stay here, because
+              they are what makes this frame a *tile* rather than a picture. */}
+          <CardArt cardId={card.id} name={card.name} selected={selected} hoverZoom />
         </button>
         {mark && (
           // The corner *and* the backing are the wall's, not the mark's: a mark sits on a

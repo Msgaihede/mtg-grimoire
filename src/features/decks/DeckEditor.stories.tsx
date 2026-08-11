@@ -468,12 +468,18 @@ export const SwapFolds: Story = {
     const canvas = within(canvasElement);
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `src/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
-    // of 41 cards that its tile is not mounted. The searchbox is addressed by role because the
+    // of 36 cards that its tile is not mounted. The searchbox is addressed by role because the
     // panel's disclosure carries the same name, "Search cards", as this field's `sr-only` label.
     await userEvent.type(
       await canvas.findByRole("searchbox", { name: "Search cards" }),
       "Sol Ring",
     );
+
+    // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
+    // Ring is one tile — its newest printing — which is the right default for building a deck
+    // and the wrong one for a story about choosing between two printings. The toggle is on the
+    // panel's own filter bar precisely so this is one press away.
+    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),
     // which is `search::ORDER_NAME`: the card, then its newest printing.
