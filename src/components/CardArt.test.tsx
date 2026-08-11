@@ -32,23 +32,54 @@ describe("CardArt", () => {
     expect(screen.getByText("No card")).toBeInTheDocument();
   });
 
-  /**
-   * The sheen tints, the chip speaks. Only the chip is information, so only the chip is in
-   * the accessibility tree — a screen reader hearing "Foil" twice per card would be being
-   * told about the decoration.
-   */
-  it("lays a sheen over a foil card and hides it from screen readers", () => {
+  /** The sheen is drawn, and a chip is drawn beside it. Both are paint. */
+  it("lays a sheen and a chip over a foil card", () => {
     const { container } = render(<CardArt cardId="unf" name="Sole Performer" finish="foil" />);
-    const sheen = container.querySelector("[data-foil-sheen]");
-    expect(sheen).toBeInTheDocument();
-    expect(sheen).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByLabelText("Foil")).toBeInTheDocument();
+    expect(container.querySelector("[data-foil-sheen]")).toBeInTheDocument();
+    // The chip's glyph, found through the DOM rather than the a11y tree — see below for why
+    // it is not in the latter.
+    expect(container.querySelector("svg")).toBeInTheDocument();
   });
 
-  it("marks etched as etched, not as foil", () => {
-    render(<CardArt cardId="etch" name="Etched Card" finish="etched" />);
-    expect(screen.getByLabelText("Etched")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Foil")).not.toBeInTheDocument();
+  /**
+   * **The overlay is decoration, all of it — chip included.**
+   *
+   * This frame usually sits *inside* a button, and a button's accessible name is computed
+   * from its contents, so a chip that named itself turned a wall of foil tiles into buttons
+   * called "Consecrated Sphinx Foil". Measured over CDP in the shipped window 2026-08-11,
+   * where a tile button's accessible name came back as bare "Foil".
+   *
+   * The same trap the owned badge avoids by being a *sibling* of the button rather than a
+   * child of it. Nothing is lost: every surface states the finish in text where it has room —
+   * the wall's caption carries an `sr-only` word, the search table a `FinishMark` in its Name
+   * cell, the pane one per finish price. This test is what stops the chip being "helpfully"
+   * re-exposed.
+   */
+  it("keeps the whole foil overlay out of the accessibility tree", () => {
+    const { container } = render(
+      <button type="button">
+        <CardArt cardId="unf" name="Sole Performer" finish="foil" />
+      </button>,
+    );
+    // The claim, stated the way the platform states it: the *computed* name, which is what a
+    // screen reader announces. (`queryByLabelText` is no use here — it matches the attribute
+    // wherever it sits, `aria-hidden` ancestors included, so it would fail on correct code.)
+    expect(screen.getByRole("button")).toHaveAccessibleName("Sole Performer");
+    // And the mechanism that makes it true, so a failure says which half broke.
+    const overlay = container.querySelector("[data-foil-sheen]")?.parentElement;
+    expect(overlay).toHaveAttribute("aria-hidden", "true");
+  });
+
+  /**
+   * Etched is a third thing and never a kind of foil, so it gets a glyph of its own. Compared
+   * by rendered markup because neither is in the accessibility tree.
+   */
+  it("marks etched with a different glyph than foil", () => {
+    const { container: foil } = render(<CardArt cardId="a" name="A" finish="foil" />);
+    const { container: etched } = render(<CardArt cardId="b" name="B" finish="etched" />);
+    const glyph = (c: HTMLElement) => c.querySelector("svg")?.innerHTML;
+    expect(glyph(foil)).toBeTruthy();
+    expect(glyph(etched)).not.toBe(glyph(foil));
   });
 
   it("draws no sheen for a card that is not foil", () => {

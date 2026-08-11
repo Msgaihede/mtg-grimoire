@@ -60,10 +60,16 @@ export const Nonfoil: Story = {
 /**
  * `mp2 8` — Consecrated Sphinx, one of the corpus's two foil-only printings.
  *
- * Both halves are drawn and neither does the other's job: the sheen is what *looks* foil and
- * is `aria-hidden`, the chip is what *says* it and carries the word. A sheen alone is
- * ambiguous at a glance on dark art; a chip alone says nothing about the object being a
- * different physical thing.
+ * Both halves are drawn and neither does the other's job: the sheen is what *looks* foil, the
+ * chip is what *says* it at a glance. A sheen alone is ambiguous on busy art; a chip alone
+ * says nothing about the object being a different physical thing.
+ *
+ * **Both are `aria-hidden`, and that is deliberate.** This frame usually sits inside a button
+ * — a wall tile is one — and a button's accessible name is computed from its contents, so a
+ * chip that named itself made a wall of foils into buttons called "Consecrated Sphinx Foil"
+ * (measured over CDP in the shipped window). The finish is stated in text on every surface
+ * that has room: the wall's caption carries an `sr-only` word, the search table a `FinishMark`
+ * in its Name cell, the pane one per finish price.
  */
 export const FoilOnly: Story = {
   args: {
@@ -72,11 +78,13 @@ export const FoilOnly: Story = {
     finish: soleFinish(printing("mp2", "8").finishes),
   },
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
     const sheen = canvasElement.querySelector("[data-foil-sheen]");
     await expect(sheen).not.toBeNull();
-    await expect(sheen).toHaveAttribute("aria-hidden", "true");
-    await expect(canvas.getByLabelText("Foil")).toBeInTheDocument();
+    await expect(sheen?.parentElement).toHaveAttribute("aria-hidden", "true");
+    // The art itself is still named by the card, which is the whole point of hiding the chip.
+    await expect(within(canvasElement).getByRole("img")).toHaveAccessibleName(
+      "Consecrated Sphinx",
+    );
   },
 };
 
@@ -95,9 +103,10 @@ export const EtchedOnly: Story = {
     finish: soleFinish(printing("acr", "211").finishes),
   },
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByLabelText("Etched")).toBeInTheDocument();
-    await expect(canvas.queryByLabelText("Foil")).toBeNull();
+    // The glyph is decoration (see {@link FoilOnly}), so it is found in the markup rather
+    // than in the accessibility tree — and what matters is that it is *a different one*.
+    await expect(canvasElement.querySelector("[data-foil-sheen]")).not.toBeNull();
+    await expect(canvasElement.querySelector("svg")).not.toBeNull();
   },
 };
 
