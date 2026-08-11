@@ -129,6 +129,61 @@ export const Default: Story = {
 };
 
 /**
+ * What the collapse actually does, in one row.
+ *
+ * Sol Ring is printed twice in this corpus — `sld 913` (2025-12-01) and `c21 263` (2021-04-23)
+ * — so collapsed it is **one** row that says `×2 printings` and prices across both. Press All
+ * printings and it is two rows, each priced on its own.
+ *
+ * Three rules are visible here at once. The **representative is the newest printing**, so the
+ * set cell reads `SLD · 913` and not the older one. The **count and the range describe what
+ * matched**, never the database — filters narrow printings first and the survivors are
+ * grouped. And the mark is drawn **only past one printing**: every other row on this page has
+ * a single printing and says nothing, because `×1 printings` on 17 588 of 37 553 cards would
+ * be a column of noise.
+ */
+export const CollapsedPrintings: Story = {
+  args: { view: "table" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("36 cards");
+
+    await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Sol Ring");
+
+    // Anchored on the card and not on the mark: the box is debounced by `DEBOUNCE_MS`, and
+    // the unfiltered list already holds another card with two printings — asserting on the
+    // first `×2 printings` in the document raced the query and found Ancestral Recall.
+    //
+    // The whole check is inside one `waitFor` so it re-reads the row: the results are
+    // replaced wholesale when the query lands, and an element captured before that is stale.
+    await waitFor(
+      async () => {
+        const rows = canvas
+          .getAllByRole("row")
+          .filter((r) => r.textContent?.includes("Sol Ring"));
+        await expect(rows).toHaveLength(1);
+        // Read off the row's own text rather than through a matcher: the set cell is three
+        // text nodes (`SLD`, ` · `, `913`), so a regex spanning the separator matches no
+        // single element.
+        await expect(rows[0].textContent).toContain("×2 printings");
+        // The newest printing represents the card — `search::COLLAPSE_REP`.
+        await expect(rows[0].textContent).toContain("SLD");
+        await expect(rows[0].textContent).toContain("913");
+      },
+      { timeout: 5000 },
+    );
+
+    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+
+    // Two rows now, and neither claims to stand for more than itself.
+    await waitFor(async () => {
+      await expect(canvas.getAllByText("Sol Ring")).toHaveLength(2);
+    });
+    await expect(canvas.queryByText(/×\d+ printings/)).toBeNull();
+  },
+};
+
+/**
  * The same search as five columns of facts.
  *
  * The table is the view for *comparing* — set, type, rarity, price — and a row here is read
