@@ -24,6 +24,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
+    // The filter row asks for its facet counts on the way up, beside the page. Answered
+    // **cold** — `ready: false`, every map empty — which is the state in which nothing greys
+    // and every control keeps the plain name this file queries by.
+    facetCards: vi.fn().mockResolvedValue({
+      colors: {},
+      manaValues: {},
+      formats: {},
+      sets: {},
+      owned: { owned: 0, missing: 0 },
+      total: 0,
+      ready: false,
+    }),
     listSets: vi.fn().mockResolvedValue([]),
     // The grid warms the images of every page that lands, so routing to the search view
     // calls this on the way up.

@@ -25,6 +25,17 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onSyncProgress,
     onCollectionReconciled,
     searchCards: vi.fn(),
+    // The filter row asks for facet counts beside the page. Answered **cold** — `ready:
+    // false`, every map empty — so nothing greys and every control keeps its plain name.
+    facetCards: vi.fn().mockResolvedValue({
+      colors: {},
+      manaValues: {},
+      formats: {},
+      sets: {},
+      owned: { owned: 0, missing: 0 },
+      total: 0,
+      ready: false,
+    }),
     deckAddCard,
     wishlistAdd,
     deckGet,

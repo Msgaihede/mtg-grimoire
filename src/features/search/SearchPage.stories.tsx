@@ -390,7 +390,9 @@ export const OwnedCountsEntries: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("36 cards");
 
-    await userEvent.click(canvas.getByRole("button", { name: "Owned" }));
+    // A prefix, because the chip's accessible name carries its facet count — "Owned — 9
+    // printings" — and the label is what has to come first.
+    await userEvent.click(canvas.getByRole("button", { name: /^Owned\b/ }));
     await waitFor(async () => {
       await expect(canvas.getByText("9 cards")).toBeInTheDocument();
     });

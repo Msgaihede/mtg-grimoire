@@ -20,6 +20,19 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     searchCards,
+    // The filter row asks for facet counts beside every page. Answered **cold** — `ready:
+    // false`, every map empty — which leaves every control live and every accessible name
+    // plain, so this file's queries say what they always said. The greying itself is
+    // `FilterBar.test.tsx`'s and `facets.test.ts`'s subject.
+    facetCards: vi.fn().mockResolvedValue({
+      colors: {},
+      manaValues: {},
+      formats: {},
+      sets: {},
+      owned: { owned: 0, missing: 0 },
+      total: 0,
+      ready: false,
+    }),
     listSets,
     prefetchImages,
     collectionAdd,

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown } from "lucide-react";
+import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { facetTitle, optionDisabled } from "./facets";
 
 /**
  * Options rendered at once.
@@ -50,9 +52,20 @@ const rank = (code: string, needle: string): number =>
 export function SetCombobox({
   selected,
   onToggle,
+  counts,
 }: {
   selected: readonly string[];
   onToggle: (code: string) => void;
+  /**
+   * How many printings this search holds per set code, or `undefined` when that is not
+   * known — in which case nothing is greyed, because not-greyed means "we don't know".
+   *
+   * **Greys, never hides.** The `cardCount > 0` filter below drops sets the corpus holds
+   * nothing for at all, which is a fact about the database; this is a fact about the search
+   * the reader is halfway through typing, and dropping those rows would make the list jump
+   * under the cursor on every keystroke.
+   */
+  counts?: Record<string, number>;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -144,7 +157,15 @@ export function SetCombobox({
 
   /** At the ceiling, adding is off and removing is still on — the way out has to stay open. */
   const full = selected.length >= MAX_SETS;
-  const canToggle = (code: string) => !full || selected.includes(code);
+  /**
+   * Why a row cannot be pressed — the cap, or nothing in this search to press it for.
+   *
+   * One predicate for both, because both the mouse and the Enter key have to hit the same
+   * wall: a list that refuses the click and takes the keystroke is a list with two rules.
+   * A picked row is live under either, which is the way out of both dead ends.
+   */
+  const canToggle = (code: string) =>
+    (!full || selected.includes(code)) && !optionDisabled(counts, code, selected.includes(code));
 
   const onListKeyDown = (e: React.KeyboardEvent) => {
     if (options.length === 0) return;
@@ -277,6 +298,7 @@ export function SetCombobox({
                 picked={selected.includes(s.code)}
                 active={i === activeIndex}
                 disabled={!canToggle(s.code)}
+                title={facetTitle(s.name, counts?.[s.code])}
                 onToggle={onToggle}
               />
             ))}
@@ -303,6 +325,7 @@ function Option({
   picked,
   active,
   disabled,
+  title,
   onToggle,
 }: {
   id: string;
@@ -310,6 +333,12 @@ function Option({
   picked: boolean;
   active: boolean;
   disabled: boolean;
+  /**
+   * The tooltip, and only the tooltip. Unlike the chips, this row's accessible name comes
+   * from its own content — the set's name, its code and its tick — and an `aria-label`
+   * carrying the count would replace all three with a sentence that has no code in it.
+   */
+  title?: string;
   onToggle: (code: string) => void;
 }) {
   const glyph = setGlyphClass(set.code);
@@ -319,6 +348,7 @@ function Option({
       role="option"
       aria-selected={picked}
       aria-disabled={disabled || undefined}
+      title={title}
       // Keeps the caret — and therefore the arrow keys — in the search box while the
       // reader picks several sets with the mouse.
       onMouseDown={(e) => e.preventDefault()}
@@ -326,7 +356,9 @@ function Option({
       className={cn(
         "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
         "transition-colors duration-150 motion-reduce:transition-none",
-        disabled ? "cursor-not-allowed opacity-45" : "cursor-pointer",
+        // The filter row's one treatment for unavailable, shared with the chips rather than
+        // spelled twice: the cap and a facet zero look the same because they mean the same.
+        disabled ? FILTER_UNAVAILABLE : "cursor-pointer",
         picked ? "text-accent" : "text-text",
         active && "bg-bg",
       )}

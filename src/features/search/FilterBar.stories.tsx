@@ -195,11 +195,14 @@ export const AllFiltersActive: Story = {
     await expect(reset).toHaveTextContent("6");
     // Three chips pressed against a badge reading 6: this is the whole of "kinds, not values",
     // and it is invisible in a screenshot of a row full of gold.
+    //
+    // **Matched on a prefix**, because the fake answers `facet_cards` and a chip's accessible
+    // name carries its count: "White — 3 printings". The label still comes first, which is
+    // what WCAG 2.5.3 asks of it and what keeps this query readable.
     for (const colour of ["White", "Blue", "Black"]) {
-      await expect(canvas.getByRole("button", { name: colour })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      await expect(
+        canvas.getByRole("button", { name: new RegExp(`^${colour}\\b`) }),
+      ).toHaveAttribute("aria-pressed", "true");
     }
     // The picker's label is a count of sets rather than their names: 64 codes will not fit on a
     // control that has to share a line with six colour chips.
@@ -229,18 +232,20 @@ export const Cleared: Story = {
     await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
     await expect(canvas.getByLabelText("Search cards")).toHaveValue("");
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
-    await expect(canvas.getByRole("button", { name: "White" })).toHaveAttribute(
+    // Prefix matches throughout: every chip's accessible name now ends in the count the fake's
+    // facets report for it, and the label is what has to come first.
+    await expect(canvas.getByRole("button", { name: /^White\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
-    await expect(canvas.getByRole("button", { name: "Mana value 1" })).toHaveAttribute(
+    await expect(canvas.getByRole("button", { name: /^Mana value 1\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
     await expect(canvas.getByRole("button", { name: "Set" })).toHaveTextContent("Any set");
     // The three-state chip is back to asking the first of its two questions, and the *label* is
     // what says so — an unpressed "Owned" cannot be mistaken for a pressed "Missing".
-    await expect(canvas.getByRole("button", { name: "Owned" })).toHaveAttribute(
+    await expect(canvas.getByRole("button", { name: /^Owned\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
