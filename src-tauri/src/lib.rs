@@ -3,6 +3,9 @@ pub mod card_row;
 pub mod collection;
 pub mod db;
 pub mod deck;
+pub mod deck_audit;
+pub mod deck_meta;
+pub mod deck_theory;
 pub mod filters;
 pub mod images;
 pub mod index;
@@ -165,6 +168,14 @@ pub fn run() {
             focus_existing_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        // The system file picker, for one control: choosing a custom deck cover. Only
+        // `dialog:allow-open` is granted in `capabilities/default.json`, so the four other
+        // verbs this plugin can serve — save, message, ask and confirm — are unreachable from
+        // the webview however this is initialised. The app's own questions are drawn in the
+        // page (`DeleteConfirm`, the settings dialog), which is a deliberate choice and not an
+        // oversight: a native message box cannot be styled, tested over CDP, or read by the
+        // story runner.
+        .plugin(tauri_plugin_dialog::init())
         // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
         // (that is Electron): registering the scheme here is what privileges it, and the
         // CSP in tauri.conf.json is what lets the page load from it. On Windows the origin
@@ -204,6 +215,8 @@ pub fn run() {
             deck::deck_update,
             deck::deck_delete,
             deck::deck_duplicate,
+            deck::deck_set_cover_image,
+            deck::deck_set_folder,
             deck::deck_list,
             deck::deck_get,
             deck::deck_add_card,
@@ -212,6 +225,27 @@ pub fn run() {
             deck::deck_swap_printing,
             deck::deck_missing_to_wishlist,
             deck::format_specs_list,
+            deck_meta::deck_category_list,
+            deck_meta::deck_category_create,
+            deck_meta::deck_category_rename,
+            deck_meta::deck_category_set_active,
+            deck_meta::deck_category_reorder,
+            deck_meta::deck_category_delete,
+            deck_meta::deck_tag_list,
+            deck_meta::deck_tag_create,
+            deck_meta::deck_tag_update,
+            deck_meta::deck_tag_delete,
+            deck_meta::deck_tag_suggestions,
+            deck_meta::deck_card_set_tag,
+            deck_meta::deck_folder_list,
+            deck_meta::deck_folder_create,
+            deck_meta::deck_folder_rename,
+            deck_meta::deck_folder_move,
+            deck_meta::deck_folder_delete,
+            deck_audit::deck_audit_list,
+            deck_theory::deck_theory_diff,
+            deck_theory::deck_theory_copy_from_live,
+            deck_theory::deck_theory_missing_to_wishlist,
             update_status,
             update_check,
             update_download,

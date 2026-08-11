@@ -184,8 +184,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("deck_list");
 
     invoke.mockResolvedValue(null);
-    await ipc.deckGet(3);
-    expect(invoke).toHaveBeenCalledWith("deck_get", { id: 3 });
+    // The variant is a parameter of the command and not a filter this side applies: it scopes
+    // the **cards** and nothing else, so a mirror that dropped it would not read the live deck
+    // by luck — Tauri refuses a call whose parameters it cannot fill.
+    await ipc.deckGet(3, "live");
+    expect(invoke).toHaveBeenCalledWith("deck_get", { id: 3, variant: "live" });
 
     invoke.mockResolvedValue([]);
     await ipc.formatSpecs();
@@ -218,53 +221,79 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The zone writes, and the one command in this module that does not take `id`.
+   * The card writes, and the one command in this module that does not take `id`.
    *
-   * Every zone write addresses a slot by **deck and card**, never by the `deck_cards.id` it
-   * answers with: a stale row id is the difference between emptying the slot the reader
-   * pressed and emptying somebody else's. And `deck_missing_to_wishlist` takes `deckId`
-   * where its four siblings take `id` — the one break in the pattern is the one a
-   * copy-paste gets wrong, and it is a runtime rejection with no type error anywhere.
+   * Every card write addresses a slot by **deck, card and category**, never by the
+   * `deck_cards.id` it answers with: a stale row id is the difference between emptying the
+   * slot the reader pressed and emptying somebody else's. Since schema v8 the slot carries a
+   * `variant` too, and it is a *fourth* part of the grain rather than a mode — the same
+   * printing in the same category is two rows, one `live` and one `theory`, so a write that
+   * dropped it would edit whichever the backend defaulted to. And `deck_missing_to_wishlist`
+   * takes `deckId` where its four siblings take `id` — the one break in the pattern is the one
+   * a copy-paste gets wrong, and it is a runtime rejection with no type error anywhere.
    */
-  it("addresses every zone write by deck and card, and the wishlist push by `deckId`", async () => {
+  it("addresses every card write by deck, card and category, and the wishlist push by `deckId`", async () => {
     invoke.mockResolvedValue({ id: 9, quantity: 4, removed: false });
 
-    await ipc.deckAddCard(4, "p1", "main", 4);
+    await ipc.deckAddCard(4, "p1", 7, null, "live", 4);
     expect(invoke).toHaveBeenCalledWith("deck_add_card", {
       deckId: 4,
       cardId: "p1",
-      zone: "main",
+      categoryId: 7,
+      categoryName: null,
+      variant: "live",
       quantity: 4,
     });
 
-    await ipc.deckSetCardQuantity(4, "p1", "main", 0);
+    // The other half of the one command that takes two ways of naming a pile: an id is a drop
+    // onto a column the reader pointed at, a name is "file it where this card belongs",
+    // found-or-created. **Both keys travel either way** — the unused one as an explicit
+    // `null`, because Tauri fills parameters by name and an absent key is a refusal rather
+    // than a default.
+    await ipc.deckAddCard(4, "p1", null, "Main deck", "live", 1);
+    expect(invoke).toHaveBeenCalledWith("deck_add_card", {
+      deckId: 4,
+      cardId: "p1",
+      categoryId: null,
+      categoryName: "Main deck",
+      variant: "live",
+      quantity: 1,
+    });
+
+    await ipc.deckSetCardQuantity(4, "p1", 7, "live", 0);
     expect(invoke).toHaveBeenCalledWith("deck_set_card_quantity", {
       deckId: 4,
       cardId: "p1",
-      zone: "main",
+      categoryId: 7,
+      variant: "live",
       quantity: 0,
     });
 
+    // The one write that names **two** categories, so it spells neither of them `categoryId`
+    // the way its siblings do — and `from`/`to` alone, which is what the zones took, would
+    // deserialize into neither parameter.
     invoke.mockResolvedValue(undefined);
-    await ipc.deckMoveCard(4, "p1", "maybe", "side");
+    await ipc.deckMoveCard(4, "p1", 9, 2, "live");
     expect(invoke).toHaveBeenCalledWith("deck_move_card", {
       deckId: 4,
       cardId: "p1",
-      from: "maybe",
-      to: "side",
+      fromCategoryId: 9,
+      toCategoryId: 2,
+      variant: "live",
     });
 
-    // The one zone write that names **two** cards, so it spells neither of them `cardId` the
-    // way its five siblings do — a payload that did would deserialize into neither parameter.
+    // The one card write that names **two** cards, so it spells neither of them `cardId` the
+    // way its siblings do — a payload that did would deserialize into neither parameter.
     // The answer is read back too: `folded` is the server's arithmetic, and a mirror typed
     // `void` would throw away the one thing the UI has to say about a swap.
     invoke.mockResolvedValue({ folded: true, quantity: 5 });
-    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", "main");
+    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", 7, "live");
     expect(invoke).toHaveBeenCalledWith("deck_swap_printing", {
       deckId: 4,
       fromCardId: "p1",
       toCardId: "p2",
-      zone: "main",
+      categoryId: 7,
+      variant: "live",
     });
     expect(swapped).toEqual({ folded: true, quantity: 5 });
 
@@ -274,6 +303,198 @@ describe("ipc argument names match the Rust command signatures", () => {
     // How many wishes were *touched*, not how many copies were added — clicking twice raises
     // one line rather than making two, which is `add_wish`'s fold.
     expect(wishes).toBe(2);
+  });
+
+  /**
+   * The two deck writes that are **not** a `DeckPatch`, and the reason neither can be one.
+   *
+   * `deck_update` writes every column with `coalesce(?n, column)`, which reads a bound NULL as
+   * "leave it" — so a patch has no way to say *clear this*. Filing a deck back at the **root**
+   * of the folder tree is exactly that sentence, which is why `deck_set_folder` exists and
+   * takes an `Option<i64>` of its own where `null` means the root. And a cover image is a file
+   * on disk rather than a column, so it arrives as the path the picker answered.
+   */
+  it("sends the two deck writes a patch cannot express under their own names", async () => {
+    invoke.mockResolvedValue({ id: 4 });
+
+    await ipc.deckSetCoverImage(4, "C:\\pics\\dragon.png");
+    // `deckId` and `sourcePath` — the command takes neither `id` nor `path`, and Tauri fills
+    // parameters by name.
+    expect(invoke).toHaveBeenCalledWith("deck_set_cover_image", {
+      deckId: 4,
+      sourcePath: "C:\\pics\\dragon.png",
+    });
+
+    await ipc.deckSetFolder(4, 2);
+    expect(invoke).toHaveBeenCalledWith("deck_set_folder", { deckId: 4, folderId: 2 });
+
+    // The whole reason this command is not a patch field: an explicit `null` is the root, and
+    // it must travel as a key rather than be dropped — `DeckPatch` would read it as "leave it".
+    await ipc.deckSetFolder(4, null);
+    expect(invoke).toHaveBeenCalledWith("deck_set_folder", { deckId: 4, folderId: null });
+  });
+
+  /**
+   * The six category commands.
+   *
+   * Three different first parameters between them — `deckId` on the two that are about a
+   * *deck's* categories (list, create, reorder) and a bare `id` on the three that are about
+   * **one** category (rename, setActive, delete) — and Tauri matches by name, so the one
+   * copied from its neighbour is the one that fails at runtime with no type error anywhere.
+   */
+  it("sends every category command under the name its command declares", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.deckCategoryList(4, "theory");
+    // The variant scopes the two **counts** on each row and nothing else — the list of
+    // categories is the same either way, which is what keeps the editor's columns still while
+    // the reader switches lists.
+    expect(invoke).toHaveBeenCalledWith("deck_category_list", { deckId: 4, variant: "theory" });
+
+    invoke.mockResolvedValue({ id: 7 });
+    await ipc.deckCategoryCreate(4, "Ramp");
+    expect(invoke).toHaveBeenCalledWith("deck_category_create", { deckId: 4, name: "Ramp" });
+
+    await ipc.deckCategoryRename(7, "Acceleration");
+    // `id`, not `deckId`: a category names its own deck, so a rename does not.
+    expect(invoke).toHaveBeenCalledWith("deck_category_rename", { id: 7, name: "Acceleration" });
+
+    await ipc.deckCategorySetActive(7, false);
+    // `isActive` — the flag that is the whole of "counts toward nothing", and the one field of
+    // a category every kind accepts, `commander` included.
+    expect(invoke).toHaveBeenCalledWith("deck_category_set_active", { id: 7, isActive: false });
+
+    invoke.mockResolvedValue([]);
+    await ipc.deckCategoryReorder(4, [7, 1, 2]);
+    expect(invoke).toHaveBeenCalledWith("deck_category_reorder", { deckId: 4, ids: [7, 1, 2] });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckCategoryDelete(7, 1);
+    expect(invoke).toHaveBeenCalledWith("deck_category_delete", { id: 7, moveToCategoryId: 1 });
+
+    // `null` is not "no argument": it is the destructive half of one command — the cards go
+    // with the category, by `ON DELETE CASCADE`. The key must travel either way.
+    await ipc.deckCategoryDelete(7, null);
+    expect(invoke).toHaveBeenCalledWith("deck_category_delete", { id: 7, moveToCategoryId: null });
+  });
+
+  /**
+   * The six tag commands, and the two that break the module's own pattern.
+   *
+   * `deck_tag_suggestions` takes **no deck id at all** — the palette is a property of the
+   * app's whole history rather than of one deck — so an argument object here is a
+   * deserialization error, `prewarm_collection`'s trap again. And `deck_card_set_tag` is a
+   * *card* write wearing a tag command's name: it addresses the slot by the full grain, like
+   * every other card write, and not by the tag.
+   */
+  it("sends every tag command under the name its command declares", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.deckTagList(4, "live");
+    expect(invoke).toHaveBeenCalledWith("deck_tag_list", { deckId: 4, variant: "live" });
+
+    invoke.mockResolvedValue({ id: 3 });
+    await ipc.deckTagCreate(4, "Cut candidate", "ember");
+    expect(invoke).toHaveBeenCalledWith("deck_tag_create", {
+      deckId: 4,
+      name: "Cut candidate",
+      color: "ember",
+    });
+
+    // One command for the rename **and** the recolour, and both are required: there is no
+    // patch shape here, so a caller changing one sends the other back unchanged.
+    await ipc.deckTagUpdate(3, "Cut", "moss");
+    expect(invoke).toHaveBeenCalledWith("deck_tag_update", { id: 3, name: "Cut", color: "moss" });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckTagDelete(3);
+    expect(invoke).toHaveBeenCalledWith("deck_tag_delete", { id: 3 });
+
+    invoke.mockResolvedValue([{ name: "Cut candidate", color: "ember" }]);
+    const palette = await ipc.deckTagSuggestions();
+    expect(invoke).toHaveBeenCalledWith("deck_tag_suggestions");
+    expect(palette).toEqual([{ name: "Cut candidate", color: "ember" }]);
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckCardSetTag(4, "p1", 7, "live", 3);
+    expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
+      deckId: 4,
+      cardId: "p1",
+      categoryId: 7,
+      variant: "live",
+      tagId: 3,
+    });
+
+    // Untagging is the same command with `null`, not a second one — `deck_cards.tag_id` is a
+    // nullable column and clearing it is a write to it.
+    await ipc.deckCardSetTag(4, "p1", 7, "live", null);
+    expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
+      deckId: 4,
+      cardId: "p1",
+      categoryId: 7,
+      variant: "live",
+      tagId: null,
+    });
+  });
+
+  /**
+   * The five folder commands — the one family in the deck surface that is about **no deck**.
+   *
+   * `deck_folder_list` therefore takes nothing, and `create`/`move` both spell their target
+   * `parentId` with `null` meaning the root of the tree. That `null` is load-bearing twice
+   * over: it is how a folder is made at the top level and how one is moved back out.
+   */
+  it("sends every folder command under the name its command declares", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.deckFolderList();
+    expect(invoke).toHaveBeenCalledWith("deck_folder_list");
+
+    invoke.mockResolvedValue({ id: 2 });
+    await ipc.deckFolderCreate(null, "Commander");
+    expect(invoke).toHaveBeenCalledWith("deck_folder_create", { parentId: null, name: "Commander" });
+
+    await ipc.deckFolderCreate(2, "Legends");
+    expect(invoke).toHaveBeenCalledWith("deck_folder_create", { parentId: 2, name: "Legends" });
+
+    await ipc.deckFolderRename(2, "EDH");
+    expect(invoke).toHaveBeenCalledWith("deck_folder_rename", { id: 2, name: "EDH" });
+
+    await ipc.deckFolderMove(3, null);
+    expect(invoke).toHaveBeenCalledWith("deck_folder_move", { id: 3, parentId: null });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckFolderDelete(3);
+    expect(invoke).toHaveBeenCalledWith("deck_folder_delete", { id: 3 });
+  });
+
+  /**
+   * The history and the theory list.
+   *
+   * `deck_audit_list` takes a **required** `limit`: the backend clamps it into `1..=500`, and
+   * a mirror that made it optional would send `undefined` — which Tauri cannot fill an `i64`
+   * from, so the drawer would fail to open rather than quietly reading everything.
+   *
+   * The two theory writes both answer a **count**, and they count different things:
+   * `copyFromLive` answers rows written, `missingToWishlist` answers wishes touched.
+   */
+  it("sends the history and theory commands under the names their commands declare", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.deckAuditList(4, 200);
+    expect(invoke).toHaveBeenCalledWith("deck_audit_list", { deckId: 4, limit: 200 });
+
+    invoke.mockResolvedValue([]);
+    await ipc.deckTheoryDiff(4);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_diff", { deckId: 4 });
+
+    invoke.mockResolvedValue(12);
+    const copied = await ipc.deckTheoryCopyFromLive(4);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_copy_from_live", { deckId: 4 });
+    expect(copied).toBe(12);
+
+    invoke.mockResolvedValue(3);
+    const wishes = await ipc.deckTheoryMissingToWishlist(4);
+    // A **second** command rather than a variant argument on `deck_missing_to_wishlist`: that
+    // one reads `live` and only `live`, and the two shopping lists are different questions.
+    expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", { deckId: 4 });
+    expect(wishes).toBe(3);
   });
 
   it("asks for a collection pre-warm with no arguments and reads back the queue size", async () => {

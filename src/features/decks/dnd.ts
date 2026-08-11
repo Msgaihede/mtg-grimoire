@@ -1,54 +1,56 @@
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import type { DeckZone } from "@/lib/ipc";
 
 /**
  * What a drag is carrying, and the only shape a drop target here will act on.
  *
  * Three kinds, because there are three things a drop can mean: a printing that is not in the
- * deck yet (`deck_add_card`, which folds into whatever the zone already holds), a row that is
- * (`deck_move_card`, which takes every copy with it), and a card picked up **anywhere else in
- * the app** — a search tile, a collection row, a wish, a printings row. A target reads the
- * kind rather than guessing from what is on screen, so the search panel and a zone column can
- * never be mistaken for each other.
+ * deck yet (`deck_add_card`, which folds into whatever the category already holds), a row that
+ * is (`deck_move_card`, which takes every copy with it), and a card picked up **anywhere else
+ * in the app** — a search tile, a collection row, a wish, a printings row. A target reads the
+ * kind rather than guessing from what is on screen, so the search panel and a category column
+ * can never be mistaken for each other.
  *
- * `"card"` and `"search-card"` mean the same thing to a zone (one copy, added) and are two
+ * `"card"` and `"search-card"` mean the same thing to a category (one copy, added) and are two
  * kinds all the same: the panel's tile is *inside* the editor and the other four surfaces are
  * not, and the day a target wants to know which wall a card came from — the sidebar's own
  * entries are the first — the answer has to be in the payload rather than deduced from where
  * the pointer happens to be.
  *
- * Almost every drag has a click path from Tasks 12–13 — the panel's Add button, the row menu's
- * "Move to", the stepper down to zero, and the quick-add on every surface that carries a
- * `"card"`. Speed, not capability, with **one measured exception**: a printings row dragged to
- * the sidebar's Decks entry adds that printing to the open deck, and the card pane offers no
- * button that does it (its quick-add writes the collection or the wishlist, and "Use this
- * printing" *replaces* a row the deck already has). A deck row let go on Wishlist is not the
- * exception — that one has a longer click path through the pane's quick-add in wishlist mode.
- * So this gesture is the one route with no click equivalent **on the surface it starts from**
- * — the deck is not closed to the keyboard, because the docked panel's Add takes any printing
- * that panel's own search can reach. If that detour stops being acceptable, the answer is a
- * button in the pane, not a rule here.
+ * Every drag into a deck has a click path beside it — the panel's Add button, the toolbar's
+ * quick add, and the quick-add on every surface that carries a `"card"`. Speed, not capability,
+ * with **one measured exception**: a printings row dragged to the sidebar's Decks entry adds
+ * that printing to the open deck, and the card pane offers no button that does it (its quick-add
+ * writes the collection or the wishlist, and "Use this printing" *replaces* a row the deck
+ * already has). So this gesture is the one route with no click equivalent **on the surface it
+ * starts from** — the deck is not closed to the keyboard, because the docked panel's Add takes
+ * any printing that panel's own search can reach. If that detour stops being acceptable, the
+ * answer is a button in the pane, not a rule here.
+ *
+ * **`"deck-card"` is carried by every card in every view**, through `cardControl.tsx`'s
+ * `useDeckCardDrag` — one registration, four surfaces, so a card picked up in the table means
+ * exactly what the same card picked up in the stack means.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string }
-  | { kind: "deck-card"; cardId: string; name: string; fromZone: DeckZone }
+  | { kind: "deck-card"; cardId: string; name: string; fromCategoryId: number }
   | { kind: "card"; cardId: string; name: string };
 
-/** Where a payload was let go: one of the deck's zones, or the tray that takes cards out. */
-export type DropTarget = { kind: "zone"; zone: DeckZone } | { kind: "remove" };
+/** Where a payload was let go: one of the deck's categories, or the tray that takes cards
+ *  out. */
+export type DropTarget = { kind: "category"; categoryId: number } | { kind: "remove" };
 
 /**
  * The write a drop means — named for the command it becomes, and carrying nothing the editor
  * does not already need to send.
  *
- * Addressed by the slot (`cardId` + zone) rather than by `deck_cards.id`, like every other
+ * Addressed by the slot (`cardId` + category) rather than by `deck_cards.id`, like every other
  * write in this feature: a stale row id is the difference between emptying the slot the
  * reader dropped and emptying one that has since been refilled.
  */
 export type DeckWrite =
-  | { write: "add"; cardId: string; zone: DeckZone }
-  | { write: "move"; cardId: string; from: DeckZone; to: DeckZone }
-  | { write: "remove"; cardId: string; zone: DeckZone };
+  | { write: "add"; cardId: string; categoryId: number }
+  | { write: "move"; cardId: string; from: number; to: number }
+  | { write: "remove"; cardId: string; categoryId: number };
 
 /**
  * The mark that says a payload is one of this app's card drags, and its key.
@@ -71,27 +73,18 @@ const MARK = "mtg-grimoire/deck-drag";
 const MARK_KEY = "dragSource";
 
 /**
- * Every zone, as a value rather than as a type.
+ * Whether a value could be a `deck_categories.id`.
  *
- * A `Record<DeckZone, true>` is exhaustive by the type checker: a sixth zone in the union
- * fails this line rather than silently making `readDragData` refuse the new one. Written here
- * rather than read off `ZONE_LABEL` because `ZoneColumn` imports *this* module, and a cycle
- * between the drag contract and the component that draws it is a cycle for no gain.
+ * Schema v8 turned the fixed five-word zone into a row the user owns, so the fence that used
+ * to be an exhaustive `Record<DeckZone, true>` is now a shape check and nothing more — there
+ * is no closed list of category ids to check against, and the payload is written by this
+ * app's own draggables rather than by anything a reader can type. What is still worth
+ * refusing is a value that would address *every* row or *no* row: a float, a NaN, a zero, a
+ * negative, a string of digits. `Number.isSafeInteger` answers all of those in one call, and
+ * refusing here is what keeps `deck_move_card` from being handed a `from` it cannot mean.
  */
-const ZONES: Record<DeckZone, true> = {
-  main: true,
-  side: true,
-  commander: true,
-  companion: true,
-  maybe: true,
-};
-
-function isZone(value: unknown): value is DeckZone {
-  // The *value* is what is asked for, not the key: `"toString" in ZONES` is true, and a drag
-  // claiming to come from the `toString` zone would then be handed to `deck_move_card`.
-  // Nothing on `Object.prototype` is `true`, so this asks about own entries without needing
-  // `Object.hasOwn` (ES2022; this project compiles to ES2020).
-  return typeof value === "string" && (ZONES as Record<string, true | undefined>)[value] === true;
+function isCategoryId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 /** A name is allowed to be empty — a row denormalizes whatever `cards` had — but an id is
@@ -121,7 +114,7 @@ export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
 
 /**
  * The second DOM contract a deck card control carries: the **slot** it draws, as
- * `"<zone>:<card id>"` — the address every deck write is made to.
+ * `"<category id>:<card id>"` — the address every deck write is made to.
  *
  * How the card pane hands the caret back when it closes after a swap. An attribute rather than
  * a ref because the pane is not in the deck's tree and owns none of its elements — and least of
@@ -130,9 +123,15 @@ export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
  * opened points at something unmounted by the time Escape is pressed. A slot is a question the
  * DOM can answer after the fact.
  *
- * Here rather than in `ZoneColumn` because both views carry it and `ZoneColumn` imports
- * `VisualCard`: the other direction would be an import cycle for one string. This module is
- * already where a card control's DOM contracts live ({@link NOT_A_DRAG} above).
+ * Here rather than on a view, because it is a contract between two components that share no
+ * tree; this module is already where a card control's DOM contracts live ({@link NOT_A_DRAG}
+ * above).
+ *
+ * Written by `cardControl.tsx`'s `deckCardProps` and therefore by all four views — on the card's
+ * own button, or on the row in the table, because what the pane does with it is hand the caret
+ * back and the caret needs somewhere that takes focus. `App.test.tsx`'s "hands the caret back to
+ * the deck's card after a swap" is the only test in the repo that notices it going missing,
+ * which it did for exactly one task of the rebuild.
  */
 export const DECK_CARD_ATTR = "data-deck-card";
 
@@ -142,12 +141,12 @@ export const DECK_CARD_ATTR = "data-deck-card";
  * **No deck id, because one editor is mounted at a time**: `openDeckId` is a single id, and
  * `setOpenDeckId` clears `paneDeckContext` in the same write — so every marked control on the
  * page belongs to the deck the context names, and the pane's document-wide `querySelector` is
- * deck-scoped by construction. The day two editors can be on screen at once, this gains a
- * `deckId` and the pane's lookup passes it: zone and card alone would then match a slot in a
- * deck the reader was not working in.
+ * deck-scoped by construction. A category id is per-deck and unique across the whole table,
+ * which makes this stronger than the zone word it replaces rather than weaker — but the deck
+ * scoping is still the single open editor's, not this string's.
  */
-export function deckCardSlot(zone: DeckZone, cardId: string): string {
-  return `${zone}:${cardId}`;
+export function deckCardSlot(categoryId: number, cardId: string): string {
+  return `${categoryId}:${cardId}`;
 }
 
 /**
@@ -206,10 +205,12 @@ export function cardDraggable({
  */
 export function readDragData(data: Record<string, unknown>): DragPayload | null {
   if (data[MARK_KEY] !== MARK) return null;
-  const { kind, cardId, name, fromZone } = data;
+  const { kind, cardId, name, fromCategoryId } = data;
   if (!isId(cardId) || typeof name !== "string") return null;
   if (kind === "search-card" || kind === "card") return { kind, cardId, name };
-  if (kind === "deck-card" && isZone(fromZone)) return { kind, cardId, name, fromZone };
+  if (kind === "deck-card" && isCategoryId(fromCategoryId)) {
+    return { kind, cardId, name, fromCategoryId };
+  }
   return null;
 }
 
@@ -226,17 +227,22 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
     // the database, not a row in this deck. The tray is only drawn for a deck-card drag for
     // the same reason.
     if (payload.kind !== "deck-card") return null;
-    return { write: "remove", cardId: payload.cardId, zone: payload.fromZone };
+    return { write: "remove", cardId: payload.cardId, categoryId: payload.fromCategoryId };
   }
   if (payload.kind === "search-card" || payload.kind === "card") {
     // One copy, exactly as the panel's Add button sends — and `deck_add_card` folds, so
     // dropping the same card twice is two copies rather than a refusal. The two kinds are one
-    // write here: where a printing was picked up does not change what putting it in a zone
+    // write here: where a printing was picked up does not change what putting it in a category
     // means.
-    return { write: "add", cardId: payload.cardId, zone: target.zone };
+    return { write: "add", cardId: payload.cardId, categoryId: target.categoryId };
   }
   // Back where it came from is not a move: it would touch the deck, reallocate and bump
   // `updated_at` to leave the list exactly as it was.
-  if (payload.fromZone === target.zone) return null;
-  return { write: "move", cardId: payload.cardId, from: payload.fromZone, to: target.zone };
+  if (payload.fromCategoryId === target.categoryId) return null;
+  return {
+    write: "move",
+    cardId: payload.cardId,
+    from: payload.fromCategoryId,
+    to: target.categoryId,
+  };
 }

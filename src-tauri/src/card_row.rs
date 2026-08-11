@@ -41,7 +41,7 @@ pub struct CardRow {
     pub colors: Option<String>,
     pub color_identity: Option<String>,
     pub legalities: Option<String>,
-    /// [`crate::legalities`]' mask of the line above, a column of its own since v8: the
+    /// [`crate::legalities`]' mask of the line above, a column of its own since v9: the
     /// format filter is a bitwise test rather than 23 `json_extract`s per row, and — the
     /// part no blob can do at any price — it can live in an index.
     pub legal_mask: u64,
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(c.cmc, Some(0.5));
     }
 
-    /// The ingest fills the mask natively, so the v8 backfill is only ever paid once — and
+    /// The ingest fills the mask natively, so the v9 backfill is only ever paid once — and
     /// a printing Scryfall gave no `legalities` at all masks to zero, which is legal
     /// nowhere and is an answer rather than a gap.
     #[test]

@@ -26,33 +26,35 @@
  * `companion-eligibility` **error**. All three are `not_legal` in all 23 keys, so the legality
  * pass has already refused every one of them.
  *
- * **The starting deck is `main` + `commander`, and never the sideboard.** A companion's
- * condition is on the deck you begin the game with; the sideboard is not part of it. In the
- * commander formats the commander *is* — it is one of the hundred (CR 903.5a) — which is most
- * of why Lurrus is not an EDH companion.
+ * **The starting deck is the `main` and `commander` kinds, and never the sideboard.** A
+ * companion's condition is on the deck you begin the game with; the sideboard is not part of
+ * it. In the commander formats the commander *is* — it is one of the hundred (CR 903.5a) —
+ * which is most of why Lurrus is not an EDH companion.
  *
  * Two things about a companion are **not** in this file, both because they are already the
  * deck's own rules rather than the companion's:
  *
- * * its **copy count**. The `companion` zone is one of `engine.ts`'s `COPY_ZONES`, so a card
- *   held as companion *and* in the 99 is two copies of it and the singleton rule says so —
- *   the research doc's "effectively a 101st card", in the one place that already counts cards.
- * * its **legality and mana value**, which `engine.ts` runs over every zone but `maybe`.
+ * * its **copy count**. `engine.ts`'s copy pass counts every row it is handed, the `companion`
+ *   kind included, so a card held as companion *and* in the 99 is two copies of it and the
+ *   singleton rule says so — the research doc's "effectively a 101st card", in the one place
+ *   that already counts cards.
+ * * its **legality and mana value**, which `engine.ts` runs over every card of every *active*
+ *   category.
  *
  * Its **colour identity** is here, because `engine.ts` deliberately leaves the companion out
  * of the deck-wide identity pass so that it is checked once rather than twice.
  */
-import type { DeckZone, FormatSpec } from "@/lib/ipc";
+import type { CategoryKind, FormatSpec } from "@/lib/ipc";
 import type { CardFacts, ValidationIssue } from "./types";
 import { colorIdentityIssues, commanderIdentity, frontFace } from "./commanders";
 import { isOrphan, manaValueOf } from "./engine";
 
 /**
- * The zones a companion's condition reads. `side` is out (a sideboard is not the starting
- * deck) and so is `companion` itself — the companion begins the game outside the deck, which
- * is why Lurrus at mana value 3 can be its own deck's Lurrus.
+ * The category kinds a companion's condition reads. `side` is out (a sideboard is not the
+ * starting deck) and so is `companion` itself — the companion begins the game outside the
+ * deck, which is why Lurrus at mana value 3 can be its own deck's Lurrus.
  */
-const STARTING_DECK: readonly DeckZone[] = ["main", "commander"];
+const STARTING_DECK: readonly CategoryKind[] = ["main", "commander"];
 
 /** U+2014, written as an escape for the reason `commanders.ts` gives: an editor or a paste
  *  that swaps it for an en dash or a hyphen must not break a parser invisibly. */
@@ -570,8 +572,8 @@ function yorionIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
  * it, whether each may be there, whether the deck satisfies it, and — in the commander formats
  * — whether it fits the commander's colours.
  *
- * `deck` is the whole deck minus the scratchpad, as `engine.ts` holds it; the conditions read
- * {@link STARTING_DECK} out of it themselves.
+ * `deck` is the whole deck minus its inactive categories, as `engine.ts` holds it; the
+ * conditions read {@link STARTING_DECK} out of it themselves.
  */
 export function companionIssues(
   companionZone: CardFacts[],
@@ -603,7 +605,7 @@ export function companionIssues(
     });
   }
 
-  const startingDeck = deck.filter((card) => STARTING_DECK.includes(card.zone));
+  const startingDeck = deck.filter((card) => STARTING_DECK.includes(card.categoryKind));
   // Only where there is a commander to derive an identity from — `commanderIdentity` answers
   // `null` for an empty zone, and an empty *set* is a real answer (a colourless commander
   // admits only colourless cards).
@@ -611,7 +613,7 @@ export function companionIssues(
     spec.commanderRule === null
       ? null
       : commanderIdentity(
-          deck.filter((card) => card.zone === "commander"),
+          deck.filter((card) => card.categoryKind === "commander"),
           spec,
         );
 

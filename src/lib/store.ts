@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { DeckZone } from "@/lib/ipc";
+import type { DeckVariant } from "./ipc";
 
 /** The five top-level destinations in the sidebar. */
 export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
@@ -8,7 +8,7 @@ export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings"
  * The deck row the open card was opened *from* — which is the whole of what the card pane
  * needs to offer "Use this printing", and nothing more.
  *
- * A slot, addressed the way every deck write addresses one: the deck, the zone, and the
+ * A slot, addressed the way every deck write addresses one: the deck, the category, and the
  * printing that is in it. Not a `deck_cards.id`, for `useDeck`'s reason — a stale row id is
  * the difference between rewriting the slot the reader is looking at and rewriting one
  * somebody else already refilled.
@@ -16,10 +16,40 @@ export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings"
 export interface PaneDeckContext {
   /** `decks.id` is an INTEGER primary key, so this is a number all the way to the command. */
   deckId: number;
-  zone: DeckZone;
+  /**
+   * The `deck_categories.id` the row is filed under — what the swap is addressed by.
+   *
+   * **Paired with {@link categoryName} on purpose, and the pair is not redundant.** Schema v8
+   * made a category a row the user names, so the word is no longer derivable from the id by a
+   * lookup table the way `ZONE_LABEL` was: it lives in the deck's own `categories` list, and
+   * the pane is a *sibling* of the deck editor with nothing between them but this store. The
+   * pane spells the name out twice — the fold announcement and the accessible name of every
+   * "Use this printing" — so the alternative is the pane holding a copy of the deck's category
+   * list to translate one id with. The writer already has both in hand (the editor draws the
+   * column), so it hands both over.
+   */
+  categoryId: number;
+  /** The category's name as the deck's own column heading reads it — see {@link categoryId}. */
+  categoryName: string;
   /** The printing the deck holds in that slot — the swap's `from`, and normally the card the
    *  pane is showing. */
   cardId: string;
+  /**
+   * **Which of the deck's two lists the row is in — the fourth part of the slot.**
+   *
+   * Schema v8 made a deck two lists and put `variant` in `DECK_CARD_GRAIN`, so a context naming
+   * only the deck, the category and the printing names three quarters of a row. It was that for
+   * one task, and the cost was measurable rather than theoretical: `useSwapFromPane` defaults to
+   * `live`, so a pane opened from a **Theory** row either had its swap refused (no row matched)
+   * or — where the same printing sits in the same category of *both* lists — **rewrote the live
+   * row while the reader was looking at the theory one**, silently and with the right-looking
+   * answer.
+   *
+   * Written by whichever surface opened the card, because that surface is the one that knows
+   * which list it is drawing; read at `CardDetailPane`'s `useSwapFromPane` call, which is the
+   * only place the swap is pressed.
+   */
+  variant: DeckVariant;
 }
 
 /** How the search results are laid out. */
@@ -42,7 +72,7 @@ interface AppState {
    * anywhere else, and every card at all when no pane is open.
    *
    * It is here rather than in the pane because it is written by one view (the deck editor's
-   * zone columns) and read by another (the card pane docked beside them), and the two are
+   * category columns) and read by another (the card pane docked beside them), and the two are
    * siblings under `App` with nothing between them but this store.
    */
   paneDeckContext: PaneDeckContext | null;
@@ -53,8 +83,8 @@ interface AppState {
    * One action rather than a pair of setters, and that is the whole design: `setSelectedCardId`
    * clears the context (see there), so "every other way of opening a card leaves no context"
    * is structural rather than a rule six call sites have to remember. Two writers use this —
-   * a click on a card in a zone column, and a swap that succeeded, which re-anchors the pane
-   * onto the printing the deck now holds in the same slot.
+   * a click on a card in a category column, and a swap that succeeded, which re-anchors the
+   * pane onto the printing the deck now holds in the same slot.
    */
   openCardFromDeck: (context: PaneDeckContext) => void;
   /**

@@ -409,7 +409,7 @@ export const Etched: Story = {
  * finish has no price".
  *
  * The wishlist and `deck_cards` are the opposite by table CHECK (`quantity > 0`): a wish for
- * none of something is not a wish, and a zone slot at zero holds no condition, no price and no
+ * none of something is not a wish, and a deck's category slot at zero holds no condition, no price and no
  * story. Only the collection's zero is worth keeping.
  */
 export const ZeroQuantity: Story = {

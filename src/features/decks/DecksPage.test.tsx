@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { DeckRow, FormatSpec } from "@/lib/ipc";
-import { cardImageUrl } from "@/lib/images";
+import type { DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
+import { cardImageUrl, imageOrigin } from "@/lib/images";
 import { spec } from "./validation/fixtures";
 
 const deckList = vi.hoisted(() => vi.fn());
@@ -12,10 +12,29 @@ const deckCreate = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckDuplicate = vi.hoisted(() => vi.fn());
+const deckSetFolder = vi.hoisted(() => vi.fn());
+const deckFolderList = vi.hoisted(() => vi.fn());
+const deckFolderCreate = vi.hoisted(() => vi.fn());
+const deckFolderRename = vi.hoisted(() => vi.fn());
+const deckFolderMove = vi.hoisted(() => vi.fn());
+const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckList, deckCreate, deckUpdate, deckDelete, deckDuplicate, formatSpecs },
+  ipc: {
+    deckList,
+    deckCreate,
+    deckUpdate,
+    deckDelete,
+    deckDuplicate,
+    deckSetFolder,
+    deckFolderList,
+    deckFolderCreate,
+    deckFolderRename,
+    deckFolderMove,
+    deckFolderDelete,
+    formatSpecs,
+  },
 }));
 
 import { DecksPage } from "./DecksPage";
@@ -34,6 +53,11 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
+  // The four v8 deck columns. Every real row carries all four, so the fixture does too.
+  coverKind: "card_art",
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
 };
 
 /** No cover, so no art and — the plan's ruling — no credit line at all. */
@@ -50,6 +74,31 @@ const DRAFT: DeckRow = {
 
 /** Filed away: sorted last by `deck_list`, and behind a disclosure here. */
 const FILED: DeckRow = { ...BURN, id: 6, name: "Old Standard", archived: true, cardCount: 60 };
+
+/** Two folders, one inside the other — flat rows, because `deck_folders` has no notion of
+ *  depth and the tree is the reader's to build from `parentId`. */
+const EDH: DeckFolder = { id: 1, parentId: null, name: "Commander", sortOrder: 0 };
+const LEGENDS: DeckFolder = { id: 2, parentId: 1, name: "Legends", sortOrder: 0 };
+
+/** Filed one level down, and the only fixture that keeps a theory list. */
+const KENRITH: DeckRow = {
+  ...BURN,
+  id: 7,
+  name: "Kenrith Two-Drops",
+  formatKey: "commander",
+  formatName: "Commander",
+  coverArtist: "Kieran Yanner",
+  cardCount: 100,
+  folderId: 2,
+  theoryEnabled: true,
+};
+
+/** Two folders, three decks: `Burn` at the top level, `Sunday draft` in Commander and
+ *  `Kenrith Two-Drops` one level further down in Legends. */
+function withFolders() {
+  deckFolderList.mockResolvedValue([EDH, LEGENDS]);
+  deckList.mockResolvedValue([BURN, { ...DRAFT, folderId: 1 }, KENRITH]);
+}
 
 /**
  * The picker's rows as `format_specs` serves them: every seeded row, in `sort_order`,
@@ -89,6 +138,14 @@ beforeEach(() => {
   deckUpdate.mockReset().mockResolvedValue({ ...BURN, archived: true });
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 10, name: "Burn (copy)" });
+  deckSetFolder.mockReset().mockResolvedValue(BURN);
+  // No folders by default: the ordinary gallery is one that files nothing, and every case
+  // below that is about filing says so by overriding this.
+  deckFolderList.mockReset().mockResolvedValue([]);
+  deckFolderCreate.mockReset().mockResolvedValue(LEGENDS);
+  deckFolderRename.mockReset().mockResolvedValue({ ...EDH, name: "EDH" });
+  deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
+  deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });
 });
@@ -157,20 +214,105 @@ describe("DecksPage", () => {
   });
 
   /**
-   * The ruling's real case, and the only one that can put the word "null" on a tile: the deck
-   * *has* a cover, and the printing it names has left the card database — so `cards` answers
-   * no artist for it. The art still resolves (the id is still an id); the credit does not.
+   * **A custom cover is drawn, and it is drawn from `coverKind`.**
+   *
+   * The bug this pins was found in the live window and is invisible to a reading of the tile:
+   * `Cover` took only `cardId`, so a deck wearing the reader's own picture rendered "No cover"
+   * and no `<img>` at all while the route answered the file 626×457 in 2 ms. Nothing was wrong
+   * underneath — the gallery never asked.
+   *
+   * The URL names the **deck**, not the picture, and carries no cache-buster: the route is
+   * served `no-store` so a stable URL can carry changing bytes.
    */
-  it("draws no credit for a cover whose printing has left the card database", async () => {
+  it("draws a custom cover from the cover route, not from the card id", async () => {
+    deckList.mockResolvedValue([{ ...BURN, coverKind: "custom" }]);
+
+    wrap(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    const img = tile.querySelector("img");
+    expect(img).toHaveAttribute("src", `${imageOrigin(navigator.userAgent)}/cover/4`);
+    // Not the card art, even though this deck still carries a `coverCardId`: setting a custom
+    // cover never clears the card id, so "has one" and "is showing one" are different questions.
+    expect(img).not.toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
+    expect(tile).not.toHaveTextContent("No cover");
+  });
+
+  /**
+   * **The artist rule is Scryfall's, so it stops at Scryfall's pictures.**
+   *
+   * A file the reader uploaded carries no Scryfall artist and needs no credit — so the custom
+   * arm must never be gated on `coverArtist` (or on `coverCardId`), or every custom cover
+   * disappears for a second and quieter reason than the first.
+   *
+   * The fixture is the deck that has only ever worn its own picture: **no card id, and so no
+   * artist either.** That is exactly the row such a gate would render invisible, and it is the
+   * ordinary state of a deck whose reader uploaded a photograph and never picked a card.
+   */
+  it("draws a custom cover for a deck that has no card art and no artist", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, coverKind: "custom", coverCardId: null, coverArtist: null },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    expect(tile.querySelector("img")).toHaveAttribute(
+      "src",
+      `${imageOrigin(navigator.userAgent)}/cover/4`,
+    );
+    // And not the empty frame: "No cover" is what this said before the fix.
+    expect(tile).not.toHaveTextContent("No cover");
+    expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
+  });
+
+  /** And the card-art arm keeps the rule: the credit rides the picture it is about. */
+  it("still credits the illustrator when the deck is showing card art", async () => {
+    // Two decks, identical but for which cover they wear — so the only thing that can explain
+    // one credit and not two is `coverKind`.
+    deckList.mockResolvedValue([
+      BURN,
+      { ...BURN, id: 5, name: "Sunday burn", coverKind: "custom" },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const cardArt = (await tileFor("Burn")).closest("li")!;
+    const custom = (await tileFor("Sunday burn")).closest("li")!;
+    expect(within(cardArt).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+    expect(within(custom).queryByText(/art by/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Art by Rebecca Guay")).toHaveLength(1);
+  });
+
+  /**
+   * **If the credit cannot be shown, neither can the crop.**
+   *
+   * The deck *has* a cover and the printing it names has left the card database, so `cards`
+   * answers no artist for it. The id still resolves to a URL — but Scryfall's image policy is
+   * that an `art` crop, having no printed frame, may be shown only where the illustrator is
+   * named, and `DeckRow.coverArtist`'s own doc records the ruling: "a cover with no artist is
+   * **not drawn** — an orphaned cover heals on the next sync". So the frame stays empty and
+   * says "No cover", which is what this is from the reader's side: nothing to show *yet*.
+   *
+   * **This case asserted the exact opposite until 2026-08-11** — that the `<img>` was present
+   * with only the credit line suppressed — and it was wrong from the day it was written, not
+   * made wrong by later code. `DeckSettingsDialog`'s `CoverPreview` had the policy right on the
+   * same picture, so the gallery and the dialog disagreed about one deck row. Corrected on a
+   * ruling, deliberately, and recorded here so the old assertion is never restored as a "fix":
+   * a tile drawing an uncreditable crop is a policy violation, not a feature.
+   *
+   * The rule stops at the card-art arm. A custom cover is the reader's own picture, carries no
+   * Scryfall artist and needs no credit — {@link
+   * "draws a custom cover for a deck that has no card art and no artist"} is that half.
+   */
+  it("draws no card art at all for a cover it cannot credit", async () => {
     deckList.mockResolvedValue([{ ...BURN, coverArtist: null }]);
 
     wrap(<DecksPage />);
 
-    const tile = await tileFor("Burn");
-    expect(tile.querySelector("img")).toHaveAttribute(
-      "src",
-      cardImageUrl(BURN.coverCardId!, 0, "art"),
-    );
+    const tile = (await tileFor("Burn")).closest("li")!;
+    expect(tile.querySelector("img")).toBeNull();
+    expect(within(tile).getByText("No cover")).toBeInTheDocument();
     expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
   });
@@ -446,5 +588,332 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Duplicate Burn" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more.");
+  });
+
+  /**
+   * Which of a deck's two lists exist, on the tile — derived from the two fields `deck_list`
+   * already answers rather than stored, so the badge and the editor's Live/Theory switch can
+   * never disagree. A theory list beside an empty live one is a plan, not a deck.
+   */
+  it("badges a deck by which of its two lists exist", async () => {
+    deckList.mockResolvedValue([
+      BURN,
+      { ...KENRITH, folderId: null },
+      { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const burn = (await tileFor("Burn")).closest("li")!;
+    expect(within(burn).getByText("LIVE")).toBeInTheDocument();
+    const kenrith = (await tileFor("Kenrith Two-Drops")).closest("li")!;
+    expect(within(kenrith).getByText("LIVE + THEORY")).toBeInTheDocument();
+    const sketch = (await tileFor("Sketch")).closest("li")!;
+    expect(within(sketch).getByText("THEORY ONLY")).toBeInTheDocument();
+  });
+});
+
+describe("DecksPage folders", () => {
+  /** Nested and indented, with each row counting everything under it — a row reading 0 over a
+   *  sub-folder holding twelve decks is a lie the reader could only catch by clicking. */
+  it("draws the folders as a tree, counting every deck under each one", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+
+    const tree = screen.getByRole("navigation", { name: "Folders" });
+    expect(await within(tree).findByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
+    const commander = within(tree).getByRole("button", { name: "Commander, 2 decks" });
+    // Commander holds one deck directly and one through Legends.
+    const legends = within(tree).getByRole("button", { name: "Legends, 1 deck" });
+    // The indent *is* the nesting: there is no twisty, so a level is 14px of padding.
+    expect(commander).toHaveStyle({ paddingLeft: "22px" });
+    expect(legends).toHaveStyle({ paddingLeft: "36px" });
+  });
+
+  /** One drawer at a time. The top level holds the decks filed nowhere and the folders in it;
+   *  a deck two levels down is in neither until the reader walks there. */
+  it("shows the selected folder's own decks and its own sub-folders", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+
+    expect(await tileFor("Burn")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commander folder, 2 decks" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Sunday draft/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Commander, 2 decks" }));
+
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Legends folder, 1 deck" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Burn/ })).not.toBeInTheDocument();
+    // The heading names the drawer and counts what is in it, folders first.
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    expect(screen.getByText("1 folder · 1 deck")).toBeInTheDocument();
+  });
+
+  /**
+   * Scryfall's image policy reaches the folder cards too: an `art` crop has no printed frame,
+   * so every illustrator whose work is in the strip is named — and a cover the card database
+   * has no artist for is not drawn at all, exactly as on a deck tile.
+   */
+  it("draws a folder's member art only where it can credit the illustrator", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+
+    const card = (
+      await screen.findByRole("button", { name: "Commander folder, 2 decks" })
+    ).closest("li")!;
+    // `Sunday draft` has no cover and contributes nothing; Kenrith, one level down, does.
+    expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
+    expect(card.querySelectorAll("img")).toHaveLength(1);
+    expect(card.querySelector("img")).toHaveAttribute(
+      "src",
+      cardImageUrl(KENRITH.coverCardId!, 0, "art"),
+    );
+  });
+
+  /** A folder is made where it will live, at the indent it will have — and at **any** level,
+   *  which is the whole reason the control is on every row rather than only in the header. */
+  it("makes a folder inside another one", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "New folder in Commander" }));
+
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    // The row says where it lands, for a reader who cannot see the indent.
+    expect(screen.getByText("in Commander")).toBeInTheDocument();
+
+    // `keyboard` rather than `type` for the reason the F2 case spells out: `type` focuses what
+    // it is handed, which would repair the assertion above rather than build on it.
+    await userEvent.keyboard("Legends");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(1, "Legends");
+  });
+
+  it("makes a folder at the top level", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "New folder at the top level" }),
+    );
+
+    // The same pair as every other field on this screen: assert where the caret is, then send
+    // keystrokes to wherever it is rather than to an element handed to `type`.
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    await userEvent.keyboard("Cubes");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(null, "Cubes");
+  });
+
+  /** The keyboard's half of the drag — a drop target nothing but a mouse can reach is half a
+   *  feature. */
+  it("files a deck into a folder from the tile's own control", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Move Burn to a folder" }));
+
+    const picker = screen.getByRole("dialog", { name: "Move Burn to a folder" });
+    await userEvent.click(within(picker).getByRole("button", { name: "Commander" }));
+
+    expect(deckSetFolder).toHaveBeenCalledWith(4, 1);
+  });
+
+  /**
+   * **The trap this screen exists to avoid.** `DeckPatch` writes every column with
+   * `coalesce(?n, column)`, so a bound NULL reads as "leave it alone": a move to the top level
+   * written as a patch is a write that silently does nothing. `deck_set_folder` is the one
+   * command where `null` means the root, and this is the assertion that keeps it that way.
+   */
+  it("moves a deck to the top level with deckSetFolder and never with a patch", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Move Sunday draft to a folder" }),
+    );
+
+    const picker = screen.getByRole("dialog", { name: "Move Sunday draft to a folder" });
+    // Where it already is is offered and inert: that write changes nothing and bumps
+    // `updated_at`.
+    expect(within(picker).getByRole("button", { name: /^Commander/ })).toBeDisabled();
+    await userEvent.click(within(picker).getByRole("button", { name: "All decks" }));
+
+    expect(deckSetFolder).toHaveBeenCalledWith(5, null);
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Renamed **in place**, at the indent it already has — the field stands where the folder is.
+   * The trigger is in the wall's heading row beside the other two things you do to a folder,
+   * because a 208px row has no width for a second control; `F2` below is the keyboard's own
+   * route, and a rename only a mouse can reach would be half a feature.
+   *
+   * The current name arrives **selected**, `CategoriesPanel`'s ruling for its reason: the
+   * commonest rename replaces the word rather than edits inside it.
+   */
+  it("renames a folder in place, from the wall's own control", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder…" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Commander");
+    // The row it replaced is gone while the field is up: this is in place, not beside.
+    expect(screen.queryByRole("button", { name: "Commander, 2 decks" })).not.toBeInTheDocument();
+
+    // `keyboard`, not `type`: `type` clicks the field first and a click collapses the
+    // selection — and the selection is the claim. A reader who opens a rename and starts
+    // typing replaces the name rather than appending to it; this is that reader.
+    await userEvent.keyboard("EDH");
+    expect(field).toHaveValue("EDH");
+
+    // The field's own control, named for the write. The trigger that opened it is
+    // "Rename folder…" — the ellipsis is what keeps two controls with one name off the screen.
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+
+    expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH");
+  });
+
+  /**
+   * F2 renames the row the caret is on — the file manager's key, and a rename that never needs
+   * the pointer.
+   *
+   * **This is the route where the caret's landing place is the whole feature**, so it is
+   * asserted positively: where the caret *is*, not where it is not. A keyboard reader who
+   * presses F2 and finds the caret still on the row has a field they cannot type into.
+   */
+  it("renames the row the caret is on when F2 is pressed", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    const row = await screen.findByRole("button", { name: "Legends, 1 deck" });
+    row.focus();
+    await userEvent.keyboard("{F2}");
+
+    const field = await screen.findByLabelText("Rename Legends");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Legends");
+    // `keyboard`, never `type`: `type` focuses the element it is handed, so a test that reached
+    // the field that way would silently repair the very thing it is checking and pass against
+    // a field that never took the caret. This sends to wherever the caret already is.
+    await userEvent.keyboard("Partners");
+    expect(field).toHaveValue("Partners");
+    // Not a selection: F2 renames the row, it does not open the drawer.
+    expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
+  });
+
+  /**
+   * The field replaced the row, so the row is what the caret comes back to — the opener rule's
+   * *reason* rather than its letter. `openerRef.current?.focus()` cannot serve here: the row is
+   * a different element by the time the field is gone, and focusing a detached node drops the
+   * caret onto `<body>`.
+   */
+  it("hands the caret back to the row when a rename is cancelled", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder…" }));
+    await screen.findByLabelText("Rename Commander");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commander, 2 decks" })).toHaveFocus();
+    expect(deckFolderRename).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The opposite of what a reader will fear. `decks.folder_id` is `ON DELETE SET NULL`, so the
+   * decks inside surface at the top level; `deck_folders.parent_id` cascades onto itself, so
+   * the folders inside do go. The confirmation says both, reassuring half first.
+   */
+  it("says the decks in a folder are kept when the folder is deleted", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete folder…" }));
+
+    const confirm = screen.getByRole("dialog", { name: "Delete Commander" });
+    expect(confirm).toHaveTextContent("The 2 decks in it are kept — they move to the top level.");
+    expect(confirm).toHaveTextContent("The 1 folder inside goes with it.");
+
+    await userEvent.click(within(confirm).getByRole("button", { name: "Delete folder" }));
+
+    expect(deckFolderDelete).toHaveBeenCalledWith(1);
+  });
+
+  /**
+   * A folder cannot go inside itself or inside anything it holds — the backend refuses it,
+   * because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk forever.
+   * The offer is greyed rather than left to be refused: the refusal is a fence, not the
+   * affordance.
+   */
+  it("will not offer a folder its own descendant as a destination, and says why", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Move folder…" }));
+
+    const picker = screen.getByRole("dialog", { name: "Move Commander into a folder" });
+    expect(within(picker).getByRole("button", { name: /^Commander/ })).toBeDisabled();
+    expect(within(picker).getByRole("button", { name: "Legends" })).toBeDisabled();
+    expect(picker).toHaveTextContent(
+      "A folder cannot go inside itself, or inside anything it holds.",
+    );
+    expect(deckFolderMove).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And when the fence is jumped anyway — another surface re-parented something between the
+   * read and the press — the refusal is surfaced rather than swallowed.
+   */
+  it("says so when a folder move is refused", async () => {
+    withFolders();
+    deckFolderMove.mockRejectedValue("A folder cannot be moved inside itself.");
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
+    await userEvent.click(screen.getByRole("button", { name: "Move folder…" }));
+    const picker = screen.getByRole("dialog", { name: "Move Legends into a folder" });
+    await userEvent.click(within(picker).getByRole("button", { name: "All decks" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A folder cannot be moved inside itself.",
+    );
+  });
+
+  /**
+   * A deck whose folder this screen's folder list does not carry is drawn at the top level —
+   * the same rule the tree uses for a folder whose parent is missing. It is what keeps every
+   * deck reachable on the launch where `deck_folder_list` is refused: there is nowhere else a
+   * tile could be shown, and hiding it would be the one failure a filing cabinet must not have.
+   */
+  it("still shows every deck when the folder list is refused", async () => {
+    deckFolderList.mockRejectedValue("The card database is busy finishing a sync.");
+    deckList.mockResolvedValue([BURN, { ...DRAFT, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+
+    expect(await tileFor("Burn")).toBeInTheDocument();
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Could not read your folders — The card database is busy/),
+    ).toBeInTheDocument();
   });
 });

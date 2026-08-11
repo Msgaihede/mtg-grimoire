@@ -27,7 +27,8 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.raised)).toBeLessThan(numberOf(LAYER.header));
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
     expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.dragTray));
-    expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.gate));
+    expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.overlay));
+    expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.gate));
   });
 
   /**
@@ -37,6 +38,16 @@ describe("the layer scale", () => {
    */
   it("spells the row lift out whole, at the raised layer", () => {
     expect(LAYER.raisedWhenPopupOpen).toBe(`has-[[aria-expanded=true]]:${LAYER.raised}`);
+  });
+
+  /**
+   * The deck stack's two lifts, for the same reason and with the same trap — and they are a
+   * *pair* on purpose: focus does what hover does, so a stack read with the caret comes
+   * forward exactly as far as one read with the pointer.
+   */
+  it("spells the stack lifts out whole, at the raised layer, and pairs them", () => {
+    expect(LAYER.raisedOnHover).toBe(`hover:${LAYER.raised}`);
+    expect(LAYER.raisedOnFocus).toBe(`focus-within:${LAYER.raised}`);
   });
 
   /**

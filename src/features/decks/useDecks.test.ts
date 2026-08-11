@@ -9,9 +9,10 @@ const deckCreate = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckDuplicate = vi.hoisted(() => vi.fn());
+const deckSetFolder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckList, deckCreate, deckUpdate, deckDelete, deckDuplicate },
+  ipc: { deckList, deckCreate, deckUpdate, deckDelete, deckDuplicate, deckSetFolder },
 }));
 
 import { useDecks } from "./useDecks";
@@ -28,6 +29,13 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
+  // The four v8 deck columns. Every real row carries all four, so the fixture does too — and
+  // `folderId` is the one this hook can never write: filing is `deckSetFolder`, because a
+  // patch reads a bound null as "leave it" and so cannot reach the root of the tree.
+  coverKind: "card_art",
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
 };
 
 let client: QueryClient;
@@ -44,6 +52,7 @@ beforeEach(() => {
   deckUpdate.mockReset().mockResolvedValue({ ...BURN, isBuilt: true });
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 5, name: "Burn (copy)" });
+  deckSetFolder.mockReset().mockResolvedValue({ ...BURN, folderId: 1 });
 });
 
 describe("useDecks", () => {
@@ -102,5 +111,44 @@ describe("useDecks", () => {
 
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+  });
+
+  /**
+   * **Filing is the one deck write a patch cannot express.** `update` writes every column with
+   * `coalesce(?n, column)`, so a bound NULL reads as "leave it alone" — there is no patch that
+   * takes a deck back to the root of the tree, and a drag out of a folder written as one is a
+   * write that silently does nothing. `deck_set_folder` is where `null` means the root, and
+   * this is the assertion that keeps the gallery reaching for it.
+   */
+  it("files a deck with deckSetFolder, and takes null to mean the root", async () => {
+    const { result } = renderHook(() => useDecks(), { wrapper });
+    await waitFor(() => expect(result.current.decks).toEqual([BURN]));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setFolder.mutateAsync({ id: 4, folderId: 1 });
+    expect(deckSetFolder).toHaveBeenCalledWith(4, 1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+
+    await result.current.setFolder.mutateAsync({ id: 4, folderId: null });
+    expect(deckSetFolder).toHaveBeenCalledWith(4, null);
+  });
+
+  /**
+   * **A refused file re-reads too**, and the rule lives on the mutation definition rather than
+   * on a call site — `useDeck`'s and `useDeckFolders`' reasoning, applied to the write that
+   * shares their hazard: a refusal here is a busy database or a folder another surface has
+   * already deleted, and the second must not leave a tile painted in a drawer that is gone.
+   */
+  it("re-reads when a file is refused", async () => {
+    deckSetFolder.mockRejectedValue("That folder is not there any more.");
+    const { result } = renderHook(() => useDecks(), { wrapper });
+    await waitFor(() => expect(result.current.decks).toEqual([BURN]));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.setFolder.mutateAsync({ id: 4, folderId: 9 })).rejects.toBe(
+      "That folder is not there any more.",
+    );
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
   });
 });

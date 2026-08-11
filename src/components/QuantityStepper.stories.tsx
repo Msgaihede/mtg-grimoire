@@ -57,7 +57,7 @@ type Story = StoryObj<typeof meta>;
  * The default size — a 36px control (`size-9`), and **the app renders it nowhere**.
  *
  * All four call sites pass `size="sm"`: the collection table, the wishlist table, the deck
- * editor's zone rows and the add-to-collection popup (grepped 2026-08-09, four of four). So
+ * editor's category rows and the add-to-collection popup (grepped 2026-08-09, four of four). So
  * this story is the only place the default is drawn, which is reason enough to keep it — a
  * default nobody looks at is a default that rots — but it documents the component, not the
  * product.
@@ -65,7 +65,7 @@ type Story = StoryObj<typeof meta>;
 export const Medium: Story = { args: { size: "md", value: 3 } };
 
 /** 28px (`size-7`), and what every surface in the app actually uses. The tightest is the deck
- *  editor's zone row, where the stepper shares a grid cell with the art thumbnail and a 221px
+ *  editor's category row, where the stepper shares a grid cell with the art thumbnail and a 221px
  *  column still has to hold both. */
 export const Small: Story = { args: { size: "sm", value: 1 } };
 

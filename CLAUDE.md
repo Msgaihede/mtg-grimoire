@@ -234,12 +234,15 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   to fail was the first. **The press must land somewhere visible** — a row whose centre is
   below the fold starts nothing, which is what `--press`/`--from` are for, and a scroller left
   scrolled hides rows from `click` the same way. **The target has the same problem and a
-  worse failure**: `boxOf` reads a layout rectangle, and a zone column wrapped onto the deck
-  editor's second (scrolled-away) line reports coordinates *outside* its scroller's clip — so
-  a drop dispatched there lands on whatever is painted at that point, which during a
-  `deck-card` drag is the remove tray. Measured 2026-08-06: a drop aimed at the Companion
-  column took the card out of the deck instead. Scroll the zones row first and hit-test the
-  point (`document.elementFromPoint(...)` inside the target) before believing a centre.
+  worse failure**: `boxOf` reads a layout rectangle, and a drop target scrolled out of its own
+  scroller's clip still reports coordinates *inside* the window — so a drop dispatched there
+  lands on whatever is painted at that point, which during a deck-card drag was the remove
+  tray. Measured 2026-08-06 **against the zone-column editor Plan 8 replaced**: a column
+  wrapped onto the editor's second, scrolled-away line took the drop, and a card aimed at the
+  Companion column left the deck instead. The vocabulary is gone (categories are columns now,
+  and the editor scrolls differently); the trap is not. Scroll the target into view first and
+  hit-test the point (`document.elementFromPoint(...)` inside the target) before believing a
+  centre.
 - **`hover <css> [--from x,y] [--rest ms] [--probe expr]`** is a real dwell — `mouseMoved`
   events, so React synthesises `onMouseEnter`/`onMouseLeave` from Chromium's own hover
   pipeline and a `dispatchEvent` out of `eval` proves nothing. Two facts it cost a session to
@@ -258,9 +261,12 @@ Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug
 the user's, and it is never committed. Seed **user tables only**: `cards` and `sync_meta`
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
-## Storybook (measured 2026-08-09/10)
-`npm run storybook` · `npm run build-storybook`. **275 stories across 35 story files, 36 docs
-pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
+## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-11)
+`npm run storybook` · `npm run build-storybook`. **326 stories across 43 story files, 42 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree.
+**41 of the 43 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
+stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a
@@ -280,9 +286,13 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
   seeds `empty`/`starter`/`needsReview`/`large`, faults `busy`/`syncError`/`imageFailures`/
-  `gone`. Saying nothing gets `starter` with no fault. A fault is set on the world, so a story
-  about `BUSY` shows what the *app* does with a refusal rather than what one mocked call
-  returns.
+  `gone`/`deckMeta`/`updateAvailable`/`updateError`. Saying nothing gets `starter` with no
+  fault. A fault is set on the world, so a story about `BUSY` shows what the *app* does with a
+  refusal rather than what one mocked call returns. **`deckMeta` is the one that refuses
+  *reads*** — the six a deck screen makes *beside* the deck (`deck_category_list`,
+  `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
+  `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
+  `deck_list`: a screen that could not read the deck would not be showing a panel about it.
 - **A world belongs to a story, not to the module — because a docs page mounts every story on
   it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
   so a fake built on module globals looks right and answers all ten stories of a docs page as
@@ -301,9 +311,11 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   store's `set`. So the four story files that write it during render (`AppShell`,
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
-  **frame** and with it its own module graph. The other 28 render inline. A new story file that
-  writes the store needs the same parameter or its docs page shows one story's view under every
-  heading.
+  **frame** and with it its own module graph. `DeckSettingsDialog` carries the same parameter
+  for an unrelated reason — its scrim is `fixed inset-0`, so inline it would cover the docs page
+  rather than its own block — and the other **36 docs pages render inline**. A new story file
+  that writes the store needs the same parameter or its docs page shows one story's view under
+  every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
@@ -325,7 +337,8 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (195 plays today), which is what puts a story's own claim inside `npm run verify` —
+  (236 plays today, in a file of 239 tests — the other three are its own), which is what puts a
+  story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.
@@ -488,10 +501,24 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v7.** v7 re-runs `cards_indexes_sql()` to add `idx_cards_collapse` to databases
-  that migrated before it existed — every statement in `CARDS_INDEXES` is `IF NOT EXISTS`, so
-  the step is "bring the index list up to date" and is idempotent. (v6 added `app_meta`; the
+- **Schema is v9.** v9 adds `cards.legal_mask`, backfills it, and widens `idx_cards_collapse`
+  to carry the filter columns. v8 replaced `deck_cards.zone` with a user-owned category and
+  added the deck's four new tables — the paragraph under "Hard rules — decks" describes it.
+  v7 is the collapse index's version and has **no statements of its own**: `CARDS_INDEXES`
+  describes the table *at head* and now names `legal_mask`, so **only the newest step may
+  create from that list**, and every step below v9 creates no index at all. Every statement
+  in it is `IF NOT EXISTS`, which is what makes v9's replay "bring the index list up to date"
+  rather than a rebuild — but a step that *changes* a definition must `DROP` it first, or the
+  widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
+- **A migration that touches `cards` must take the `CARDS_INDEXES` replay from the step below
+  it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
+  what fails if it does not: it migrates a v1, a v6 and a v8 fixture to head and compares
+  `cards`' columns *and* its indexes — by stored SQL, since a narrow and a widened
+  `idx_cards_collapse` share a name. It is also why a rewind fixture may only undo the steps
+  *above* where it claims to sit: `migrate` reads `user_version` once and walks every step
+  above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
+  tables and dies on a duplicate column — a failure no real upgrade can produce.
 - v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
   and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
   (2026) makes a commander out of a Vehicle or Spacecraft *with a P/T box*, and that is
@@ -548,6 +575,24 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   (`Cache`'s per-key mutex + a re-read of the disk). The waiter re-reads rather than being
   handed the bytes, so it degrades to a second fetch when the write connection was busy or
   the store failed — both acceptable, both documented at `images::fetch_and_store`.
+- **`mtgimg://` has a second route, and it touches Scryfall not at all: `/cover/<deckId>`.**
+  `images::serve` tries `parse_cover_path` **first**; it cannot collide with the card route
+  because `Variant::parse("cover")` is `None`. The bytes are a file the user picked, re-encoded
+  by `images::encode_cover` (magic-number sniff, `resize_to_fill` to the `art` crop's **626×457**,
+  lossless WEBP, source capped at `MAX_COVER_SOURCE_PIXELS`) and written to
+  `<data dir>/covers/<deckId>.webp`. **The route resolves that directory itself** — `decks
+  .cover_image_path` is a record of what was written, not what is read, which is what keeps a
+  portable install working after its folder moves. Served `no-store`, because it is the one image
+  URL whose content is *meant* to change under a fixed name; **404 when absent, never a
+  placeholder**. The `i64` parse is the whole path-traversal fence, since the id becomes a
+  filename (`a_cover_path_is_parsed_or_refused_and_never_repaired` pins `/cover/../../mtg.db`,
+  `/cover/..%2fmtg.db`, `/cover/7/8`, `/cover/7.webp`).
+- **The CSP did not change for it, and that is the point.** `img-src 'self' data: mtgimg:
+  http://mtgimg.localhost` already covered a fifth *path*; a route is not a source.
+  `images::tests::the_shipped_csp_is_untouched` asserts both the exact `img-src` and that the
+  policy does not mention `cover` at all. Measured 2026-08-11 in the shipped window: with no file
+  on disk the URL errors, and after one `deck_set_cover_image` the same URL loads **626×457 in
+  2 ms**.
 
 ## Frontend design (binding)
 - **All frontend work follows the `frontend-design` skill** (invoke it before UI tasks) and the
@@ -556,6 +601,46 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
 - Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
+  job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
+  through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats
+  `RANK.update` 10; ties break by insertion order, because two hooks' effects run in an order
+  nobody chose). The store is created per `ActivityProvider`, at the top of `AppShell` and
+  above `children`, so a job started inside a view needs no wiring — and so it never becomes a
+  second `useAppStore`, the one global Storybook cannot make per-story. Registration is
+  **declarative**: pass the job or `null` every render, and a job cannot outlive the component
+  describing it. `put` is identity-in-identity-out when nothing moved, which is what lets the
+  register-every-render form cost nothing.
+- **The mana line reacts instantly and the sentence waits `ACTIVITY_DELAY_MS` (400 ms).**
+  Measured in the shipped window 2026-08-11, sampling the row every 40 ms across a forced
+  Refresh: **bar at 121 ms, sentence at 523 ms** — the gate, to 2 ms. The gate is on the
+  *slot*, not the job, so a sync handing over to an update download swaps the sentence
+  without the row blinking. `useDelayedFlag` turns **off** by adjusting state during render
+  rather than in an effect: an effect would clear it one commit late, and
+  `react-hooks/set-state-in-effect` rejects the synchronous call outright — the lint rule and
+  the correct behaviour agree here.
+  **It does not suppress a no-op Refresh, and the design note claiming it would was wrong.**
+  That whole run measured **1.4 s**, so "Checking for card data updates" was up for ~1.0 s
+  before "Already up to date" replaced it. 400 ms filters a *flash*, not a short run — and a
+  second of the app naming what it is checking is the good case, not the one to design out.
+- **The live phase sequence, measured 2026-08-11 over a real ingest** (116,695 cards, bulk
+  file of 2026-08-10): `Importing cards · 94,000 cards` → `Reclaiming disk space · 66%` (the
+  one true percentage, climbing) → `Updating set list` → **`Syncing card data`** →
+  `116,695 cards · data from 2026-08-10`. That fourth step is the generic fallback and is
+  correct rather than a bug: `done` is a terminal phase, and `busy` stays true until the
+  status poll catches up, so for up to a second the row honestly says a sync is still
+  finishing. The mana line has always done exactly this; nobody had seen it in words before.
+  At 1024 px, with the longest realistic sentence
+  (`Downloading update 0.3.0 · 12 / 40 MB`), the ribbon row measures 816 px and the body does
+  not scroll sideways.
+- **The status line is one permanently mounted `role="status"`, and the number inside it is
+  `aria-hidden`.** Mounted because a live region that first appears with its sentence already
+  inside announces nothing (the sidebar drop report's lesson). The number is hidden because a
+  live region announces its accessible text and skips `aria-hidden` subtrees: the label
+  changes ~4 times a sync, the ingest's count ~58 times, and the mana line's `aria-valuenow`
+  is where a fraction belongs. **`getByText` matches an element's own text nodes**, so a test
+  asserting the whole sentence reads `toHaveTextContent` off the line, never a combined
+  string matcher.
 - **Card art is drawn with `components/CardImage`, never a bare `<img>`.** It keys the image
   on its own URL, and that key is the whole component. A browser keeps painting an `<img>`'s
   last decoded frame until the new `src` decodes, and every card frame here belongs to a
@@ -570,6 +655,28 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   is *element identity*, which is what `CardImage.test.tsx` and the two integration tests
   assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
   independently by keying its whole `Preview` on the printing.
+- **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
+  credited.** Scryfall's image policy, quoted in full at
+  `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55`: use the art crop and the
+  artist's name must appear elsewhere in the same interface. A `grid`/`thumb`/`display` image
+  carries the printed credit itself and needs nothing; the 626×457 `art` variant does not.
+  This has been ruled on twice and is written here because four surfaces cite it as living
+  here. Two consequences hold everywhere a **cover** is drawn — the gallery's deck tiles, its
+  folder strips and `DeckSettingsDialog`'s `CoverPreview`, all three of which print the
+  artist: **a card cover whose artist is unknown is not drawn at all** (`DeckRow.coverArtist`
+  is `null` when `cards` has no row for that printing; the orphan heals on the next sync rather
+  than being shown uncredited), and **a custom cover carries no artist and needs none**,
+  because the rule is Scryfall's and a user's own file is not Scryfall's — which is also why a
+  folder strip drops custom covers rather than crediting some of its tiles and not others.
+  **The standing gap, recorded rather than quietly inherited** (`DeckSettingsDialog.tsx`'s
+  `ChoiceTile` doc): four surfaces draw the crop with no credit — the deck's stack rows
+  (`CardStack`), its grid tiles (`views/GridView`), the theory diff's rows and the cover
+  picker's own tiles — because `DeckCardRow` carries no per-row `artist`, and a picker stricter
+  than the views it picks *from* would be an inconsistency a reader can see where this one is
+  not. Every one of those crops sits inside a control that names the card, and the card pane
+  credits the illustrator ("Illustrated by …"). Closing it for all four at once is one column
+  on `DeckCardRow`. Never distort, blur, recolour or watermark a card image, and never crop off
+  a printed credit.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. Five surfaces draw a card and each had
   rebuilt part of it. The card pane's main art is the deliberate exception: it keeps a flip
@@ -597,8 +704,11 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
-  gate only delayed the pictures about to be looked at. The deck zone columns keep it: they
-  are plain scrollers, where a 100-card list really is 100 mounted rows.
+  gate only delayed the pictures about to be looked at. **The deck feature's plain scrollers
+  keep it**: the stack and grid views (`CardStack.tsx`, `views/GridView.tsx`), the gallery's
+  deck tiles and folder strips (`DecksPage.tsx`), the theory diff (`TheoryDiffDialog.tsx`) and
+  the cover art picker (`DeckSettingsDialog.tsx`) — where a 100-card list really is 100 mounted
+  rows. (It used to say "the deck zone columns", a component the rebuild deleted.)
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
   phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
@@ -624,6 +734,17 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   *below* the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
+- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
+  `layers.test.ts` asserts every link of it. **`overlay` is one rung for a drawer *and* a modal,
+  deliberately, where two looks more careful**: the deck editor's four full-window surfaces —
+  Categories & tags, History, Theory diff, Deck settings — are held in **one** piece of state
+  (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and two
+  `"inner"` peers open at once are not ordered at all. At most one of the four is ever mounted,
+  so there is no pair for a second number to order and inventing one would be a claim about a
+  stack that cannot occur. They used to borrow `gate` and `dragTray` two apiece — each right in
+  effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
+  `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
+  and each hands focus back to the control that opened it.
 - **An anchored popup near the right of a row is pinned to its trigger's *right* edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
@@ -737,25 +858,64 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
 
 ## Hard rules — decks
-- **There are exactly three enforced foreign keys in the whole schema, and all three are
-  user↔user**: `deck_cards.deck_id → decks(id)`, `deck_allocations.deck_id → decks(id)` and
-  `deck_allocations.collection_entry_id → collection_entries(id)`, every one
-  `ON DELETE CASCADE`. Three, because CASCADE is only ever right at a *user-initiated*
-  delete: deleting a deck takes its list and its reservations, and `collection::remove_entry`
-  frees the reservations on copies that no longer exist. The app's one **non-user** delete is
-  the reconciler's fold, and `reconcile::fold_into_existing` **repoints (and where the
-  survivor is already allocated, folds) every allocation onto the surviving entry before the
-  DELETE runs**, so that CASCADE fires over nothing. Nothing else declares `REFERENCES`, and
-  **nothing ever declares it against `cards`** — a declared FK there aborts every sync.
-- Zones are an enum — `main | side | commander | companion | maybe` — CHECK-constrained in
-  SQL and narrowed in TS. **Deck cards side with the wishlist: `CHECK (quantity > 0)`, so
-  zero removes the row.** A zone slot at zero holds no condition, no price and no story;
-  only the collection's zero is worth keeping. The grain is
-  `(deck_id, card_id, zone)` (`schema::DECK_CARD_GRAIN`) — the same printing in two zones is
-  two rows, added twice in one zone is one row with the sum. `maybe` is a scratchpad and
-  **counts toward nothing at all** (`engine.ts`'s own words) — not size, not copies, not
-  legality; the allocator does not claim copies for it either. `DeckStats` still *reports*
-  `byZone.maybe`, which is a count of the pile and not a contribution to anything.
+- **Enforced foreign keys exist only *between user tables*, never against `cards.id`** — a
+  declared `REFERENCES cards(id)` aborts every sync, because `swap_staging` drops the table.
+  The `ON DELETE` action is chosen per delete-site, not fixed once. **CASCADE** on
+  `deck_cards.deck_id`, `deck_cards.category_id`, `deck_allocations.deck_id`,
+  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`, `deck_tags.deck_id`,
+  `deck_audit.deck_id` and `deck_folders.parent_id`: a deleted deck's cards and reservations,
+  a deleted category's cards and a deleted folder's sub-folders have nowhere else to be.
+  **SET NULL** on exactly two — `decks.folder_id` (a folder is a filing decision; the decks in
+  it are the user's work, not the folder's to take down) and `deck_cards.tag_id` (deleting a
+  tag must never delete a card). `schema.rs`'s module doc carries this list; check it against
+  the DDL rather than trusting either copy. CASCADE is also right at the app's one **non-user**
+  delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
+  *before* the DELETE, so that cascade fires over nothing.
+- **Schema v8 replaced the zone with a category the user owns.** `deck_cards.category_id`
+  points at a `deck_categories` row they name, reorder, switch off and delete; the fixed word
+  survives only as that row's **`kind`** — `main | side | commander | companion | maybe`,
+  `schema::CATEGORY_KINDS`, CHECK-constrained in SQL and narrowed in TS as `CategoryKind`.
+  **The name is the user's; the kind is what the rules read.** Four kinds get one predefined
+  category per deck (`schema::PREDEFINED_CATEGORIES` — Commander, Sideboard, Companion,
+  Maybeboard, seeded by `deck_meta::ensure_predefined_categories` and by the v8 backfill);
+  there is deliberately **no predefined `main`**, because a deck may own any number and the
+  pile a plain add lands in is found-or-created by name (`deck_meta::category_for_name`).
+  **Deck cards side with the wishlist: `CHECK (quantity > 0)`, so zero removes the row.**
+- **The grain is `deck_id, variant, category_id, card_id`** (`schema::DECK_CARD_GRAIN`) — the
+  same printing in two categories is two rows, added twice in one is one row with the sum, and
+  `variant` widens it again: `live` is what is sleeved up, `theory` is what the deck is being
+  built toward (`schema::DECK_VARIANTS`), so a change tried out in Theory can never silently
+  overwrite the deck as it stands. Every card command takes both.
+- **`is_active = 0` is the whole of what `maybe` used to mean.** An inactive category counts
+  toward nothing — not size, not copies, not legality — and `allocate_deck` claims no copy for
+  it. The Maybeboard is not a special case in five files any more; it is one seeded row with
+  the flag off, and a category of the user's own that they switch off behaves identically.
+  **Nothing anywhere may branch on the kind being `maybe`** — that was measured: the old shape
+  looked correct and was wrong the first time a user deactivated a pile of their own.
+- **Which totals a pile lands in: the switch decides whether it counts at all; the kind
+  decides only whether it is played *beside* the deck or *in* it, and only `side` and
+  `companion` are beside it** (CR 100.4a; EDH's companion is "effectively a 101st card"). So
+  `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in three places that must stay
+  one rule: `engine.ts`'s constant, `deck.rs`'s `DECK_SELECT` subquery behind
+  `DeckRow.card_count`, and the Storybook fake's copy. Leaving `maybe` out is the incoherent
+  version, not the smaller one: an *active* Maybeboard was then inside the format's card pool
+  and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
+  a singleton error under a figure that still read 100.
+- **`allocate_deck` claims for the `live` variant only** — a plan reserves nothing. And
+  **`deck_allocations` carries no variant column**, which is the trap: a `theory` read walks
+  the *live* deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
+  Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
+  perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
+- **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
+  else.** All categories and all tags come back whatever the variant — an empty category still
+  draws its column, an inactive one always draws — but a category's *and a tag's* `card_count`
+  read the variant asked for. Threading it into `list_categories` and not `list_tags` is
+  exactly how they came to disagree once.
+- Category and tag writes live in **`deck_meta.rs`**, and **two of them reallocate**:
+  `set_category_active` (the flag is the whole of what the allocator allocates *for*) and
+  `delete_category` (the cards leave, or land under a category with a different flag). A
+  rename, a reorder and every tag write change what a pile is *called* and claim exactly what
+  they claimed before.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
   (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
@@ -774,17 +934,59 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
   `cards.price_usd` is a fallback chain and is never summed, here least of all.
 - **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
-  deck's rows inside the caller's transaction, greedily and deterministically: exact printing,
-  then real copies, then oldest entry. It runs on **a zone write, the Built toggle, or
-  `missing_to_wishlist`** — those three and nothing else, which is worth knowing while
-  debugging, because pressing "Send missing to wishlist" rebuilds a deck's allocations as a
-  side effect. A **built** deck's claims are subtracted from what other decks can see. The
+  deck's rows inside the caller's transaction, greedily and deterministically: `KIND_PRIORITY`
+  (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
+  decides what is allocated for) then row id, and within a card, exact printing, then real
+  copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
+  `set_category_active` or `delete_category`** — those five and nothing else, which is worth
+  knowing while debugging, because pressing "Send missing to wishlist" or switching a pile off
+  rebuilds a deck's allocations as a side effect. A **built** deck's claims are subtracted from
+  what other decks can see. The
   read clamps with `min(allocation, entry.quantity)`, so stepping a collection row down is
   honest immediately — but **growing the collection does not re-run the allocator**, so a deck
   reads the new copies only after its next allocator run. Known, named, and Plan 6's to close.
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
+- **The audit log records facts; TypeScript writes the sentence.** `deck_audit` has no `summary`
+  column and never will — it holds `kind` (one of `add|remove|quantity|move|swap|tag|category|
+  folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a **JSON
+  `payload`** (`CHECK (json_valid(payload))`) and a signed `delta` for the day header's roll-up.
+  `src/features/decks/auditText.ts` is the only thing that reads that payload, and it is the only
+  thing that words it — because a sentence is domain logic and this table has to survive the day
+  the wording changes. Verified live 2026-08-11: a category move stored
+  `{"from":"Main deck","to":"Ramp"}` with `card_name` `"Vampiric Tutor"` and `delta` 0, and the
+  drawer read back "Moved Vampiric Tutor / Main deck → Ramp".
+- **Writing history is not a command.** There is no IPC write — `deck_audit::record(tx, …)` is
+  called *inside the caller's already-open transaction*, which is what makes
+  `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
+  behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
+  **23** cases and asserts exactly one row each (count the list in `deck_audit.rs`, never a
+  remembered number — it has been written down wrong twice). "Exactly one" is per
+  *command*, not per field: **`deck_update` records one row per changed field**
+  (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
+  satisfies that test only because every one of its cases changes exactly one field. The only
+  command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
+  **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
+  It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
+  **Six writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
+  deck, so a row would be orphaned by its own event); **both** `missing_to_wishlist` commands,
+  `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); and **three of the four
+  folder writes** — create, rename and move — because a folder belongs to no deck and
+  `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
+  `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
+  per deck it un-filed.
+- **The six card commands, and what each takes.** `deck_get(id, variant)`;
+  `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
+  or a name**, id wins when both arrive, neither is refused in words, and the name is
+  found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
+  pile a card belongs in is domain logic); `deck_set_card_quantity(deckId, cardId, categoryId,
+  variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId, variant)`,
+  which stays inside one variant; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
+  variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inactive
+  categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
+  variant must be one the schema knows, and the category must belong to *this* deck —
+  `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
 - **A write to what is *in* a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
   add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
@@ -800,41 +1002,131 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   keep one rule. The borrowing site owns only its own *reporting* (per-call `mutate`
   callbacks).
 - **`deck_swap_printing` is one transaction that folds on `DECK_CARD_GRAIN`.** Swapping a
-  row to a printing the same zone already holds is not an error and not two rows: the
-  `ON CONFLICT (deck_id, card_id, zone) DO UPDATE` sums the quantities and the answer carries
-  `folded: true` with the landed total, which the pane announces ("Folded into one row of 2 in
-  Main deck."). It refuses same-printing, a missing from-row (naming the zone), a raced sync
-  (the to-printing has left `cards`), and a **different oracle card** — the guard is inside the
-  transaction, because "swap this printing" must never become "swap this card".
-- **The deck is rows, one view only** (2026-08-06: the stacked-card visual mode and its
-  toggle were removed on the user's direction — full card faces at column width were huge,
-  and its `STACK_MAX_WIDTH` cap was why zone columns would not take the editor's width). Each
-  row carries the printing's **`art` crop** (626×457) as an `aria-hidden`, `alt=""`,
-  `draggable={false}` thumbnail sharing the stepper's grid cell — a fourth grid column's gap
-  made the 221px squeezed column scroll sideways, and a hidden flex child charges nothing.
-  Below 17rem of *column* (a container query on the zone scroller: the 1280px window with the
-  card pane docked) the picture yields and the row is the dense text row; orphans are fed
-  `null` and never fetch. **A printings row in the card pane is clickable to view that
-  printing** — `store.viewPrinting` sets `selectedCardId` *without* clearing
-  `paneDeckContext`, so the swap offers survive browsing; `setSelectedCardId` there instead
-  silently kills the affordance at its one moment of use.
+  row to a printing the same category already holds is not an error and not two rows: the
+  `ON CONFLICT (deck_id, variant, category_id, card_id) DO UPDATE` sums the quantities and the
+  answer carries `folded: true` with the landed total, which the pane announces ("Folded into
+  one row of 2 in Main deck." — the category's own name, out of `paneDeckContext`, which
+  carries a category id **and** its name because the pane is a sibling of the editor and has no
+  category list to translate an id through). It refuses same-printing, a missing from-row
+  (naming the category), a raced sync (the to-printing has left `cards`), and a **different
+  oracle card** — the guard is inside the transaction, because "swap this printing" must never
+  become "swap this card".
+- **The deck has four views** — `Stacks | Table | Text | Grid`, `DeckEditor`'s `VIEWS`, crossed
+  with three `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical |
+  manaCost | price | type`). All twelve combinations were driven live 2026-08-11; grouping and
+  sorting were correct in every one, and an **inactive category stays its own group in all three
+  grouping modes** rather than being folded in by mana value or type. Only `Stacks` and `Grid`
+  fetch art (`cardImageUrl(…, "art")`); `Table` and `Text` are text and draw no picture at all —
+  which is why the old single-row view's thumbnail, its `17rem` container query and
+  `STACK_MAX_WIDTH` are gone rather than moved.
+- **`CardStack` is the signature interaction, and it is arithmetic, not taste.** A card is
+  **312px** (30px title bar + 256px art + 24px data line + 2 hairlines); collapsed it carries
+  `mb-[-278px]`, so each card advances the stack by exactly **34px** — its title bar. The list is
+  given a **fixed** `stackHeight(n) = 34(n−1) + 312 + 8`, and the lifted card's `hover:mb-2`
+  turns −278 into +8: **a 286px push-down of every card after it, out of the box and over what is
+  below, without the box changing size.** Measured in the shipped window 2026-08-11 (see the live
+  pass below) — heights matched the formula exactly for stacks of 1, 2, 5, 6, 8 and 10, and the
+  push-down measured 286px with the list's height unchanged. **The lift is pure CSS**
+  (`hover:` + `focus-within:`, `LAYER.raisedOnHover`/`raisedOnFocus`), so nothing in JavaScript
+  knows which card is up and the caret gets the interaction for free. The 2026-08-06 removal of
+  the *old* stacked mode is not contradicted: that one drew full card faces at column width, and
+  this one draws a column of 34px title bars.
+- **A printings row in the card pane is clickable to view that printing** —
+  `store.viewPrinting` sets `selectedCardId` *without* clearing `paneDeckContext`, so the swap
+  offers survive browsing; `setSelectedCardId` there instead silently kills the affordance at its
+  one moment of use.
 - **Four card surfaces outside the editor are drag sources, all through the one
   `cardDraggable`**, and the payload they all carry is `{ kind: "card"; cardId; name }` —
   search tiles, collection *table* rows (the collection's **card** mode is not one: only the
   search wall is handed `CardGrid`'s `dragPayload`), **pinned** wishes only (an any-printing
-  wish names no printing to drag), and the card pane's printings rows. A zone treats `"card"` exactly as the panel's `"search-card"`: add
+  wish names no printing to drag), and the card pane's printings rows. A category column treats `"card"` exactly as the panel's `"search-card"`: add
   one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
   it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
   deck open, which — because `setActiveView` clears `openDeckId` — is *every* drag started
   from Search, Collection or Wishlist. So the sidebar's Decks target is reachable only from
   inside the Decks view (the docked panel, a deck card, the card pane).
 
-## Hard rules
+## Deck builder, driven in the shipped window (measured 2026-08-11)
+The whole rebuild had been proven by tests and by Storybook, and **neither runs in the window
+that ships**. This is what a CDP pass over the real WebView2 added, and the three bugs it found
+are all things no suite could have seen.
+
+- **The stack's push-down is real**: hovering a card moved its `margin-bottom` −278px → **8px**
+  and pushed every later card down by exactly **286px**, while the list's height stayed **490px**
+  across the whole gesture. `stackHeight` matched the formula for every stack on screen.
+  **Hovering a *middle* card means pointing at its title bar** — the cards overlap, so at any y
+  the topmost card is the last one whose top is above it, and `hover`'s default approach (from
+  directly above the element) lands on the *first* card of the stack and lifts that instead. Aim
+  at `li > button > span:first-child`, and approach sideways with `--from`.
+- **Reduced motion holds**: `transitionProperty` is `none` on the stack card and on the view
+  buttons under `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
+  — the exact false failure the harness section warns about, reproduced here on purpose.
+- **Both drags work with a real Chromium drag**, carrying pdnd's `application/vnd.pdnd`: a card
+  from one category to another (the target lit `border-accent` mid-flight; "Vampiric Tutor" moved
+  Main deck 10→9, Ramp 6→7 and survived the re-read) and a **deck tile onto a sidebar folder**
+  (folder 0→1, tile left "All decks"). **What that does not prove**: `Input.setInterceptDrags`
+  bypasses the OS drag loop entirely, so this is evidence about the app's own handlers and *not*
+  about WRY's OLE drop target. `"dragDropEnabled": false` remains the load-bearing fact, it is
+  embedded at **compile time**, and this exe was built from it.
+- **A category move is delete + insert, not an update** — the `deck_cards` row id changes. Worth
+  knowing before writing anything that holds one across a move (and it is why restoring a moved
+  row by id after a live pass silently does nothing).
+- **The allocator's triggers behave exactly as documented.** Seeding `collection_entries`
+  directly left the deck reading "66 of 66 missing" with `deck_allocations` empty; the first
+  category write rebuilt it (11 rows) and the shortage marks vanished from precisely the owned
+  cards. A card in an **inactive** category shows no shortage mark at all, because nothing was
+  claimed for it.
+- **Console over the whole pass: clean.** 377 recorded lines, no JavaScript error, no React
+  warning, no unhandled rejection. Everything else was `502` from `mtgimg://` — see the
+  unverified note below.
+
+**Three bugs found, all open** (none fixed in this pass):
+1. **The editor's title row collapses the deck name to 18px and overflows into the format
+   select, at the app's own default window.** The row is `flex min-w-0 flex-1` holding the name
+   input (`shrink: 1`) beside two `shrink-0` children — the Live/Theory group (102px) and the
+   "N cards differ" button (107px) — which together already exceed the container, so the input
+   absorbs the entire deficit. Measured: name width **18px at 1100, 1200 and 1280**, and the
+   container overflowing by **202px / 102px / 22px** respectively; `overflow` is `visible`, so at
+   1280 the button's last **9.9px** is painted over by, and hit-tests to, `select[aria-label=
+   "Deck format"]`. Fine at 1360 (76px) and above, and fine at 1024 (459px) where the toolbar
+   wraps — so the broken band is roughly **1060–1350px and the shipped 1280×800 sits inside it**.
+   Only bites when `theory_enabled` is on, which is why nothing caught it.
+2. **A custom deck cover never appears in the gallery.** `DecksPage`'s `Cover` takes only
+   `cardId` and builds `cardImageUrl(cardId, 0, "art")`; it has no `custom` arm, never reads
+   `deck.coverKind` and never forms the `/cover/<deckId>` URL that `DeckSettingsDialog` uses. So
+   a deck with `cover_kind = 'custom'` and a real file on disk renders **"No cover"** on the tile
+   — the one place the picture exists to be seen — while the settings dialog you chose it in
+   shows it correctly. Confirmed after a full reload, with the route itself proven working.
+3. **Table view starves the card name.** Seven fixed columns take **696px of 963px**, leaving the
+   two `fr` columns 147px between them: **Card name gets 84px** (`minmax(0,2fr)`) and Type 63px,
+   truncating names to ~10 characters, while the empty Tags column holds 112px and Owned 64px.
+
+**Unverified, and not by choice:**
+- **Card art could not be rendered at all.** `cards.scryfall.io` was unreachable from this
+  machine (a bare HTTPS HEAD times out; `api.scryfall.com` answers), so every fetch failed and
+  `data/images` was never created. What this *does* prove is that the `mtgimg://` handler is
+  registered and routing — the failures were the app's own **502**, its documented "failed
+  fetch", not a browser-level protocol error — and the `/cover/` route needs no network and was
+  verified end to end. But **no card image has been seen decoding in this build.**
+- **The system file picker was not driven.** `dialog:allow-open` opens a native window that CDP
+  cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
+  path. The encode → write → serve → render half is measured; **the picker → path half is not.**
+- **Linux remains entirely unrun**, as everywhere else in this file.
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.
 - Every `api.scryfall.com` request needs real `User-Agent` + `Accept` headers.
 - `cards.oracle_id/cmc/type_line` are NULLABLE. `collector_number` is TEXT. Prices are
   decimal strings. `legalities` is JSON (23 keys, grows). Finishes: enum, never boolean.
 - npm `xlsx` is banned (CVEs). TypeScript stays on 6.0.x until TS 7.1.
+- **`@tauri-apps/plugin-dialog` is here for exactly one thing — choosing a deck cover — and the
+  capability says so.** `capabilities/default.json` grants **`dialog:allow-open`**, one command,
+  not `dialog:default`'s five: save, message, ask and confirm are unreachable from the webview
+  however the plugin is initialised. The contract that makes this enough is that
+  `deck_set_cover_image` takes a **path**, not bytes — the page asks for a name and Rust opens
+  the file, so no filesystem permission of any kind is needed. **`tauri-plugin-fs` and `rfd`
+  entered `Cargo.lock` transitively** as that plugin's own dependencies and are **unreachable**:
+  `tauri_plugin_fs::init()` is never called (the three registrations are single-instance, opener
+  and dialog) and **no `fs:` permission is granted anywhere**, so the ACL would deny them even if
+  it were. Adding a plugin means adding its narrowest permission, never its `:default`.
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).
   The app palette maps `accent` to a **text** colour (gold), so rewrite a vendored
   component's `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite any more:

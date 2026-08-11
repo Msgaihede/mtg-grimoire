@@ -23,7 +23,7 @@ const meta = {
           "there is no picture.\n\n" +
           "**Extracted because five surfaces draw a card** and each had rebuilt part of this: " +
           "the search wall's tiles, the pane's main art, the pane's printings rows, the deck " +
-          "editor's zone rows and `PrintingPreview`. They agreed on the aspect ratio and " +
+          "editor's card views and `PrintingPreview`. They agreed on the aspect ratio and " +
           "disagreed about everything else, which is how a foil marking would otherwise have " +
           "come to exist in five slightly different versions.\n\n" +
           "**The foil treatment says what the object *is*, never what it could have been.** " +

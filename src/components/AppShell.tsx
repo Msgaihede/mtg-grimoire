@@ -9,12 +9,18 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
+import {
+  ActivityProvider,
+  useRegisterActivity,
+  useTopActivity,
+} from "@/components/ActivityProvider";
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { readDragData } from "@/features/decks/dnd";
-import { manaLineSync } from "@/lib/mana";
+import { ACTIVITY_DELAY_MS, syncActivity, updateActivity } from "@/lib/activity";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
@@ -36,7 +42,7 @@ const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
  * The app's existing vocabulary rather than a new one — gold is interactive emphasis
  * everywhere in this window, and the same ring is the keyboard's focus mark. Deliberate: a
  * drop target lighting up and a control being reachable are the same claim made to two
- * different hands. The zone columns' `DropIndicator` line stays theirs; a line drawn on a nav
+ * different hands. The category columns' `DropIndicator` line stays theirs; a line drawn on a nav
  * entry would promise an insertion point in a list that has none.
  *
  * Instant, with no rule of its own: a ring is a box shadow, and the entry's colour animation
@@ -66,8 +72,21 @@ export const DROP_OVER = "bg-accent/10";
  * Owns the sync status because everything that needs it lives here — the ribbon's summary
  * line, Refresh button and mana line, and the first-run overlay — and one poll for the
  * whole app is the point of the arrangement.
+ *
+ * The activity provider is out here rather than inside `Shell`, because a store read by the
+ * component that creates it is a store nothing else can be mounted above. Here it covers both
+ * of today's writers *and* `children`, so a long job started from inside a view can describe
+ * itself in the ribbon with no rewiring.
  */
 export function AppShell({ children, update }: { children: ReactNode; update: Update }) {
+  return (
+    <ActivityProvider>
+      <Shell update={update}>{children}</Shell>
+    </ActivityProvider>
+  );
+}
+
+function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
   const { status, error, refresh, refreshing, upToDate } = useSync();
@@ -84,6 +103,18 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.
   const busy = refreshing || status?.syncing === true;
+
+  // The two long jobs this window can be running. Both are registered from here because both
+  // are already owned here — the sync by this component, the update by `App`, which hands it
+  // down — and the registry is what lets the ribbon describe either without knowing which.
+  useRegisterActivity(syncActivity(progress, busy));
+  useRegisterActivity(updateActivity(update.progress, update.status?.available?.version ?? null));
+  const activity = useTopActivity();
+  // The line moves the moment a job starts; the sentence waits, so a sub-second `checking`
+  // phase never flashes words the reader cannot finish. It gates the *slot* rather than one
+  // job, so a sync handing over to a download swaps the sentence without the row blinking.
+  const activityVisible = useDelayedFlag(activity !== null, ACTIVITY_DELAY_MS);
+
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
 
   return (
@@ -119,7 +150,8 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
           upToDate={upToDate}
           hasError={error !== null}
           onRefresh={refresh}
-          sync={manaLineSync(progress, busy)}
+          activity={activity}
+          activityVisible={activityVisible}
           updateVersion={update.status?.available?.version ?? null}
           updateInstallable={update.action !== "unavailable"}
           onOpenUpdate={() => setActiveView("settings")}

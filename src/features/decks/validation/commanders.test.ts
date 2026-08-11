@@ -22,7 +22,7 @@ beforeEach(resetRowIds);
 
 /** A card in the command zone, so a test's subject is the first thing it says. */
 function inZone(overrides: Partial<CardFacts>): CardFacts {
-  return card({ zone: "commander", ...overrides });
+  return card({ categoryKind: "commander", ...overrides });
 }
 
 /** A legality blob that answers one format one way and every other format `legal`. */
@@ -1066,7 +1066,7 @@ describe("banned as a commander (TRAP A's second meaning)", () => {
 
     // The same card in the main deck of the same format is silent — Task 8 proved the
     // legality pass stays quiet, and the commander pass never sees it.
-    const inMain = padTo(100, [commander(), { ...EDRIC, zone: "main" as const }]);
+    const inMain = padTo(100, [commander(), { ...EDRIC, categoryKind: "main" as const }]);
     expect(validateDeck(inMain, spec("duel"))).toEqual([]);
   });
 

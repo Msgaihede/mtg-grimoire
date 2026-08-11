@@ -7,22 +7,23 @@ import { cn } from "@/lib/utils";
  * It has no role, no name and no text — it is decoration for a gesture only a pointer can
  * make, and narrating it to a screen reader would announce a line to a reader who cannot be
  * dragging anything. An attribute is therefore the only handle it has, in the same shape
- * `ZoneColumn`'s scroller already uses for the same reason.
+ * `StackView`'s `STACK_COLUMN_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` use for the same
+ * reason.
  */
 export const DROP_LINE_ATTR = "data-drop-line";
 
 /**
  * The line that says where a dragged card is about to land: 2px of `--color-accent` across
- * the top edge of the zone that will take it.
+ * the top edge of the category that will take it.
  *
  * **Why it is an edge of the column and not a gap between two rows.** The usual drop
  * indicator marks an insertion point, and `@atlaskit/pragmatic-drag-and-drop-hitbox` exists
  * to compute one. A deck list has no insertion point: `deck_cards` has no order column, the
- * backend answers a deck in zone priority then by name, and `deck_add_card` folds a repeat
- * into the row that is already there. A line drawn between two rows would promise a position
- * the data model cannot keep — so the indicator marks the *target*, which is the only thing a
- * drop here decides. That is also why the hitbox package is not installed (the plan's third
- * dependency): a closest edge nobody may act on is not worth an Apache-2.0 NOTICE line.
+ * backend answers a deck in category `sortOrder` then by name, and `deck_add_card` folds a
+ * repeat into the row that is already there. A line drawn between two rows would promise a
+ * position the data model cannot keep — so the indicator marks the *target*, which is the only
+ * thing a drop here decides. That is also why the hitbox package is not installed (the plan's
+ * third dependency): a closest edge nobody may act on is not worth an Apache-2.0 NOTICE line.
  *
  * **Why it is hand-rolled** rather than `-react-drop-indicator`: the app's palette owns this
  * colour and the direction doc reserves it — gold is interactive emphasis, and a drop target

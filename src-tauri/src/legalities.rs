@@ -67,7 +67,7 @@ pub fn legal_mask(legalities: &Value) -> u64 {
 }
 
 /// The same mapping as an SQL expression over **`cards.legalities`**, for the one caller
-/// that cannot run Rust per row: the v8 backfill.
+/// that cannot run Rust per row: the v9 backfill.
 ///
 /// Both the keys and the playable values are generated from [`LEGALITY_KEYS`] and
 /// [`PLAYABLE`] rather than written out, so this expression and [`legal_mask`] cannot drift
@@ -246,7 +246,7 @@ mod tests {
     /// The strongest fence available: run the generated SQL through **real SQLite** and
     /// assert it lands on the same integer [`legal_mask`] does, over the same input. Every
     /// other test here reasons about the *shape* of a string; this one is the only place
-    /// the two implementations are compared by their answers, which is what the v8 backfill
+    /// the two implementations are compared by their answers, which is what the v9 backfill
     /// actually depends on. It is also what proves the expression parses and executes at
     /// all — a test over a `String` cannot.
     ///

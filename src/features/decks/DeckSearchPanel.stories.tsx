@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import type { DeckZone } from "@/lib/ipc";
 import { DeckSearchPanel } from "./DeckSearchPanel";
 import { useDeck } from "./useDeck";
 
@@ -11,35 +10,30 @@ import { useDeck } from "./useDeck";
  * **`add` is `useDeck(deckId).addCard`, mounted here rather than inside the panel** — the shape
  * every control in the editor takes, and for the measured reason the prop's own doc gives: a
  * second observer of `["decks","detail",id]` is an extra `deck_get` every time a deck is opened.
- * So the wrapper is where the hook goes, exactly as `DeckEditor.tsx:842` is.
+ * So the wrapper is where the hook goes, exactly as `DeckEditor.tsx` is.
  *
- * **`zones` is a literal and is not derived here.** It is the editor's `moveTargets` for the
- * seeded Modern deck — `main`, `side`, `companion`, then the scratchpad — which
- * `DeckEditor.tsx:266-274` computes from the seeded format spec: Modern's `sideboardMax` is 15 so
- * the sideboard is offered, `allowsCompanion` is true so the companion is, `requiresCommander` is
- * false and the zone is empty so the command zone is not. Re-deriving it in this file would be
- * the second derivation the panel's own interface doc exists to forbid.
+ * **`categories` comes off that same hook**, which is new since schema v8 and is the whole
+ * simplification: the list this panel offers used to be `moveTargets`, derived from the seeded
+ * `format_specs` row, and a story had to hand-copy that derivation or repeat it. A category is
+ * not derived from anything — it is a row of the deck the reader owns — so `deck_get` answers
+ * the list and both the editor and this wrapper read the same one. Hand-copying it here would
+ * be a story asserting against ids the fake's database does not have.
  *
- * `targetZone` is controlled, so the state lives here; the meta keys its render on the story's
- * arguments, so changing one in Controls remounts rather than leaving a stale zone behind.
+ * `targetCategoryId` is controlled, so the state lives here; **until the reader picks, it is the
+ * first category the deck has**, which is the editor's own clamp in miniature — the deck read
+ * settles a beat after the first render, and a wrapper holding an id chosen before then would
+ * be holding one that names nothing.
  */
-function Panel({
-  deckId,
-  zones,
-  roomy = true,
-}: {
-  deckId: number;
-  zones: readonly DeckZone[];
-  roomy?: boolean;
-}) {
+function Panel({ deckId, roomy = true }: { deckId: number; roomy?: boolean }) {
   const deck = useDeck(deckId);
-  const [targetZone, setTargetZone] = useState<DeckZone>("main");
+  const [picked, setPicked] = useState<number | null>(null);
+  const categories = deck.categories;
   return (
     <DeckSearchPanel
       add={deck.addCard}
-      zones={zones}
-      targetZone={targetZone}
-      onTargetZoneChange={setTargetZone}
+      categories={categories}
+      targetCategoryId={picked ?? categories[0]?.id ?? 0}
+      onTargetCategoryChange={setPicked}
       roomy={roomy}
     />
   );
@@ -49,7 +43,7 @@ const meta = {
   title: "Decks/SearchPanel",
   component: Panel,
   tags: ["autodocs"],
-  args: { deckId: 1, zones: ["main", "side", "companion", "maybe"], roomy: true },
+  args: { deckId: 1, roomy: true },
   render: (args) => <Panel key={`${args.deckId}:${args.roomy}`} {...args} />,
   decorators: [
     // The panel is a flex column with `min-h-0`, so it needs a parent with a height or its wall
@@ -68,17 +62,19 @@ const meta = {
         component:
           "The path by which cards enter a deck — **not a second search**. It is " +
           "`useCardSearch` + `FilterBar` + `CardGrid`, the search view's own parts, in a 384px " +
-          "column beside the zones, with the wall's two slots pointed at this job: the badge " +
+          "column beside the deck, with the wall's two slots pointed at this job: the badge " +
           "keeps telling the collection story, and the action becomes **Add to deck**.\n\n" +
           "Driven end to end by `.storybook/fake/`: the wall is `search_cards` over the seeded " +
           "corpus (**36 cards** on the `starter` seed's default browse, measured 2026-08-10 — " +
           "43 printings less the two the fake's `paperOnly` default excludes), and the Add " +
           "button writes through `deck_add_card`.\n\n" +
-          "**The zone choice sits above the results rather than on each of them.** It is the " +
-          "click path's answer to “where does this go”, and therefore the keyboard's — which " +
-          "is what makes dragging a shortcut rather than the only way in. Every Add button is " +
-          "named for the card *and* the zone, because the zone is the one thing about that " +
-          "press that is not visible on the tile.\n\n" +
+          "**The category choice sits above the results rather than on each of them.** It is " +
+          "the click path's answer to “where does this go”, and therefore the keyboard's — " +
+          "which is what makes dragging a shortcut rather than the only way in. The select's " +
+          "value is a category **id**, because a category's name is the reader's to change; " +
+          "every Add button is named for the card *and* that category's name, because where " +
+          "the card is going is the one thing about the press that is not visible on the " +
+          "tile.\n\n" +
           "**A fixture of the editor, not a dismissible layer.** Escape pressed in here belongs " +
           "to the card detail pane; the way to put the panel away is the disclosure it names " +
           "itself by ({@link Collapsed}), and the one state where that control refuses is " +
@@ -90,7 +86,8 @@ const meta = {
           "{@link Empty}, which is a statement about the database, and {@link NoMatch}, which " +
           "is a statement about the filters.\n\n" +
           "**No drag story here.** Every tile is registered as a drag source " +
-          "(`cardDraggable` with a `search-card` payload) and the zones are the drop targets, " +
+          "(`cardDraggable` with a `search-card` payload) and the category columns are the " +
+          "drop targets, " +
           "but Storybook runs in an ordinary browser with no WRY OLE drop target, while the " +
           'shipped window depends on `"dragDropEnabled": false` in `tauri.conf.json`. A green ' +
           "drag here would prove nothing about the real app; that is the live CDP pass's.",
@@ -128,29 +125,31 @@ export const Docked: Story = {
     );
     await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
-    // The zone is in every Add button's name, and it is the only part of the press a screenshot
-    // cannot show: two tiles' buttons both called "Add" are two controls a screen reader cannot
-    // tell apart.
-    const zone = within(panel).getByLabelText("Add to");
-    await expect(zone).toHaveValue("main");
+    // The category is in every Add button's name, and it is the only part of the press a
+    // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
+    // reader cannot tell apart.
+    //
+    // Read off the select rather than written out, because the list is the **deck's** now
+    // rather than a derivation from its format — the fake seeds the categories every deck is
+    // born with, and a story that retyped their names would be asserting against the seed
+    // instead of against this panel.
+    const select = within(panel).getByLabelText("Add to") as HTMLSelectElement;
+    const options = within(select).getAllByRole("option") as HTMLOptionElement[];
+    await expect(options.length).toBeGreaterThan(1);
+    await expect(select).toHaveValue(options[0].value);
     await expect(
-      await within(panel).findByRole("button", { name: "Add Ancient Tomb to Main deck" }),
+      await within(panel).findByRole("button", {
+        name: `Add Ancient Tomb to ${options[0].textContent}`,
+      }),
     ).toBeInTheDocument();
 
-    // Four options, in the editor's own order, with the scratchpad last — and no Commander,
-    // because a Modern deck is never offered one.
-    const options = within(zone as HTMLSelectElement).getAllByRole("option");
-    await expect(options.map((o) => o.textContent)).toEqual([
-      "Main deck",
-      "Sideboard",
-      "Companion",
-      "Maybe",
-    ]);
-
-    await userEvent.selectOptions(zone, "side");
+    // And the button follows the pick, which is the whole of what the select does.
+    await userEvent.selectOptions(select, options[1].value);
     await waitFor(async () => {
       await expect(
-        within(panel).getByRole("button", { name: "Add Ancient Tomb to Sideboard" }),
+        within(panel).getByRole("button", {
+          name: `Add Ancient Tomb to ${options[1].textContent}`,
+        }),
       ).toBeInTheDocument();
     });
   },
@@ -192,7 +191,7 @@ export const Collapsed: Story = {
 /**
  * No room for the deck and the panel both, so the panel yields — and says why.
  *
- * The narrowest thing gives way first, which is the rule the zone columns already follow, one
+ * The narrowest thing gives way first, which is the rule the category columns already follow, one
  * level up. `roomy` is measured against the row the deck and the panel share rather than against
  * the window, because the window's width is three layouts away from it — a 1024px window leaves
  * that row 361px with the card pane open, against 776px without one (`DeckEditor.tsx:66-71`'s
@@ -293,15 +292,23 @@ export const NoMatch: Story = {
  * **This refusal is deliberately not in the editor's banner.** That one speaks for the three
  * writes the deck's own controls make, and a refusal reported somewhere else is a refusal the
  * reader has to go looking for — two banners for one press would be worse than one in the wrong
- * place (`DeckEditor.tsx:220-224`).
+ * place (`DeckEditor.tsx:235-240`).
  */
 export const Busy: Story = {
   parameters: { fake: { fault: "busy" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    // Matched by prefix, where the click-to-add story above spells the category out.
+    //
+    // The name's tail is the category the picker is on, which is the deck's **first** in
+    // `sortOrder` — the Commander pile, on a v8-seeded deck, not the main deck — and it
+    // arrives on the deck read rather than on the search this story is really about. Naming it
+    // would make a story about a *refused write* wait on, and fail over, a list it does not
+    // care about; `findByRole` with a prefix waits for the button and says nothing about which
+    // pile it points at. `ClickToAdd` is where the picker's own contract is pinned.
     await userEvent.click(
-      await within(panel).findByRole("button", { name: "Add Ancient Tomb to Main deck" }),
+      await within(panel).findByRole("button", { name: /^Add Ancient Tomb to / }),
     );
 
     const alert = await within(panel).findByRole("alert");

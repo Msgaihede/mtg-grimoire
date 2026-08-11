@@ -54,6 +54,33 @@ export function cardImageUrl(cardId: string, face: number, variant: ImageVariant
 }
 
 /**
+ * The URL for a deck's **custom** cover — the picture the reader uploaded, which the backend
+ * re-encodes into the same 626×457 shape a card's `art` crop has so that one tile can wear
+ * either without the layout shifting.
+ *
+ * A fifth route beside the four card variants, and it cannot collide with one: `cover` is not a
+ * variant word, so `Variant::parse` answers `None` for it and the two path shapes are disjoint
+ * (`images.rs`'s `COVER_ROUTE`).
+ *
+ * **It names the deck, not the picture.** The bytes behind it change when the reader uploads
+ * again while the URL does not, which is exactly why `images.rs` serves it `no-store` — so
+ * never add a cache-buster here. The header is the mechanism, and a `?v=` would be a second one
+ * for a solved problem. A caller that must force a *re-decode* (a preview watching for its own
+ * upload to land) changes the element's React `key`, not the URL.
+ *
+ * A deck with no file on disk answers **404**, never a placeholder, chosen so the fault is
+ * visible rather than hidden behind a grey rectangle that looks like a picture. It reaches a
+ * caller as an ordinary `<img>` error.
+ *
+ * Here rather than in either surface that draws one, because it was written out twice — the
+ * gallery tile and the settings dialog's preview draw the same picture — and two literals for
+ * one route is how a route ends up with two spellings.
+ */
+export function deckCoverUrl(deckId: number): string {
+  return `${imageOrigin(navigator.userAgent)}/cover/${deckId}`;
+}
+
+/**
  * The shortest wait a failed image is allowed to come back after.
  *
  * The protocol answers a rate limit with `503` + `Retry-After`, and `images.rs` clamps

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type PaneDeckContext } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
 
@@ -103,15 +103,27 @@ describe("the open deck", () => {
  * for would offer to rewrite a deck row from a card opened out of the collection.
  */
 describe("the deck row a card was opened from", () => {
+  /**
+   * One slot, as the deck editor's category columns write it.
+   *
+   * Both halves of the category are here because the store keeps both: schema v8 made a
+   * category a row the *user* names, so the word is no longer derivable from the id by a lookup
+   * table, and the pane that reads this context is a sibling of the editor with no category list
+   * of its own. `PaneDeckContext` is where that pairing is argued.
+   */
+  const MAIN: PaneDeckContext = {
+    deckId: 4,
+    categoryId: 1,
+    categoryName: "Main deck",
+    cardId: "p1",
+    variant: "live",
+  };
+
   it("opens the card and remembers the row in one write", () => {
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     expect(useAppStore.getState().selectedCardId).toBe("p1");
-    expect(useAppStore.getState().paneDeckContext).toEqual({
-      deckId: 4,
-      zone: "main",
-      cardId: "p1",
-    });
+    expect(useAppStore.getState().paneDeckContext).toEqual(MAIN);
   });
 
   /**
@@ -121,7 +133,7 @@ describe("the deck row a card was opened from", () => {
    * *not* the deck row the last context named.
    */
   it("forgets the row when a card is opened from anywhere else", () => {
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     useAppStore.getState().setSelectedCardId("p2");
 
@@ -137,21 +149,17 @@ describe("the deck row a card was opened from", () => {
    * the one moment it is for.
    */
   it("keeps the row while the reader browses printings inside the pane", () => {
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     useAppStore.getState().viewPrinting("p2");
 
     expect(useAppStore.getState().selectedCardId).toBe("p2");
-    expect(useAppStore.getState().paneDeckContext).toEqual({
-      deckId: 4,
-      zone: "main",
-      cardId: "p1",
-    });
+    expect(useAppStore.getState().paneDeckContext).toEqual(MAIN);
   });
 
   /** The pane closes through the same setter, so the context goes with it. */
   it("forgets the row when the pane closes", () => {
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     useAppStore.getState().setSelectedCardId(null);
 
@@ -160,7 +168,7 @@ describe("the deck row a card was opened from", () => {
 
   /** Leaving Decks closes the card; a context left behind would be about a pane that is gone. */
   it("forgets the row when the reader leaves the view", () => {
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     useAppStore.getState().setActiveView("collection");
 
@@ -174,7 +182,7 @@ describe("the deck row a card was opened from", () => {
    */
   it("forgets the row when the editor closes", () => {
     useAppStore.setState({ openDeckId: 4 });
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     useAppStore.getState().setOpenDeckId(null);
 

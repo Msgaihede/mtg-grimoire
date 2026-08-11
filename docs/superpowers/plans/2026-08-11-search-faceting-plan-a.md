@@ -10,6 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-11-search-filter-faceting-design.md`
 
+> **Renumbered on merge: this plan's schema step shipped as v9, not v8.** Everything below
+> says "v8" because that is what it was when it was written — `main` was at v7 and the next
+> number was free. While this branch was building, `main` landed the deckbuilder rebuild and
+> took v8 for a different change (`deck_cards.zone` → `deck_cards.category_id`). Both were
+> v8 and they meant different things, so the merge kept `main`'s v8 untouched and moved this
+> plan's step to **v9**: `if v < 9`, `PRAGMA user_version = 9`, `SCHEMA_VERSION = 9`, and the
+> tests and fixtures renamed to match (`v8_database` is now the "one version below head"
+> fixture, `the_v9_backfill_…`, `the_v9_step_replaces_…`, `the_schema_version_is_nine`).
+>
+> Read every "v8" in the tasks below as "v9", and every "a database that stopped at v7" as
+> "at v8". Task 2's invariant — **only the newest migration step may create from
+> `CARDS_INDEXES`** — survived the renumber unchanged, because `main`'s v8 touches only the
+> deck tables and so neither needs the list nor takes the title of newest creator.
+> `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install`, added by the
+> merge, is what now holds that invariant to account.
+
 ## Global Constraints
 
 - **`CARDS_COLUMNS` is frozen.** A new column is a new `if v < N` block with `ALTER TABLE`, never an edit to that constant. `create_staging` derives staging's layout from `PRAGMA table_info(cards)`, so staging follows automatically.
@@ -2263,7 +2279,10 @@ Copy a synced database in rather than syncing — see the worktree note in CLAUD
 
 Add to the Data & sync section, or a new one:
 
-- Schema is **v8**; `legal_mask` and what freezes its key order.
+- Schema is **v9** (see the renumbering note at the top of this plan); `legal_mask` and what
+  freezes its key order. *Partly done by the merge that renumbered it — the "Schema is v9"
+  paragraph and the `CARDS_INDEXES`-replay invariant are already in CLAUDE.md; what is still
+  owed is the key-order freeze.*
 - `idx_cards_collapse` now carries the filter columns, with the 505 ms → 41 ms figure and the +0.89 MB / 4 ms cost.
 - The `CardIndex`: what it is, that it is derived and rebuilt wholesale, that cold means fail-open, and the measured warm-up from Task 4 Step 5.
 - **Correct the stale 277 ms browse figure.** The uncollapsed browse is 10.5 ms and the collapsed one 54 ms, both measured 2026-08-11; `idx_cards_collapse` is why.

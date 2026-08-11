@@ -321,7 +321,8 @@ fn merge(
 
     // A deck list is user data by the same argument as the collection: the user typed it,
     // and an upstream id change is not a reason for a card to leave a deck. Same three
-    // arms, this table's grain (`schema::DECK_CARD_GRAIN`, which has `zone` in it).
+    // arms, this table's grain (`schema::DECK_CARD_GRAIN` — `deck_id, variant, category_id,
+    // card_id` since schema v8 replaced the fixed zone word with a category the user owns).
     //
     // `name` is **not** refreshed, and it is the one column the collection loop does not
     // have to decide about. It is the oracle name, and a merge says two ids are one
@@ -523,13 +524,16 @@ fn fold_wish_into_existing(
 /// The deck list's fold. Same shape again, `schema::DECK_CARD_GRAIN` compared between two
 /// rows, and the same rule: the quantity moves before the row does.
 ///
-/// `zone` is in the grain, so this only ever folds two rows the deck runs *in the same
-/// zone* — the same printing in `main` and in `maybe` is two intentions, and a merge is not
-/// a reason to collapse them into one.
+/// `category_id` **and `variant`** are both in the grain, so this only ever folds two rows the
+/// deck runs in the same category of the same list — the same printing in the main deck and
+/// in the Maybeboard is two intentions, and one tried out in Theory against the Live copy is
+/// two more. A merge is not a reason to collapse any of them into one.
 ///
-/// Nothing else moves, because a deck card holds nothing else the user typed: no price, no
-/// acquisition story, no tags. The quantities add, exactly as `deck.rs`'s own `ON CONFLICT`
-/// adds them when the same printing is added to a zone twice.
+/// `tag_id` does not move: the row that survives keeps its own label, `deck::move_card`'s fold
+/// rule and `deck_category_delete`'s. Nothing else moves either, because a deck card holds
+/// nothing else the user typed — no price, no acquisition story. The quantities add, exactly
+/// as `deck.rs`'s own `ON CONFLICT` adds them when the same printing is added to a category
+/// twice.
 fn fold_deck_card_into_existing(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
@@ -541,7 +545,8 @@ fn fold_deck_card_into_existing(
             // the new language: this is the grain of the row **after** the repoint.
             "SELECT t.id FROM deck_cards t, deck_cards s
               WHERE s.id = ?1 AND t.id <> s.id
-                AND t.deck_id = s.deck_id AND t.card_id = ?2 AND t.zone = s.zone",
+                AND t.deck_id = s.deck_id AND t.card_id = ?2
+                AND t.category_id = s.category_id AND t.variant = s.variant",
             params![source, new_id],
             |r| r.get(0),
         )
@@ -675,6 +680,9 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The deck fixtures' one shared piece: a category is what a deck card is filed under
+    // since schema v8, and `schema::tests` already owns the insert.
+    use crate::schema::tests::category;
 
     fn migration(id: &str, strategy: &str, old: &str, new: Option<&str>) -> Migration {
         Migration {
@@ -724,17 +732,23 @@ mod tests {
         .unwrap()
     }
 
-    /// One printing in one zone of one deck, with the printing denormalised beside the
-    /// soft `card_id` exactly as `deck.rs` writes it — the *old* printing, which is what
-    /// a merge has to refresh.
-    fn deck_card(conn: &Connection, deck_id: i64, card_id: &str, zone: &str, quantity: i64) -> i64 {
+    /// One printing in one category of one deck (the `live` variant, the only one these
+    /// tests need), with the printing denormalised beside the soft `card_id` exactly as
+    /// `deck.rs` writes it — the *old* printing, which is what a merge has to refresh.
+    fn deck_card(
+        conn: &Connection,
+        deck_id: i64,
+        card_id: &str,
+        category_id: i64,
+        quantity: i64,
+    ) -> i64 {
         conn.query_row(
             "INSERT INTO deck_cards
-                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
                  created_at,updated_at)
-             VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,?4,unixepoch(),unixepoch())
+             VALUES (?1,?2,?3,'lea','161','en','Lightning Bolt',?4,unixepoch(),unixepoch())
              RETURNING id",
-            rusqlite::params![deck_id, card_id, zone, quantity],
+            rusqlite::params![deck_id, category_id, card_id, quantity],
             |r| r.get(0),
         )
         .unwrap()
@@ -1636,19 +1650,21 @@ mod tests {
     }
 
     /// Deck rows are user rows: a merge repoints them, folding on the deck grain when the
-    /// deck already runs the new printing in that zone.
+    /// deck already runs the new printing in that category.
     ///
     /// The refreshed printing is asserted on the *repointed* row, because that is the row
     /// the refresh happens to: the fold's survivor keeps its own `set_code`/
     /// `collector_number`, which already describe the new card — `collection_entries`'
     /// fold makes exactly the same statement about exactly the same columns.
     #[test]
-    fn a_merge_repoints_deck_cards_and_folds_same_zone_collisions() {
+    fn a_merge_repoints_deck_cards_and_folds_same_category_collisions() {
         let mut conn = seeded();
         let burn = deck(&conn, "Burn");
-        let source = deck_card(&conn, burn, "old-id", "main", 3);
-        let target = deck_card(&conn, burn, "new-id", "main", 2);
-        let maybe = deck_card(&conn, burn, "old-id", "maybe", 1);
+        let main = category(&conn, burn, "main", "Main deck");
+        let scratch = category(&conn, burn, "maybe", "Maybeboard");
+        let source = deck_card(&conn, burn, "old-id", main, 3);
+        let target = deck_card(&conn, burn, "new-id", main, 2);
+        let maybe = deck_card(&conn, burn, "old-id", scratch, 1);
 
         let stats = apply(
             &mut conn,
@@ -1659,19 +1675,19 @@ mod tests {
         assert_eq!(
             (stats.repointed, stats.folded),
             (1, 1),
-            "the maybe row moved, the main row folded"
+            "the Maybeboard row moved, the main-deck row folded"
         );
         let rows: i64 = conn
             .query_row("SELECT count(*) FROM deck_cards", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
             rows, 2,
-            "one row per zone, and the maybe row is not one of them"
+            "one row per category, and the Maybeboard row is not one of them"
         );
         let (id, card, qty): (i64, String, i64) = conn
             .query_row(
-                "SELECT id, card_id, quantity FROM deck_cards WHERE zone = 'main'",
-                [],
+                "SELECT id, card_id, quantity FROM deck_cards WHERE category_id = ?1",
+                [main],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
@@ -1686,8 +1702,8 @@ mod tests {
             0,
             "the folded row is gone, not duplicated"
         );
-        // Zone is part of the grain, so the same printing in `maybe` is a different row
-        // with a different intention — it repoints on its own, printing and all.
+        // `category_id` is part of the grain, so the same printing in the Maybeboard is a
+        // different row with a different intention — it repoints on its own, printing and all.
         let (card, set, cn, name): (String, String, String, String) = conn
             .query_row(
                 "SELECT card_id, set_code, collector_number, name FROM deck_cards WHERE id = ?1",
@@ -1713,8 +1729,10 @@ mod tests {
     fn a_delete_flags_deck_rows_and_the_sweep_clears_what_returns() {
         let mut conn = seeded();
         let burn = deck(&conn, "Burn");
-        let vanished = deck_card(&conn, burn, "gone-id", "main", 2);
-        let live = deck_card(&conn, burn, "new-id", "side", 1);
+        let main = category(&conn, burn, "main", "Main deck");
+        let side = category(&conn, burn, "side", "Sideboard");
+        let vanished = deck_card(&conn, burn, "gone-id", main, 2);
+        let live = deck_card(&conn, burn, "new-id", side, 1);
 
         let stats = apply(&mut conn, &[migration("m2", "delete", "gone-id", None)]).unwrap();
 
@@ -1781,7 +1799,13 @@ mod tests {
         // A deck with no cards names no printing the reconciler acts on: `deck_cards` is
         // where the card ids are, and `decks.cover_card_id` is not one this module touches.
         assert!(user_data_is_empty(&conn));
-        deck_card(&conn, burn, "new-id", "main", 1);
+        deck_card(
+            &conn,
+            burn,
+            "new-id",
+            category(&conn, burn, "main", "Main deck"),
+            1,
+        );
         assert!(!user_data_is_empty(&conn));
     }
 

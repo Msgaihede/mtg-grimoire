@@ -42,13 +42,7 @@ export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price";
  * `src-tauri/src/collection.rs`.
  */
 export type CollectionSortKey =
-  | "name"
-  | "set"
-  | "finish"
-  | "quantity"
-  | "value"
-  | "price"
-  | "added";
+  "name" | "set" | "finish" | "quantity" | "value" | "price" | "added";
 
 /**
  * The wishlist's sortable columns.
@@ -585,15 +579,320 @@ export interface WishlistPage {
 }
 
 /**
- * The five zones a deck card can sit in — `schema::DECK_ZONES`, which the table's own CHECK
- * is built from.
+ * What a deck category *is for* — `schema::CATEGORY_KINDS`, which `deck_categories.kind`'s
+ * own CHECK is built from.
  *
- * `maybe` is the scratchpad and is unlike the other four in two ways worth knowing before
- * anything renders it: it counts toward no deck size, and the allocator never claims a copy
- * for it — so a maybe row always reads {@link DeckCard.ownedQuantity} `0`, by design and not
- * because the user is short of it.
+ * **This is not the category's name.** A category is a row the user makes, renames, reorders
+ * and switches off; its `kind` is the fixed word the rules read, and only four of the five
+ * are predefined (one `Commander`, one `Sideboard`, one `Companion`, one `Maybeboard` per
+ * deck). Every category a user makes is a `main` one, and a deck may own any number.
+ *
+ * **The governing rule, and the one sentence to read before writing anything that counts
+ * cards: the switch decides whether a pile counts *at all*; the kind decides only whether it
+ * is played *beside* the deck or *in* it — and only `side` and `companion` are beside it.**
+ * So a deck's size is every active category of kind `main`, `commander` or `maybe`, which
+ * reads odd until the alternative is written out: an active Maybeboard that was part of the
+ * card pool and part of the allocator's claims but not part of the size reported a singleton
+ * error under a count that still said 100.
+ *
+ * `maybe` therefore exists for exactly one reason — to name the predefined Maybeboard and
+ * seed it inactive. Nothing here says "counts toward nothing" any more;
+ * {@link DeckCategory.isActive} does.
  */
-export type DeckZone = "main" | "side" | "commander" | "companion" | "maybe";
+export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe";
+
+/**
+ * The two decks every deck secretly is — `schema::DECK_VARIANTS`.
+ *
+ * `live` is what is actually sleeved up: the gallery's card count, the allocator's claims and
+ * the "send missing to the wishlist" button all read it and nothing else. `theory` is what
+ * the deck is being built toward — a plan, which reserves no copy of anything and appears on
+ * no tile. The two are separate rows of `deck_cards`, so a change tried out in Theory can
+ * never silently overwrite the deck as it stands.
+ */
+export type DeckVariant = "live" | "theory";
+
+/**
+ * One category of one deck: a named pile the user owns.
+ *
+ * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
+ * (`schema::PREDEFINED_CATEGORIES`) are seeded with every deck and cannot be renamed or
+ * deleted; everything else is the user's, and `kind` is `main`.
+ */
+export interface DeckCategory {
+  id: number;
+  deckId: number;
+  /** As the user wrote it — a column heading, and what every refusal about a card in it says. */
+  name: string;
+  kind: CategoryKind;
+  /**
+   * **`categoryActive` is the whole of what `maybe` used to mean.** A card in an inactive
+   * category counts toward no deck size, no copy limit and no legality check, and the
+   * allocator claims no copy for it — so its {@link DeckCard.ownedQuantity} is always `0`.
+   * The Maybeboard is simply the one predefined category seeded inactive; a user category
+   * switched off behaves identically, and nothing in the engine, the allocator or the stats
+   * needs to know which is which.
+   *
+   * Settable on **every** category, `commander` included: deactivating that one is a legal
+   * (if unwise) thing to do, and the validation engine reports a missing commander, which is
+   * the honest cost. The only kind-based refusal in the backend is against *renaming* and
+   * *deleting* a predefined category, and it never reaches this field.
+   */
+  isActive: boolean;
+  sortOrder: number;
+  /**
+   * Copies filed here **in the variant that was asked for** — `sum(quantity)`, not a row count.
+   * Two printings at 2 and 3 copies read 5.
+   *
+   * The number a *list* row wants: a panel drawing the deck's columns is drawing the list the
+   * reader is editing. It is **not** the number a delete confirmation wants — see
+   * {@link DeckCategory.cardCountAllVariants}, and read both before reaching for either.
+   */
+  cardCount: number;
+  /** Nonfoil `usd` × copies over the same variant, `null` when nothing here has a price. */
+  totalPriceUsd: number | null;
+  /**
+   * Copies filed here **across both variants**, live and theory together — the number a
+   * destructive confirmation has to quote, and the same answer whichever variant was asked by.
+   *
+   * A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so deleting
+   * one takes its rows out of **both** lists, and `deckCategoryDelete`'s move arm moves both for
+   * the same reason. A dialog quoting {@link DeckCategory.cardCount} therefore understates what
+   * it is about to do on any theory-enabled deck — and understates the **destructive** arm in
+   * particular, which is a control lying in the direction of the reader pressing it.
+   */
+  cardCountAllVariants: number;
+}
+
+/**
+ * A tag's stored colour: a **token** from the app's palette (`gold`, `ember`, …), never a
+ * CSS colour and never a hex string.
+ *
+ * **Deliberately `string` and not a union**, which is the one place this file declines to
+ * narrow a Rust `String`. `deck_tags.color` carries no CHECK — the backend validates only
+ * that it is non-empty, because picking what a colour *is* belongs to the webview
+ * (CLAUDE.md's Rust/TS boundary), and `features/decks/tagColors.ts` owns the palette. A union
+ * here would make a tag written by a newer build a **type error at the read**, when the
+ * behaviour that was actually designed is a fallback: `tagColorCss` answers the default for
+ * any token it has never heard of, so an unknown colour is a visible dot rather than a
+ * crash. The alias exists to say all of that at every field that holds one.
+ */
+export type TagColor = string;
+
+/**
+ * One tag of one deck: a per-deck label a card can carry, at most one per card.
+ *
+ * The "at most one" is the `deck_cards.tag_id` column itself and nothing else — there is no
+ * join table and no constraint to relax if that ever changes.
+ */
+export interface DeckTag {
+  id: number;
+  deckId: number;
+  name: string;
+  color: TagColor;
+  /** Copies carrying it, `sum(quantity)` like {@link DeckCategory.cardCount}, and scoped to
+   *  the same variant the read asked by — the two agree, deliberately. */
+  cardCount: number;
+}
+
+/**
+ * One row of the "New tag" dialog's autocomplete: a name, a colour, and no deck.
+ *
+ * **Global on purpose.** A tag is per-deck data, but the palette a dialog offers to complete
+ * from is a property of the app's whole history rather than of the deck that happens to be
+ * open — a reader who has typed "Cut candidate" into four decks should be offered it in the
+ * fifth. `deck_tag_suggestions` is the only command in the deck surface that takes no id at
+ * all, and it answers most-used first.
+ *
+ * Grouped on the **pair**, not on the name: nothing in the schema forces two decks to pick
+ * the same colour for one word, so a name used in two colours is honestly two rows.
+ */
+export interface TagSuggestion {
+  name: string;
+  color: TagColor;
+}
+
+/**
+ * One folder of the deck gallery's filing tree.
+ *
+ * **Flat rows; the tree is the reader's to build from `parentId`** — `deck_folders` has no
+ * notion of depth and `deck_folder_list` takes no deck id, because a folder belongs to no
+ * deck: it files them, the way a directory files files.
+ *
+ * Two cascades worth knowing before drawing a delete confirmation, and they point opposite
+ * ways. `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so deleting a folder
+ * takes its sub-folders with it. `decks.folder_id` is `ON DELETE SET NULL`, so the decks
+ * inside surface at the root, filed nowhere, otherwise untouched. A confirmation that said
+ * "and everything in it" would be wrong about the half that matters.
+ */
+export interface DeckFolder {
+  id: number;
+  /** The folder this one sits inside, or `null` for the root of the tree. */
+  parentId: number | null;
+  name: string;
+  sortOrder: number;
+}
+
+/**
+ * One card the **theory** list wants more of than the live list has — a line of the plan's
+ * shopping list.
+ *
+ * **One direction only**, and that is the design rather than an omission: what live has and
+ * theory dropped is a cut the reader already made, and it needs no row. Inactive categories
+ * are excluded from *both* sides, so a card parked in either Maybeboard is neither wanted nor
+ * owned for this purpose.
+ *
+ * The comparison is by **oracle card**, not by printing: needing a second Sol Ring is not
+ * answered by the live list holding a different printing of one. An orphan — a row whose
+ * printing has left `cards` — has no oracle id and is compared by its own id, which is as far
+ * as the data honestly goes.
+ */
+export interface TheoryDiffRow {
+  /** The printing **the theory row names**, which is the printing the reader would be buying.
+   *  When the same card is filed in two theory categories this is the first row's printing. */
+  cardId: string;
+  name: string;
+  /** The category the theory row is filed under — the pile this card is wanted *for*, which is
+   *  what makes a shopping list readable ("2 more Ramp, 1 more Removal"). */
+  categoryName: string;
+  /** How many more copies theory wants than live has. **Always positive**: a card live has as
+   *  many of is not on this list, and one it has more of is a cut rather than a purchase. */
+  quantity: number;
+  /** Nonfoil `usd` from this printing's prices blob, per copy — {@link DeckCard.unitPriceUsd}'s
+   *  rule. Never `cards.price_usd`, which is a display fallback chain and must not be summed. */
+  unitPriceUsd: number | null;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * Copies of this oracle card the collection holds that **no built deck has claimed** — the
+   * number that turns "I need two more Sol Rings" into "and one is in the box already".
+   *
+   * **A display field, and never a term in an arithmetic.** It is deliberately not netted out
+   * of {@link TheoryDiffRow.quantity}, least of all by `deckTheoryMissingToWishlist`:
+   * `quantity` has already subtracted the live list and this number has not, so an unbuilt
+   * deck's own live copies read as spare here — right for a person, wrong for a subtraction.
+   */
+  ownedSpare: number;
+}
+
+/**
+ * What one `deck_audit` row says happened — `schema::AUDIT_KINDS`, narrowed.
+ *
+ * A `String` on the Rust struct and a CHECK constraint in SQL, a union here: the database
+ * is the enforcement and this is the mirror, which is the same arrangement
+ * {@link CategoryKind} and {@link DeckVariant} are in.
+ *
+ * The nine split three ways, and the split is why {@link DeckAuditEntry.cardId} is nullable:
+ * `add`/`remove`/`quantity`/`move`/`swap` are about **one card**; `category` and `folder` are
+ * about a pile or a filing cabinet; `deck` is about the deck itself.
+ *
+ * **`tag` is on both sides of that line**, which is the trap: one kind covers a card wearing
+ * a label (`cardId` set) *and* the label itself being created, renamed or deleted (`cardId`
+ * `null`, plus an `action` verb in the payload). They share a kind because they share a
+ * subject. A renderer that could not see the verb reports "deleted the Cut candidate tag" as
+ * "tagged as Cut candidate" — `auditText.ts` switches on `action` first for exactly that
+ * reason.
+ */
+export type DeckAuditKind =
+  "add" | "remove" | "quantity" | "move" | "swap" | "tag" | "category" | "folder" | "deck";
+
+/**
+ * One line of a deck's history — **what happened, not how to say it.**
+ *
+ * The whole design of this table is in {@link DeckAuditEntry.payload}: Rust records the
+ * facts inside the transaction that made the change, and `features/decks/auditText.ts`
+ * turns them into the sentence a person reads. A row that stored the sentence would be a
+ * history that has to be migrated the day the wording changes, and one that could not be
+ * re-rendered in another language or at another length at all.
+ *
+ * Recorded **inside** the caller's transaction, always: an audit row that committed while
+ * the change it describes rolled back is a history that lies.
+ */
+export interface DeckAuditEntry {
+  id: number;
+  deckId: number;
+  /** Unix **seconds**, like {@link DeckRow.updatedAt} — not milliseconds. `auditText`'s
+   *  day grouping multiplies by 1000 exactly once, where the `Date` is built. */
+  at: number;
+  /**
+   * Which of the deck's two lists the change was made to — **for the kinds that are about a
+   * list at all.** `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so every row
+   * has to carry *something*, and for four kinds that something is filler.
+   *
+   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of `tag`,
+   * and for the one `deck` row that records a theory copy (which deliberately says `theory`).
+   * It is **filler for the rest**: a category write, a folder filing, a label being created or
+   * deleted and every other `deck` field all record the column's DDL default, `live`, because
+   * none of them is a fact about one variant's cards. `deck_audit::DECK_LEVEL` is literally
+   * `DECK_VARIANTS[0]`.
+   *
+   * So **do not filter a history by variant** — a Theory reader who did would be shown every
+   * category rename and deck setting they had ever changed, and a Live reader would lose half
+   * their history to nothing more than a CHECK constraint. {@link DeckAuditEntry.cardId} draws
+   * the same line one field down, and for the same reason.
+   */
+  variant: DeckVariant;
+  kind: DeckAuditKind;
+  /**
+   * The card the change was about, **softly** referenced like every card id in a user table
+   * — and `null` for the three kinds that are about no card at all (`category`, `folder`,
+   * `deck`), and for the half of `tag` that is about the label rather than a card wearing it.
+   */
+  cardId: string | null;
+  /** Denormalized at write time, for the reason `deck_cards.name` is: a history line still
+   *  names its card the day that printing leaves the card database. */
+  cardName: string | null;
+  /**
+   * **JSON text**, not an object — `payload TEXT NOT NULL CHECK (json_valid(payload))`, so
+   * it arrives as a string and is parsed by the one module that reads it.
+   *
+   * The shape depends entirely on {@link DeckAuditEntry.kind}, and the shapes are written out
+   * in `features/decks/auditText.ts`, which is the only place in the app that looks inside
+   * this string. It is deliberately schemaless here: adding a fact to one kind is a change to
+   * a sentence rather than a migration, which is what a log of "all changes" needs in order to
+   * survive being useful. Roughly, by kind:
+   *
+   * | kind | payload |
+   * |---|---|
+   * | `add` | `{ category, quantity }` |
+   * | `remove` | `{ category, quantity, reason }` |
+   * | `quantity` | `{ category, from, to }` |
+   * | `move` | `{ from, to }` — category **names**, not ids |
+   * | `swap` | `{ category, fromSet, toSet, folded }` |
+   * | `tag` | `{ tag, previous }` on a card; `{ action, tag, previous }` on the label |
+   * | `category` | `{ action, name, previousName, cards }` |
+   * | `folder` | `{ action, folder }` — `folder` is `null` for the root |
+   * | `deck` | `{ field, from, to }`, or `{ field: "theory", copied }` |
+   *
+   * **Read every field as optional, including the ones that table shows.** Several payloads
+   * are narrower than they look — a category `reorder` emits `{ action }` alone, because every
+   * pile moved and there is no one pile to name — and the writer is still growing: this build
+   * may be older *or* newer than the one that wrote a row, since a database outlives the app.
+   * `deck.field` today is `name | format | cover | notes | built | theory | description |
+   * archived`, and `cover` records the literal `"custom"` for an uploaded image rather than a
+   * card id. Parse defensively and be total over unknowns, which is what `auditText.ts` does
+   * and why nothing in it throws.
+   *
+   * Values are recorded **as stored**: a set code inside a `swap` is the lowercase
+   * `cards.set_code` it came from, not the capitals a tile draws. Casing is the renderer's.
+   */
+  payload: string;
+  /**
+   * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
+   * remove, the difference on a quantity change, and **`+n` on the one `deck` row that records
+   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the live list and
+   * carries the copies it wrote. `0` on everything else.
+   *
+   * That fourth case is the one worth naming, because it is the exception to the shape of this
+   * list: every *other* nonzero delta belongs to a card-shaped kind, and a reader who took
+   * "card kinds move the number, deck kinds do not" as the rule would be wrong exactly once —
+   * on a row that can move it by ninety-nine.
+   *
+   * Zero is the common case and means "this changed no card count", never "nothing
+   * happened" — a rename, a reorder, a move, a tag and a printing swap all record `0`.
+   */
+  delta: number;
+}
 
 /**
  * One new deck, as the "New deck" dialog sends it.
@@ -615,14 +914,28 @@ export interface DeckInput {
  * An edit to one deck. Every field is optional: absent means "leave it"
  * (`coalesce(?n, column)`, {@link EntryPatch}'s rule).
  *
- * There is no field here that clears one — `description: ""` writes an empty string rather
- * than a NULL, and `coverCardId` cannot be unset. A deck editor that offers to remove a
- * cover has nothing here to do it with.
+ * **Absent is the only way to say "leave it", so `null` cannot say "clear it".** Every column
+ * below is written with `coalesce(?n, column)`, which reads a bound NULL as *unchanged* — so
+ * there is no patch that clears a cover, empties a description, or files a deck back at the
+ * **root** of the folder tree. The last of those is a thing the app actually needs, which is
+ * why {@link ipc.deckSetFolder} is a command of its own: it takes `folderId: number | null`
+ * and `null` there means the root. A reader looking for "un-file this deck" wants that
+ * command and will not find it here.
+ *
+ * Un-filing through a patch would need a double-`Option` (absent versus null) across this
+ * whole struct — a change to make once and deliberately, not as a side effect of adding a
+ * field.
  */
 export interface DeckPatch {
   name?: string;
   formatKey?: string;
+  /** The one-line blurb the "New deck" dialog fills and the gallery tile shows — **not**
+   *  {@link DeckPatch.notes}. Two fields because they are two things: a caption and a
+   *  notebook. */
   description?: string;
+  /** Point the cover at a printing's art crop. Sending it also sets `coverKind` back to
+   *  `card_art`, so a deck showing an uploaded picture returns to card art without the file
+   *  being deleted — see {@link DeckRow.coverKind}. */
   coverCardId?: string;
   /**
    * Sleeved up on a table, or a plan on paper. The **only** thing this means: a built deck's
@@ -633,7 +946,41 @@ export interface DeckPatch {
   /** Filed away: sorted last in the gallery, never deleted. This is what a gallery's
    *  "remove" should reach for — `deckDelete` really deletes. */
   archived?: boolean;
+  /**
+   * Which folder the deck is filed in.
+   *
+   * **This field can file a deck, and cannot un-file one** — by the rule above, `null` here
+   * means "leave it". {@link ipc.deckSetFolder} is the command that reaches the root.
+   */
+  folderId?: number;
+  /** The deck's long-form notes — the v8 column, and not {@link DeckPatch.description}. */
+  notes?: string;
+  /**
+   * Whether this deck keeps a theory list beside its live one.
+   *
+   * **Switching it on seeds the theory list from live when there is nothing in it**, in the
+   * same transaction: an empty theory list beside a full live one reads as data loss rather
+   * than as a blank page. Switching it off **keeps every row** — it hides a switch, it does
+   * not delete a list, and nothing in the backend ever deletes a `theory` row except the
+   * ordinary card writes the reader makes against it.
+   */
+  theoryEnabled?: boolean;
 }
+
+/**
+ * Which of a deck's two cover fields a tile should draw — `decks.cover_kind`, and the only
+ * thing that decides it.
+ *
+ * `card_art` means {@link DeckRow.coverCardId}'s art crop; `custom` means the file the reader
+ * picked, served by the image protocol at `<origin>/cover/<deckId>` (a fifth route beside the
+ * four card variants — the CSP was not edited for it).
+ *
+ * **A deck can carry both at once and usually does**: setting a custom cover leaves the card
+ * id alone and picking a card leaves the file on disk, so switching back and forth costs
+ * nothing and loses nothing. That is only coherent because this column is the one answer to
+ * "which one is showing".
+ */
+export type DeckCoverKind = "card_art" | "custom";
 
 /** One deck as the gallery shows it. */
 export interface DeckRow {
@@ -645,34 +992,60 @@ export interface DeckRow {
   formatName: string | null;
   description: string | null;
   coverCardId: string | null;
+  /** Which of the two covers is showing. See {@link DeckCoverKind} — a deck usually carries
+   *  both, and this is the one answer to which one a tile draws. */
+  coverKind: DeckCoverKind;
   /**
    * The cover printing's illustrator, `null` when `cards` has no row for it.
    *
    * Read here so a tile can obey Scryfall's image policy: an `art` crop has no printed
    * frame, so wherever one is shown the artist must be credited. Task 11's ruling is that a
    * cover with no artist is **not drawn** — an orphaned cover heals on the next sync.
+   *
+   * It is about {@link DeckRow.coverCardId} and only that: a `custom` cover is the reader's
+   * own picture and has no Scryfall artist to credit, so this stays `null` while the tile
+   * quite properly draws one.
    */
   coverArtist: string | null;
   isBuilt: boolean;
   archived: boolean;
   /**
-   * main + commander copies — what "a 60-card deck" means in a caption, and the **same zones
-   * the validation engine sizes a deck by**: `SIZE_ZONES` in
-   * `features/decks/validation/engine.ts`. One definition, so a tile and the format check
-   * beside it never answer the same question with two numbers.
+   * `live` copies in **active** categories of kind `main`, `commander` or `maybe` — what "a
+   * 60-card deck" means in a caption, and the **same cards the validation engine sizes a deck
+   * by**: `SIZE_KINDS` in `features/decks/validation/engine.ts`. One definition, so a tile and
+   * the format check beside it never answer the same question with two numbers. The kind list
+   * here and that constant are the same three words, and a change to one is a change to both.
    *
-   * The sideboard, the maybe pile and the companion are deliberately not in it — a companion
-   * is played beside the deck rather than in it, and EDH's is "effectively a 101st card",
-   * which is exactly the card a "100-card deck" caption must not count.
+   * Three exclusions, and they are {@link CategoryKind}'s governing rule applied. The
+   * sideboard and the companion are *beside* the deck rather than in it (CR 100.4a; EDH calls
+   * a companion "effectively a 101st card", which is exactly the card a 100-card caption must
+   * not add). A **theory** row is a plan and appears on no tile. And an **inactive** category
+   * counts toward nothing whatever its kind, which is how a switched-off Maybeboard stays out
+   * without `maybe` being excluded — a Maybeboard switched *on* counts like any other pile.
    */
   cardCount: number;
-  /** Unix seconds. The gallery's sort key, and every zone write moves it — including a
+  /** Unix seconds. The gallery's sort key, and every card write moves it — including a
    *  removal that found nothing to remove. */
   updatedAt: number;
+  /** Which folder the deck is filed in, or `null` for the root of the tree. Filing is
+   *  {@link ipc.deckSetFolder}, which is the only write that can put it back at `null`. */
+  folderId: number | null;
+  /** The deck's long-form notes — the v8 column, not {@link DeckRow.description}. */
+  notes: string | null;
+  /**
+   * Whether this deck keeps a theory list beside its live one.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, because a switch the app can
+   * set and never see is a switch nothing can draw: the editor's Live/Theory control **is**
+   * this boolean. Without it every reader would have to guess from whether the theory list
+   * happens to be empty — which is precisely the state the seed-on-enable exists to make
+   * impossible to interpret.
+   */
+  theoryEnabled: boolean;
 }
 
 /**
- * One card in one zone of one deck: what it is, what the validation engine needs to judge
+ * One card in one category of one deck: what it is, what the validation engine needs to judge
  * it, and how much of it the user actually has.
  *
  * Three groups of fields, and the split is the design:
@@ -686,11 +1059,29 @@ export interface DeckRow {
  * * **The availability numbers**, computed at read time and stored on no row.
  */
 export interface DeckCard {
-  /** `deck_cards.id`. Answered by the writes, but **never** what addresses one: every zone
-   *  command takes `(deckId, cardId, zone)`, the grain the unique index is on. */
+  /** `deck_cards.id`. Answered by the writes, but **never** what addresses one: every card
+   *  command takes `(deckId, cardId, categoryId, variant)`, the grain the unique index is on. */
   id: number;
   cardId: string;
-  zone: DeckZone;
+  categoryId: number;
+  /** The category's own name, denormalized into the read so a row can be drawn without a
+   *  second lookup. */
+  categoryName: string;
+  /** **What the rules read.** The name is the user's and can be anything; this is the fixed
+   *  word the engine sizes a deck, counts copies and judges a commander by. */
+  categoryKind: CategoryKind;
+  /** {@link DeckCategory.isActive}, copied onto the row — `false` means this card counts
+   *  toward nothing at all. */
+  categoryActive: boolean;
+  /** Which of the deck's two lists this row is in. Every row of one read carries the same
+   *  value; it is here so a caller holding a row can write it back. */
+  variant: DeckVariant;
+  /** The one tag this row carries, resolved so a row can be drawn without a second lookup.
+   *  All three are `null` together — deleting a tag untags its cards rather than deleting
+   *  them. */
+  tagId: number | null;
+  tagName: string | null;
+  tagColor: TagColor | null;
   quantity: number;
   /** Denormalized at write time, and the one name an orphaned row still has. */
   name: string;
@@ -762,17 +1153,23 @@ export interface DeckCard {
   unitPriceUsd: number | null;
   /**
    * Copies of this oracle card the allocator **secured for this deck**, attributed to this
-   * row in zone-priority order and clamped to what each collection entry still holds.
+   * row in the read's own order and clamped to what each collection entry still holds.
    *
    * The third of this file's three `ownedQuantity` fields and the only one that is not a
    * count of what the user has: {@link CardSummary.ownedQuantity} is every copy of one
    * printing, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this one
    * is a *claim* — oracle-grained (a Bolt is a Bolt), finish-blind, condition-blind.
    *
-   * Two things it will not do, both by design:
+   * Three things it will not do, all by design:
    *
-   * * a `maybe` row always reads `0`, because the allocator never claims for the scratchpad
-   *   — so no "owned" badge belongs on that pile at all;
+   * * a row whose `categoryActive` is `false` always reads `0`, because the allocator claims
+   *   nothing for an inactive category — so no "owned" badge belongs on that pile at all;
+   * * a `theory` row always reads `0` too: **the allocator claims for the `live` variant
+   *   only**, and a plan reserves nothing. `deck_allocations` carries no variant column at
+   *   all — there is nothing on a claim that says which list it came from, because only one
+   *   list ever makes them — which is why the *read* is what filters, and why a mirror of
+   *   this field that assumed a claim could be theory-scoped would be describing a column
+   *   that does not exist;
    * * across **several built decks** these numbers are not guaranteed to add up to what the
    *   collection holds. A deck's claims are recomputed when *that deck* is written to, so
    *   two built decks sharing a card can each carry a claim made when the other's was
@@ -784,29 +1181,43 @@ export interface DeckCard {
 /**
  * One deck and everything in it.
  *
- * One command rather than three, because the editor and the validation engine ask the same
+ * One command rather than four, because the editor and the validation engine ask the same
  * question — *what is in this deck* — and a screen that draws a curve from one query, a
- * legality panel from another and an owned badge from a third is a screen whose three
- * answers can disagree.
+ * legality panel from another, an owned badge from a third and its column headings from a
+ * fourth is a screen whose answers can disagree.
  */
 export interface DeckDetail {
   deck: DeckRow;
-  /** Zone-priority order (`commander`, `main`, `side`, `companion`, `maybe`), then name,
-   *  then row id. The read's own order, not the caller's: `ownedQuantity` is attributed
-   *  along it, so the number a row shows must not depend on how a list was displayed. */
+  /** Category `sortOrder`, then the name the row carries, then row id. The read's own order,
+   *  not the caller's: `ownedQuantity` is attributed along it, so the number a row shows must
+   *  not depend on how a list was displayed. */
   cards: DeckCard[];
+  /**
+   * **Every** category of the deck, in `sortOrder`, never filtered by what happens to be in
+   * it: an empty one still draws a column — that is where the next card goes — and an
+   * inactive one always draws, which is the affordance for switching it back on.
+   *
+   * The counts are scoped to the variant that was asked for; the list itself is not, so
+   * switching between Live and Theory changes what is in the columns and never which columns
+   * there are.
+   */
+  categories: DeckCategory[];
+  /** Every tag of the deck, alphabetically — the palette a row's label is picked from, which
+   *  exists whether or not any row is wearing it. */
+  tags: DeckTag[];
 }
 
 /**
  * What a printing swap answers: where the copies ended up, and whether they had company.
  *
  * The reason the swap has a return type of its own rather than the `EntryChange` its
- * neighbours share: two rows can become one. A zone holds a printing at most once (the grain
- * is `(deck, card, zone)`), so swapping onto a printing the zone already has *folds* — and a
- * deck list that silently loses a line reads like a bug unless something says so.
+ * neighbours share: two rows can become one. A category holds a printing at most once per
+ * variant (the grain is `(deck, variant, category, card)`), so swapping onto a printing the
+ * category already has *folds* — and a deck list that silently loses a line reads like a bug
+ * unless something says so.
  */
 export interface SwapResult {
-  /** The target zone already held that printing, so the two rows became one. */
+  /** The target category already held that printing, so the two rows became one. */
   folded: boolean;
   /** What the row the copies now live in holds — the **sum**, when `folded`. */
   quantity: number;
@@ -1063,9 +1474,17 @@ export const ipc = {
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
-  /** One deck and everything in it, or `null` when no deck has that id — a gallery that has
-   *  not refreshed since another view deleted it asks for a deck that is not there. */
-  deckGet: (id: number) => invoke<DeckDetail | null>("deck_get", { id }),
+  /**
+   * One deck and everything in it, or `null` when no deck has that id — a gallery that has
+   * not refreshed since another view deleted it asks for a deck that is not there.
+   *
+   * `variant` scopes the **cards, and the two counts on every category and tag row** — it is
+   * threaded into all three reads. What it does *not* scope is which categories and tags come
+   * back: every one of them does either way, so switching between the two lists changes the
+   * numbers in the column headings and never the columns themselves.
+   */
+  deckGet: (id: number, variant: DeckVariant) =>
+    invoke<DeckDetail | null>("deck_get", { id, variant }),
   deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
   /** Rename, re-format, cover, build and archive all arrive here. Sending `isBuilt`
    *  reallocates the deck in the same transaction. */
@@ -1074,43 +1493,272 @@ export const ipc = {
    *  is `deckUpdate(id, { archived: true })`, and it is what a gallery's "remove" wants.
    *  An id that resolves to nothing is a success: the caller wanted that deck gone. */
   deckDelete: (id: number) => invoke<void>("deck_delete", { id }),
-  /** Copy the deck and its cards — never its claims, never `isBuilt`, never `archived`. A
-   *  copy is a draft. */
+  /** Copy the deck: its categories and tags as new rows, its cards in **both** variants
+   *  remapped onto them — never its claims, never `isBuilt`, never `archived`. A copy is a
+   *  draft. */
   deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
   /**
-   * Put copies into a zone, folding on `(deck, card, zone)` — the drag-in and the
-   * click-to-add write, and **not** the stepper's.
+   * Point the deck at a picture on disk: decode it, re-encode it as this app's cover shape
+   * (626×457, the same crop a card cover draws) and store it beside the database.
+   *
+   * `sourcePath` is a **path the backend reads**, not bytes and not a `file://` URL — the
+   * file picker's answer, handed straight across. The re-encode happens *before* the write
+   * lock is taken, so a big photograph does not put every collection edit in the app behind
+   * one file dialog.
+   *
+   * Answers the deck as the gallery would read it, with {@link DeckRow.coverKind} now
+   * `custom`. It does **not** clear {@link DeckRow.coverCardId}: switching back to card art is
+   * `deckUpdate(id, { coverCardId })` and loses nothing either way.
+   */
+  deckSetCoverImage: (deckId: number, sourcePath: string) =>
+    invoke<DeckRow>("deck_set_cover_image", { deckId, sourcePath }),
+  /**
+   * File the deck under a folder — or, with `folderId: null`, back at the **root** of the
+   * tree.
+   *
+   * **The one thing {@link DeckPatch} cannot express, and the reason this is a command rather
+   * than a field.** A patch writes every column with `coalesce(?n, column)`, which reads a
+   * bound NULL as "leave it": there is no patch that un-files a deck. Here `null` is an
+   * argument with a meaning, and it must travel as an explicit key — Tauri fills parameters by
+   * name and an absent one is a refusal, not a default.
+   */
+  deckSetFolder: (deckId: number, folderId: number | null) =>
+    invoke<DeckRow>("deck_set_folder", { deckId, folderId }),
+  /**
+   * A deck's categories on their own — the same list `deckGet` already carries, for a panel
+   * that wants it without the cards.
+   *
+   * `variant` scopes each row's `cardCount`/`totalPriceUsd` and **nothing else**: which
+   * categories a deck has does not depend on which list is showing, which is what keeps the
+   * columns still while the reader switches between Live and Theory.
+   */
+  deckCategoryList: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckCategory[]>("deck_category_list", { deckId, variant }),
+  /** A new category, always `kind: "main"` and always active, appended after the deck's last
+   *  one. Refuses a name the deck already has — the grain is `(deckId, name)`. */
+  deckCategoryCreate: (deckId: number, name: string) =>
+    invoke<DeckCategory>("deck_category_create", { deckId, name }),
+  /**
+   * Rename one category — `id`, not `deckId`, because a category names its own deck.
+   *
+   * **Refused for the four predefined ones** (`Commander`, `Sideboard`, `Companion`,
+   * `Maybeboard`), and that refusal is what guarantees they still read those words: the rules
+   * role is `kind`, but every heading, every refusal sentence and every payload in the history
+   * quotes the *name*.
+   */
+  deckCategoryRename: (id: number, name: string) =>
+    invoke<DeckCategory>("deck_category_rename", { id, name }),
+  /**
+   * Switch a pile on or off — {@link DeckCategory.isActive}, which is the whole of "counts
+   * toward nothing".
+   *
+   * **Allowed on every kind**, the Commander included: the backend's predefined guard is
+   * about renaming and deleting and never reaches this. It reallocates in the same
+   * transaction, because an inactive category claims no copies — so this changes what the deck
+   * has reserved without touching a single card.
+   */
+  deckCategorySetActive: (id: number, isActive: boolean) =>
+    invoke<DeckCategory>("deck_category_set_active", { id, isActive }),
+  /**
+   * Write `sortOrder` from position in `ids`, and answer the whole list back in its new order.
+   *
+   * An id that is not this deck's — stale, or gone — is **silently skipped** rather than
+   * failing the reorder over one entry, so a list that raced a delete still lands. Send every
+   * id: this is the order, not a move.
+   */
+  deckCategoryReorder: (deckId: number, ids: number[]) =>
+    invoke<DeckCategory[]>("deck_category_reorder", { deckId, ids }),
+  /**
+   * Delete a `main` category, with or without keeping its cards.
+   *
+   * **`moveToCategoryId` is the whole of the difference, and `null` is destructive**: an id
+   * moves the cards first, in the same transaction, folding into whatever the target already
+   * holds — `null` lets `ON DELETE CASCADE` take the cards with the category, which is what a
+   * confirm dialog has to say out loud. One command for both, because a caller doing the move
+   * and the delete as two round trips could lose the cards between them.
+   *
+   * The move covers **both variants**: a `live` row and a `theory` row of one printing fold
+   * into their own matching rows in the target and never into each other. Refuses a predefined
+   * category, a target belonging to another deck, and a move into itself.
+   */
+  deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
+    invoke<void>("deck_category_delete", { id, moveToCategoryId }),
+  /** A deck's tags on their own, alphabetically — `deckGet` carries the same list. `variant`
+   *  scopes each row's `cardCount` and nothing else, exactly as it does for categories. */
+  deckTagList: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckTag[]>("deck_tag_list", { deckId, variant }),
+  /** A new label for this deck. Refuses a name the deck already has; the colour is a palette
+   *  token and the backend checks only that it is non-empty — see {@link TagColor}. */
+  deckTagCreate: (deckId: number, name: string, color: TagColor) =>
+    invoke<DeckTag>("deck_tag_create", { deckId, name, color }),
+  /** Rename **and** recolour: one command, both arguments required. There is no patch shape
+   *  here, so a caller changing one sends the other back unchanged. */
+  deckTagUpdate: (id: number, name: string, color: TagColor) =>
+    invoke<DeckTag>("deck_tag_update", { id, name, color }),
+  /** Delete a label. **Untags its cards rather than deleting them** — `deck_cards.tag_id` is
+   *  `ON DELETE SET NULL` — which is the half of the sentence a confirm dialog owes a reader. */
+  deckTagDelete: (id: number) => invoke<void>("deck_tag_delete", { id }),
+  /** The autocomplete palette for a "New tag" dialog: every name and colour used across
+   *  **every** deck, most-used first. Takes no deck id at all — see {@link TagSuggestion}. */
+  deckTagSuggestions: () => invoke<TagSuggestion[]>("deck_tag_suggestions"),
+  /**
+   * Put the one tag a deck card carries on it, or take it off with `tagId: null`.
+   *
+   * A **card** write wearing a tag command's name: it addresses the slot by the full grain
+   * `(deckId, cardId, categoryId, variant)` like every other card write, and answers "that
+   * card is not in this deck's category any more" for a row that has since moved, folded or
+   * been stepped to zero. A `tagId` belonging to another deck is refused before anything is
+   * written.
+   */
+  deckCardSetTag: (
+    deckId: number,
+    cardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    tagId: number | null,
+  ) => invoke<void>("deck_card_set_tag", { deckId, cardId, categoryId, variant, tagId }),
+  /** Every folder there is, flat — the tree is the reader's to build from `parentId`. No deck
+   *  scoping, because a folder belongs to no deck: it files them. */
+  deckFolderList: () => invoke<DeckFolder[]>("deck_folder_list"),
+  /** A new folder, at the root with `parentId: null` or inside another one. */
+  deckFolderCreate: (parentId: number | null, name: string) =>
+    invoke<DeckFolder>("deck_folder_create", { parentId, name }),
+  deckFolderRename: (id: number, name: string) =>
+    invoke<DeckFolder>("deck_folder_rename", { id, name }),
+  /**
+   * Re-parent a folder — `parentId: null` moves it back to the root.
+   *
+   * Refuses a move into itself or into one of its own descendants, and that guard is not
+   * cosmetic: `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so a cycle is a
+   * graph SQLite's recursive cascade would walk forever the day the folder is deleted.
+   */
+  deckFolderMove: (id: number, parentId: number | null) =>
+    invoke<DeckFolder>("deck_folder_move", { id, parentId }),
+  /**
+   * Delete a folder. **Its decks are not deleted** — `decks.folder_id` is `ON DELETE SET
+   * NULL`, so they surface at the root, filed nowhere and otherwise exactly as they were.
+   * Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   */
+  deckFolderDelete: (id: number) => invoke<void>("deck_folder_delete", { id }),
+  /**
+   * One deck's history, newest first — `at DESC, id DESC`, because `unixepoch()` has
+   * one-second resolution and a single click can write two rows inside one second.
+   *
+   * `limit` is **required and clamped into `1..=500`** by the backend: a cap rather than a
+   * page cursor, because this table grows by one row per edit and a built deck is hundreds of
+   * rows, not millions. The clamp is also what stops a `0` or a negative from meaning *no
+   * limit at all*, which is exactly how SQLite reads a negative `LIMIT`.
+   *
+   * A deck that is not there answers an **empty list**, not an error: the history of a deck
+   * that does not exist is nothing, and the rows cascade with it.
+   */
+  deckAuditList: (deckId: number, limit: number) =>
+    invoke<DeckAuditEntry[]>("deck_audit_list", { deckId, limit }),
+  /** What the plan wants and the deck does not have — see {@link TheoryDiffRow}. One
+   *  direction only, inactive categories excluded from both sides. */
+  deckTheoryDiff: (deckId: number) => invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId }),
+  /**
+   * Seed the theory list from the live one. Answers how many **rows** were written.
+   *
+   * Normally implicit — `deckUpdate(id, { theoryEnabled: true })` does this in the same
+   * transaction when the theory list is empty — and offered separately for the reader who
+   * wants to start again from what is sleeved up.
+   *
+   * **It skips rather than folding, and the difference is the whole point of the command.**
+   * `deck_theory::seed_from_live` is `ON CONFLICT(deck, variant, category, card) DO NOTHING`:
+   * a theory row the reader already made is *their plan for that card*, and topping it up with
+   * the live count would silently overwrite the very edit the theory list exists to hold. So a
+   * card the plan already holds one of stays at **one** however many are sleeved up — this is
+   * the one place in this file where a repeated card is not summed, and "fold" (which means
+   * *sum the quantities* in {@link SwapResult.folded}, {@link ipc.deckAddCard} and
+   * {@link ipc.deckCategoryDelete}'s move arm) is the wrong word for it. Idempotent, never
+   * destructive, and the number it answers is **rows written** — the ones that were missing.
+   */
+  deckTheoryCopyFromLive: (deckId: number) =>
+    invoke<number>("deck_theory_copy_from_live", { deckId }),
+  /**
+   * Everything the **plan** is short of, onto the wishlist. Answers how many wishes were
+   * touched, like its live twin.
+   *
+   * A second command rather than a variant argument on `deckMissingToWishlist`, because the
+   * two are different questions: that one reads `live` and only `live` — what the deck as it
+   * stands is short of — while this one reads the difference between the plan and the deck.
+   * Neither nets out {@link TheoryDiffRow.ownedSpare}: it is a display field, and subtracting
+   * it here would count the live list twice.
+   */
+  deckTheoryMissingToWishlist: (deckId: number) =>
+    invoke<number>("deck_theory_missing_to_wishlist", { deckId }),
+  /**
+   * Put copies into a category, folding on `(deck, variant, category, card)` — the drag-in
+   * and the click-to-add write, and **not** the stepper's.
+   *
+   * **`categoryId` or `categoryName`, and at least one.** An id is a drop onto a column the
+   * reader pointed at; a name is "file it where this card belongs", found-or-created — the
+   * word being `autoCategoryFor`'s to compute, because which pile a Sol Ring goes in is
+   * domain logic. Passing both uses the id. Passing neither is refused in words.
    *
    * It reads `cards` to denormalize the printing onto the new row, so it refuses a card the
    * database does not have: an orphaned deck row can be stepped and moved but never
    * re-added. `quantity` must be positive; zero is refused rather than treated as a removal.
    */
-  deckAddCard: (deckId: number, cardId: string, zone: DeckZone, quantity: number) =>
-    invoke<EntryChange>("deck_add_card", { deckId, cardId, zone, quantity }),
+  deckAddCard: (
+    deckId: number,
+    cardId: string,
+    categoryId: number | null,
+    categoryName: string | null,
+    variant: DeckVariant,
+    quantity: number,
+  ) =>
+    invoke<EntryChange>("deck_add_card", {
+      deckId,
+      cardId,
+      categoryId,
+      categoryName,
+      variant,
+      quantity,
+    }),
   /**
    * An absolute quantity — **the stepper's write**, and the one that works on a row whose
    * printing has left the card database.
    *
-   * `0` *removes* the row, the wishlist's asymmetry rather than the collection's: a zone slot
-   * holds an intention and nothing else, and an intention stepped down to none of is
+   * `0` *removes* the row, the wishlist's asymmetry rather than the collection's: a category
+   * slot holds an intention and nothing else, and an intention stepped down to none of is
    * withdrawn. The answer then reads `removed: true` with `id: 0` when there was no row to
    * remove in the first place.
    *
-   * Adjusts what is there; it does not create. Putting a card into a zone is `deckAddCard`.
+   * Adjusts what is there; it does not create. Putting a card into a category is
+   * `deckAddCard`.
    */
-  deckSetCardQuantity: (deckId: number, cardId: string, zone: DeckZone, quantity: number) =>
-    invoke<EntryChange>("deck_set_card_quantity", { deckId, cardId, zone, quantity }),
-  /** Move every copy from one zone to another, folding into whatever the target zone already
-   *  holds. The identity travels from the moved row, so an orphan can be tidied out of the
-   *  maybe pile like anything else. */
-  deckMoveCard: (deckId: number, cardId: string, from: DeckZone, to: DeckZone) =>
-    invoke<void>("deck_move_card", { deckId, cardId, from, to }),
+  deckSetCardQuantity: (
+    deckId: number,
+    cardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    quantity: number,
+  ) =>
+    invoke<EntryChange>("deck_set_card_quantity", {
+      deckId,
+      cardId,
+      categoryId,
+      variant,
+      quantity,
+    }),
+  /** Move every copy from one category to another **within one variant**, folding into
+   *  whatever the target already holds. The identity travels from the moved row, so an orphan
+   *  can be tidied out of the scratchpad like anything else. */
+  deckMoveCard: (
+    deckId: number,
+    cardId: string,
+    fromCategoryId: number,
+    toCategoryId: number,
+    variant: DeckVariant,
+  ) => invoke<void>("deck_move_card", { deckId, cardId, fromCategoryId, toCategoryId, variant }),
   /**
-   * Swap a deck card to **another printing of the same card**: same zone, same copies, folding
-   * into whatever that zone already holds of the printing swapped to. The card pane's "Use
-   * this printing".
+   * Swap a deck card to **another printing of the same card**: same category, same variant,
+   * same copies, folding into whatever that category already holds of the printing swapped
+   * to. The card pane's "Use this printing".
    *
-   * The one zone write whose identity comes from a fresh `cards` lookup rather than from the
+   * The one card write whose identity comes from a fresh `cards` lookup rather than from the
    * row being changed — a move keeps a printing the reader already chose, a swap *is* the
    * reader choosing a new one — so a `toCardId` that no longer resolves is answered as a sync
    * that raced the click, not as an orphan to preserve. The backend refuses two printings of
@@ -1118,12 +1766,21 @@ export const ipc = {
    * the database has lost has no oracle id to compare and is exactly the row a swap has to be
    * able to rescue.
    */
-  deckSwapPrinting: (deckId: number, fromCardId: string, toCardId: string, zone: DeckZone) =>
-    invoke<SwapResult>("deck_swap_printing", { deckId, fromCardId, toCardId, zone }),
+  deckSwapPrinting: (
+    deckId: number,
+    fromCardId: string,
+    toCardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+  ) =>
+    invoke<SwapResult>("deck_swap_printing", { deckId, fromCardId, toCardId, categoryId, variant }),
   /**
    * Everything this deck is short of, onto the wishlist. Answers how many **wishes were
-   * touched** — one per oracle card, so the same card short in two zones is one wish for the
-   * sum, and pressing twice raises a line rather than making a second one.
+   * touched** — one per oracle card, so the same card short in two categories is one wish for
+   * the sum, and pressing twice raises a line rather than making a second one.
+   *
+   * Reads the `live` variant and skips inactive categories: a plan is not a shopping list,
+   * and neither is a pile the reader switched off.
    *
    * `deckId`, where the four commands above take `id`: the odd one out, and Tauri matches by
    * name. It reallocates before counting — a button that shopped for cards already bought

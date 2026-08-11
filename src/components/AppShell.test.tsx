@@ -3,7 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeckDetail, SyncOutcome, SyncStatus } from "@/lib/ipc";
+import type { DeckDetail, SyncOutcome, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
 
 const syncStatus = vi.hoisted(() => vi.fn());
 const syncRun = vi.hoisted(() => vi.fn());
@@ -163,6 +163,59 @@ describe("the status line", () => {
       "C:\\Users\\x\\AppData\\Roaming\\mtg\\data",
     );
   });
+
+  /**
+   * The end-to-end claim: an event out of `sync.rs` becomes a sentence in the row. Every
+   * piece of this has a unit test of its own; this is the one test that proves they are
+   * connected.
+   *
+   * Real timers, not fake ones, because the assertion is about a 400 ms threshold and
+   * `findByText` is already a polling wait. It costs the suite half a second.
+   */
+  it("says what the sync is doing, once it has been doing it for a moment", async () => {
+    let emit: ((e: SyncProgressEvent) => void) | undefined;
+    onSyncProgress.mockImplementation((cb: (e: SyncProgressEvent) => void) => {
+      emit = cb;
+      return Promise.resolve(() => {});
+    });
+    syncStatus.mockResolvedValue(status({ syncing: true }));
+
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    await waitFor(() => expect(emit).toBeDefined());
+    act(() => emit!({ phase: "ingesting", done: 83_000, total: 117_000, message: null }));
+
+    // Not immediately: a sub-second phase must not flash a sentence at the reader, and the
+    // corpus summary holds the row until the job has earned it.
+    expect(screen.queryByText(/Importing cards/)).not.toBeInTheDocument();
+    expect(screen.getByText(/116,568 cards/)).toBeInTheDocument();
+
+    // The label is the element's own text and the count is a child span, so the whole
+    // sentence is read off the line rather than matched as one string.
+    const line = await screen.findByText(/Importing cards/, {}, { timeout: 3000 });
+    expect(line).toHaveTextContent("Importing cards · 83,000 cards");
+  });
+
+  /** The corpus summary is not lost while it is hidden — it comes straight back, because it
+   *  is a static fact about a database rather than an answer to one click. */
+  it("gives the summary back when the sync stops", async () => {
+    let emit: ((e: SyncProgressEvent) => void) | undefined;
+    onSyncProgress.mockImplementation((cb: (e: SyncProgressEvent) => void) => {
+      emit = cb;
+      return Promise.resolve(() => {});
+    });
+    syncStatus.mockResolvedValue(status({ syncing: true }));
+
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    await waitFor(() => expect(emit).toBeDefined());
+    act(() => emit!({ phase: "ingesting", done: 83_000, total: 117_000, message: null }));
+    await screen.findByText(/Importing cards/, {}, { timeout: 3000 });
+
+    syncStatus.mockResolvedValue(status({ syncing: false }));
+
+    expect(
+      await screen.findByText("116,568 cards · data from 2026-08-03", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("the Refresh button", () => {
@@ -277,7 +330,11 @@ describe("the error banner", () => {
       lastError: null,
       lastIngestSkipped: null,
       dataDir: "D:\\app\\data",
-      syncing: true,
+      // The one field here that is *not* database-derived — it is an in-memory flag — and
+      // the one the assertion below depends on. A blind poll can report either, and it has
+      // to be `false` for the merged count to be observable at all: while a sync is running
+      // the status line reports the sync, which is the whole point of the activity line.
+      syncing: false,
       imageStoreFailures: 0,
     });
     render(<AppShell update={noUpdate}>{null}</AppShell>);
@@ -351,6 +408,18 @@ describe("the sidebar's drop targets", () => {
     return startDrag(screen.getByText("a card"));
   }
 
+  /**
+   * What a drop on the Decks entry sends, spelled out once.
+   *
+   * A sidebar entry has no column to point at, so it names **no category id** and lets the
+   * command find or create one by name — `useDeck`'s `DEFAULT_CATEGORY_NAME`, which is the v8
+   * migration's own word for the pile it filed every legacy main-deck row into. The name is
+   * written out here rather than imported because the hook keeps it private, and a test that
+   * spells it is a test that notices the day it changes (which is the day `autoCategoryFor`
+   * lands and this stops being one word at all).
+   */
+  const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Main deck", "live", 1];
+
   const entry = (label: string) => screen.getByRole("button", { name: label });
   /** The entry's own live region — the line under its button, where a drop reports. */
   const report = (label: string) =>
@@ -412,7 +481,7 @@ describe("the sidebar's drop targets", () => {
     await held.over(entry("Decks"));
     await held.drop();
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", "main", 1));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7)));
   });
 
   it("leaves Decks inert while no deck is open, and says why", async () => {
@@ -457,7 +526,9 @@ describe("the sidebar's drop targets", () => {
       kind: "deck-card",
       cardId: "c-bolt",
       name: "Lightning Bolt",
-      fromZone: "main",
+      // A `deck_categories.id`, which is what a deck row carries since schema v8 — and it has
+      // to be a positive safe integer or `readDragData` refuses the payload outright.
+      fromCategoryId: 1,
     });
 
     await held.over(entry("Wishlist"));
@@ -468,7 +539,7 @@ describe("the sidebar's drop targets", () => {
     );
   });
 
-  it("adds one copy to the open deck's main zone and names the deck", async () => {
+  it("adds one copy to the open deck and names the deck", async () => {
     openDeck(7, "Burn");
     const held = await pickUp();
 
@@ -476,7 +547,7 @@ describe("the sidebar's drop targets", () => {
     await held.drop();
 
     await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
-    expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", "main", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 

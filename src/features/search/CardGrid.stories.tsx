@@ -99,8 +99,8 @@ const meta = {
           "The tiles are whole card images (the `grid` variant), which is also what keeps this " +
           "view inside Scryfall's image policy with no credit line of its own: the artist's " +
           "name is printed on the card. An art crop here would need one — which is exactly " +
-          "why `ZoneColumn`'s row thumbnail, which *is* a crop, sits beside a name rather " +
-          "than alone.\n\n" +
+          "why the deck views' art, which *is* a crop, always sits beside the card's name " +
+          "rather than alone.\n\n" +
           "Two slots keep the wall generic. `badge` is a mark over the art's bottom-left " +
           "corner and `action` is one control at the end of the caption; the corner, its " +
           "felt backing and the `empty:hidden` guard belong to the wall, so two views cannot " +
@@ -248,7 +248,7 @@ export const Selected: Story = { args: { selectedId: BOLT_ALPHA.id } };
 /**
  * A wall whose tiles can be carried to a deck — spec §1's first drag source.
  *
- * The payload is `{ kind: "card" }`, which a zone treats exactly as the deck panel's
+ * The payload is `{ kind: "card" }`, which a category treats exactly as the deck panel's
  * `"search-card"`: add one copy. The remove tray narrows to `"deck-card"`, so a card from this
  * wall can never draw it.
  *

@@ -1,0 +1,179 @@
+/**
+ * What the app is doing, when it is doing something long enough to say so.
+ *
+ * The ribbon has one place for this — the line beside Refresh, and the 2px mana line
+ * beneath it — and more than one thing in the app can be running. So a job is registered
+ * here rather than plumbed to the ribbon by whoever started it: a sync, an update download,
+ * and whatever comes next, all described the same way and ranked against each other.
+ */
+import { createStore } from "zustand/vanilla";
+import type { SyncPhase, SyncProgressEvent, UpdateProgressEvent } from "@/lib/ipc";
+import type { ManaLineSync } from "@/lib/mana";
+import { PHASE_LABEL } from "@/lib/useSyncProgress";
+
+/** One long-running job, as the ribbon needs to describe it. */
+export interface Activity extends ManaLineSync {
+  /** One job per key — registering the same key again replaces it. */
+  key: string;
+  /**
+   * Which job wins when two are running. Lower is louder; see {@link RANK}.
+   *
+   * On the job rather than in a table here, because the ribbon must be able to rank a job
+   * from a feature this module has never heard of.
+   */
+  rank: number;
+  /**
+   * The unit the job is counting — `"45 / 77 MB"`, `"83,000 cards"`, `"62%"` — or `null`
+   * for a phase that counts nothing.
+   *
+   * Separate from `label` because the two are read by different audiences: the label is
+   * announced and the detail is looked at. See `Ribbon`, where the detail is `aria-hidden`.
+   */
+  detail: string | null;
+}
+
+/**
+ * The ranks, ten apart so a job that belongs between two of these does not renumber them.
+ *
+ * The sync outranks the download because it is the job that disables Refresh and rewrites
+ * the corpus underneath every view; a download changes nothing until the reader restarts,
+ * and has a panel of its own in Settings.
+ */
+export const RANK = {
+  sync: 0,
+  update: 10,
+} as const;
+
+/** How long a job must run before the ribbon puts a sentence on screen. See `Ribbon`. */
+export const ACTIVITY_DELAY_MS = 400;
+
+export interface ActivityState {
+  /** Insertion-ordered, which is what makes {@link topActivity}'s tie-break deterministic. */
+  jobs: Activity[];
+  /** Add a job, or replace the one already under its key. */
+  put: (job: Activity) => void;
+  /** Remove a job. Silent when there is nothing under that key. */
+  drop: (key: string) => void;
+}
+
+function unchanged(a: Activity, b: Activity): boolean {
+  return a.rank === b.rank && a.label === b.label && a.detail === b.detail && a.value === b.value;
+}
+
+/**
+ * A registry, per provider rather than per module.
+ *
+ * `useAppStore` is on record in CLAUDE.md as the one global that cannot be made per-story
+ * from `.storybook/` — zustand's `create` does not expose its initializer — and a docs page
+ * mounting ten stories at once is where that bites. A factory means a story, a test and the
+ * app each get their own.
+ */
+export function createActivityStore() {
+  return createStore<ActivityState>((set) => ({
+    jobs: [],
+    put: (job) =>
+      set((s) => {
+        const at = s.jobs.findIndex((j) => j.key === job.key);
+        if (at === -1) return { jobs: [...s.jobs, job] };
+        // Identity in, identity out. `useRegisterActivity` puts on every render, so a put
+        // that changes nothing must not notify a single subscriber.
+        if (unchanged(s.jobs[at], job)) return s;
+        const jobs = s.jobs.slice();
+        jobs[at] = job;
+        return { jobs };
+      }),
+    drop: (key) =>
+      set((s) =>
+        s.jobs.some((j) => j.key === key) ? { jobs: s.jobs.filter((j) => j.key !== key) } : s,
+      ),
+  }));
+}
+
+/**
+ * The job the ribbon describes: the lowest rank, ties broken by insertion order.
+ *
+ * Strictly lower, so the first job to arrive keeps the row — two hooks' effects run in an
+ * order nobody chose, and an answer that depended on it would be a bug that reproduced
+ * about half the time.
+ */
+export function topActivity(jobs: readonly Activity[]): Activity | null {
+  let top: Activity | null = null;
+  for (const job of jobs) if (top === null || job.rank < top.rank) top = job;
+  return top;
+}
+
+/**
+ * `45 / 77 MB`.
+ *
+ * Whole megabytes on purpose: a tenth of a megabyte reflowing twice a second is motion
+ * without information, and this number sits in a 48px row beside a moving bar.
+ */
+export function megabytes(done: number, total: number): string {
+  const mb = (n: number) => (n / 1_000_000).toFixed(0);
+  return `${mb(done)} / ${mb(total)} MB`;
+}
+
+/**
+ * Fold a sync into the job the ribbon describes.
+ *
+ * `busy` decides whether anything is running, never the event: a run inside the 24 h check
+ * window emits nothing at all, and Tauri drops the events emitted before the webview started
+ * listening. `done` and `error` are terminal phases whose event can outlive the run by a poll
+ * interval, so they fall back to the generic sentence and an indeterminate bar rather than
+ * reading as finished — and a failure is reported by the banner and the status poll, which
+ * outlive the event and can say why.
+ */
+export function syncActivity(progress: SyncProgressEvent | null, busy: boolean): Activity | null {
+  if (!busy) return null;
+  const phase: SyncPhase | null =
+    progress && progress.phase !== "done" && progress.phase !== "error" ? progress.phase : null;
+  if (!phase || !progress) {
+    return { key: "sync", rank: RANK.sync, label: "Syncing card data", detail: null, value: null };
+  }
+  return {
+    key: "sync",
+    rank: RANK.sync,
+    label: PHASE_LABEL[phase],
+    detail: syncDetail(phase, progress),
+    value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
+  };
+}
+
+/**
+ * The number under each phase, in the unit that phase is actually counting.
+ *
+ * The ingest gets no denominator: its total is `INGEST_TOTAL_ESTIMATE`, a constant, and a
+ * printed `83,000 / 117,000` would state a figure nobody has counted. The reclaim is the
+ * opposite — the freelist is counted once at entry and only falls — so it is the one phase
+ * whose percentage is exactly true.
+ */
+function syncDetail(phase: SyncPhase, e: SyncProgressEvent): string | null {
+  if (phase === "downloading" && e.total > 0) return megabytes(e.done, e.total);
+  if (phase === "ingesting") return `${e.done.toLocaleString("en-US")} cards`;
+  if (phase === "reclaiming" && e.total > 0) {
+    return `${Math.min(100, Math.round((e.done / e.total) * 100))}%`;
+  }
+  return null;
+}
+
+/**
+ * Fold an update download into a job.
+ *
+ * Takes the two values it needs rather than the whole `Update`, so this module stays free of
+ * a hook's return type and a test can name the case in two arguments. `progress` is non-null
+ * only while a download is in flight — `useUpdate` clears it in the call's `finally` — which
+ * is what keeps a *check*, and a staged build waiting to install, out of the ribbon.
+ */
+export function updateActivity(
+  progress: UpdateProgressEvent | null,
+  version: string | null,
+): Activity | null {
+  if (!progress) return null;
+  return {
+    key: "update-download",
+    rank: RANK.update,
+    label: version ? `Downloading update ${version}` : "Downloading update",
+    detail: progress.total > 0 ? megabytes(progress.done, progress.total) : null,
+    value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
+  };
+}

@@ -28,7 +28,8 @@ export const PREVIEW_DWELL_MS = 250;
  * How the preview finds the box it is positioned in and clipped by — the card pane.
  *
  * An attribute rather than a ref chain, because the preview is two components away from the
- * pane and owns none of it (`ZoneColumn`'s `SCROLLER_ATTR`, for its reason). One mark for both
+ * pane and owns none of it — the same reason `DropIndicator`'s `DROP_LINE_ATTR` and the deck
+ * views' `DECK_GROUP_ATTR` are attributes. One mark for both
  * jobs, because they are one box: the pane is `relative`, so absolute coordinates are the
  * pane's own, and it is the scroller, so it is also what would cut a picture in half.
  */
@@ -60,8 +61,8 @@ const PREVIEW_GAP = 4;
  *
  * `aria-expanded` alone is not it, and getting that wrong would be a silent kill switch for
  * this whole feature: the app uses the bare attribute for plain disclosures that are open for
- * minutes at a time (`DeckSearchPanel`'s rail, `DeckEditor`'s Maybe pile, `DecksPage`'s
- * archived list, `ValidationPanel`'s "why"), and a pane that ever grows one — an expanded
+ * minutes at a time (`DeckSearchPanel`'s rail, `DecksPage`'s archived list,
+ * `ValidationPanel`'s "why"), and a pane that ever grows one — an expanded
  * Rulings section — would stop previewing anything, everywhere, with nothing to say why.
  * Every layer this has to be exclusive with is a *popup*, and every popup trigger in this app
  * pairs the two attributes (`AddToCollection`, `SetCombobox`, both row menus, both panels).

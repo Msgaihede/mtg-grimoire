@@ -170,15 +170,15 @@ function isTutor(text: string): boolean {
 /**
  * A reading of this deck's bracket.
  *
- * The scratchpad is dropped for the same reason every rule in `engine.ts` drops it — a maybe
- * pile is not the deck. Everything else counts, the companion included: it is a card the deck
- * plays.
+ * An inactive category is dropped for the same reason every rule in `engine.ts` drops one — a
+ * pile the user switched off is not the deck, and the seeded Maybeboard is only the commonest
+ * of those. Everything else counts, the companion included: it is a card the deck plays.
  *
  * Cards are counted **by name**, once each. In Commander that is also the number of copies,
  * and in a format where it is not, "this deck runs Rhystic Study" is still one fact about it.
  */
 export function estimateBracket(cards: CardFacts[]): BracketEstimate {
-  const deck = cards.filter((card) => card.zone !== "maybe");
+  const deck = cards.filter((card) => card.categoryActive);
 
   const gameChangerNames: string[] = [];
   const massLandDenial: string[] = [];

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeckCard } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { card, islands } from "./validation/fixtures";
-import { DeckStats, deckStats, type MissingWrite } from "./DeckStats";
+import { DeckStats, deckStats, typeCounts, type MissingWrite } from "./DeckStats";
 
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
@@ -23,6 +23,76 @@ function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
 function spell(name: string, cmc: number, overrides: Partial<DeckCard> = {}): DeckCard {
   return card({ name, cmc, typeLine: "Sorcery", manaCost: `{${cmc}}`, ...overrides });
 }
+
+/**
+ * The type bars' own bucketing.
+ *
+ * These cases came here from `ZoneColumn.test.tsx` with the function they test. While the deck
+ * list was a column of type headings, one derivation served both the headings and the bars —
+ * "a bar and the heading over the rows it counts must never be two derivations of one thing".
+ * Schema v8's rebuild draws headings from `grouping.ts` (whose type vocabulary checks `Land`
+ * first, so that a card is *filed* where a decklist would put it), so this is now one surface's
+ * arithmetic and belongs with the surface.
+ */
+describe("typeCounts", () => {
+  /**
+   * The eight printed types in the order they are printed on a card, and the ninth bucket that
+   * is not a type: `Other` is where a token, a scheme or a row whose printing has left the card
+   * database lands, and it sorts last because it is a remainder rather than a kind.
+   */
+  it("buckets by the printed types, in printed order, dropping the empty ones", () => {
+    const bars = typeCounts([
+      card({ name: "Wastes", typeLine: "Basic Land" }),
+      card({ name: "Bolt", typeLine: "Instant" }),
+      card({ name: "Bear", typeLine: "Creature — Bear" }),
+      card({ name: "Relic", typeLine: "Artifact" }),
+    ]);
+
+    expect(bars.map((b) => b.label)).toEqual(["Creature", "Instant", "Artifact", "Land"]);
+  });
+
+  /** A card with two types is filed under the first one printed order names — an Artifact
+   *  Creature is a creature to everyone who has ever built a deck. */
+  it("files a card with two types under the earlier of them", () => {
+    expect(
+      typeCounts([card({ name: "Golem", typeLine: "Artifact Creature — Golem" })]).map(
+        (b) => b.label,
+      ),
+    ).toEqual(["Creature"]);
+  });
+
+  /** A double-faced card is what its front says it is: the back of a werewolf is still a
+   *  creature, but the back of an adventure or a modal DFC often is not. */
+  it("reads the front face's type line and nothing after the slashes", () => {
+    expect(
+      typeCounts([card({ name: "Trap", typeLine: "Land // Instant — Adventure" })]).map(
+        (b) => b.label,
+      ),
+    ).toEqual(["Land"]);
+  });
+
+  /** The orphan case: `deck_cards LEFT JOIN cards` answers a row with nulls, and it is still a
+   *  card in the deck. It is counted rather than dropped. */
+  it("puts a row with no type line in Other, last", () => {
+    expect(
+      typeCounts([
+        card({ name: "Ghost", typeLine: null }),
+        card({ name: "Bolt", typeLine: "Instant" }),
+      ]).map((b) => b.label),
+    ).toEqual(["Instant", "Other"]);
+  });
+
+  /** A count on a deck is copies, never rows — four Bolts are four cards. */
+  it("counts copies rather than rows", () => {
+    const bars = typeCounts([
+      card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
+      card({ name: "Bolt2", typeLine: "Instant", quantity: 2 }),
+    ]);
+
+    expect(bars).toHaveLength(1);
+    expect(bars[0].count).toBe(6);
+  });
+});
 
 describe("deckStats", () => {
   /** The curve is the deck's casting costs: nine buckets, and the last one is open-ended —
@@ -152,9 +222,9 @@ describe("deckStats", () => {
    * The one card class where the two readings of "land" part company, and the reason each
    * side is read the way it is.
    *
-   * `groupCards` files a card under the **first** type printed on it, so Urza's Saga heads up
-   * the Enchantment bar — which is right for the bars, because that is the heading the reader
-   * already sees over the rows. Everywhere else the type line decides: a deckbuilder counts
+   * `typeCounts` files a card under the **first** type printed on it, so Urza's Saga heads up
+   * the Enchantment bar — which is right for the bars, because the question a bar answers is
+   * what a card *does*. Everywhere else the type line decides: a deckbuilder counts
    * Urza's Saga among their lands, and it costs nothing to put onto the battlefield, so the
    * curve would file it under 0 — the very flood the curve excludes lands to avoid.
    */
@@ -181,20 +251,34 @@ describe("deckStats", () => {
     ]);
   });
 
-  /** The headline figure is the engine's `SIZE_ZONES`, so the strip and the format check
-   *  count the same cards; everything else is counted over every zone but the scratchpad. */
-  it("sizes the deck by the zones the format's size rule counts", () => {
+  /** The headline figure is the engine's `SIZE_KINDS` over the active categories, so the strip
+   *  and the format check count the same cards; everything else is counted over every active
+   *  pile. */
+  it("sizes the deck by the kinds the format's size rule counts", () => {
     const stats = deckStats([
       spell("Bolt", 1, { quantity: 4 }),
-      card({ name: "Kenrith", zone: "commander" }),
-      spell("Pyroblast", 1, { zone: "side", quantity: 3 }),
-      spell("Lurrus", 3, { zone: "companion" }),
-      spell("Ghost", 5, { zone: "maybe", quantity: 9 }),
+      card({ name: "Kenrith", categoryKind: "commander" }),
+      spell("Pyroblast", 1, { categoryKind: "side", quantity: 3 }),
+      spell("Lurrus", 3, { categoryKind: "companion" }),
+      spell("Ghost", 5, { categoryKind: "maybe", quantity: 9 }),
     ]);
 
     expect(stats.sized).toBe(5);
     expect(stats.copies).toBe(9);
-    expect(stats.byZone).toEqual({ main: 4, commander: 1, side: 3, companion: 1, maybe: 9 });
+    // Every pile that holds a card, in the order the rows arrived, by the name it carries —
+    // the ids are the fixture's own and mean nothing, so they are not what this asserts.
+    expect(stats.byCategory.map((c) => [c.name, c.quantity])).toEqual([
+      ["Main deck", 4],
+      ["Commander", 1],
+      ["Sideboard", 3],
+      ["Companion", 1],
+      // Listed like any other pile and counted in nothing else: the scratchpad's old bargain,
+      // made by the switch now rather than by the word `maybe`.
+      ["Maybeboard", 9],
+    ]);
+    // Where the rest of the deck is — the active piles the size rule does not count, which is
+    // the note under the headline figure and is not the switched-off Maybeboard.
+    expect(stats.elsewhere.map((c) => c.name)).toEqual(["Sideboard", "Companion"]);
   });
 
   /** The type bars come from the deck list's own grouping, so a heading in a column and a
@@ -213,12 +297,13 @@ describe("deckStats", () => {
     ]);
   });
 
-  /** The scratchpad counts toward nothing — the same rule the engine applies before it
-   *  judges anything, and the allocator never claims a copy for it either. */
-  it("leaves the scratchpad out of every number", () => {
+  /** The Maybeboard is the one predefined category seeded switched off, so it counts toward
+   *  nothing — the same rule the engine applies before it judges anything, and the allocator
+   *  never claims a copy for it either. */
+  it("leaves the seeded Maybeboard out of every number", () => {
     const stats = deckStats([
       spell("Bolt", 1, { quantity: 4, unitPriceUsd: 1 }),
-      spell("Ghost", 5, { zone: "maybe", quantity: 9, unitPriceUsd: 100 }),
+      spell("Ghost", 5, { categoryKind: "maybe", quantity: 9, unitPriceUsd: 100 }),
     ]);
 
     expect(stats.copies).toBe(4);
@@ -226,12 +311,70 @@ describe("deckStats", () => {
     expect(stats.priceUsd).toBe(4);
   });
 
+  /**
+   * And it is the **switch** that does that, never the word `maybe`: a `main` pile of the
+   * reader's own, switched off, is left out of exactly the same numbers.
+   *
+   * This is the case that separates the two readings. Its kind is the kind the size rule
+   * counts and its name is not one this app chose, so anything still asking whether a
+   * category is the Maybeboard sizes this deck at 13 and puts nine copies in the curve.
+   */
+  it("leaves a category the reader switched off out of the size and the curve", () => {
+    const stats = deckStats([
+      spell("Bolt", 1, { quantity: 4, unitPriceUsd: 1 }),
+      spell("Ghost", 5, {
+        categoryId: 7,
+        categoryName: "Cuts",
+        categoryKind: "main",
+        categoryActive: false,
+        quantity: 9,
+        unitPriceUsd: 100,
+      }),
+    ]);
+
+    expect(stats.sized).toBe(4);
+    expect(stats.copies).toBe(4);
+    expect(stats.curve[5]).toBe(0);
+    expect(stats.priceUsd).toBe(4);
+    // Listed, though, like the Maybeboard above it: "counts toward nothing" is not "hidden".
+    expect(stats.byCategory).toContainEqual({ id: 7, name: "Cuts", quantity: 9 });
+    // And not in the headline's note, which accounts for the copies the figure left out.
+    expect(stats.elsewhere).toEqual([]);
+  });
+
+  /**
+   * The other direction, and the third reader of one definition.
+   *
+   * `SIZE_KINDS` is `main`, `commander` **and `maybe`** — the switch decides whether a pile
+   * counts at all, the kind decides only whether it is played *beside* the deck or *in* it,
+   * and only `side` and `companion` are beside it. So a Maybeboard the reader switched on is a
+   * pile of the deck and this strip sizes it, exactly as `validateDeck` and `DeckRow.cardCount`
+   * do. Three surfaces, one rule; a strip that disagreed would print a headline the panel
+   * beside it contradicts.
+   */
+  it("sizes a Maybeboard the reader switched on, like any other pile of the deck", () => {
+    const parked = spell("Ghost", 5, {
+      categoryKind: "maybe",
+      categoryActive: false,
+      quantity: 9,
+    });
+    const played = { ...parked, categoryActive: true };
+
+    expect(deckStats([spell("Bolt", 1, { quantity: 4 }), parked]).sized).toBe(4);
+
+    const on = deckStats([spell("Bolt", 1, { quantity: 4 }), played]);
+    expect(on.sized).toBe(13);
+    expect(on.curve[5]).toBe(9);
+    // In the size, so *not* in the note that accounts for what the size left out.
+    expect(on.elsewhere).toEqual([]);
+  });
+
   /** The sideboard is part of what a deck costs and what it is short of: it is cards you
    *  own, sleeve and pay for. */
-  it("counts every zone but the scratchpad", () => {
+  it("counts every active category", () => {
     const stats = deckStats([
       spell("Bolt", 1, { quantity: 4 }),
-      spell("Pyroblast", 1, { zone: "side", quantity: 2 }),
+      spell("Pyroblast", 1, { categoryKind: "side", quantity: 2 }),
     ]);
 
     expect(stats.copies).toBe(6);
@@ -393,17 +536,18 @@ describe("DeckStats", () => {
 
   /**
    * The headline figure is the number the format check beside it is talking about — the
-   * engine's own `SIZE_ZONES`. The sideboard and the companion are counted by the price, the
-   * shortfall and every chart, and named here rather than folded in: "Cards 9" over a chip
-   * reading "you have 5" is two numbers for one question.
+   * engine's own `SIZE_KINDS`. The sideboard and the companion are counted by the price, the
+   * shortfall and every chart, and named here — in the reader's own words for those piles —
+   * rather than folded in: "Cards 9" over a chip reading "you have 5" is two numbers for one
+   * question.
    */
   it("heads the strip with the cards a format's size rule counts", () => {
     strip([
       card({ name: "Bolt", quantity: 4 }),
-      card({ name: "Kenrith", zone: "commander", quantity: 1 }),
-      card({ name: "Pyroblast", zone: "side", quantity: 3 }),
-      card({ name: "Lurrus", zone: "companion", quantity: 1 }),
-      card({ name: "Ghost", zone: "maybe", quantity: 9 }),
+      card({ name: "Kenrith", categoryKind: "commander", quantity: 1 }),
+      card({ name: "Pyroblast", categoryKind: "side", quantity: 3 }),
+      card({ name: "Lurrus", categoryKind: "companion", quantity: 1 }),
+      card({ name: "Ghost", categoryKind: "maybe", quantity: 9 }),
     ]);
 
     const figure = screen.getByText("Cards").closest("div");
@@ -411,7 +555,7 @@ describe("DeckStats", () => {
     expect(figure).toHaveAttribute("title", expect.stringMatching(/size rule counts/i));
   });
 
-  it("says nothing about other zones when the deck is only a main deck", () => {
+  it("says nothing about other piles when the deck is only a main deck", () => {
     strip([card({ name: "Bolt", quantity: 4 })]);
 
     expect(screen.getByText("Cards").closest("div")?.querySelector("dd")?.textContent).toBe("4");

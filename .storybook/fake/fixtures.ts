@@ -28,7 +28,10 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
-import type { DeckCard, ReleaseInfo, UpdateAsset } from "@/lib/ipc";
+import { buildGroups, type GroupBy } from "@/features/decks/grouping";
+import type { SortBy } from "@/features/decks/sorting";
+import type { ValidationIssue } from "@/features/decks/validation/types";
+import type { CategoryKind, DeckCard, DeckCategory, ReleaseInfo, UpdateAsset } from "@/lib/ipc";
 
 /**
  * A fixture printing, by the two columns that identify one — the set code and the collector
@@ -56,14 +59,80 @@ export function printing(setCode: string, collectorNumber: string): FakeCard {
  * `deck_cards.id`, handed out in call order.
  *
  * One counter for every story file rather than one per file, which is what the three copies of
- * {@link deckCard} each kept. The number is only ever a React key — `ZoneColumn.tsx:381` is the
- * one place any component reads a `DeckCard.id` at all (grepped 2026-08-10) — so the only thing
- * that has to hold is that two rows in one list never share one. `DeckStats.stories.tsx` used to
+ * {@link deckCard} each kept. The number is only ever a React key — the zone column's row key was
+ * the one place any component read a `DeckCard.id` at all (grepped 2026-08-10, cited without a
+ * line because the deck editor is being rebuilt around it) — so the only thing that has to hold
+ * is that two rows in one list never share one. `DeckStats.stories.tsx` used to
  * buy that for its orphans with `900 + quantity`, an arithmetic dodge around a hardcoded 900; a
  * counter has nothing to get wrong, and it covers {@link orphanDeckCard} on the same terms as
  * everything else.
  */
 let nextId = 1;
+
+/**
+ * The five categories every deck in these fixtures owns, as `(kind, name, isActive,
+ * sortOrder)`.
+ *
+ * Four of them are `schema::PREDEFINED_CATEGORIES` and the fifth is the one schema v8's
+ * migration builds out of a deck's old `main` zone, which it names **"Main deck"**. The sort
+ * orders are that migration's own — commander 0, main 1, side 2, companion 3, maybe 4 — so a
+ * deck that predates v8 reads with its Commander column first and its Maybeboard last, and
+ * that is the shape every *seeded* deck here is in.
+ *
+ * **A kind is not a name, and this table is where that distinction is made concrete.** A
+ * category is a row the user renames, reorders and switches off; `kind` is the fixed word the
+ * rules read. Only four kinds are predefined — a user may own any number of `main` categories
+ * with names of their own — so a fixture that wants two main columns overrides `categoryName`
+ * and `categoryId` rather than looking for a second `main` row here.
+ */
+export const DECK_CATEGORIES: readonly {
+  kind: CategoryKind;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+}[] = [
+  { kind: "commander", name: "Commander", isActive: true, sortOrder: 0 },
+  { kind: "main", name: "Main deck", isActive: true, sortOrder: 1 },
+  { kind: "side", name: "Sideboard", isActive: true, sortOrder: 2 },
+  { kind: "companion", name: "Companion", isActive: true, sortOrder: 3 },
+  // The one seeded inactive category, and **that** is the whole of what makes a Maybeboard
+  // special — not its kind. Switch it on and it counts like anything else.
+  { kind: "maybe", name: "Maybeboard", isActive: false, sortOrder: 4 },
+];
+
+/**
+ * One `deck_categories` row as `deck::get_deck` answers it, addressed by the **kind** a story
+ * means rather than by an id nobody chose.
+ *
+ * The id is `sortOrder + 1`, which is a DTO's whole requirement of one: stable across calls
+ * (a column keyed on it does not remount) and distinct per kind (two columns are two
+ * columns). A *row* in `db.ts` mints its own from the table, because there it has to be unique
+ * across every deck in the store; these are the ids of a deck that is the only deck there is.
+ *
+ * `cardCount`/`totalPriceUsd` default to an empty column. They are read off the world in a
+ * story that has one — `deck_get` computes both over the variant it was asked for — so a story
+ * building a `DeckDetail` by hand is the caller that has to say.
+ */
+export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {}): DeckCategory {
+  const category = DECK_CATEGORIES.find((c) => c.kind === kind);
+  if (!category) throw new Error(`No fixture category of kind ${kind}`);
+  const row = {
+    id: category.sortOrder + 1,
+    deckId: 1,
+    name: category.name,
+    kind: category.kind,
+    isActive: category.isActive,
+    sortOrder: category.sortOrder,
+    cardCount: 0,
+    totalPriceUsd: null,
+    ...over,
+  };
+  // Both lists, defaulting to the one-list count — so a fixture that says nothing is a deck
+  // with nothing in its theory list, and the two numbers differ only where a test means them
+  // to. They must never be defaulted independently: a total *below* the variant-scoped count
+  // is a shape the backend cannot produce, and the delete confirmation reads the total.
+  return { ...row, cardCountAllVariants: over.cardCountAllVariants ?? row.cardCount };
+}
 
 /**
  * One `deck_cards` row joined to its card, as `deck::get_deck` answers it.
@@ -83,12 +152,29 @@ let nextId = 1;
  * one is a nonfoil→foil→etched fallback chain built for sorting. A deck names a printing rather
  * than a finish, and nonfoil is the cheapest way to satisfy it. Anything that *sums* these
  * (`DeckStats` does) would otherwise quote a deck at foil rates nobody was offered.
+ *
+ * **The category is named by its kind**, `main` unless the caller says otherwise, and the
+ * three category fields on the row are then {@link deckCategory}'s — so a story that writes
+ * `deckCard(card, { categoryKind: "side" })` gets a row that agrees with itself about which
+ * column it is in, its heading and whether it counts. Overriding `categoryName` or
+ * `categoryActive` on top is how a story reaches a category the user made.
  */
 export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard {
+  const category = deckCategory(over.categoryKind ?? "main");
   return {
     id: nextId++,
     cardId: card.id,
-    zone: "main",
+    categoryId: category.id,
+    categoryName: category.name,
+    categoryKind: category.kind,
+    categoryActive: category.isActive,
+    // The deck as it is sleeved. A `theory` row is a plan: it counts on no tile and reserves
+    // no copy, which is a different story from this one.
+    variant: "live",
+    // All three together — a row is untagged, or it wears one tag with a name and a colour.
+    tagId: null,
+    tagName: null,
+    tagColor: null,
     quantity: 1,
     // Denormalised on the row, like the collection's — the one name an orphaned row still has.
     name: card.name,
@@ -147,8 +233,9 @@ export const MISSING =
  * so an orphaned deck row still knows what it is called.
  *
  * What it has lost is its type line, its mana cost, its rarity, its price and its art, and each of
- * those is a hole something draws differently: `ZoneColumn` files it under `Other` and fetches no
- * picture for it, and `DeckStats` shows three at once — a card with no mana value is counted out
+ * those is a hole something draws differently: the views draw no picture for a row whose
+ * `needsReview` is set (`GridView`'s `art` is fed `null` outright), `grouping.ts` files it under
+ * `Other` when the deck is grouped by type, and `DeckStats` shows three at once — a card with no mana value is counted out
  * of the curve rather than filed under 0, a card with no type line lands in that same `Other`
  * bucket, and a card with no price is counted as unpriced rather than as free.
  *
@@ -156,10 +243,20 @@ export const MISSING =
  * which is what an orphan *is*.
  */
 export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
+  const category = deckCategory(over.categoryKind ?? "main");
   return {
     id: nextId++,
     cardId: "0f0c1b0e-8e0d-4a2f-9f4b-2f5c9a1d3e77",
-    zone: "main",
+    // The category is the deck's, not the card's: an orphan is filed exactly where the user
+    // left it, which is why these four are the row's own and not nulled with the card facts.
+    categoryId: category.id,
+    categoryName: category.name,
+    categoryKind: category.kind,
+    categoryActive: category.isActive,
+    variant: "live",
+    tagId: null,
+    tagName: null,
+    tagColor: null,
     quantity: 1,
     name: "Sword of the Meek",
     setCode: "dst",
@@ -187,6 +284,94 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     ownedQuantity: 0,
     ...over,
   };
+}
+
+/* --------------------------------------------------------------------- deck views ------ */
+
+/**
+ * A deck the four views can be judged by, as the groups they take.
+ *
+ * Built through the app's own {@link buildGroups} rather than written out as `CardGroup`
+ * literals, and that is the point: the four view story files are then drawing what
+ * `grouping.ts` actually answers — the counts, the sums, the empty categories that still
+ * draw, and the inactive pile appended last — rather than four hand-written agreements about
+ * what it ought to answer.
+ *
+ * Five piles, chosen so every branch of a header has something to show: a Commander (the
+ * `RULE` marker), two categories of the reader's own, an **empty** Sideboard (a place as much
+ * as a heading), and a Maybeboard (`INACTIVE`, and the pile whose cards are never called
+ * short of copies).
+ */
+export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alphabetical") {
+  const commander = deckCategory("commander");
+  // The seeded Sideboard sorts at 2 and the reader's own two piles are ahead of it here, so
+  // it is moved rather than left to tie with `Removal` and be ordered by row id.
+  const side: DeckCategory = { ...deckCategory("side"), sortOrder: 3 };
+  const maybe = deckCategory("maybe");
+  const ramp: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp", sortOrder: 1 };
+  const removal: DeckCategory = { ...deckCategory("main"), id: 11, name: "Removal", sortOrder: 2 };
+
+  const inPile = (pile: DeckCategory, row: DeckCard): DeckCard => ({
+    ...row,
+    categoryId: pile.id,
+    categoryName: pile.name,
+    categoryKind: pile.kind,
+    categoryActive: pile.isActive,
+  });
+
+  const cards: DeckCard[] = [
+    inPile(commander, deckCard(printing("dom", "168"), { ownedQuantity: 1 })),
+    inPile(ramp, deckCard(printing("lea", "288"), { quantity: 2, ownedQuantity: 1 })),
+    inPile(
+      ramp,
+      deckCard(printing("mh2", "138"), {
+        ownedQuantity: 1,
+        tagId: 1,
+        tagName: "Wincon",
+        tagColor: "gold",
+      }),
+    ),
+    inPile(ramp, deckCard(printing("lea", "161"), { ownedQuantity: 1, gameChanger: true })),
+    inPile(
+      removal,
+      deckCard(printing("isd", "51"), {
+        ownedQuantity: 1,
+        tagId: 2,
+        tagName: "Cut candidate",
+        tagColor: "ember",
+      }),
+    ),
+    inPile(removal, deckCard(printing("gtc", "148"), { quantity: 2, ownedQuantity: 2 })),
+    inPile(removal, deckCard(printing("nph", "57"), { ownedQuantity: 0 })),
+    inPile(maybe, deckCard(printing("mh2", "267"), { quantity: 3 })),
+    inPile(maybe, deckCard(printing("wwk", "31"))),
+  ];
+
+  return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy);
+}
+
+/**
+ * One finding about one of the cards above, so a view story can draw the `RULE BREAK` mark
+ * beside the game-changer badge it must never be confusable with.
+ */
+export function deckViolations(): Map<string, ValidationIssue[]> {
+  // The sentence names the fixture's own card rather than a pasted one: `CARDS` is generated
+  // and may be regenerated against a newer sync, and a hardcoded name would go on reading as
+  // true while pointing at whatever printing that slot had become.
+  const card = printing("lea", "288");
+  return new Map([
+    [
+      card.id,
+      [
+        {
+          severity: "error" as const,
+          code: "singleton",
+          message: `Commander decks are singleton: max 1 copy of ${card.name}; you have 2.`,
+          cardIds: [card.id],
+        },
+      ],
+    ],
+  ]);
 }
 
 /* ------------------------------------------------------------------- the updater ------- */

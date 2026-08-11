@@ -787,7 +787,7 @@ mod tests {
         conn
     }
 
-    /// The `legal_mask` the ingest writes beside `legalities`, filled the way the v8
+    /// The `legal_mask` the ingest writes beside `legalities`, filled the way the v9
     /// migration fills it: [`crate::legalities::mask_sql`] over the column the fixture rows
     /// already carry.
     ///
