@@ -665,25 +665,64 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
 
 ## Hard rules — decks
-- **There are exactly three enforced foreign keys in the whole schema, and all three are
-  user↔user**: `deck_cards.deck_id → decks(id)`, `deck_allocations.deck_id → decks(id)` and
-  `deck_allocations.collection_entry_id → collection_entries(id)`, every one
-  `ON DELETE CASCADE`. Three, because CASCADE is only ever right at a *user-initiated*
-  delete: deleting a deck takes its list and its reservations, and `collection::remove_entry`
-  frees the reservations on copies that no longer exist. The app's one **non-user** delete is
-  the reconciler's fold, and `reconcile::fold_into_existing` **repoints (and where the
-  survivor is already allocated, folds) every allocation onto the surviving entry before the
-  DELETE runs**, so that CASCADE fires over nothing. Nothing else declares `REFERENCES`, and
-  **nothing ever declares it against `cards`** — a declared FK there aborts every sync.
-- Zones are an enum — `main | side | commander | companion | maybe` — CHECK-constrained in
-  SQL and narrowed in TS. **Deck cards side with the wishlist: `CHECK (quantity > 0)`, so
-  zero removes the row.** A zone slot at zero holds no condition, no price and no story;
-  only the collection's zero is worth keeping. The grain is
-  `(deck_id, card_id, zone)` (`schema::DECK_CARD_GRAIN`) — the same printing in two zones is
-  two rows, added twice in one zone is one row with the sum. `maybe` is a scratchpad and
-  **counts toward nothing at all** (`engine.ts`'s own words) — not size, not copies, not
-  legality; the allocator does not claim copies for it either. `DeckStats` still *reports*
-  `byZone.maybe`, which is a count of the pile and not a contribution to anything.
+- **Enforced foreign keys exist only *between user tables*, never against `cards.id`** — a
+  declared `REFERENCES cards(id)` aborts every sync, because `swap_staging` drops the table.
+  The `ON DELETE` action is chosen per delete-site, not fixed once. **CASCADE** on
+  `deck_cards.deck_id`, `deck_cards.category_id`, `deck_allocations.deck_id`,
+  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`, `deck_tags.deck_id`,
+  `deck_audit.deck_id` and `deck_folders.parent_id`: a deleted deck's cards and reservations,
+  a deleted category's cards and a deleted folder's sub-folders have nowhere else to be.
+  **SET NULL** on exactly two — `decks.folder_id` (a folder is a filing decision; the decks in
+  it are the user's work, not the folder's to take down) and `deck_cards.tag_id` (deleting a
+  tag must never delete a card). `schema.rs`'s module doc carries this list; check it against
+  the DDL rather than trusting either copy. CASCADE is also right at the app's one **non-user**
+  delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
+  *before* the DELETE, so that cascade fires over nothing.
+- **Schema v7 replaced the zone with a category the user owns.** `deck_cards.category_id`
+  points at a `deck_categories` row they name, reorder, switch off and delete; the fixed word
+  survives only as that row's **`kind`** — `main | side | commander | companion | maybe`,
+  `schema::CATEGORY_KINDS`, CHECK-constrained in SQL and narrowed in TS as `CategoryKind`.
+  **The name is the user's; the kind is what the rules read.** Four kinds get one predefined
+  category per deck (`schema::PREDEFINED_CATEGORIES` — Commander, Sideboard, Companion,
+  Maybeboard, seeded by `deck_meta::ensure_predefined_categories` and by the v7 backfill);
+  there is deliberately **no predefined `main`**, because a deck may own any number and the
+  pile a plain add lands in is found-or-created by name (`deck_meta::category_for_name`).
+  **Deck cards side with the wishlist: `CHECK (quantity > 0)`, so zero removes the row.**
+- **The grain is `deck_id, variant, category_id, card_id`** (`schema::DECK_CARD_GRAIN`) — the
+  same printing in two categories is two rows, added twice in one is one row with the sum, and
+  `variant` widens it again: `live` is what is sleeved up, `theory` is what the deck is being
+  built toward (`schema::DECK_VARIANTS`), so a change tried out in Theory can never silently
+  overwrite the deck as it stands. Every card command takes both.
+- **`is_active = 0` is the whole of what `maybe` used to mean.** An inactive category counts
+  toward nothing — not size, not copies, not legality — and `allocate_deck` claims no copy for
+  it. The Maybeboard is not a special case in five files any more; it is one seeded row with
+  the flag off, and a category of the user's own that they switch off behaves identically.
+  **Nothing anywhere may branch on the kind being `maybe`** — that was measured: the old shape
+  looked correct and was wrong the first time a user deactivated a pile of their own.
+- **Which totals a pile lands in: the switch decides whether it counts at all; the kind
+  decides only whether it is played *beside* the deck or *in* it, and only `side` and
+  `companion` are beside it** (CR 100.4a; EDH's companion is "effectively a 101st card"). So
+  `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in three places that must stay
+  one rule: `engine.ts`'s constant, `deck.rs`'s `DECK_SELECT` subquery behind
+  `DeckRow.card_count`, and the Storybook fake's copy. Leaving `maybe` out is the incoherent
+  version, not the smaller one: an *active* Maybeboard was then inside the format's card pool
+  and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
+  a singleton error under a figure that still read 100.
+- **`allocate_deck` claims for the `live` variant only** — a plan reserves nothing. And
+  **`deck_allocations` carries no variant column**, which is the trap: a `theory` read walks
+  the *live* deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
+  Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
+  perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
+- **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
+  else.** All categories and all tags come back whatever the variant — an empty category still
+  draws its column, an inactive one always draws — but a category's *and a tag's* `card_count`
+  read the variant asked for. Threading it into `list_categories` and not `list_tags` is
+  exactly how they came to disagree once.
+- Category and tag writes live in **`deck_meta.rs`**, and **two of them reallocate**:
+  `set_category_active` (the flag is the whole of what the allocator allocates *for*) and
+  `delete_category` (the cards leave, or land under a category with a different flag). A
+  rename, a reorder and every tag write change what a pile is *called* and claim exactly what
+  they claimed before.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
   (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
@@ -702,17 +741,31 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
   `cards.price_usd` is a fallback chain and is never summed, here least of all.
 - **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
-  deck's rows inside the caller's transaction, greedily and deterministically: exact printing,
-  then real copies, then oldest entry. It runs on **a zone write, the Built toggle, or
-  `missing_to_wishlist`** — those three and nothing else, which is worth knowing while
-  debugging, because pressing "Send missing to wishlist" rebuilds a deck's allocations as a
-  side effect. A **built** deck's claims are subtracted from what other decks can see. The
+  deck's rows inside the caller's transaction, greedily and deterministically: `KIND_PRIORITY`
+  (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
+  decides what is allocated for) then row id, and within a card, exact printing, then real
+  copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
+  `set_category_active` or `delete_category`** — those five and nothing else, which is worth
+  knowing while debugging, because pressing "Send missing to wishlist" or switching a pile off
+  rebuilds a deck's allocations as a side effect. A **built** deck's claims are subtracted from
+  what other decks can see. The
   read clamps with `min(allocation, entry.quantity)`, so stepping a collection row down is
   honest immediately — but **growing the collection does not re-run the allocator**, so a deck
   reads the new copies only after its next allocator run. Known, named, and Plan 6's to close.
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
+- **The six card commands, and what each takes.** `deck_get(id, variant)`;
+  `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
+  or a name**, id wins when both arrive, neither is refused in words, and the name is
+  found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
+  pile a card belongs in is domain logic); `deck_set_card_quantity(deckId, cardId, categoryId,
+  variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId, variant)`,
+  which stays inside one variant; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
+  variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inactive
+  categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
+  variant must be one the schema knows, and the category must belong to *this* deck —
+  `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
 - **A write to what is *in* a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
   add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
@@ -728,19 +781,22 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   keep one rule. The borrowing site owns only its own *reporting* (per-call `mutate`
   callbacks).
 - **`deck_swap_printing` is one transaction that folds on `DECK_CARD_GRAIN`.** Swapping a
-  row to a printing the same zone already holds is not an error and not two rows: the
-  `ON CONFLICT (deck_id, card_id, zone) DO UPDATE` sums the quantities and the answer carries
-  `folded: true` with the landed total, which the pane announces ("Folded into one row of 2 in
-  Main deck."). It refuses same-printing, a missing from-row (naming the zone), a raced sync
-  (the to-printing has left `cards`), and a **different oracle card** — the guard is inside the
-  transaction, because "swap this printing" must never become "swap this card".
+  row to a printing the same category already holds is not an error and not two rows: the
+  `ON CONFLICT (deck_id, variant, category_id, card_id) DO UPDATE` sums the quantities and the
+  answer carries `folded: true` with the landed total, which the pane announces ("Folded into
+  one row of 2 in Main deck." — the category's own name, out of `paneDeckContext`, which
+  carries a category id **and** its name because the pane is a sibling of the editor and has no
+  category list to translate an id through). It refuses same-printing, a missing from-row
+  (naming the category), a raced sync (the to-printing has left `cards`), and a **different
+  oracle card** — the guard is inside the transaction, because "swap this printing" must never
+  become "swap this card".
 - **The deck is rows, one view only** (2026-08-06: the stacked-card visual mode and its
   toggle were removed on the user's direction — full card faces at column width were huge,
-  and its `STACK_MAX_WIDTH` cap was why zone columns would not take the editor's width). Each
+  and its `STACK_MAX_WIDTH` cap was why the category columns would not take the editor's width). Each
   row carries the printing's **`art` crop** (626×457) as an `aria-hidden`, `alt=""`,
   `draggable={false}` thumbnail sharing the stepper's grid cell — a fourth grid column's gap
   made the 221px squeezed column scroll sideways, and a hidden flex child charges nothing.
-  Below 17rem of *column* (a container query on the zone scroller: the 1280px window with the
+  Below 17rem of *column* (a container query on the category scroller: the 1280px window with the
   card pane docked) the picture yields and the row is the dense text row; orphans are fed
   `null` and never fetch. **A printings row in the card pane is clickable to view that
   printing** — `store.viewPrinting` sets `selectedCardId` *without* clearing
@@ -750,7 +806,7 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   `cardDraggable`**, and the payload they all carry is `{ kind: "card"; cardId; name }` —
   search tiles, collection *table* rows (the collection's **card** mode is not one: only the
   search wall is handed `CardGrid`'s `dragPayload`), **pinned** wishes only (an any-printing
-  wish names no printing to drag), and the card pane's printings rows. A zone treats `"card"` exactly as the panel's `"search-card"`: add
+  wish names no printing to drag), and the card pane's printings rows. A category column treats `"card"` exactly as the panel's `"search-card"`: add
   one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
   it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
   deck open, which — because `setActiveView` clears `openDeckId` — is *every* drag started
