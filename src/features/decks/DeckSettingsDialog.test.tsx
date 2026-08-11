@@ -18,6 +18,17 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { deckGet, deckUpdate, deckSetFolder, deckSetCoverImage, deckFolderList, formatSpecs },
 }));
 
+/**
+ * The system file picker.
+ *
+ * Mocked because there is no OS dialog in jsdom — the real `open` reaches `invoke`, which needs
+ * `window.__TAURI_INTERNALS__` and would throw the same way in every test, telling us nothing
+ * about which of the three answers a picker really gives (a path, a cancel, a failure) this
+ * dialog handles. All three are exercised below.
+ */
+const pickFile = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
+
 import { coverChoices, DeckSettingsDialog, folderPaths } from "./DeckSettingsDialog";
 
 /** A deck with a cover whose artist is known, which is the only kind that is drawn at all. */
@@ -92,6 +103,7 @@ beforeEach(() => {
   deckSetCoverImage.mockResolvedValue({ ...BURN, coverKind: "custom" });
   deckFolderList.mockResolvedValue(FOLDERS);
   formatSpecs.mockResolvedValue(SPECS);
+  pickFile.mockResolvedValue("C:\\pics\\dragon.png");
 });
 
 describe("DeckSettingsDialog", () => {
@@ -225,20 +237,70 @@ describe("DeckSettingsDialog", () => {
   });
 
   /** The other half of the pair: a file goes through the command that re-encodes it, and the
-   *  path travels as the backend wants it — a path it reads, not bytes and not a `file://` URL. */
-  it("uploads a picture with deckSetCoverImage, never with deckUpdate", async () => {
+   *  picker's answer travels as the backend wants it — a path it reads, unchanged, not bytes
+   *  and not a `file://` URL. */
+  it("uploads the picked path with deckSetCoverImage, never with deckUpdate", async () => {
     open();
     await loaded();
 
     await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-    await userEvent.type(
-      screen.getByLabelText("Path to a picture on this computer"),
-      "C:\\pics\\dragon.png",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Use this picture" }));
 
     await waitFor(() => expect(deckSetCoverImage).toHaveBeenCalledWith(4, "C:\\pics\\dragon.png"));
     expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The picker is asked for one image file, and the extension list is the **backend's decoder
+   * list**: `Cargo.toml` builds the `image` crate with png, jpeg, gif, bmp and webp, so a
+   * filter wider than that would offer a file the re-encode then refuses.
+   */
+  it("asks for a single image file", async () => {
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
+
+    expect(pickFile).toHaveBeenCalledWith(
+      expect.objectContaining({ multiple: false, directory: false }),
+    );
+    const { filters } = pickFile.mock.calls[0][0] as {
+      filters: { extensions: string[] }[];
+    };
+    expect(filters[0].extensions).toEqual(["png", "jpg", "jpeg", "gif", "bmp", "webp"]);
+  });
+
+  /**
+   * **A cancelled picker is not a failure**, and this is the most ordinary way anyone will use
+   * the control after changing their mind. `open` answers `null`; nothing is written and no red
+   * sentence appears.
+   */
+  it("says nothing when the picker is cancelled", async () => {
+    pickFile.mockResolvedValue(null);
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Upload an image…" })).toBeEnabled(),
+    );
+    expect(deckSetCoverImage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  /** A picker that could not be opened at all is a different failure from a write the database
+   *  refused, and it is reported beside the button that was pressed. */
+  it("reports a picker that could not be opened", async () => {
+    pickFile.mockRejectedValue("dialog.open not allowed");
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not open the file picker — dialog.open not allowed",
+    );
+    expect(deckSetCoverImage).not.toHaveBeenCalled();
   });
 
   /**

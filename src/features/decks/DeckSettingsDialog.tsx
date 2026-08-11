@@ -9,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl, imageOrigin } from "@/lib/images";
@@ -38,13 +39,6 @@ const FIELD = cn(
   "focus:border-accent focus:outline-none",
 );
 
-/** A quiet control: an edge, dim text, and the text coming up on hover. */
-const QUIET = cn(
-  "rounded-md border border-border px-2.5 text-xs text-dim",
-  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-  FOCUS,
-);
-
 /**
  * What Tab may land on inside the panel.
  *
@@ -63,6 +57,21 @@ const FOCUSABLE = [
 
 /** How deep a folder path is walked before the walk is called a cycle. */
 const MAX_FOLDER_DEPTH = 32;
+
+/**
+ * What the file picker will offer, and it is **the backend's decoder list written out**.
+ *
+ * `src-tauri/Cargo.toml` builds the `image` crate with exactly five formats — `png`, `jpeg`,
+ * `gif`, `bmp`, `webp` — chosen as "the five a person actually has on disk". A filter wider
+ * than that would let a reader pick a TIFF the re-encode then refuses, which is a refusal the
+ * picker could have prevented; a filter narrower would hide files that work. `jpg` and `jpeg`
+ * are one decoder and two extensions people really have.
+ *
+ * A list, not a scope: the dialog plugin has no path scope to grant (measured against the
+ * generated ACL manifest — `dialog:allow-open` carries no `scope` and the plugin declares no
+ * global scope schema), so *which files* may be offered is decided here and nowhere else.
+ */
+const COVER_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
 export interface DeckSettingsDialogProps {
   deckId: number;
@@ -215,12 +224,14 @@ function Settings({
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}
-        // **`aria-modal` here where `SyncProgress` refuses it**, and the difference is the trap
-        // below rather than a change of mind. That takeover leaves the app reachable by
-        // keyboard, so calling it modal would hide from assistive technology a screen anyone
-        // could still Tab into. This one is covered by a scrim a pointer cannot cross, and the
-        // caret cannot leave it either — so the claim is true in both directions, which is the
-        // only condition under which it may be made.
+        // **`aria-modal` here where `SyncProgress` refuses it, and the difference is the
+        // scrim.** That component is a full-window takeover with nothing over the app behind
+        // it: the ribbon and every view stay reachable by keyboard, so claiming modality there
+        // would hide from assistive technology a screen anyone can still Tab into — its own
+        // comment says exactly that, and it is right. This one paints a scrim a pointer cannot
+        // cross, and `trapTab` below keeps the caret inside to match. The claim is true for
+        // both input methods, which is the only condition under which it may be made — and if
+        // either half is ever removed, this attribute goes with it.
         onKeyDown={trapTab}
         className={cn(
           "flex max-h-full w-[55rem] max-w-full flex-col rounded-xl border border-border",
@@ -468,7 +479,7 @@ function CoverSection({
             ))}
           </ul>
         )}
-        <Upload upload={upload} pending={uploading} id={id} />
+        <Upload upload={upload} pending={uploading} />
       </div>
     </>
   );
@@ -526,10 +537,21 @@ function CoverPreview({ deck }: { deck: DeckRow }) {
  * One printing offered as a cover.
  *
  * The `art` crop, at the shape a cover is: this is a picture of what pressing it would do, and
- * a 5:7 card face here would be a preview of a different picture. It follows the deck views'
- * own reading of the image policy — `ZoneColumn`, `CardStack` and `GridView` all draw an
- * uncredited crop inside a control that *names the card*, which is what makes the illustrator
- * findable — and the credit proper appears above the moment a choice becomes the cover.
+ * a 5:7 card face here would be a preview of a different picture.
+ *
+ * **A known gap against CLAUDE.md's stated rule, recorded here rather than quietly inherited.**
+ * That rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
+ * illustrator must be credited — and these tiles do not credit one. Neither do `ZoneColumn`,
+ * `CardStack` or `GridView`, which draw the same crop for every row and tile in the editor;
+ * this follows those three deliberately, because a picker that was stricter than the views it
+ * picks *from* would be an inconsistency a reader could see, where this one is one only a
+ * lawyer can. What holds it together is that each crop sits inside a control that **names the
+ * card**, so the illustrator is one press away in the card pane, which does credit them.
+ *
+ * The way to close it for all four at once is a per-row `artist`, which `DeckCard` does not
+ * carry; the alternative here alone is the `grid` variant, whose printed frame carries the
+ * credit, at the cost of the cover-shaped tile. The **cover preview** above is strict either
+ * way: an unknown artist is not drawn at all, which is `DeckRow.coverArtist`'s own ruling.
  */
 function ChoiceTile({
   card,
@@ -576,100 +598,74 @@ function ChoiceTile({
 }
 
 /**
- * The reader's own picture, behind a disclosure.
+ * The reader's own picture, through the system file picker.
  *
- * **A path typed in, because this app has no file picker.** `@tauri-apps/plugin-dialog` is not
- * a dependency, and the backend's argument is a path it reads rather than bytes — so until the
- * plugin is added, the honest control is a field that says exactly what it wants. The copy is
- * the whole of the affordance here: an input labelled "Upload" that silently wanted a path
- * would fail on every ordinary attempt at using it.
+ * **One press, one `open()`, and the path goes straight to the command that already existed.**
+ * `deck_set_cover_image` takes a path the backend reads rather than bytes — that is its whole
+ * contract — so the picker's answer is handed across unchanged. Nothing is read in the webview,
+ * which is why this needs no filesystem permission of any kind: `dialog:allow-open` lets the
+ * page *ask for a name*, and Rust is what opens the file.
+ *
+ * The disclosure this replaced asked the reader to type a path. It worked, and it was the wrong
+ * affordance for a desktop app.
  */
-function Upload({
-  upload,
-  pending,
-  id,
-}: {
-  upload: (sourcePath: string) => void;
-  pending: boolean;
-  id: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [path, setPath] = useState("");
-  const fieldRef = useRef<HTMLInputElement>(null);
+function Upload({ upload, pending }: { upload: (sourcePath: string) => void; pending: boolean }) {
+  /** The picker itself could not be opened — a different failure from a write the database
+   *  refused, and it belongs beside the button rather than in the dialog's write banner. */
+  const [pickerFailure, setPickerFailure] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
 
-  useEffect(() => {
-    if (open) fieldRef.current?.focus();
-  }, [open]);
-
-  const send = () => {
-    const trimmed = path.trim();
-    if (trimmed === "") return;
-    upload(trimmed);
-    setPath("");
-    setOpen(false);
+  const choose = async () => {
+    setPickerFailure(null);
+    setPicking(true);
+    try {
+      const chosen = await pickFile({
+        multiple: false,
+        directory: false,
+        title: "Choose a deck picture",
+        filters: [{ name: "Images", extensions: COVER_EXTENSIONS }],
+      });
+      // **A cancelled picker is not a failure.** `open` answers `null` when the reader closed
+      // it without choosing, which is an ordinary way to use a file dialog — the most ordinary
+      // one after changing your mind. Treating it as an error would put a red sentence under
+      // the button every time somebody looked and decided not to.
+      if (chosen !== null) upload(chosen);
+    } catch (e) {
+      setPickerFailure(ipcError(e));
+    } finally {
+      setPicking(false);
+    }
   };
 
-  if (!open) {
-    return (
+  return (
+    <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        aria-expanded={false}
+        onClick={() => void choose()}
+        // Disabled through both halves of the round trip — the picker being up and the
+        // re-encode running — because both are states in which a second press does nothing
+        // useful. The label does not change: an action keeps its name through the whole flow.
+        disabled={picking || pending}
         className={cn(
           "mt-2 h-8 w-full rounded-md border border-dashed border-border text-xs text-dim",
           "transition-colors duration-150 hover:border-accent hover:text-accent",
+          "disabled:opacity-50 disabled:hover:border-border disabled:hover:text-dim",
           "motion-reduce:transition-none",
           FOCUS,
         )}
       >
         Upload an image…
       </button>
-    );
-  }
-
-  return (
-    <div className="mt-2 space-y-1.5">
-      <label htmlFor={`${id}-upload`} className={CAPTION}>
-        Path to a picture on this computer
-      </label>
-      <input
-        id={`${id}-upload`}
-        ref={fieldRef}
-        value={path}
-        onChange={(e) => setPath(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            send();
-          }
-        }}
-        placeholder="C:\Users\…\dragon.png"
-        className={cn(FIELD, "h-8")}
-      />
-      <p className="text-[0.6875rem] text-dim">
-        It is copied and re-encoded into the deck’s own picture, so moving or deleting the
-        original afterwards changes nothing.
+      <p className="mt-1 text-[0.6875rem] text-dim">
+        Copied and re-encoded into the deck’s own picture, so moving or deleting the original
+        afterwards changes nothing.
       </p>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={send}
-          disabled={path.trim() === "" || pending}
-          className={cn(
-            "h-8 rounded-md border border-accent px-2.5 text-xs text-accent",
-            "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-            "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          Use this picture
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className={cn(QUIET, "h-8")}>
-          Cancel
-        </button>
-      </div>
-    </div>
+      {pickerFailure !== null && (
+        <p role="alert" className="mt-1 text-[0.6875rem] text-destructive">
+          Could not open the file picker — {pickerFailure}
+        </p>
+      )}
+    </>
   );
 }
 
