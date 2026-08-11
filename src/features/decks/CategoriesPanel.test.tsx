@@ -47,15 +47,19 @@ import { CategoriesPanel, movedTo } from "./CategoriesPanel";
 /* --------------------------------------------------------------------- fixtures ------- */
 
 function category(over: Partial<DeckCategory> & { id: number; name: string }): DeckCategory {
-  return {
+  const row = {
     deckId: 1,
-    kind: "main",
+    kind: "main" as const,
     isActive: true,
     sortOrder: over.id,
     cardCount: 0,
     totalPriceUsd: null,
     ...over,
   };
+  // Both lists, defaulting to the one-list count: these fixtures are single-list decks unless
+  // a test says otherwise, and the ones that say otherwise are the point — see
+  // `quotes the copies in both lists…`.
+  return { ...row, cardCountAllVariants: over.cardCountAllVariants ?? row.cardCount };
 }
 
 /**
@@ -431,9 +435,64 @@ describe("categories", () => {
     const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
 
     expect(within(dialog).getByText(/move to “Commander”\. Nothing is lost/)).toBeInTheDocument();
+    // One list in this deck, so no sentence about a second one: the words appear only where
+    // there are copies the reader cannot see.
+    expect(within(dialog).queryByText(/both the live and theory lists/)).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Move 12 cards and delete" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, 1);
+  });
+
+  /**
+   * The confirmation counts **both lists**, because the delete takes both.
+   *
+   * `deck_cards.category_id` is `ON DELETE CASCADE` and a category is not per-variant, so the
+   * live rows and the theory rows go together — and the move arm moves both. A dialog quoting
+   * the variant-scoped `cardCount` promised less than it took, and promised least on the arm
+   * that destroys. Found by a reviewer on the fake's seeded deck 4, where a "Ramp" offering to
+   * move 2 cards moved 7.
+   *
+   * **The fixture makes the two numbers differ on purpose.** Every other delete test here has
+   * them equal, which is exactly why none of them saw this: a deck with an empty theory list
+   * cannot tell the two fields apart, so a test built on one proves nothing about which was
+   * read.
+   */
+  it("quotes the copies in both lists, not just the one on screen", async () => {
+    deckCategoryList.mockResolvedValue([
+      CATEGORIES[0],
+      category({
+        id: 2,
+        name: "Ramp",
+        sortOrder: 1,
+        cardCount: 2,
+        cardCountAllVariants: 7,
+      }),
+    ]);
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    // The row is still the list being edited, and is right to be: that is what the reader is
+    // looking at. Only the confirmation changes scope.
+    expect(within(row("Ramp")).getByText("2 cards")).toBeInTheDocument();
+
+    await user.click(within(row("Ramp")).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
+    const picker = within(dialog).getByLabelText("Its 7 cards");
+
+    // Anchored on the sentence's own opening: `move to “Commander”` alone also matches the
+    // `<option>` in the picker, which is a different control saying a different thing.
+    expect(within(dialog).getByText(/^The 7 cards in it move to “Commander”/)).toHaveTextContent(
+      "both the live and theory lists",
+    );
+
+    await user.selectOptions(picker, "delete");
+    expect(within(dialog).getByText(/^The 7 cards in it are deleted too/)).toHaveTextContent(
+      "both the live and theory lists, not just the one on screen",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
+
+    expect(deckCategoryDelete).toHaveBeenCalledWith(2, null);
   });
 
   it("says the cards go too when the reader picks the destructive answer", async () => {

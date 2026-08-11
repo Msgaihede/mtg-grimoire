@@ -145,6 +145,7 @@ const MAIN: DeckCategory = {
   sortOrder: 0,
   cardCount: 0,
   totalPriceUsd: null,
+  cardCountAllVariants: 0,
 };
 
 /** One `deck_get` answer: this deck, the rows asked for, and the categories the editor draws

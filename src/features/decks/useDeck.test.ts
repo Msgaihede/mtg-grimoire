@@ -74,6 +74,7 @@ const MAIN: DeckCategory = {
   sortOrder: 0,
   cardCount: 4,
   totalPriceUsd: 18,
+  cardCountAllVariants: 4,
 };
 const SIDE: DeckCategory = {
   id: 2,
@@ -84,6 +85,7 @@ const SIDE: DeckCategory = {
   sortOrder: 1,
   cardCount: 0,
   totalPriceUsd: null,
+  cardCountAllVariants: 0,
 };
 const MAYBE: DeckCategory = {
   id: 5,
@@ -94,6 +96,7 @@ const MAYBE: DeckCategory = {
   sortOrder: 2,
   cardCount: 0,
   totalPriceUsd: null,
+  cardCountAllVariants: 0,
 };
 
 const BOLT: DeckCard = {

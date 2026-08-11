@@ -126,9 +126,28 @@ pub struct DeckCategoryRow {
     /// refusal in this module is [`predefined_refusal`], and it never reaches this field.
     pub is_active: bool,
     pub sort_order: i64,
-    /// Copies filed here, `sum(quantity)` and **not** a row count — two different printings
-    /// at 2 and 3 copies read 5, not 2 — scoped to the one `variant` the caller asked by.
+    /// Copies filed here **in the one `variant` the caller asked by**, `sum(quantity)` and not
+    /// a row count — two different printings at 2 and 3 copies read 5, not 2.
+    ///
+    /// This is the number a *list* row wants: a panel drawing the deck's columns is drawing the
+    /// list the reader is editing, and a heading that counted the other one would be counting
+    /// cards that are not on screen. It is **not** the number a delete confirmation wants — see
+    /// [`DeckCategoryRow::card_count_all_variants`], and read both docs before using either.
     pub card_count: i64,
+    /// Copies filed here **across every [`crate::schema::DECK_VARIANTS`]**, live and theory
+    /// together — the number a destructive confirmation has to quote.
+    ///
+    /// A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so
+    /// deleting one takes its rows out of **both** lists, and the move arm of
+    /// [`delete_category`] moves both for the same reason ("The move covers both variants" is
+    /// already that command's contract). A dialog quoting [`DeckCategoryRow::card_count`]
+    /// therefore understates what it is about to do on any theory-enabled deck — measured on
+    /// the fake's seeded deck 4, where a "Ramp" offering to move 2 cards moved 7.
+    ///
+    /// It **understates the destructive arm in particular** (`move_to = None`), which is the
+    /// shape that made this worth a schema-to-webview change rather than a note: a control that
+    /// lies about its scope lies in the direction of the reader pressing it.
+    pub card_count_all_variants: i64,
     /// Nonfoil `usd` × copies, summed over the same `variant`. `None` when nothing filed here
     /// has a price, `deck.rs`'s own `unit_price_usd` expression verbatim
     /// (`CAST(json_extract(prices, '$.usd') AS REAL)`) — never `cards.price_usd`, which is a
@@ -314,7 +333,9 @@ const CATEGORY_SELECT: &str = "SELECT cat.id, cat.deck_id, cat.name, cat.kind, c
                        WHERE dc.category_id = cat.id AND dc.variant = ?2), 0),
             (SELECT sum(dc.quantity * CAST(json_extract(c.prices, '$.usd') AS REAL))
                FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
-              WHERE dc.category_id = cat.id AND dc.variant = ?2)
+              WHERE dc.category_id = cat.id AND dc.variant = ?2),
+            coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
+                       WHERE dc.category_id = cat.id), 0)
        FROM deck_categories cat";
 
 fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
@@ -327,6 +348,9 @@ fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
         sort_order: r.get(5)?,
         card_count: r.get(6)?,
         total_price_usd: r.get(7)?,
+        // No `?2` in this one's subquery, and that is the whole of the difference: the CASCADE
+        // this number exists to describe does not know what variant anybody is looking at.
+        card_count_all_variants: r.get(8)?,
     })
 }
 
@@ -1606,6 +1630,66 @@ mod tests {
             commander_theory.card_count, 7,
             "the theory variant is a separate count"
         );
+    }
+
+    /// The number a delete confirmation has to quote, and the reason it is a second field.
+    ///
+    /// The two counts are deliberately made to **differ** — 5 live, 7 theory — because a fixture
+    /// where they happen to agree proves nothing at all here: that is exactly the shape every
+    /// test had while the confirmation was undercounting, and it is why the bug reached a
+    /// reviewer rather than a suite.
+    #[test]
+    fn card_count_all_variants_counts_both_lists_where_card_count_counts_one() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "commander", "Commander");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        crate::schema::tests::seed_card(&conn, "bolt-m10", "m10", "146");
+        deck_card(&conn, deck_id, "bolt-lea", cat, 2);
+        deck_card(&conn, deck_id, "bolt-m10", cat, 3);
+        deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
+
+        for (variant, scoped) in [("live", 5), ("theory", 7)] {
+            let rows = list_categories(&conn, deck_id, variant).unwrap();
+            let row = rows.iter().find(|c| c.id == cat).unwrap();
+            assert_eq!(row.card_count, scoped, "{variant}: the one list asked for");
+            assert_eq!(
+                row.card_count_all_variants, 12,
+                "{variant}: both lists, and the same answer whichever one was asked by — a \
+                 category is not per-variant",
+            );
+        }
+    }
+
+    /// The claim the field exists to make true: **what the number quotes is what the delete
+    /// takes.** `deck_cards.category_id` is `ON DELETE CASCADE`, so the destructive arm reaches
+    /// both lists, and a dialog quoting `card_count` would have promised 5 while taking 12.
+    #[test]
+    fn deleting_a_category_takes_the_copies_card_count_all_variants_quoted() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "main", "Ramp");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", cat, 5);
+        deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
+
+        let quoted = list_categories(&conn, deck_id, "live")
+            .unwrap()
+            .iter()
+            .find(|c| c.id == cat)
+            .unwrap()
+            .card_count_all_variants;
+        assert_eq!(quoted, 12);
+
+        delete_category(&conn, cat, None).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM deck_cards WHERE deck_id = ?1",
+                params![deck_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "all {quoted} copies went, across both lists");
     }
 
     #[test]
