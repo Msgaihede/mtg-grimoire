@@ -28,7 +28,8 @@ export const PREVIEW_DWELL_MS = 250;
  * How the preview finds the box it is positioned in and clipped by — the card pane.
  *
  * An attribute rather than a ref chain, because the preview is two components away from the
- * pane and owns none of it (`ZoneColumn`'s `SCROLLER_ATTR`, for its reason). One mark for both
+ * pane and owns none of it — the same reason `DropIndicator`'s `DROP_LINE_ATTR` and the deck
+ * views' `DECK_GROUP_ATTR` are attributes. One mark for both
  * jobs, because they are one box: the pane is `relative`, so absolute coordinates are the
  * pane's own, and it is the scroller, so it is also what would cut a picture in half.
  */

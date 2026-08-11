@@ -789,8 +789,8 @@ function PrintingRow({
       {...dwell}
       // The mouse's way into the printing: a click anywhere on the row that is not one of its
       // own controls shows this printing in the pane. The keyboard's way in is the set-code
-      // button below — the same split `ZoneColumn`'s rows use, and for the same reason: a
-      // `role="button"` on the row would make the controls inside it presentational.
+      // button below. The split is the reason: a `role="button"` on the row would make the
+      // controls inside it presentational.
       onClick={current ? undefined : () => viewPrinting(printing.id)}
       className={cn(
         "group rounded-md px-2 py-1 text-xs",

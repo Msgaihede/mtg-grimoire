@@ -306,8 +306,10 @@ export const EmptyDeck: Story = {
  * A commander deck with a companion, where the headline figure counts **neither the way the
  * others do**.
  *
- * "Cards" is `engine.SIZE_KINDS` — the `main` and `commander` kinds, in categories that are
- * switched on — imported from the validation engine rather than restated, because the chip beside
+ * "Cards" is `engine.SIZE_KINDS` — the `main`, `commander` **and `maybe`** kinds, in categories
+ * that are switched on (an *active* Maybeboard counts toward size exactly like the main deck; the
+ * seeded one is switched off, which is why it usually does not) — imported from the validation
+ * engine rather than restated, because the chip beside
  * this strip would say "Commander decks are exactly 100 cards including the commander; you have
  * 39" and a figure counting something else next to that sentence would be two numbers for one
  * question. It reads 39 while the deck is 40 copies: the companion is the difference, and the note
@@ -353,7 +355,7 @@ export const CommanderDeck: Story = {
     // keeps its as-of line.
     await expect(cards).toHaveAttribute(
       "title",
-      "Main deck and commander — the cards a format's size rule counts.",
+      "The cards a format's size rule counts — every switched-on pile except the sideboard.",
     );
     // The companion *is* counted everywhere else: 40 copies owned, not 39.
     await expect(canvas.getByText("All 40 owned.")).toBeInTheDocument();

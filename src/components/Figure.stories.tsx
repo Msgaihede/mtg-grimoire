@@ -116,7 +116,7 @@ export const FullRow: Story = {
         label="Cards"
         value="100"
         note="+ 15"
-        title="Main deck and commander — the cards a format's size rule counts."
+        title="The cards a format's size rule counts — every switched-on pile except the sideboard."
       />
       <Figure label="Lands" value="37" />
       <Figure label="Avg. mana value" value="3.14" note="nonlands" />

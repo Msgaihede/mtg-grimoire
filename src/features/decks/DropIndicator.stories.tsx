@@ -4,16 +4,16 @@ import { expect } from "storybook/test";
 import { DROP_LINE_ATTR, DropIndicator } from "./DropIndicator";
 
 /**
- * A category column, reduced to the two things this line needs from one: a `relative` box with a
+ * A category group, reduced to the two things this line needs from one: a `relative` box with a
  * border, and something inside it to have an edge above.
  *
- * A **stand-in**, not `ZoneColumn` — that component takes a deck, a category and the whole
- * pragmatic-drag-and-drop wiring, and it is Task 10's to story. The one class copied verbatim
- * is `relative`, and it is copied because it is load-bearing: `ZoneColumn` puts it on the
- * column and says so in its own comment ("`relative` is what the drop line hangs from"), and
- * `absolute inset-x-0 top-0` with no positioned ancestor escapes to the page.
+ * A **stand-in**, not one of the four views — each takes a deck, a category and the whole
+ * pragmatic-drag-and-drop wiring, and each has its own story file. The one class copied verbatim
+ * is `relative`, and it is copied because it is load-bearing: every view puts it on the group
+ * that holds this line (`StackView`'s `relative rounded-lg`, `GridView`'s `relative rounded-md`),
+ * and `absolute inset-x-0 top-0` with no positioned ancestor escapes to the page.
  */
-function ZoneStandIn({ children, name }: { children?: ReactNode; name: string }) {
+function GroupStandIn({ children, name }: { children?: ReactNode; name: string }) {
   return (
     <div className="relative flex h-48 w-56 flex-col overflow-hidden rounded-lg border border-border bg-surface">
       {children}
@@ -79,30 +79,30 @@ export const Alone: Story = {
   },
 };
 
-/** The real shape: the line on the top edge of the column that would take the card. The
- *  column is a stand-in, but the `relative` it hangs from is `ZoneColumn`'s own. */
-export const OnAZoneEdge: Story = {
+/** The real shape: the line on the top edge of the category that would take the card. The
+ *  box is a stand-in, but the `relative` it hangs from is the views' own. */
+export const OnACategoryEdge: Story = {
   render: () => (
-    <ZoneStandIn name="Main deck">
+    <GroupStandIn name="Main deck">
       <DropIndicator />
-    </ZoneStandIn>
+    </GroupStandIn>
   ),
 };
 
 /**
- * Two columns, one lit — which is the whole of what a drop here decides.
+ * Two categories, one lit — which is the whole of what a drop here decides.
  *
  * The indicator marks the **target**, so the question it answers is "which category", never "where
  * in the list". Side by side is the only arrangement that shows that, because a single lit
- * column looks equally like an insertion point at the top of it.
+ * box looks equally like an insertion point at the top of it.
  */
-export const AcrossTwoZones: Story = {
+export const AcrossTwoCategories: Story = {
   render: () => (
     <div className="flex gap-4">
-      <ZoneStandIn name="Main deck">
+      <GroupStandIn name="Main deck">
         <DropIndicator />
-      </ZoneStandIn>
-      <ZoneStandIn name="Sideboard" />
+      </GroupStandIn>
+      <GroupStandIn name="Sideboard" />
     </div>
   ),
 };

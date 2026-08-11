@@ -236,7 +236,7 @@ describe("DeckSearchPanel", () => {
    * the panel reaches them through one callback ref, and a callback that closed over the wrong
    * card would drag a card the reader is not touching. So this asks the drag itself rather
    * than the `draggable="true"` attribute: pick the tile up, and read what the library was
-   * handed. Where the card *lands* is the column's business (`ZoneColumn.test.tsx`) and the
+   * handed. Where the card *lands* is the group's business (`views/views.test.tsx`) and the
    * whole gesture is the editor's (`DeckEditor.test.tsx`).
    */
   it("hands each drawn tile to the drag adapter, carrying the card it draws", async () => {
