@@ -355,6 +355,9 @@ mod tests {
         image::RgbaImage::new(8, 8)
             .save(covers.join("source.png"))
             .unwrap();
+        // `set_cover_image` takes bytes, not a path — the encode belongs outside the write
+        // lock and its signature is what says so.
+        let cover_bytes = crate::images::encode_cover(&covers.join("source.png")).unwrap();
 
         /// One command under test: what to call it in a failure, and how to drive it.
         type Case<'a> = (&'a str, Box<dyn Fn() + 'a>);
@@ -437,8 +440,7 @@ mod tests {
             (
                 "deck_set_cover_image",
                 Box::new(|| {
-                    crate::deck::set_cover_image(&conn, &covers, id, &covers.join("source.png"))
-                        .unwrap();
+                    crate::deck::set_cover_image(&conn, &covers, id, &cover_bytes).unwrap();
                 }),
             ),
             (

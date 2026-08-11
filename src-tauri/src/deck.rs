@@ -822,13 +822,17 @@ pub fn delete_deck(conn: &Connection, id: i64, covers: Option<&Path>) -> Result<
     Ok(())
 }
 
-/// Point a deck at a picture the user picked: decode it, re-encode it as this app's cover
-/// shape, write it beside the database and record that the deck is showing it.
+/// Point a deck at a picture the user picked: write the already-encoded bytes beside the
+/// database and record that the deck is showing them.
 ///
-/// **The encoding happens before the write lock is taken**, and the order is the point: a
-/// decode plus a Lanczos resample plus a lossless WEBP encode is tens of milliseconds, and
-/// holding the app-wide write mutex across it would put every collection edit in the app behind
-/// one file-picker. [`crate::images::encode_cover`] is pure and needs no database at all.
+/// **This function is handed `bytes` and never encodes**, and that signature is the whole of
+/// the ordering rule: [`crate::images::encode_cover`] runs in [`deck_set_cover_image`] *before*
+/// `with_write`, so the decode, the Lanczos resample and the lossless WEBP encode are outside
+/// the app-wide write mutex. A source is bounded at
+/// [`crate::images::MAX_COVER_SOURCE_PIXELS`]-worth of pixels rather than by taste, so holding
+/// the mutex across it would put every collection edit in the app behind a hundred-megapixel
+/// decode. Taking a path here instead — which is what this did — made that ordering a sentence
+/// in a doc that the call site could contradict, and it did.
 ///
 /// **The file is written inside the transaction**, which is the other half of that order: the
 /// deck's existence is checked by [`touch_deck`] first, so a cover is never written for a deck
@@ -846,9 +850,8 @@ pub fn set_cover_image(
     conn: &Connection,
     covers: &Path,
     deck_id: i64,
-    source_path: &Path,
+    bytes: &[u8],
 ) -> Result<DeckRow, String> {
-    let bytes = crate::images::encode_cover(source_path)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let before: (Option<String>, String) = tx
         .query_row(
@@ -860,7 +863,7 @@ pub fn set_cover_image(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| GONE.to_owned())?;
     touch_deck(&tx, deck_id)?;
-    crate::images::write_cover(covers, deck_id, &bytes)?;
+    crate::images::write_cover(covers, deck_id, bytes)?;
     let stored = crate::images::cover_file(covers, deck_id);
     tx.execute(
         "UPDATE decks SET cover_kind = ?2, cover_image_path = ?3, updated_at = unixepoch()
@@ -2404,6 +2407,14 @@ pub async fn deck_delete(
 }
 
 /// Point a deck at a picture on disk. Answers the deck as the gallery would read it.
+///
+/// **The encode is inside the blocking task and outside the write lock**, and the order is the
+/// point rather than a detail: a decode of up to
+/// [`crate::images::MAX_COVER_SOURCE_PIXELS`] plus a Lanczos resample plus a lossless WEBP
+/// encode is not tens of milliseconds at the top of that range, and holding the app-wide write
+/// mutex across it would put every collection edit in the app behind one file-picker. It is
+/// [`set_cover_image`]'s **signature** that keeps this true — it takes bytes and cannot
+/// encode — because the version of this that took a path had the doc and the wiring disagree.
 #[tauri::command]
 pub async fn deck_set_cover_image(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2414,9 +2425,8 @@ pub async fn deck_set_cover_image(
     let state = state.inner().clone();
     let covers = crate::paths::covers_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
-            set_cover_image(c, &covers, deck_id, Path::new(&source_path))
-        })
+        let bytes = crate::images::encode_cover(Path::new(&source_path))?;
+        with_write(&state, |c| set_cover_image(c, &covers, deck_id, &bytes))
     })
     .await
     .map_err(unfinished)?
@@ -3897,7 +3907,7 @@ mod tests {
         let conn = seeded();
         let (dir, bytes) = covers("delete");
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        set_cover_image(&conn, &dir, deck.id, &dir.join("source.png")).unwrap();
+        set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
         let file = crate::images::cover_file(&dir, deck.id);
         assert!(file.is_file(), "the fixture must have written a cover");
         assert_eq!(std::fs::read(&file).unwrap(), bytes);
@@ -3924,10 +3934,10 @@ mod tests {
     #[test]
     fn a_custom_cover_and_a_card_cover_take_turns_without_losing_either() {
         let conn = seeded();
-        let (dir, _) = covers("switch");
+        let (dir, bytes) = covers("switch");
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
 
-        let row = set_cover_image(&conn, &dir, deck.id, &dir.join("source.png")).unwrap();
+        let row = set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
         assert_eq!(row.cover_kind, COVER_CUSTOM);
         let stored: Option<String> = conn
             .query_row(
@@ -3963,9 +3973,9 @@ mod tests {
     #[test]
     fn a_cover_for_a_deck_that_is_gone_writes_nothing() {
         let conn = seeded();
-        let (dir, _) = covers("gone");
+        let (dir, bytes) = covers("gone");
 
-        let refused = set_cover_image(&conn, &dir, 404, &dir.join("source.png")).unwrap_err();
+        let refused = set_cover_image(&conn, &dir, 404, &bytes).unwrap_err();
 
         let written = crate::images::cover_file(&dir, 404).exists();
         let _ = std::fs::remove_dir_all(&dir);
@@ -3983,7 +3993,7 @@ mod tests {
         let conn = seeded();
         let (dir, bytes) = covers("duplicate");
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        set_cover_image(&conn, &dir, deck.id, &dir.join("source.png")).unwrap();
+        set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
 
         let copy = duplicate_deck(&conn, deck.id, Some(&dir)).unwrap();
 
@@ -4015,9 +4025,9 @@ mod tests {
     #[test]
     fn a_duplicate_falls_back_to_card_art_when_the_cover_cannot_be_copied() {
         let conn = seeded();
-        let (dir, _) = covers("duplicate-fallback");
+        let (dir, bytes) = covers("duplicate-fallback");
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        set_cover_image(&conn, &dir, deck.id, &dir.join("source.png")).unwrap();
+        set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
         // The file goes, the columns stay — which is exactly the state a hand-deleted
         // `data/covers` leaves behind, and `covers/` is documented as safe to delete.
         std::fs::remove_file(crate::images::cover_file(&dir, deck.id)).unwrap();

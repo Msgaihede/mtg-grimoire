@@ -935,13 +935,25 @@ async fn serve_cover(app: &tauri::AppHandle, deck_id: i64) -> tauri::http::Respo
     cover_response(bytes)
 }
 
-/// Largest source image a cover may be decoded from.
+/// Largest source image a cover may be decoded from, **in total pixels**.
 ///
-/// Not a policy about photographs — it is the memory bound. `image` allocates the *decoded*
-/// buffer, four bytes a pixel, before anything is resized: a 20 000 × 20 000 PNG is 1.6 GB and
-/// a portable app that OOMs because someone picked a scanned poster is an app that lost their
-/// session. Twenty thousand a side is far past any camera and far short of the cliff.
-const MAX_COVER_SOURCE_PIXELS: u32 = 20_000;
+/// Not a policy about photographs — it is the memory bound, and it has to be a *product*
+/// rather than a per-side cap. `image` allocates the whole decoded buffer, at least four bytes
+/// a pixel, before anything is resized, and this limit used to be twenty thousand *a side*:
+/// 20 000 × 20 000 was inside it, which is the 1.6 GB allocation the comment named as the
+/// cliff it meant to stay short of. A portable app that OOMs because someone picked a scanned
+/// poster is an app that lost their session.
+///
+/// A hundred megapixels is **400 MB** decoded at 8-bit RGBA — past every consumer camera made,
+/// the 100 MP medium-format backs included, and a quarter of that cliff. A phone's 200 MP mode
+/// is refused in a sentence, which is what a user is owed instead.
+///
+/// **It is checked against the file's own header before a pixel is decoded**, because that is
+/// the only strict fence there is: `image` documents `max_image_width`/`max_image_height` as
+/// strict and `max_alloc` as "non-strict by default and some decoders may ignore it", so a
+/// budget expressed only through `Limits` would be advice. `max_alloc` is set from the same
+/// number anyway, as the second fence for a header that lied.
+pub(crate) const MAX_COVER_SOURCE_PIXELS: u64 = 100_000_000;
 
 /// Decode whatever the user picked and re-encode it as this app's cover shape.
 ///
@@ -966,13 +978,30 @@ const MAX_COVER_SOURCE_PIXELS: u32 = 20_000;
 /// decks a person has.
 pub fn encode_cover(source: &std::path::Path) -> Result<Vec<u8>, String> {
     let (width, height) = COVER_VARIANT.dimensions();
-    let mut reader = image::ImageReader::open(source)
-        .map_err(|e| format!("could not open {}: {e}", source.display()))?
-        .with_guessed_format()
-        .map_err(|e| format!("could not read {}: {e}", source.display()))?;
+    let open = || {
+        image::ImageReader::open(source)
+            .map_err(|e| format!("could not open {}: {e}", source.display()))?
+            .with_guessed_format()
+            .map_err(|e| format!("could not read {}: {e}", source.display()))
+    };
+    // The header on a pass of its own, before anything is decoded. `into_dimensions` consumes
+    // the reader, hence the second open — two header reads of a local file against the one
+    // strict way to bound [`MAX_COVER_SOURCE_PIXELS`] as a product.
+    let (w, h) = open()?.into_dimensions().map_err(|e| {
+        format!(
+            "{} is not an image this app can read: {e}",
+            source.display()
+        )
+    })?;
+    if u64::from(w) * u64::from(h) > MAX_COVER_SOURCE_PIXELS {
+        return Err(format!(
+            "{} is {w} × {h}, which is too large a picture to make a deck cover from.",
+            source.display()
+        ));
+    }
+    let mut reader = open()?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_COVER_SOURCE_PIXELS);
-    limits.max_image_height = Some(MAX_COVER_SOURCE_PIXELS);
+    limits.max_alloc = Some(MAX_COVER_SOURCE_PIXELS * 4);
     reader.limits(limits);
     let decoded = reader.decode().map_err(|e| {
         format!(
@@ -2548,6 +2577,76 @@ mod tests {
 
         assert!(refused.contains("notes.txt"), "{refused}");
         assert!(absent.contains("gone.png"), "{absent}");
+    }
+
+    /// [`MAX_COVER_SOURCE_PIXELS`] bounds the **product**, and it is read off the header before
+    /// a pixel is decoded. Both halves are what this test is for, and the fixture proves them
+    /// together: a PNG that is nothing but a valid `IHDR` claiming 20 000 × 20 000, with no
+    /// image data at all behind it. 20 000 a side was *inside* the old per-side cap; 400
+    /// megapixels is four times the new one; and since there is nothing to decode, a refusal
+    /// that arrives at all is a refusal that arrived from the header.
+    ///
+    /// Written by hand rather than encoded, because encoding a source over the limit means
+    /// allocating the 400 MB this constant exists to refuse.
+    #[test]
+    fn a_source_too_large_to_decode_is_refused_from_its_header_alone() {
+        /// The one thing a hand-built PNG chunk needs that cannot be typed out: `png` validates
+        /// every chunk's CRC-32 and stops at a bad one, which would refuse this file for the
+        /// wrong reason.
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xFFFF_FFFF_u32;
+            for &byte in bytes {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+
+        /// `<length><type><data><crc>`, the shape every PNG chunk has.
+        fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+            let mut body = Vec::from(*kind);
+            body.extend_from_slice(data);
+            let mut out = Vec::new();
+            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc32(&body).to_be_bytes());
+            out
+        }
+
+        let dir = scratch("oversize");
+        let source = dir.join("poster.png");
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&20_000_u32.to_be_bytes());
+        ihdr.extend_from_slice(&20_000_u32.to_be_bytes());
+        // 8-bit, colour type 6 (RGBA), deflate, adaptive filtering, no interlace.
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut png = Vec::from([0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        png.extend_from_slice(&chunk(b"IHDR", &ihdr));
+        // An empty `IDAT` is where the header ends and the picture would begin. There are 400
+        // million pixels' worth of nothing behind it, which is the point.
+        png.extend_from_slice(&chunk(b"IDAT", &[]));
+        png.extend_from_slice(&chunk(b"IEND", &[]));
+        std::fs::write(&source, &png).unwrap();
+
+        let refused = encode_cover(&source).unwrap_err();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(refused.contains("poster.png"), "{refused}");
+        assert!(
+            refused.contains("20000 × 20000"),
+            "the refusal says how big the picture was: {refused}"
+        );
+        assert_eq!(
+            20_000_u64 * 20_000,
+            400_000_000,
+            "which is four times the budget, and was inside the old per-side cap"
+        );
     }
 
     /// An id nothing resolves to is a caller error. A 404 rather than a placeholder,
