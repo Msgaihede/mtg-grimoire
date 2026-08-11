@@ -113,6 +113,16 @@ export function FilterBar({
           control, so every view that offers a reset offers the same one. */}
       <ResetAll count={search.activeCount} onReset={search.resetAll} />
 
+      {/* A view mode rather than a filter, so it sits past the reset with the layout pair
+          rather than among the statements about which cards to show — and, like them, it
+          is untouched by Reset all. The search answers "which cards exist"; this is the way
+          through to "which printings", which is otherwise the card pane's question. */}
+      <ToggleChip
+        label="All printings"
+        pressed={search.allPrintings}
+        onClick={search.toggleAllPrintings}
+      />
+
       {layoutToggle && <ViewToggle />}
     </div>
   );

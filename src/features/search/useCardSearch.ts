@@ -181,6 +181,13 @@ export function useCardSearch() {
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
   // should not also throw away the order you chose to read it in.
   const [sort, setSort] = useState<SortSpec<SearchSortKey>>([]);
+  // A **view mode**, and outside `resetAll` for the same reason the sort is: clearing what
+  // you are looking at should not also change *how* you are looking at it.
+  //
+  // Off is one row per card — 37 553 cards rather than 107 337 printings — because "which
+  // cards exist" is the question a search box is asked, and "which printings exist" is the
+  // question the card detail pane answers.
+  const [allPrintings, setAllPrintings] = useState(false);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -211,6 +218,10 @@ export function useCardSearch() {
     // The whole sort in one segment: a differently-ordered page is a different answer, and
     // must not be served from the cached pages of the order before it.
     sort.map((t) => `${t.key}:${t.dir}`).join(","),
+    // Spelled rather than stringified, for the reason `owned` is: these are different
+    // *rows*, not a different order over the same rows, so the two modes must never answer
+    // each other from cache.
+    allPrintings ? "all" : "collapsed",
   ];
 
   const query = useInfiniteQuery({
@@ -230,6 +241,10 @@ export function useCardSearch() {
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
+        // Absent rather than `false` when all printings are asked for: uncollapsed is the
+        // backend's own default, and sending it would make the payload lie about intent —
+        // the same rule `paperOnly` follows below.
+        collapse: allPrintings ? undefined : true,
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong.
@@ -264,6 +279,14 @@ export function useCardSearch() {
     owned,
     /** Off → owned → missing → off. The search asks "what have I already got" first. */
     toggleOwned: () => setOwned((current) => cycleTriState(current, true)),
+    /**
+     * Show every printing rather than one row per card.
+     *
+     * `false` — one row per card — is the default. A view mode and not a filter, so it is
+     * absent from {@link activeFilterCount} and survives `resetAll`.
+     */
+    allPrintings,
+    toggleAllPrintings: () => setAllPrintings((on) => !on),
     /** How many kinds of filter are on — the number on the Reset all badge. */
     activeCount: activeFilterCount({ text, format, colors, sets, manaValues, owned }),
     /**
