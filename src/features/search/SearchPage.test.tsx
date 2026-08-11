@@ -209,6 +209,54 @@ describe("SearchPage", () => {
     expect(req).toMatchObject({ limit: 50, offset: 0 });
   });
 
+  it("collapses printings by default, and asks the backend for it", async () => {
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(lastRequest().collapse).toBe(true);
+    expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("stops collapsing when all printings are asked for", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: "All printings" }));
+
+    await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
+    expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * A view mode, not a filter. Reset all clears what you are *looking at*; it must not also
+   * change whether you are looking at cards or at cardboard — the same reasoning that keeps
+   * the sort out of it.
+   */
+  it("does not count All printings as a filter, and Reset all leaves it alone", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: "All printings" }));
+    // Nothing to reset: a view mode is not a filter, so no Reset all appears.
+    expect(screen.queryByRole("button", { name: /reset/i })).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText("Search cards…"), "bolt");
+    const reset = await screen.findByRole("button", { name: /reset/i });
+    await userEvent.click(reset);
+
+    expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
+  });
+
   it("passes the format filter", async () => {
     wrap(<SearchPage />);
 
