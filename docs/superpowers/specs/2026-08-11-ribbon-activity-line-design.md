@@ -1,7 +1,7 @@
 # The ribbon says what it is doing
 
 **Date:** 2026-08-11
-**Status:** approved, not yet implemented
+**Status:** implemented 2026-08-11, and one claim in §3 corrected by the live pass (below)
 **Branch:** `feat/ribbon-activity-line`
 
 The mana line under the ribbon is the app's only progress bar, and while it fills the
@@ -128,9 +128,16 @@ slot, not one job — so a sync handing over to an update download changes the s
 without the slot blinking, and only a genuine gap re-arms the delay. The mana line reacts
 instantly because a 2px rule flickering is the app's existing vocabulary for "something
 brief happened"; a *sentence* that appears and vanishes inside a second is a thing the
-reader tries to read and fails. A Refresh that finds nothing new takes ~1.8 s, of which the
-`checking` phase is under one — so the common no-op Refresh shows the bar, then
-"Already up to date", and never a half-read sentence in between.
+reader tries to read and fails.
+
+> **Corrected by the live pass, 2026-08-11.** This paragraph originally went on to claim that
+> a no-op Refresh — "~1.8 s, of which `checking` is under one" — would therefore show the bar
+> and never a sentence. Measured in the shipped window by sampling the row every 40 ms: the
+> bar appeared at **121 ms**, the sentence at **523 ms**, and the whole run ended at
+> **1.4 s** — so "Checking for card data updates" was on screen for about a second before
+> "Already up to date" replaced it. The gate filters a *flash*, not a short run. The
+> behaviour is kept: a second of the app naming what it is checking is better than a moving
+> bar that explains nothing, and 400 ms is still what stops a sub-frame phase from flashing.
 
 When `activityVisible`, the activity takes the status-line slot:
 
