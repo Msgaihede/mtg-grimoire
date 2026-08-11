@@ -150,10 +150,11 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
    */
   const deckRow = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
-  // No variant passed, so this swaps the **live** list. {@link PaneDeckContext} carries no
-  // variant to pass — see its own doc — so a pane opened from a Theory row addresses the wrong
-  // one. Add the field there and hand it over here; the hook's second argument is waiting.
-  const { swap, deckGone } = useSwapFromPane(deckRow);
+  // The context's own variant, so the swap rewrites the list the reader is looking at. Passing
+  // nothing here would take the hook's `live` default — which, where the same printing sits in
+  // the same category of both lists, rewrites the live row from a theory pane and reports
+  // success. `undefined` with no context is the default again, which is the idle case.
+  const { swap, deckGone } = useSwapFromPane(deckRow, deckRow?.variant);
 
   // A different card is a different card, and the back of the last one is not where a
   // reader wants to arrive. Reset during render — React's own answer to state that has to

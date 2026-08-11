@@ -167,13 +167,10 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
       }}
       className={cn(
         "fixed inset-0 flex justify-end bg-black/60",
-        // `dragTray`'s number rather than `popup`'s, and the name is the awkward half: this is
-        // a full-window layer that has to cover every anchored popup in the editor behind it,
-        // and `popup` would *tie* with them — equal z-indexes resolve by document order, and
-        // where the editor mounts this drawer is the editor's choice, not this file's. The two
-        // never contend for the rung itself: the tray is drawn only during a card drag, and no
-        // card drag can be in flight while this is up.
-        LAYER.dragTray,
+        // The editor's overlay rung, above every anchored popup in the view behind this: `popup`
+        // would *tie* with them, and equal z-indexes resolve by document order — where the editor
+        // mounts this drawer is the editor's choice, not this file's.
+        LAYER.overlay,
       )}
     >
       <div

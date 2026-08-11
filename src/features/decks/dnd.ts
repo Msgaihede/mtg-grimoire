@@ -16,17 +16,21 @@ import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
  * entries are the first — the answer has to be in the payload rather than deduced from where
  * the pointer happens to be.
  *
- * Almost every drag has a click path from Tasks 12–13 — the panel's Add button, the row menu's
- * "Move to", the stepper down to zero, and the quick-add on every surface that carries a
- * `"card"`. Speed, not capability, with **one measured exception**: a printings row dragged to
- * the sidebar's Decks entry adds that printing to the open deck, and the card pane offers no
- * button that does it (its quick-add writes the collection or the wishlist, and "Use this
- * printing" *replaces* a row the deck already has). A deck row let go on Wishlist is not the
- * exception — that one has a longer click path through the pane's quick-add in wishlist mode.
- * So this gesture is the one route with no click equivalent **on the surface it starts from**
- * — the deck is not closed to the keyboard, because the docked panel's Add takes any printing
- * that panel's own search can reach. If that detour stops being acceptable, the answer is a
- * button in the pane, not a rule here.
+ * Every drag into a deck has a click path beside it — the panel's Add button, the toolbar's
+ * quick add, and the quick-add on every surface that carries a `"card"`. Speed, not capability,
+ * with **one measured exception**: a printings row dragged to the sidebar's Decks entry adds
+ * that printing to the open deck, and the card pane offers no button that does it (its quick-add
+ * writes the collection or the wishlist, and "Use this printing" *replaces* a row the deck
+ * already has). So this gesture is the one route with no click equivalent **on the surface it
+ * starts from** — the deck is not closed to the keyboard, because the docked panel's Add takes
+ * any printing that panel's own search can reach. If that detour stops being acceptable, the
+ * answer is a button in the pane, not a rule here.
+ *
+ * **`"deck-card"` has no source at the moment.** The category columns that made a deck row
+ * draggable were replaced by `views/`, and a view draws a card as a labelled button with no
+ * `draggable()` registration — so the move-by-drag and the remove tray that read this kind have
+ * nothing to carry. The kind stays: it is what a drop *means*, `dropWrite` is tested against it
+ * either way, and the day a view picks a card up the rule is already written.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string }
@@ -121,9 +125,15 @@ export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
  * opened points at something unmounted by the time Escape is pressed. A slot is a question the
  * DOM can answer after the fact.
  *
- * Here rather than in `ZoneColumn` because both views carry it and `ZoneColumn` imports
- * `VisualCard`: the other direction would be an import cycle for one string. This module is
- * already where a card control's DOM contracts live ({@link NOT_A_DRAG} above).
+ * Here rather than on a view, because it is a contract between two components that share no
+ * tree; this module is already where a card control's DOM contracts live ({@link NOT_A_DRAG}
+ * above).
+ *
+ * **Nothing writes it at the moment, and that is a gap rather than a retirement.** The category
+ * columns that carried it were replaced by `views/`, which draw a card as a button with an
+ * accessible name and no slot attribute — so the pane's lookup finds nothing and falls back to
+ * closing without a hand-back. The string, the spelling and the reader are all still right; what
+ * is missing is a view that stamps it.
  */
 export const DECK_CARD_ATTR = "data-deck-card";
 

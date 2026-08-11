@@ -78,6 +78,9 @@ function Pane({ cardId, deckId }: { cardId: string; deckId: number | null }) {
         categoryId: slot.id,
         categoryName: slot.name,
         cardId,
+        // The list the editor would have been drawing. `live` is what every seeded deck's rows
+        // are in, and it is the variant the swap below is addressed to.
+        variant: "live",
       });
     }
   });

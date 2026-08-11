@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeckCard } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { card, islands } from "./validation/fixtures";
-import { DeckStats, deckStats, type MissingWrite } from "./DeckStats";
+import { DeckStats, deckStats, typeCounts, type MissingWrite } from "./DeckStats";
 
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
@@ -23,6 +23,76 @@ function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
 function spell(name: string, cmc: number, overrides: Partial<DeckCard> = {}): DeckCard {
   return card({ name, cmc, typeLine: "Sorcery", manaCost: `{${cmc}}`, ...overrides });
 }
+
+/**
+ * The type bars' own bucketing.
+ *
+ * These cases came here from `ZoneColumn.test.tsx` with the function they test. While the deck
+ * list was a column of type headings, one derivation served both the headings and the bars —
+ * "a bar and the heading over the rows it counts must never be two derivations of one thing".
+ * Schema v8's rebuild draws headings from `grouping.ts` (whose type vocabulary checks `Land`
+ * first, so that a card is *filed* where a decklist would put it), so this is now one surface's
+ * arithmetic and belongs with the surface.
+ */
+describe("typeCounts", () => {
+  /**
+   * The eight printed types in the order they are printed on a card, and the ninth bucket that
+   * is not a type: `Other` is where a token, a scheme or a row whose printing has left the card
+   * database lands, and it sorts last because it is a remainder rather than a kind.
+   */
+  it("buckets by the printed types, in printed order, dropping the empty ones", () => {
+    const bars = typeCounts([
+      card({ name: "Wastes", typeLine: "Basic Land" }),
+      card({ name: "Bolt", typeLine: "Instant" }),
+      card({ name: "Bear", typeLine: "Creature — Bear" }),
+      card({ name: "Relic", typeLine: "Artifact" }),
+    ]);
+
+    expect(bars.map((b) => b.label)).toEqual(["Creature", "Instant", "Artifact", "Land"]);
+  });
+
+  /** A card with two types is filed under the first one printed order names — an Artifact
+   *  Creature is a creature to everyone who has ever built a deck. */
+  it("files a card with two types under the earlier of them", () => {
+    expect(
+      typeCounts([card({ name: "Golem", typeLine: "Artifact Creature — Golem" })]).map(
+        (b) => b.label,
+      ),
+    ).toEqual(["Creature"]);
+  });
+
+  /** A double-faced card is what its front says it is: the back of a werewolf is still a
+   *  creature, but the back of an adventure or a modal DFC often is not. */
+  it("reads the front face's type line and nothing after the slashes", () => {
+    expect(
+      typeCounts([card({ name: "Trap", typeLine: "Land // Instant — Adventure" })]).map(
+        (b) => b.label,
+      ),
+    ).toEqual(["Land"]);
+  });
+
+  /** The orphan case: `deck_cards LEFT JOIN cards` answers a row with nulls, and it is still a
+   *  card in the deck. It is counted rather than dropped. */
+  it("puts a row with no type line in Other, last", () => {
+    expect(
+      typeCounts([
+        card({ name: "Ghost", typeLine: null }),
+        card({ name: "Bolt", typeLine: "Instant" }),
+      ]).map((b) => b.label),
+    ).toEqual(["Instant", "Other"]);
+  });
+
+  /** A count on a deck is copies, never rows — four Bolts are four cards. */
+  it("counts copies rather than rows", () => {
+    const bars = typeCounts([
+      card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
+      card({ name: "Bolt2", typeLine: "Instant", quantity: 2 }),
+    ]);
+
+    expect(bars).toHaveLength(1);
+    expect(bars[0].count).toBe(6);
+  });
+});
 
 describe("deckStats", () => {
   /** The curve is the deck's casting costs: nine buckets, and the last one is open-ended —
@@ -152,9 +222,9 @@ describe("deckStats", () => {
    * The one card class where the two readings of "land" part company, and the reason each
    * side is read the way it is.
    *
-   * `groupCards` files a card under the **first** type printed on it, so Urza's Saga heads up
-   * the Enchantment bar — which is right for the bars, because that is the heading the reader
-   * already sees over the rows. Everywhere else the type line decides: a deckbuilder counts
+   * `typeCounts` files a card under the **first** type printed on it, so Urza's Saga heads up
+   * the Enchantment bar — which is right for the bars, because the question a bar answers is
+   * what a card *does*. Everywhere else the type line decides: a deckbuilder counts
    * Urza's Saga among their lands, and it costs nothing to put onto the battlefield, so the
    * curve would file it under 0 — the very flood the curve excludes lands to avoid.
    */

@@ -98,6 +98,7 @@ const MAIN: PaneDeckContext = {
   categoryId: 1,
   categoryName: "Main deck",
   cardId: "p1",
+  variant: "live",
 };
 
 const cardDetail = vi.fn();
@@ -738,6 +739,32 @@ describe("the printings list, opened from a deck row", () => {
     expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live");
     await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("p2"));
     expect(useAppStore.getState().paneDeckContext).toEqual({ ...MAIN, cardId: "p2" });
+  });
+
+  /**
+   * **The list the row is in, and not whichever one the hook defaults to.**
+   *
+   * Schema v8 made a deck two lists and put `variant` in `DECK_CARD_GRAIN`, so a slot is four
+   * things. `PaneDeckContext` named three of them for one task and `useSwapFromPane` filled the
+   * fourth with its `live` default — which is refused where the theory row has no live twin, and,
+   * where the same printing sits in the same category of *both* lists, quietly rewrites the live
+   * row while the reader is looking at the theory one and reports success.
+   *
+   * The pane cannot tell those two cases apart and must not try: it swaps the row it was opened
+   * from. This is that, from the only surface that presses it.
+   */
+  it("swaps the theory row when the pane was opened from one", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    useAppStore.getState().openCardFromDeck({ ...MAIN, variant: "theory" });
+
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: /^Use this printing/ }));
+
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "theory");
+    // And the re-anchor keeps it: the pane is still showing a theory row afterwards, so a
+    // second press addresses the same list rather than falling back to `live`.
+    await waitFor(() => expect(useAppStore.getState().paneDeckContext?.variant).toBe("theory"));
   });
 
   /**

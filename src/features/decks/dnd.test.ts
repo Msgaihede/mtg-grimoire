@@ -9,8 +9,8 @@ import { dragData, dropWrite, readDragData, type DragPayload } from "./dnd";
  * tested here, exhaustively — every payload a target can be handed, and every answer the rule
  * gives, without a DOM in sight.
  *
- * The wiring is tested too, over the library's own code path, in `ZoneColumn.test.tsx` and
- * `DeckEditor.test.tsx`: `src/test-drag.ts` drives real `dragstart`/`dragenter`/`dragover`/
+ * The wiring is tested too, over the library's own code path, in `DeckEditor.test.tsx`:
+ * `src/test-drag.ts` drives real `dragstart`/`dragenter`/`dragover`/
  * `drop` events at the real registrations, which works because
  * `@atlaskit/pragmatic-drag-and-drop` hit-tests with `event.target` and `Element.closest`
  * rather than with `elementFromPoint`. That file records exactly what jsdom still cannot

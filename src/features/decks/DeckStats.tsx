@@ -5,7 +5,6 @@ import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
-import { groupCards } from "./ZoneColumn";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
@@ -14,8 +13,43 @@ import { groupCards } from "./ZoneColumn";
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /** The nine curve buckets — 0 through 7 exactly, and 8 open-ended, which is the bucketing the
- *  mana-value filter chips and `ZoneColumn`'s mana-value grouping already use. */
+ *  mana-value filter chips and `grouping.ts`'s mana-value grouping already use. */
 const CURVE_BUCKETS = 9;
+
+/**
+ * The eight card types, in the order they are printed on the type line, and the word each bar
+ * is named by.
+ *
+ * Order is the whole of the rule for a card with two types: an Artifact Creature is a creature
+ * to everyone who has ever built a deck, and `Creature` comes first here. `Land` is last of the
+ * eight for the same reason it is last in a decklist — it is where the counting ends.
+ *
+ * **Deliberately not `autoCategory.ts`'s list, though the eight words are the same.** That one
+ * checks `Land` *first*, because it decides where a card is filed and Dryad Arbor
+ * (`Land Creature — Forest Dryad`) belongs in the lands. These are bars over a curve, where the
+ * question is what a card *does*: an artifact land heads up the Artifact bar and Urza's Saga the
+ * Enchantment bar, which is the reading `isLand` below then contradicts on purpose for every
+ * other chart. That disagreement is named in `isLand`'s doc and pinned by `a land that is not
+ * filed under Land is still a land to every chart but the type bars` — folding the two orders
+ * together breaks whichever job loses.
+ *
+ * This lived in `ZoneColumn.groupCards` while the deck list was a column of type headings.
+ * Schema v8's rebuild draws its headings from `grouping.ts` instead, so this is now one
+ * surface's own bucketing and lives with the surface.
+ */
+const TYPE_BUCKETS = [
+  "Creature",
+  "Planeswalker",
+  "Instant",
+  "Sorcery",
+  "Artifact",
+  "Enchantment",
+  "Battle",
+  "Land",
+] as const;
+
+/** Where a token, a scheme, or a row whose printing has left the card database goes. */
+const OTHER = "Other";
 
 /** The five colours a pip can be, in the order symbols are printed. */
 type PipKey = (typeof MANA_LINE_KEYS)[number];
@@ -213,6 +247,39 @@ function isLand(typeLine: string | null): boolean {
 }
 
 /**
+ * The type bars: one per bucket something is in, in {@link TYPE_BUCKETS}' order.
+ *
+ * Empty buckets are dropped rather than drawn — a deck with no planeswalkers has no
+ * planeswalker bar — which is the same rule {@link drawable} applies to a pie, stated once for
+ * each shape because they are counted differently (copies here, slices there).
+ *
+ * Exported for its test and for nothing else: it is `deckStats`' arithmetic, and a chart is only
+ * as trustworthy as arithmetic somebody has checked.
+ */
+export function typeCounts(cards: readonly DeckCard[]): TypeCount[] {
+  const order = new Map<string, number>();
+  const counts = new Map<string, TypeCount>();
+
+  for (const card of cards) {
+    // The **front** face decides: `type_line` carries both sides of a double-faced card
+    // separated by `//`, and the back of a modal DFC is routinely a land while its front is a
+    // spell. A deck's curve is cast from the front.
+    const label = TYPE_BUCKETS.find((bucket) => front(card.typeLine).includes(bucket)) ?? OTHER;
+    const at = TYPE_BUCKETS.indexOf(label as (typeof TYPE_BUCKETS)[number]);
+    const key = label.toLowerCase();
+
+    const seen = counts.get(key);
+    if (seen) seen.count += card.quantity;
+    else {
+      order.set(key, at < 0 ? TYPE_BUCKETS.length : at);
+      counts.set(key, { key, label, count: card.quantity });
+    }
+  }
+
+  return [...counts.values()].sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+}
+
+/**
  * The buckets a pie can draw: the ones with something in them.
  *
  * Dropped here rather than in the chart so that every distribution this module answers has the
@@ -237,9 +304,9 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
   // kind it is.
   const counted = cards.filter((c) => c.categoryActive);
 
-  // The type bars are the deck list's own headings, read from the deck list's own helper — a
-  // bar and the heading over the rows it counts must never be two derivations of one thing.
-  const groups = groupCards(counted, "type");
+  // The type bars, in this file's own bucketing — see {@link TYPE_BUCKETS} for why it is not
+  // the add path's, and `isLand` below for the one card the two answer differently about.
+  const typeDist = typeCounts(counted);
   // Every other chart asks the type line instead; `isLand` is where that costs and buys.
   const lands = counted.filter((c) => isLand(c.typeLine));
   const nonlands = counted.filter((c) => !isLand(c.typeLine));
@@ -359,7 +426,7 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
     pips,
     colorDist,
     landDist,
-    typeDist: groups.map(({ key, label, count }) => ({ key, label, count })),
+    typeDist,
     averageManaValue: manaValued === 0 ? null : manaValueTotal / manaValued,
     priceUsd: priced === 0 ? null : priceUsd,
     unpriced,

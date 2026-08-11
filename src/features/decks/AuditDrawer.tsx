@@ -222,12 +222,11 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      // `LAYER.gate` is the scale's top rung, and an open drawer is the top of the screen.
-      // Not `dragTray`: nothing is being dragged, and the tray only exists during a drag this
-      // layer makes impossible. A `drawer` rung of its own belongs in `LAYER` once the three
-      // overlay surfaces of this rebuild have landed — one of them adding it is three agents
-      // editing one file.
-      className={cn("fixed inset-0 flex justify-end bg-black/60", LAYER.gate)}
+      // `LAYER.overlay`: the rung the editor's four full-window surfaces share. Above every
+      // anchored popup and above the drag tray — nothing is being dragged, since the tray only
+      // exists during a drag this layer makes impossible — and below `gate`, which is
+      // `SyncProgress` taking the window over.
+      className={cn("fixed inset-0 flex justify-end bg-black/60", LAYER.overlay)}
     >
       <div
         ref={panelRef}
