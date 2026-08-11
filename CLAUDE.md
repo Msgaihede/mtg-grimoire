@@ -556,6 +556,46 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
 - Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
+  job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
+  through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats
+  `RANK.update` 10; ties break by insertion order, because two hooks' effects run in an order
+  nobody chose). The store is created per `ActivityProvider`, at the top of `AppShell` and
+  above `children`, so a job started inside a view needs no wiring — and so it never becomes a
+  second `useAppStore`, the one global Storybook cannot make per-story. Registration is
+  **declarative**: pass the job or `null` every render, and a job cannot outlive the component
+  describing it. `put` is identity-in-identity-out when nothing moved, which is what lets the
+  register-every-render form cost nothing.
+- **The mana line reacts instantly and the sentence waits `ACTIVITY_DELAY_MS` (400 ms).**
+  Measured in the shipped window 2026-08-11, sampling the row every 40 ms across a forced
+  Refresh: **bar at 121 ms, sentence at 523 ms** — the gate, to 2 ms. The gate is on the
+  *slot*, not the job, so a sync handing over to an update download swaps the sentence
+  without the row blinking. `useDelayedFlag` turns **off** by adjusting state during render
+  rather than in an effect: an effect would clear it one commit late, and
+  `react-hooks/set-state-in-effect` rejects the synchronous call outright — the lint rule and
+  the correct behaviour agree here.
+  **It does not suppress a no-op Refresh, and the design note claiming it would was wrong.**
+  That whole run measured **1.4 s**, so "Checking for card data updates" was up for ~1.0 s
+  before "Already up to date" replaced it. 400 ms filters a *flash*, not a short run — and a
+  second of the app naming what it is checking is the good case, not the one to design out.
+- **The live phase sequence, measured 2026-08-11 over a real ingest** (116,695 cards, bulk
+  file of 2026-08-10): `Importing cards · 94,000 cards` → `Reclaiming disk space · 66%` (the
+  one true percentage, climbing) → `Updating set list` → **`Syncing card data`** →
+  `116,695 cards · data from 2026-08-10`. That fourth step is the generic fallback and is
+  correct rather than a bug: `done` is a terminal phase, and `busy` stays true until the
+  status poll catches up, so for up to a second the row honestly says a sync is still
+  finishing. The mana line has always done exactly this; nobody had seen it in words before.
+  At 1024 px, with the longest realistic sentence
+  (`Downloading update 0.3.0 · 12 / 40 MB`), the ribbon row measures 816 px and the body does
+  not scroll sideways.
+- **The status line is one permanently mounted `role="status"`, and the number inside it is
+  `aria-hidden`.** Mounted because a live region that first appears with its sentence already
+  inside announces nothing (the sidebar drop report's lesson). The number is hidden because a
+  live region announces its accessible text and skips `aria-hidden` subtrees: the label
+  changes ~4 times a sync, the ingest's count ~58 times, and the mana line's `aria-valuenow`
+  is where a fraction belongs. **`getByText` matches an element's own text nodes**, so a test
+  asserting the whole sentence reads `toHaveTextContent` off the line, never a combined
+  string matcher.
 - **Card art is drawn with `components/CardImage`, never a bare `<img>`.** It keys the image
   on its own URL, and that key is the whole component. A browser keeps painting an `<img>`'s
   last decoded frame until the new `src` decodes, and every card frame here belongs to a
