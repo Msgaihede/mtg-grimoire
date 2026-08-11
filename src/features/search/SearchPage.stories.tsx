@@ -111,7 +111,7 @@ export const Default: Story = {
   args: { view: "grid" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("41 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("36 cards")).toBeInTheDocument();
     // The first card in `search::ORDER_NAME` — the browse order, which is the card's name and
     // then its newest printing. Named rather than counted: jsdom's viewport is not the app's, so
     // *how many* tiles the virtualiser draws here is an artefact of `src/stories.test.tsx`'s
@@ -139,13 +139,13 @@ export const TableView: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("41 cards");
+    await canvas.findByText("36 cards");
     // **What assistive tech is told the list is, which no screenshot shows.** A virtualised
     // table holds a couple of dozen rows in the DOM; `aria-rowcount` is every matching row plus
-    // the header (`VirtualTable.tsx:181`), so 41 matches read as 42. Without it a screen reader
+    // the header (`VirtualTable.tsx:181`), so 36 matches read as 37. Without it a screen reader
     // is told the database holds twenty cards.
     const table = canvas.getByRole("table", { name: "Search results" });
-    await expect(table).toHaveAttribute("aria-rowcount", "42");
+    await expect(table).toHaveAttribute("aria-rowcount", "37");
   },
 };
 
@@ -178,7 +178,7 @@ export const Empty: Story = {
  * `Collection/Page` and `Wishlist/Page`, where it is a band under the row it belongs to.
  *
  * Kept as a story rather than left out, so that the claim is asserted rather than described: this
- * seed answers the same 41 cards `starter` does (measured 2026-08-10 over both seeds), and if a
+ * seed answers the same 36 cards `starter` does (measured 2026-08-10 over both seeds), and if a
  * future seed change makes an orphan visible here, this is where it fails.
  */
 export const NeedsReview: Story = {
@@ -186,7 +186,7 @@ export const NeedsReview: Story = {
   parameters: { fake: { seed: "needsReview" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("41 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("36 cards")).toBeInTheDocument();
   },
 };
 
@@ -206,7 +206,7 @@ export const Busy: Story = {
   parameters: { fake: { fault: "busy" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("41 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("36 cards")).toBeInTheDocument();
     // No alert either: the page's `role="alert"` band is for a *failed query*, and nothing here
     // failed.
     await expect(canvas.queryByRole("alert")).toBeNull();
@@ -214,22 +214,27 @@ export const Busy: Story = {
 };
 
 /**
- * 5 243 printings, and a count that stops before it has walked them.
+ * 5 243 printings of 686 cards — and the count that stops before it has walked them.
  *
- * The backend counts to `search::TOTAL_CAP` and no further — `db.ts:1201`, 5 000 — because
- * nobody reads the exact size of a 116 k-row browse. Past it the answer carries
- * `totalIsCapped`, and `countOf` (`SearchPage.tsx:222-225`) renders `5,000+ cards`: a floor,
- * which is true, rather than `5,000 cards`, which would not be.
+ * **This is the story where the collapse pays for itself.** The page opens on one row per
+ * card, so the caption is an exact `686 cards`; pressing All printings asks for the printings
+ * instead, and *then* the count runs past `search::TOTAL_CAP` (`db.ts`, 5 000) and stops.
+ * Past it the answer carries `totalIsCapped`, and `countOf` (`SearchPage.tsx`) renders
+ * `5,000+ cards`: a floor, which is true, rather than `5,000 cards`, which would not be.
  *
- * Reachable with no interaction at all. The unfiltered browse of this seed is already past the
- * cap — measured 2026-08-10: `total: 5000`, `totalIsCapped: true` — so the plus sign is what the
- * page opens on.
+ * The two captions are the same seed asked two questions, which is the clearest statement of
+ * what the toggle does that this file can make.
  */
 export const Large: Story = {
   args: { view: "grid" },
   parameters: { fake: { seed: "large" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // Collapsed — the default — the whole set fits under the cap and is counted exactly.
+    await expect(await canvas.findByText("686 cards")).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+
     await expect(await canvas.findByText("5,000+ cards")).toBeInTheDocument();
     // The lie the `+` exists to prevent, asserted as absent.
     await expect(canvas.queryByText("5,000 cards")).toBeNull();
@@ -245,12 +250,24 @@ export const Large: Story = {
  *
  * Invisible on screen, and the only reason this is a story of its own rather than a second
  * assertion on {@link Large}: the two views take different paths to the same number.
+ *
+ * All printings is pressed first, because the cap is only reachable over printings now — 686
+ * cards fit under it comfortably, and a collapsed table reports an honest `aria-rowcount`.
  */
 export const CappedTotal: Story = {
   args: { view: "table" },
   parameters: { fake: { seed: "large" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // Collapsed the count is exact, so the row count is a real number rather than "unknown".
+    await canvas.findByText("686 cards");
+    await expect(canvas.getByRole("table", { name: "Search results" })).toHaveAttribute(
+      "aria-rowcount",
+      "687",
+    );
+
+    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+
     await canvas.findByText("5,000+ cards");
     const table = canvas.getByRole("table", { name: "Search results" });
     await expect(table).toHaveAttribute("aria-rowcount", "-1");
@@ -273,6 +290,9 @@ export const NarrowedToAnExactCount: Story = {
   parameters: { fake: { seed: "large" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await canvas.findByText("686 cards");
+    // Over printings, because that is where the cap lives — see {@link CappedTotal}.
+    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
     await canvas.findByText("5,000+ cards");
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Ancient");
@@ -301,19 +321,23 @@ export const NarrowedToAnExactCount: Story = {
  * `OwnedBadge` draws nothing for it: the badge's own guard is `owned <= 0 && !wishlisted`
  * (`OwnedBadge.tsx:29`).
  *
- * Twelve entries over twelve distinct printings, so the filtered list is twelve rows — measured
- * 2026-08-10. The table rather than the wall, because at jsdom's stubbed viewport the wall's
- * virtualiser draws only the first few tiles and the row this story is about is the eighth.
+ * Twelve entries over twelve distinct printings — which the collapsed list shows as **nine
+ * cards**, because three of those printings are second copies of a card already in it. The
+ * filter narrows printings first and the survivors are grouped, so the count answers "how many
+ * cards do I have an entry for", which is the question the chip asks. Measured 2026-08-11.
+ *
+ * The table rather than the wall, because at jsdom's stubbed viewport the wall's virtualiser
+ * draws only the first few tiles and the row this story is about is the eighth.
  */
 export const OwnedCountsEntries: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("41 cards");
+    await canvas.findByText("36 cards");
 
     await userEvent.click(canvas.getByRole("button", { name: "Owned" }));
     await waitFor(async () => {
-      await expect(canvas.getByText("12 cards")).toBeInTheDocument();
+      await expect(canvas.getByText("9 cards")).toBeInTheDocument();
     });
 
     // Listed, with nothing to say about copies. `queryByText` over the row rather than over the

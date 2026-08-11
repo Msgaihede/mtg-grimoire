@@ -71,7 +71,7 @@ const meta = {
           "column beside the zones, with the wall's two slots pointed at this job: the badge " +
           "keeps telling the collection story, and the action becomes **Add to deck**.\n\n" +
           "Driven end to end by `.storybook/fake/`: the wall is `search_cards` over the seeded " +
-          "corpus (**41 cards** on the `starter` seed's default browse, measured 2026-08-10 — " +
+          "corpus (**36 cards** on the `starter` seed's default browse, measured 2026-08-10 — " +
           "43 printings less the two the fake's `paperOnly` default excludes), and the Add " +
           "button writes through `deck_add_card`.\n\n" +
           "**The zone choice sits above the results rather than on each of them.** It is the " +
@@ -126,7 +126,7 @@ export const Docked: Story = {
       "aria-expanded",
       "true",
     );
-    await expect(await within(panel).findByText("41 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
     // The zone is in every Add button's name, and it is the only part of the press a screenshot
     // cannot show: two tiles' buttons both called "Add" are two controls a screen reader cannot
@@ -175,7 +175,7 @@ export const Collapsed: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
-    await expect(await within(panel).findByText("41 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
     await userEvent.click(toggle);
 
@@ -183,7 +183,7 @@ export const Collapsed: Story = {
     // The same button, not a new one in the same place.
     await expect(within(panel).getByRole("button", { name: "Search cards" })).toBe(toggle);
     // Everything below the rail is gone with it: the filters, the count and the wall.
-    await expect(within(panel).queryByText("41 cards")).toBeNull();
+    await expect(within(panel).queryByText("36 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox")).toBeNull();
     await expect(within(panel).queryByLabelText("Add to")).toBeNull();
   },
@@ -265,7 +265,7 @@ export const NoMatch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    await expect(await within(panel).findByText("41 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
     // label, "Search cards".
@@ -309,6 +309,6 @@ export const Busy: Story = {
       "Could not add that card — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
-    await expect(within(panel).getByText("41 cards")).toBeInTheDocument();
+    await expect(within(panel).getByText("36 cards")).toBeInTheDocument();
   },
 };
