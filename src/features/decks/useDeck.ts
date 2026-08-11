@@ -19,16 +19,15 @@ const NO_CATEGORIES: readonly DeckCategory[] = [];
 const NO_TAGS: readonly DeckTag[] = [];
 
 /**
- * The variant this hook reads and writes.
+ * The variant every surface that has no opinion reads.
  *
  * Schema v8 gave every deck two lists — `live`, what is sleeved up, and `theory`, what it is
- * being built toward — but **nothing in the app switches between them yet**: there is no
- * control for it, and adding one is a design decision this re-point deliberately does not
- * make. Every read and every write here therefore names `live`, which is what the app meant by
- * "the deck" before the column existed. When a switcher lands, this constant becomes the
- * hook's argument and nothing else about these mutations changes.
+ * being built toward — and this is the one the app meant by "the deck" before the column
+ * existed. It is a **default argument** rather than a constant now: a caller with a Live/Theory
+ * control passes what the reader chose, and a caller that has none (the sidebar's drop target,
+ * the card pane) gets the deck as it stands.
  */
-const VARIANT: DeckVariant = "live";
+const DEFAULT_VARIANT: DeckVariant = "live";
 
 /**
  * What an add is filed under when the caller names no category.
@@ -39,16 +38,25 @@ const VARIANT: DeckVariant = "live";
  * that name: the v8 migration's own word for the pile it put every legacy main-deck row in, so
  * a deck that predates categories and one made since agree about where a plain add goes.
  *
- * **A placeholder, and named as one.** The spec's answer is `autoCategoryFor` — one rule, in
- * TypeScript, that reads a card's type line and answers the pile it belongs in ("Creatures",
- * "Lands", …). That rule is a later task's; until it exists, every add that names no column
- * goes to one pile rather than to a guess this file invents.
+ * **Still one pile rather than `autoCategoryFor`, and now for a different reason.** That rule
+ * exists (`autoCategory.ts`) and `useDeckMeta`'s `autoCategorise` presses it — but it reads a
+ * card's **type line**, and the thing these surfaces hand this hook is a bare `cardId`. A hook
+ * that fetched the card in order to file it would put a round trip in front of every quick add
+ * to answer a question the reader can settle in one press afterwards. So a plain add goes to
+ * one predictable pile, and the panel's "Auto-categorise from card types" is what splits it.
+ *
+ * Exported for that one reader: `useDeckMeta` has to know which piles are *nobody's choice*
+ * before it is allowed to empty them, and a second copy of this string there would be a second
+ * place to keep one word.
  */
-const DEFAULT_CATEGORY_NAME = "Main deck";
+export const DEFAULT_CATEGORY_NAME = "Main deck";
 
 /** One category slot, as every write here addresses it: by what it *is*, never by the
  *  `deck_cards.id` the answer carries. A stale row id is the difference between emptying the
- *  slot the reader pressed and emptying one somebody else already refilled. */
+ *  slot the reader pressed and emptying one somebody else already refilled.
+ *
+ *  The **variant** is the third part of the slot and is not a field here: it is the hook's, and
+ *  it is in the query key — see {@link useDeck}. */
 interface Slot {
   cardId: string;
   categoryId: number;
@@ -62,8 +70,11 @@ interface Slot {
  * nothing because a mutation that resolves without writing is a stepper that looks like it
  * worked, and the rejection lands in the mutation's error state, which the editor already
  * renders.
+ *
+ * Exported because every deck hook in this folder takes a nullable id for the same reason —
+ * the view mounts whether or not a deck is open — and one fence is one sentence to keep.
  */
-function opened(id: number | null): number {
+export function opened(id: number | null): number {
   if (id === null) throw new Error("No deck is open.");
   return id;
 }
@@ -79,21 +90,33 @@ function opened(id: number | null): number {
  * `id` is nullable because the gallery is the same view: Decks mounts this hook whether or
  * not a deck is open, and a query that fired anyway would ask the backend for deck `null`
  * on every gallery render.
+ *
+ * **Switching variant is a query-key change, not a refetch.** `["decks", "detail", id,
+ * variant]`, so Live and Theory are two cached answers rather than one that is thrown away
+ * and re-read every time the reader flips the switch — flipping back is instant, and each
+ * list keeps its own freshness. It also means the optimistic patch below is addressing the
+ * right list by construction: the cache it writes into holds one variant's cards and no
+ * other.
  */
-export function useDeck(id: number | null) {
+export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIANT) {
   const queryClient = useQueryClient();
 
-  const detailKey = ["decks", "detail", id];
+  const detailKey = ["decks", "detail", id, variant];
 
   const query = useQuery({
     queryKey: detailKey,
-    queryFn: () => ipc.deckGet(opened(id), VARIANT),
+    queryFn: () => ipc.deckGet(opened(id), variant),
     enabled: id !== null,
   });
 
   /**
    * Rewrite one category slot in the cached answer, or drop it — addressed by the slot rather
    * than by `deck_cards.id`, like every write here.
+   *
+   * The slot is `(cardId, categoryId, variant)`, which is `DECK_CARD_GRAIN` minus the deck the
+   * hook already is. The variant clause is belt and braces — the key scopes this cache to one
+   * list already — and it is written out because the grain is four things and a reader
+   * checking this against the schema should find all four.
    *
    * A slot the cache does not hold is left alone rather than added: this patches what is on
    * screen, and inventing a row the read never answered is how an optimistic update starts
@@ -102,7 +125,8 @@ export function useDeck(id: number | null) {
   const patchSlot = (slot: Slot, next: ((card: DeckCard) => DeckCard) | null) => {
     queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
       if (!data) return data;
-      const at = (c: DeckCard) => c.cardId === slot.cardId && c.categoryId === slot.categoryId;
+      const at = (c: DeckCard) =>
+        c.cardId === slot.cardId && c.categoryId === slot.categoryId && c.variant === variant;
       if (!data.cards.some(at)) return data;
       return {
         ...data,
@@ -183,7 +207,7 @@ export function useDeck(id: number | null) {
         cardId,
         categoryId,
         categoryId === null ? DEFAULT_CATEGORY_NAME : null,
-        VARIANT,
+        variant,
         quantity,
       ),
     onSuccess: invalidate,
@@ -215,7 +239,7 @@ export function useDeck(id: number | null) {
    */
   const setQuantity = useMutation({
     mutationFn: ({ cardId, categoryId, quantity }: Slot & { quantity: number }) =>
-      ipc.deckSetCardQuantity(opened(id), cardId, categoryId, VARIANT, quantity),
+      ipc.deckSetCardQuantity(opened(id), cardId, categoryId, variant, quantity),
     onMutate: async ({ cardId, categoryId, quantity }) => {
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
@@ -244,7 +268,7 @@ export function useDeck(id: number | null) {
    *  like the rest. */
   const moveCard = useMutation({
     mutationFn: ({ cardId, from, to }: { cardId: string; from: number; to: number }) =>
-      ipc.deckMoveCard(opened(id), cardId, from, to, VARIANT),
+      ipc.deckMoveCard(opened(id), cardId, from, to, variant),
     onSuccess: invalidate,
   });
 
@@ -285,7 +309,7 @@ export function useDeck(id: number | null) {
       fromCardId: string;
       toCardId: string;
       categoryId: number;
-    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, categoryId, VARIANT),
+    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, categoryId, variant),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -314,24 +338,49 @@ export function useDeck(id: number | null) {
     },
   });
 
+  /**
+   * Put the deck's one tag on a card, or take it off with `tagId: null`.
+   *
+   * A **card** write, addressed by the same slot as the stepper and the move — which is why it
+   * lives here rather than in `useDeckMeta` beside the tag CRUD. The label is per-deck data; a
+   * card *wearing* one is a fact about a row of `deck_cards`, and a stale editor pointing at a
+   * row that has since moved, folded or been stepped to zero is answered in words.
+   *
+   * **No optimistic patch, and no reallocation to wait for.** A tag changes what a row is
+   * *called* and nothing about what is in the deck — the backend does not run the allocator for
+   * it — so there is no number on screen that this could get wrong for a beat. It still takes
+   * the `["decks"]` root on the way out, because the tag counts on every `DeckTag` row moved.
+   */
+  const setTag = useMutation({
+    mutationFn: ({ cardId, categoryId, tagId }: Slot & { tagId: number | null }) =>
+      ipc.deckCardSetTag(opened(id), cardId, categoryId, variant, tagId),
+    onSuccess: invalidate,
+    onError: invalidate,
+  });
+
   return {
     query,
     /** The gallery's row for this deck, or `null` — both while it is loading and when the id
      *  names a deck another view has since deleted. */
     deck: query.data?.deck ?? null,
-    /** Every card of the `live` list, in category `sortOrder`, then by the name the row
-     *  carries, then by row id. */
+    /** Every card of the variant this hook was opened on, in category `sortOrder`, then by the
+     *  name the row carries, then by row id. */
     cards: query.data?.cards ?? NONE,
     /** **Every** category of the deck in `sortOrder`, empty and inactive ones included — the
-     *  editor's columns are this list, not the categories that happen to hold a card. */
+     *  editor's columns are this list, not the categories that happen to hold a card. The list
+     *  is the same in both variants; only the counts on each row are scoped. */
     categories: query.data?.categories ?? NO_CATEGORIES,
     /** Every tag of the deck, alphabetically — the palette a row's label is drawn from. */
     tags: query.data?.tags ?? NO_TAGS,
+    /** Which of the two lists this hook is reading and writing. Handed back so a caller that
+     *  took the default does not have to know what it was. */
+    variant,
     update,
     addCard,
     setQuantity,
     moveCard,
     swapPrinting,
+    setTag,
     missingToWishlist,
   };
 }
@@ -349,15 +398,28 @@ export type Deck = ReturnType<typeof useDeck>;
  * query that asks for nothing, exactly as the gallery's `useDeck(null)` does.
  *
  * **The whole hook, deliberately, rather than a mutation defined here.** The query it brings
- * along is the same `["decks", "detail", id]` the editor is already reading, and TanStack
- * shares a query's cache between observers — so with an editor open this costs no `deck_get`
- * at all (the app's `staleTime` is 30 s), and with the context set from a deck the reader is
- * looking at there is always an editor open. A second definition of the mutation would cost
- * more than the query does: the refusal rule that carries a pane-fired GONE back to the editor
- * lives on the definition, and two definitions are two places to keep it.
+ * along is the same `["decks", "detail", id, variant]` the editor is already reading, and
+ * TanStack shares a query's cache between observers — so with an editor open this costs no
+ * `deck_get` at all (the app's `staleTime` is 30 s), and with the context set from a deck the
+ * reader is looking at there is always an editor open. A second definition of the mutation
+ * would cost more than the query does: the refusal rule that carries a pane-fired GONE back to
+ * the editor lives on the definition, and two definitions are two places to keep it.
+ *
+ * **`variant` is a parameter with a `live` default, and the default is a known gap.**
+ * {@link PaneDeckContext} does not carry a variant — it names a deck, a category and a
+ * printing — so a pane opened from a **Theory** row and left to the default addresses the
+ * `live` list. Two ways that goes wrong: the swap is refused, because
+ * `(deck, card, category, variant)` matches no row; or, when the same printing sits in the
+ * same category of *both* lists, it swaps the live row while the reader is looking at the
+ * theory one. Closing it properly is a field on the store's context, which is the writer's to
+ * add; until then the caller passes what the editor is showing, and this shares the editor's
+ * cache only when the two agree.
  */
-export function useSwapFromPane(context: PaneDeckContext | null) {
-  const deck = useDeck(context?.deckId ?? null);
+export function useSwapFromPane(
+  context: PaneDeckContext | null,
+  variant: DeckVariant = DEFAULT_VARIANT,
+) {
+  const deck = useDeck(context?.deckId ?? null, variant);
   return {
     swap: deck.swapPrinting,
     /**

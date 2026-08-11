@@ -100,6 +100,11 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 0,
   updatedAt: 1_800_000_000,
+  // The four v8 deck columns. Every real row carries all four, so the fixture does too.
+  coverKind: "card_art",
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
 };
 
 const BOLT: CardSummary = {

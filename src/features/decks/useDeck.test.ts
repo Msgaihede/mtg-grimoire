@@ -2,7 +2,14 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { DeckCard, DeckCategory, DeckDetail, DeckRow, SwapResult } from "@/lib/ipc";
+import type {
+  DeckCard,
+  DeckCategory,
+  DeckDetail,
+  DeckRow,
+  DeckVariant,
+  SwapResult,
+} from "@/lib/ipc";
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
@@ -10,6 +17,7 @@ const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+const deckCardSetTag = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -19,6 +27,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMoveCard,
     deckMissingToWishlist,
     deckSwapPrinting,
+    deckCardSetTag,
   },
 }));
 
@@ -36,6 +45,13 @@ const DECK: DeckRow = {
   archived: false,
   cardCount: 4,
   updatedAt: 1_800_000_000,
+  // The four v8 deck columns. `theoryEnabled: false` is the ordinary deck — the switch is off
+  // until the reader turns it on, and turning it on seeds the theory list from live so that an
+  // empty second list is never a state anyone has to interpret.
+  coverKind: "card_art",
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
 };
 
 /**
@@ -136,6 +152,7 @@ beforeEach(() => {
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  deckCardSetTag.mockReset().mockResolvedValue(undefined);
 });
 
 describe("useDeck", () => {
@@ -153,16 +170,73 @@ describe("useDeck", () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
 
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
-    // `live` and never a choice the caller makes: nothing in the app switches between the two
-    // lists yet, and the hook names the one the app meant by "the deck" before the column
-    // existed. The variant scopes the **cards** — the categories and tags come back either way.
+    // `live` is the **default argument**, not a constant: a caller with no Live/Theory control
+    // gets the deck as it stands. The variant scopes the **cards** — the categories and tags
+    // come back either way.
     expect(deckGet).toHaveBeenCalledWith(4, "live");
     expect(result.current.cards).toEqual([BOLT]);
     // Every category, including the two holding nothing: the editor's columns are this list
     // rather than the piles that happen to be full.
     expect(result.current.categories).toEqual([MAIN, SIDE, MAYBE]);
     expect(result.current.tags).toEqual([]);
-    expect(client.getQueryData(["decks", "detail", 4])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "live"])).toEqual(DETAIL);
+  });
+
+  /**
+   * **Switching variant is a query-key change, not a refetch.**
+   *
+   * The two lists are two cached answers rather than one that is thrown away every time the
+   * reader flips the switch: flipping back is a cache hit, and each list keeps its own
+   * freshness. It is also what makes the optimistic patch below address the right list by
+   * construction — the cache it writes into holds one variant's cards and no other.
+   */
+  it("caches each variant's cards under its own key", async () => {
+    const PLAN: DeckCard = { ...BOLT, id: 11, variant: "theory", quantity: 2 };
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? { ...DETAIL, cards: [PLAN] } : DETAIL),
+    );
+    const { result, rerender } = renderHook(
+      ({ variant }: { variant: DeckVariant }) => useDeck(4, variant),
+      { wrapper, initialProps: { variant: "live" as DeckVariant } },
+    );
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    rerender({ variant: "theory" });
+
+    await waitFor(() => expect(result.current.cards).toEqual([PLAN]));
+    expect(deckGet).toHaveBeenCalledWith(4, "theory");
+    // Both answers are still there. Nothing was invalidated and nothing was re-read to get
+    // here — a switch is a different question, not a stale answer to the same one.
+    expect(client.getQueryData(["decks", "detail", 4, "live"])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "theory"])).toEqual({
+      ...DETAIL,
+      cards: [PLAN],
+    });
+  });
+
+  /**
+   * Every write goes to the list the hook was opened on — the fourth part of
+   * `DECK_CARD_GRAIN`, and the difference between editing the plan and editing the deck.
+   *
+   * The same printing in the same category is **two rows**, one per variant, so a write that
+   * sent the wrong word would edit a real deck while the reader was looking at a plan.
+   */
+  it("writes to the variant it was opened on", async () => {
+    const { result } = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      quantity: 3,
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "theory", 3);
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", categoryId: SIDE.id, quantity: 1 });
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", 1);
+
+    await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, "theory");
   });
 
   /** A deck the gallery has not refreshed since another view deleted it. `null` is the
@@ -285,7 +359,7 @@ describe("useDeck", () => {
     // Mid-flight, and the deck on screen is still the deck that was read: no guess was
     // written. This is what "no optimism" costs and buys — a beat of the old printing rather
     // than a line that disappears and comes back.
-    expect(client.getQueryData(["decks", "detail", 4])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "live"])).toEqual(DETAIL);
 
     answer({ folded: true, quantity: 7 });
 
@@ -332,6 +406,26 @@ describe("useDeck", () => {
     // printing of every card the deck was short of, and a search behind this is visibly wrong
     // rather than stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /**
+   * The one tag a deck card carries — a **card** write, addressed by the same slot as the
+   * stepper and the move, which is why it lives here rather than beside the tag CRUD in
+   * `useDeckMeta`. The label is per-deck data; a card *wearing* one is a fact about a row.
+   *
+   * `null` is not a second command: untagging is a write to a nullable column.
+   */
+  it("tags and untags a card through the slot the row lives in", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, tagId: 8 });
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", 8);
+
+    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, tagId: null });
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 });
 
