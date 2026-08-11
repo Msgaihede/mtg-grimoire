@@ -404,7 +404,9 @@ and in `from_json`, beside `legalities: compact(v, "legalities")`:
                 .map_or(0, crate::legalities::legal_mask),
 ```
 
-In `ingest.rs`, add `legal_mask` to `STAGING_INSERT`'s column list and `?43` to its `VALUES`, and `c.legal_mask,` to the `params![…]` in `write_batch` — **in the same position in both**, immediately after `c.legalities`.
+In `ingest.rs`, add `legal_mask` to `STAGING_INSERT`'s column list and `?43` to its `VALUES`, and `c.legal_mask as i64,` to the `params![…]` in `write_batch` — **in the same position in both**, immediately after `c.legalities`.
+
+**The `as i64` is required, not stylistic.** rusqlite implements `ToSql` for `i64` and for the unsigned types up to `u32`, but **not for `u64`** — SQLite's INTEGER is signed 64-bit, so the conversion cannot be infallible in general. `CardRow::legal_mask` stays `u64` because a bitmask is not a number you do arithmetic on, and the cast is lossless while `LEGALITY_KEYS.len() <= 63` — which Task 1's `the_key_list_fits_in_a_u64` already fences, and which 23 keys is nowhere near.
 
 - [ ] **Step 4: Run the full Rust suite**
 
@@ -1876,9 +1878,9 @@ import { describe, expect, it } from "vitest";
 import { colorDisabled, optionDisabled } from "./facets";
 
 describe("the greying rule", () => {
-  it("greys an option whose count is zero", () => {
+  it("greys an option whose count is zero, and only that one", () => {
     expect(optionDisabled({ lea: 0 }, "lea", false)).toBe(true);
-    expect(optionDisabled({ lea: 3 }, "lea", false)).toBe(true === false);
+    expect(optionDisabled({ lea: 3 }, "lea", false)).toBe(false);
   });
 
   /** The way out of a dead end has to stay open, or a reader who filters into nothing is
