@@ -698,9 +698,11 @@ to guess.
   `dataUpdateCount` stopped dead at 40 (≈40 × 500 ms over a ~20 s cold window) rather than
   climbing, which is the half of the claim that says it does not poll a healthy index forever.
 - **An index over an *empty* corpus answers `ready: false` too**, and that is the state a new
-  user is in for the whole of the opening sync — **~20 s** on the release build this was
-  verified on (2026-08-11), against the ~93 s the Data & sync section quotes from a *debug*
-  run. Counted honestly every option is zero,
+  user is in for the whole of the opening sync — **~20 s** *inferred* on the release build this
+  was driven on (2026-08-11: the index answered `ready: true` 21 s after launch, and a ready
+  index needs an ingested, swapped corpus), against the ~93 s the Data & sync section quotes
+  from a *debug* run. Nobody has stopwatched a release sync end to end.
+  Counted honestly every option is zero,
   the greying rule dims the entire row, and with no filter on there is no `Reset all` drawn to
   escape by. Verified in the shipped window 2026-08-11 against a cleared `data/`: **0 of 19
   chips greyed, 0 of 8 format options disabled, and no chip carrying a count in its name**,

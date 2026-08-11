@@ -18,11 +18,16 @@ use serde_json::Value;
 /// Every `legalities` key. **Append only** — see the module docs. Bit *k* of a mask is
 /// `LEGALITY_KEYS[k]`.
 ///
-/// The 23 seeded here happen to be Scryfall's own emission order (alphabetical, as of
-/// 2026-08-11), and that is a coincidence of the first fill rather than a rule: the append
-/// rule outranks it, so the first key Scryfall adds that does not sort last will land at the
-/// end regardless. Do not re-sort this list to restore the resemblance — bit positions are
-/// stored data.
+/// **This list is alphabetical. Scryfall's emission order is not, and never was.** Scryfall
+/// emits `standard, future, historic, timeless, gladiator, pioneer, modern, …` — recorded in
+/// `docs/superpowers/research/2026-08-04-scryfall-api.md` §4f, in the domain-rules research
+/// beside it, and observable in every `legalities` object in
+/// `tests/fixtures/cards_sample.jsonl`. The sort here was this list's author's choice.
+///
+/// Neither order carries any meaning, because the **append-only** rule outranks both: a 24th
+/// key goes on the end whatever it is alphabetically and wherever Scryfall emits it. Never
+/// re-sort to restore either — bit positions are stored data, and a re-sort silently
+/// reinterprets every row already on disk.
 pub const LEGALITY_KEYS: [&str; 23] = [
     "alchemy",
     "brawl",

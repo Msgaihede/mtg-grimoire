@@ -78,10 +78,10 @@ export function facetTitle(label: string, count: number | undefined): string | u
 /**
  * The facet counts a control may believe, or `undefined` when nothing is known.
  *
- * **A cold index answers `ready: false` with every map empty**, not zeroed — the "a key is
- * never absent" promise on `FacetResponse` holds only for a ready one. Collapsing the whole
- * response to `undefined` here is what keeps that distinction from having to be remembered
- * at each of the five controls.
+ * **A cold index answers `ready: false` with every map empty**, not zeroed — `FacetResponse`
+ * promises its keys on a **ready** response and on no other. Collapsing the whole response to
+ * `undefined` here is what keeps that distinction from having to be remembered at each of the
+ * five controls.
  */
 export function facetsOrUndefined(f: FacetResponse | undefined): FacetResponse | undefined {
   return f?.ready ? f : undefined;
