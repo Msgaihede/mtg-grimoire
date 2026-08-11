@@ -214,9 +214,17 @@ leaves no history — the rule `deck_audit` already follows.
 
 **IPC and UI.** `error_log_list(limit)` and `error_log_clear()`. `SettingsPage` gains an
 `ErrorLogPanel`: newest first, relative time, source, message, `×N` when folded, and a
-Clear button; an empty state saying nothing has failed; and a notice when a Scryfall
-lockout is currently in force, with the time remaining. Storybook story and
+Clear button; and an empty state saying nothing has failed. Storybook story and
 `.storybook/fake` wiring, per the repo's rules for a new panel.
+
+**Dropped during implementation: the live lockout countdown.** This section originally
+called for a notice showing the time remaining on an active 429. `SettingsPage` receives
+only `update` from `App.tsx`, and the sync status lives in `AppShell`'s `useSync` — so
+surfacing a countdown meant either a second `useSync` (a second poller, the arrangement
+`useUpdate` is deliberately structured to avoid) or threading a new prop through two
+components for one line of text. The log's own `rate_limited` rows carry the message and
+when it last happened, which answers the same question without either. Worth revisiting if
+the ribbon ever wants it, where the poll already exists.
 
 ## Testing
 
