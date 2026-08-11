@@ -2285,6 +2285,10 @@ Add to the Data & sync section, or a new one:
   owed is the key-order freeze.*
 - `idx_cards_collapse` now carries the filter columns, with the 505 ms → 41 ms figure and the +0.89 MB / 4 ms cost.
 - The `CardIndex`: what it is, that it is derived and rebuilt wholesale, that cold means fail-open, and the measured warm-up from Task 4 Step 5.
+- **The Storybook fake's fault list**, which was already three faults stale before this plan
+  (`deckMeta`, `updateAvailable`, `updateError`) and gained `indexCold` in Task 8. CLAUDE.md
+  names four; the union now holds eight. A prose-only edit routes to neither CI job, which is
+  exactly why it rots.
 - **Correct the stale 277 ms browse figure.** The uncollapsed browse is 10.5 ms and the collapsed one 54 ms, both measured 2026-08-11; `idx_cards_collapse` is why.
 
 - [ ] **Step 5: Verify and commit**
