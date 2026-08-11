@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { RANK } from "@/lib/activity";
 import type { SyncStatus } from "@/lib/ipc";
 import { statusLine } from "@/lib/useSync";
 import { Ribbon } from "./Ribbon";
@@ -43,7 +44,8 @@ const meta = {
     upToDate: false,
     hasError: false,
     onRefresh: fn(),
-    sync: null,
+    activity: null,
+    activityVisible: false,
   },
   decorators: [
     // The ribbon is `shrink-0` inside a flex column and stretches to whatever it is given, so a
@@ -64,6 +66,12 @@ const meta = {
           "below it. Refresh and the sync status used to live in a per-view header, which made " +
           "them look like properties of whatever was on screen; they are properties of the " +
           "*app*, so they live in one place that never changes.\n\n" +
+          "**One line does two jobs.** Idle, it reports the card database; while something " +
+          "long is running it reports that instead, and hands the row back the moment the " +
+          "work stops. It is a single permanently mounted `role=\"status\"` — a live region " +
+          "that first appears with its sentence already inside announces nothing — and the " +
+          "number beside the phase is `aria-hidden`, because the label changes about four " +
+          "times in a sync while an ingest's count changes fifty-eight.\n\n" +
           "**Every state here is an argument, not a world.** This component subscribes to " +
           "nothing and polls nothing — `AppShell` owns the one `sync_status` poll and the one " +
           "`sync:progress` listener and hands the answers down — so a story that emitted a " +
@@ -102,22 +110,123 @@ export const Idle: Story = {};
  * The button says it instead by going disabled, and by `aria-busy` — which is the half of that
  * pair no screenshot shows, and the half a screen reader gets.
  *
- * `value: 0.5` with the label "Importing cards" is the ingest at half way, which is the phase a
- * sync spends most of its ~93 s in (CLAUDE.md, measured 2026-08-06).
+ * The status line stops reporting the corpus and starts reporting the work — for the ninety
+ * seconds of a sync, "116,590 cards" is the sentence in this row least about what is
+ * happening. `value: 0.5` with "Importing cards" is the ingest at half way, which is the phase
+ * a sync spends most of its ~93 s in (CLAUDE.md, measured 2026-08-06).
  */
 export const Syncing: Story = {
-  args: { busy: true, sync: { value: 0.5, label: "Importing cards" } },
+  args: {
+    busy: true,
+    activity: {
+      key: "sync",
+      rank: RANK.sync,
+      label: "Importing cards",
+      detail: "83,000 cards",
+      value: 0.5,
+    },
+    activityVisible: true,
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const refresh = canvas.getByRole("button", { name: "Refresh data" });
     await expect(refresh).toBeDisabled();
     await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await expect(canvas.getByRole("status")).toHaveTextContent("Importing cards · 83,000 cards");
     // The line is named after the phase — an unnamed progress bar is announced as an anonymous
     // percentage, and the phase is the only thing that says what is being measured.
     await expect(canvas.getByRole("progressbar", { name: "Importing cards" })).toHaveAttribute(
       "aria-valuenow",
       "50",
     );
+  },
+};
+
+/**
+ * The download, in the one unit a 77 MB file is worth reporting in.
+ *
+ * Whole megabytes: a tenth of a megabyte reflowing twice a second is motion without
+ * information. The number is Geist Mono and `aria-hidden` — the label is what gets announced,
+ * because it changes about four times in a sync while this changes constantly, and the mana
+ * line's `aria-valuenow` already carries the fraction.
+ */
+export const Downloading: Story = {
+  args: {
+    busy: true,
+    activity: {
+      key: "sync",
+      rank: RANK.sync,
+      label: "Downloading card data",
+      detail: "45 / 77 MB",
+      value: 0.58,
+    },
+    activityVisible: true,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText(/45 \/ 77 MB/, { selector: "span" })).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+  },
+};
+
+/**
+ * The first second of a Refresh: the bar is up, the sentence is not.
+ *
+ * `checking` is over in under a second and a Refresh that finds nothing new is over in ~1.8 s,
+ * so `AppShell` holds the text back by `ACTIVITY_DELAY_MS` while the line reacts immediately.
+ * This is that gap — a state a reader really does see on most Refreshes — and the row goes on
+ * showing the corpus summary rather than blanking.
+ */
+export const StartingUp: Story = {
+  args: {
+    busy: true,
+    activity: {
+      key: "sync",
+      rank: RANK.sync,
+      label: "Checking for card data updates",
+      detail: null,
+      value: null,
+    },
+    activityVisible: false,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("status")).toHaveTextContent(IDLE_LINE);
+    // The line is already moving, under the name of the phase nobody has been told about yet.
+    await expect(
+      canvas.getByRole("progressbar", { name: "Checking for card data updates" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The app's other long job, in the same row.
+ *
+ * The registry is what makes this the same code path as a sync: `updateActivity` produces an
+ * `Activity` and the ribbon does not know or care which feature made it. Refresh stays
+ * **enabled** — a download says nothing about the card data, and the two really can overlap,
+ * which is why an activity carries a rank at all (`RANK.sync` wins).
+ */
+export const UpdateDownloading: Story = {
+  args: {
+    activity: {
+      key: "update-download",
+      rank: RANK.update,
+      label: "Downloading update 0.4.0",
+      detail: "12 / 40 MB",
+      value: 0.3,
+    },
+    activityVisible: true,
+    updateVersion: "0.4.0",
+    updateInstallable: true,
+    onOpenUpdate: fn(),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("status")).toHaveTextContent("Downloading update 0.4.0");
+    await expect(canvas.getByRole("button", { name: "Refresh data" })).toBeEnabled();
   },
 };
 

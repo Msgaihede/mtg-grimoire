@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { RANK, type Activity } from "@/lib/activity";
 import { Ribbon, type RibbonProps } from "./Ribbon";
 
 const props = (over: Partial<RibbonProps> = {}): RibbonProps => ({
@@ -11,9 +12,18 @@ const props = (over: Partial<RibbonProps> = {}): RibbonProps => ({
   upToDate: false,
   hasError: false,
   onRefresh: vi.fn(),
-  sync: null,
+  activity: null,
+  activityVisible: false,
   ...over,
 });
+
+const importing: Activity = {
+  key: "sync",
+  rank: RANK.sync,
+  label: "Importing cards",
+  detail: "83,000 cards",
+  value: 0.5,
+};
 
 describe("Ribbon", () => {
   /** Global actions live here now, not in a view — that is the whole point of the row. */
@@ -77,13 +87,56 @@ describe("Ribbon", () => {
     expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
   });
 
-  it("hands the sync to the mana line", () => {
-    render(<Ribbon {...props({ busy: true, sync: { value: 0.5, label: "Importing cards" } })} />);
+  it("hands the job to the mana line, whether or not the row has room to say so", () => {
+    render(<Ribbon {...props({ busy: true, activity: importing })} />);
 
+    // The line reacts to the job immediately; only the sentence waits.
     expect(screen.getByRole("progressbar", { name: "Importing cards" })).toHaveAttribute(
       "aria-valuenow",
       "50",
     );
+  });
+
+  /**
+   * The whole feature: for ninety seconds the row used to go on reading "116,568 cards",
+   * which is the one sentence least about what is happening.
+   */
+  it("says what the app is doing, and gives the summary back when it stops", () => {
+    const { rerender } = render(
+      <Ribbon {...props({ busy: true, activity: importing, activityVisible: true })} />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Importing cards · 83,000 cards");
+    expect(screen.queryByText(/116,568 cards/)).not.toBeInTheDocument();
+
+    rerender(<Ribbon {...props()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("116,568 cards · data from 2026-08-03");
+  });
+
+  /**
+   * A live region announces its accessible text, and skips `aria-hidden` subtrees. The label
+   * changes about four times in a sync and is worth hearing; the number changes fifty-eight
+   * times during the ingest alone, and the mana line's `aria-valuenow` already carries it.
+   */
+  it("announces the phase and not the number", () => {
+    render(<Ribbon {...props({ busy: true, activity: importing, activityVisible: true })} />);
+
+    expect(screen.getByText(/83,000 cards/, { selector: "span" })).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+  });
+
+  /**
+   * A live region that first appears with its sentence already inside it announces nothing —
+   * the lesson the sidebar's drop report and the card pane's swap report both cost. So the
+   * line is mounted from the start and is merely empty.
+   */
+  it("keeps the status line mounted before it has anything to say", () => {
+    render(<Ribbon {...props({ statusLine: null })} />);
+
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
   it("stays out of the way when there is no update", () => {

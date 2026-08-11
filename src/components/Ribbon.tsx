@@ -1,6 +1,6 @@
 import { CircleArrowUp, RefreshCw } from "lucide-react";
 import { ManaLine } from "@/components/ManaLine";
-import type { ManaLineSync } from "@/lib/mana";
+import type { Activity } from "@/lib/activity";
 import { cn } from "@/lib/utils";
 
 export interface RibbonProps {
@@ -22,8 +22,20 @@ export interface RibbonProps {
   /** An error banner is showing below; the ribbon stays out of its way. */
   hasError: boolean;
   onRefresh: () => void;
-  /** Drives the mana line. `null` when nothing is running. */
-  sync: ManaLineSync | null;
+  /**
+   * The long job the app is running, or `null` when it is idle. Drives the mana line, and —
+   * once {@link RibbonProps.activityVisible} — the status line too.
+   */
+  activity: Activity | null;
+  /**
+   * Whether the job has been running long enough to be worth a sentence.
+   *
+   * A separate flag rather than a second, delayed copy of the job: two props carrying the
+   * same thing at two different times are two props that can disagree. `AppShell` owns the
+   * threshold (`ACTIVITY_DELAY_MS`), because the 2px line must react instantly while a
+   * sentence nobody can finish reading is worse than no sentence at all.
+   */
+  activityVisible: boolean;
   /** A newer version of the app exists — `"0.3.0"`. `null` when there is nothing to say. */
   updateVersion?: string | null;
   /**
@@ -55,7 +67,8 @@ export function Ribbon({
   upToDate,
   hasError,
   onRefresh,
-  sync,
+  activity,
+  activityVisible,
   updateVersion = null,
   updateInstallable = false,
   onOpenUpdate,
@@ -73,6 +86,11 @@ export function Ribbon({
     ]
       .filter((s): s is string => typeof s === "string" && s.length > 0)
       .join("\n") || undefined;
+
+  // The job takes the row while it is running; the corpus summary is a static fact about a
+  // database and comes straight back when it stops.
+  const showActivity = activityVisible && activity !== null;
+  const said = showActivity ? activity.label : statusLine;
 
   return (
     <div className="shrink-0">
@@ -119,11 +137,31 @@ export function Ribbon({
               Already up to date
             </p>
           )}
-          {statusLine && (
-            <p className="truncate text-xs text-dim" title={tooltip}>
-              {statusLine}
-            </p>
-          )}
+          {/* One line, mounted for the life of the ribbon, saying either what the app is
+              doing or what is in the database.
+
+              **Mounted even when empty**, because it is a live region and a live region that
+              first appears with its sentence already inside it announces nothing — the same
+              lesson as the sidebar's drop report. Empty, `sr-only` takes it out of the flex
+              row so the gap between its neighbours does not grow by a phantom element. */}
+          <p
+            role="status"
+            className={said ? "min-w-0 truncate text-xs text-dim" : "sr-only"}
+            title={tooltip}
+          >
+            {said}
+            {/* Hidden from the announcement, not from the eye: the label changes about four
+                times in a sync while the number changes fifty-eight times during the ingest
+                alone, and the mana line's `aria-valuenow` is where a fraction belongs. Geist
+                Mono because the direction's third type role is data, and a count that reflows
+                its own width every 200 ms is exactly what it is for. */}
+            {showActivity && activity.detail && (
+              <span aria-hidden="true" className="font-mono tabular-nums">
+                {" · "}
+                {activity.detail}
+              </span>
+            )}
+          </p>
           {/* No spinner on the icon while `busy`: the mana line two pixels below is the
               app's one sync animation, and the direction's motion budget spends itself
               there. The button says it another way — disabled, and `aria-busy`. */}
@@ -144,7 +182,7 @@ export function Ribbon({
           </button>
         </div>
       </div>
-      <ManaLine sync={sync} />
+      <ManaLine sync={activity} />
     </div>
   );
 }

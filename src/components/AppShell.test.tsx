@@ -277,7 +277,11 @@ describe("the error banner", () => {
       lastError: null,
       lastIngestSkipped: null,
       dataDir: "D:\\app\\data",
-      syncing: true,
+      // The one field here that is *not* database-derived — it is an in-memory flag — and
+      // the one the assertion below depends on. A blind poll can report either, and it has
+      // to be `false` for the merged count to be observable at all: while a sync is running
+      // the status line reports the sync, which is the whole point of the activity line.
+      syncing: false,
       imageStoreFailures: 0,
     });
     render(<AppShell update={noUpdate}>{null}</AppShell>);
