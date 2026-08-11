@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ArchiveRestore,
@@ -13,7 +12,7 @@ import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl } from "@/lib/images";
-import { ipc, ipcError, type DeckRow } from "@/lib/ipc";
+import { ipcError, type DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -25,12 +24,14 @@ import {
   deckDraggable,
   flattenFolders,
   folderDescendants,
+  FOLDER_ROW_ATTR,
   FolderTree,
   MoveToFolder,
   plural,
   useDeckDragging,
   useDeckDropTarget,
   type DeckDrag,
+  type FolderNaming,
   type FolderNode,
 } from "./FolderTree";
 import { useDeckFolders } from "./useDeckFolders";
@@ -113,6 +114,7 @@ type Panel =
   | { kind: "deleteDeck"; deckId: number }
   | { kind: "moveDeck"; deckId: number }
   | { kind: "newFolder"; parentId: number | null }
+  | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
   | null;
@@ -129,7 +131,6 @@ export function DecksPage() {
   const decks = useDecks();
   const folders = useDeckFolders();
   const { query } = decks;
-  const queryClient = useQueryClient();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
@@ -142,29 +143,22 @@ export function DecksPage() {
   const wallRef = useRef<HTMLElement>(null);
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * The folder row to put the caret back on once the field that replaced it has gone.
+   *
+   * The opener rule's *reason* rather than its letter. A rename field stands where the row
+   * stood, so the row the caret should return to does not exist while the layer is up and is a
+   * **different element** when it comes back — `openerRef.current?.focus()` would be a call on
+   * a detached node and the caret would land on `<body>`. So the id is remembered and the row
+   * is found after the render that redraws it, which is why this is read from an effect and
+   * `dismiss` cannot do it inline.
+   */
+  const refocusFolderRef = useRef<number | null>(null);
 
   /** The deck in the air, or `null` — what every drawer that could take *it* lights up for. */
   const drag = useDeckDragging();
 
-  /**
-   * Filing a deck, which is the one write on this screen that {@link DeckPatch} cannot express.
-   *
-   * A patch writes every column with `coalesce(?n, column)`, so a bound NULL reads as "leave
-   * it": there is no patch that un-files a deck, and a drag out of a folder written as one
-   * would silently do nothing. `deck_set_folder` is the command where `null` means the root.
-   *
-   * Defined here rather than in `useDecks` because this screen is the only surface that files
-   * anything; it invalidates the same `["decks"]` root every other deck write does, on the way
-   * out as well as on the way in — a refusal here is a busy database or a folder another
-   * surface has already deleted, and the second must not leave a tile drawn in a drawer that is
-   * gone.
-   */
-  const setFolder = useMutation({
-    mutationFn: ({ deckId, folderId }: { deckId: number; folderId: number | null }) =>
-      ipc.deckSetFolder(deckId, folderId),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["decks"] }),
-    onError: () => void queryClient.invalidateQueries({ queryKey: ["decks"] }),
-  });
+  const setFolder = decks.setFolder;
 
   /**
    * The folder a deck is drawn in.
@@ -264,10 +258,22 @@ export function DecksPage() {
   // already somewhere else, and one function wired to both paths breaks it in two visible
   // ways (a Tab forward out of Cancel bounces backwards, and a control that disables itself
   // mid-write blurs into a hand-back nobody asked for).
+  // The rename field is the one layer whose opener is not where the caret should land: it
+  // *replaced* the row, so the row is what it comes back to — see {@link refocusFolderRef}.
   const dismiss = useCallback(() => {
-    openerRef.current?.focus();
+    if (panel?.kind === "renameFolder") refocusFolderRef.current = panel.folderId;
+    else openerRef.current?.focus();
     setPanel(null);
-  }, []);
+  }, [panel]);
+
+  // The other end of that, after the render that redraws the row. No deps: a hand-back owed is
+  // a hand-back owed on whatever render pays it, and the ref is cleared as it is spent.
+  useEffect(() => {
+    const id = refocusFolderRef.current;
+    if (id === null) return;
+    refocusFolderRef.current = null;
+    wallRef.current?.querySelector<HTMLButtonElement>(`[${FOLDER_ROW_ATTR}="${id}"]`)?.focus();
+  });
 
   /** The click-away way out: the layer goes, the caret stays where the reader put it. */
   const close = useCallback(() => setPanel(null), []);
@@ -321,26 +327,36 @@ export function DecksPage() {
     [dismiss, setOpenDeckId],
   );
 
-  const createFolder = useCallback(
-    (parentId: number | null, name: string) => {
-      folders.create.mutate(
-        { parentId, name },
-        {
-          onSuccess: (folder) => {
-            // Made in order to put something in it: the new drawer is the one the reader is
-            // standing in when the field closes.
-            setSelectedFolderId(folder.id);
-            dismiss();
+  /**
+   * The tree's one field, answered — whichever of its two jobs it is doing.
+   *
+   * One callback because there is one field: which write a name becomes is a fact about the
+   * open `Panel`, which this component owns, rather than something the tree has to be told
+   * twice and then hand back.
+   */
+  const nameFolder = useCallback(
+    (name: string) => {
+      if (panel?.kind === "newFolder") {
+        folders.create.mutate(
+          { parentId: panel.parentId, name },
+          {
+            onSuccess: (folder) => {
+              // Made in order to put something in it: the new drawer is the one the reader is
+              // standing in when the field closes.
+              setSelectedFolderId(folder.id);
+              dismiss();
+            },
           },
-        },
-      );
+        );
+      } else if (panel?.kind === "renameFolder") {
+        folders.rename.mutate({ id: panel.folderId, name }, { onSuccess: dismiss });
+      }
     },
-    [folders.create, dismiss],
+    [panel, folders.create, folders.rename, dismiss],
   );
 
   const fileDeck = useCallback(
-    (drag: DeckDrag, folderId: number | null) =>
-      setFolder.mutate({ deckId: drag.deckId, folderId }),
+    (drag: DeckDrag, folderId: number | null) => setFolder.mutate({ id: drag.deckId, folderId }),
     [setFolder],
   );
 
@@ -354,6 +370,30 @@ export function DecksPage() {
     },
     [decks.decks, folderOf],
   );
+
+  /**
+   * Renaming, from either route.
+   *
+   * `folders.rename.reset()` for `openCreate`'s reason — a refusal from the last attempt is not
+   * news about this one — and no opener, because the row the field replaces is what the caret
+   * comes back to whichever control started it.
+   */
+  const startRename = useCallback(
+    (folderId: number) => {
+      folders.rename.reset();
+      openerRef.current = null;
+      setPanel({ kind: "renameFolder", folderId });
+    },
+    [folders.rename],
+  );
+
+  /** The tree's one field, as the tree needs to know it. */
+  const naming: FolderNaming | null =
+    panel?.kind === "newFolder"
+      ? { kind: "new", parentId: panel.parentId }
+      : panel?.kind === "renameFolder"
+        ? { kind: "rename", folderId: panel.folderId }
+        : null;
 
   const failure = query.isError ? ipcError(query.error) : null;
   const status = query.isPending ? "Reading your decks…" : failure;
@@ -369,6 +409,7 @@ export function DecksPage() {
     decks.duplicate,
     setFolder,
     folders.create,
+    folders.rename,
     folders.move,
     folders.remove,
   ];
@@ -407,14 +448,15 @@ export function DecksPage() {
           drag={drag}
           canDropIn={canFile}
           onDropIn={fileDeck}
-          creatingAt={panel?.kind === "newFolder" ? { parentId: panel.parentId } : null}
-          onOpenCreate={(parentId, opener) => {
+          naming={naming}
+          onOpenNew={(parentId, opener) => {
             folders.create.reset();
             open({ kind: "newFolder", parentId }, opener);
           }}
-          onCloseCreate={close}
-          onCreate={createFolder}
-          creating={folders.create.isPending}
+          onOpenRename={startRename}
+          onCloseNaming={close}
+          onName={nameFolder}
+          busy={folders.create.isPending || folders.rename.isPending}
           failure={folders.query.isError ? ipcError(folders.query.error) : null}
           pending={folders.query.isPending}
         />
@@ -429,6 +471,25 @@ export function DecksPage() {
             <div className="ml-auto flex items-center gap-2">
               {openNode !== null && (
                 <>
+                  {/* The pointer's route to a rename. The field it opens is in the tree, where
+                      the folder is — the trigger is here because a 208px row with an indent, a
+                      glyph, a name, a count and a "new folder" control has no width left for a
+                      second one, and because this is already where the three things you do
+                      *to* a folder live. F2 on the row is the keyboard's shortcut. */}
+                  {/* The ellipsis is the row's own convention and it is load-bearing here:
+                      each of these three opens something and the thing it opens carries a
+                      control named for the write itself ("Rename folder", "Delete folder"). A
+                      trigger sharing that name would be two controls with one name on screen at
+                      once — which is exactly what a screen reader would have to disambiguate by
+                      position. */}
+                  <button
+                    type="button"
+                    onClick={() => startRename(openNode.folder.id)}
+                    className={HEADING_BUTTON}
+                  >
+                    Rename folder…
+                  </button>
+
                   <div className="relative">
                     <button
                       type="button"
@@ -482,7 +543,7 @@ export function DecksPage() {
                       }
                       className={cn(HEADING_BUTTON, "hover:text-destructive")}
                     >
-                      Delete folder
+                      Delete folder…
                     </button>
                     {panel?.kind === "deleteFolder" && (
                       <DeleteFolderConfirm
@@ -586,7 +647,7 @@ export function DecksPage() {
                   onAskDelete={askDelete}
                   onAskMove={askMove}
                   onMove={(folderId) =>
-                    setFolder.mutate({ deckId: deck.id, folderId }, { onSuccess: dismiss })
+                    setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                   }
                   onConfirmDelete={confirmDelete}
                   onCancelPanel={dismiss}
@@ -639,7 +700,7 @@ export function DecksPage() {
                       onAskDelete={askDelete}
                       onAskMove={askMove}
                       onMove={(folderId) =>
-                        setFolder.mutate({ deckId: deck.id, folderId }, { onSuccess: dismiss })
+                        setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                       }
                       onConfirmDelete={confirmDelete}
                       onCancelPanel={dismiss}
