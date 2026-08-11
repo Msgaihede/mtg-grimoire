@@ -857,26 +857,57 @@ mod tests {
         );
     }
 
+    /// Every reservation there is, as `(collection entry, copies)`, oldest first.
+    fn allocations(conn: &Connection) -> Vec<(i64, i64)> {
+        conn.prepare("SELECT collection_entry_id, quantity FROM deck_allocations ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
     /// A plan reserves nothing. This is the rule every other module states and this one has
     /// the sharpest way to break: seeding writes a pile of `theory` rows in one statement, and
     /// an allocator run over them would take copies away from decks that are real.
+    ///
+    /// **The fixture has to own the card and claim it live, or the test cannot fail.** The
+    /// first version of this compared an allocation count of 0 against an allocation count of
+    /// 0: nothing was copied, and nothing could have been claimed either way. Here the live
+    /// list really has reserved all four copies before the copy runs, so a plan that claimed
+    /// too would come out at eight — and the allocator is run again *afterwards*, over a
+    /// database that now holds both lists, because "an allocator run over them" is the
+    /// sentence this test is named for and the only way to make it is to run one.
     #[test]
     fn seeding_the_plan_claims_no_collection_copy() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
-        own(&conn, "bolt-lea", 4);
-        add(&conn, id, "serra-lea", main, THEORY, 1);
-        let before: i64 = conn
-            .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
-            .unwrap();
+        // **Eight owned against a live list of four**, and the second number is what makes the
+        // test able to fail: with only four in the binder the clamp would hold the answer at
+        // four however many lists claimed it, and the doubling would be invisible.
+        let entry = own(&conn, "bolt-lea", 8);
+        // A card write runs the allocator, so this is a real reservation of four copies.
+        add(&conn, id, "bolt-lea", main, LIVE, 4);
+        assert_eq!(
+            allocations(&conn),
+            vec![(entry, 4)],
+            "the live list must have claimed copies for there to be a doubling to catch"
+        );
 
         copy_from_live(&conn, id).unwrap();
+        crate::deck::allocate_deck(&conn, id).unwrap();
 
-        let after: i64 = conn
-            .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(before, after);
+        assert_eq!(
+            cards_in(&conn, id, THEORY),
+            vec![("bolt-lea".to_owned(), 4)],
+            "the plan holds the same four copies"
+        );
+        assert_eq!(
+            allocations(&conn),
+            vec![(entry, 4)],
+            "and the deck still reserves four, not eight"
+        );
     }
 
     /// A stale deck id is answered in words by every entry point here, rather than by an empty

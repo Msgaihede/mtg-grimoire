@@ -2996,11 +2996,31 @@ mod tests {
         assert_eq!(count(&conn, "deck_cards"), 0, "and nothing was written");
 
         // Every card write runs the same two fences, so the CHECK and the FK never reach a
-        // user.
-        assert!(set_card_quantity(&conn, deck.id, "bolt-lea", theirs, LIVE, 1).is_err());
-        assert!(set_card_quantity(&conn, deck.id, "bolt-lea", main, "draft", 1).is_err());
-        assert!(move_card(&conn, deck.id, "bolt-lea", main, theirs, LIVE).is_err());
-        assert!(swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", theirs, LIVE).is_err());
+        // user. **The row has to exist first and the refusal has to be compared by text**, and
+        // both halves are the point: with an empty deck every one of these calls errors at its
+        // row lookup instead, with `card_gone`, so an `is_err()` here goes on passing with the
+        // fences deleted from all three commands. That is what this assertion used to be.
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        assert_eq!(
+            set_card_quantity(&conn, deck.id, "bolt-lea", theirs, LIVE, 1).unwrap_err(),
+            crate::deck_meta::CATEGORY_WRONG_DECK
+        );
+        let err = set_card_quantity(&conn, deck.id, "bolt-lea", main, "draft", 1).unwrap_err();
+        assert!(err.contains("draft"), "{err}");
+        assert_eq!(
+            move_card(&conn, deck.id, "bolt-lea", main, theirs, LIVE).unwrap_err(),
+            crate::deck_meta::CATEGORY_WRONG_DECK,
+            "the destination is fenced as well as the source"
+        );
+        assert_eq!(
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", theirs, LIVE).unwrap_err(),
+            crate::deck_meta::CATEGORY_WRONG_DECK
+        );
+        assert_eq!(
+            count(&conn, "deck_cards"),
+            1,
+            "and the one row that does exist is untouched"
+        );
     }
 
     #[test]

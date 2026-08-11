@@ -3022,29 +3022,53 @@ pub(crate) mod tests {
     /// still there and still resolves afterwards — proving the migration does not quietly
     /// clear a user's claims, not that the rebuild "cannot" disturb them, since that FK chain
     /// does not run through `deck_cards` at all.
+    ///
+    /// **Two decks, because the backfill's JOIN has two terms.** It is
+    /// `ON cat.deck_id = dc.deck_id AND cat.kind = dc.zone`, and a one-deck fixture exercises
+    /// only the second: with a single deck there is exactly one category of each kind, so
+    /// dropping `cat.deck_id` changes nothing and the deck-scoping half of the JOIN goes
+    /// unchecked entirely. Measured with two decks: dropping that term matches each card
+    /// against *both* decks' category of its kind, and since the rebuild copies `dc.id`
+    /// verbatim, `migrate` dies at "UNIQUE constraint failed: deck_cards_v8.id" — a hard
+    /// failure where there had been none at all. The per-card `cat.deck_id` assertion below is
+    /// the direct statement of the same rule, and is what would catch a future backfill that
+    /// picked one wrong category rather than two.
     #[test]
     fn the_v8_step_carries_a_v6_deck_across_into_categories() {
         let conn = v6_deck_database();
-        conn.execute(
-            "INSERT INTO decks (name, created_at, updated_at)
-             VALUES ('Burn', unixepoch(), unixepoch())",
-            [],
-        )
-        .unwrap();
-        let deck_id = conn.last_insert_rowid();
+        let deck = |name: &str| {
+            conn.execute(
+                "INSERT INTO decks (name, created_at, updated_at)
+                 VALUES (?1, unixepoch(), unixepoch())",
+                rusqlite::params![name],
+            )
+            .unwrap();
+            conn.last_insert_rowid()
+        };
+        let deck_id = deck("Burn");
+        let other_id = deck("Angels");
 
         let zones = ["main", "side", "commander", "companion", "maybe"];
         let mut ids = Vec::new();
         for zone in zones {
-            conn.execute(
-                "INSERT INTO deck_cards
-                    (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
-                     created_at,updated_at)
-                 VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,3,unixepoch(),unixepoch())",
-                rusqlite::params![deck_id, format!("bolt-{zone}"), zone],
-            )
-            .unwrap();
-            ids.push((zone, conn.last_insert_rowid()));
+            // The same five zones in both decks, with different printings so each row can be
+            // found on its own afterwards.
+            for (owner, prefix) in [(deck_id, "bolt"), (other_id, "serra")] {
+                conn.execute(
+                    "INSERT INTO deck_cards
+                        (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                         created_at,updated_at)
+                     VALUES (?1,?2,'lea','161','en','Lightning Bolt',?3,3,unixepoch(),unixepoch())",
+                    rusqlite::params![owner, format!("{prefix}-{zone}"), zone],
+                )
+                .unwrap();
+                ids.push((
+                    owner,
+                    zone,
+                    format!("{prefix}-{zone}"),
+                    conn.last_insert_rowid(),
+                ));
+            }
         }
 
         // A live reservation the migration must not quietly clear: four copies owned, all
@@ -3125,16 +3149,20 @@ pub(crate) mod tests {
             "the migration must not quietly clear a user's existing allocation"
         );
 
-        for (zone, id) in ids {
-            let (kind, is_active, quantity, row_id): (String, i64, i64, i64) = conn
-                .query_row(
-                    "SELECT cat.kind, cat.is_active, dc.quantity, dc.id
+        for (owner, zone, card_id, id) in ids {
+            let (owning_deck, kind, is_active, quantity, row_id): (i64, String, i64, i64, i64) =
+                conn.query_row(
+                    "SELECT cat.deck_id, cat.kind, cat.is_active, dc.quantity, dc.id
                        FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
                       WHERE dc.card_id = ?1",
-                    [format!("bolt-{zone}")],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    [&card_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
                 )
-                .unwrap_or_else(|e| panic!("no migrated row for the `{zone}` card: {e}"));
+                .unwrap_or_else(|e| panic!("no migrated row for `{card_id}`: {e}"));
+            assert_eq!(
+                owning_deck, owner,
+                "`{card_id}` must land in a category of **its own** deck"
+            );
             assert_eq!(
                 kind, zone,
                 "the `{zone}` card must land in a category of the matching kind"
