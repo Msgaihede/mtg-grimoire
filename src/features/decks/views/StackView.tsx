@@ -2,6 +2,7 @@
  * The deck as stacks of cards in columns — the default view, and the one the redesign is
  * built around.
  */
+import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { CardStack, stackHeight } from "../CardStack";
@@ -24,7 +25,8 @@ const COLUMN_WIDTH = "14rem";
  * How a test finds a column. An attribute rather than a role, because a column is a *layout*
  * and carries no meaning for a reader — `packColumns` decides which groups share one, and the
  * only claim worth pinning is that it decided rather than dropped everything into one box.
- * `ZoneColumn`'s `data-zone-scroller` is the same idea for the same reason.
+ * `DropIndicator`'s `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for
+ * the same reason.
  */
 export const STACK_COLUMN_ATTR = "data-stack-column";
 
@@ -118,7 +120,7 @@ function StackGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
-  const { attach, over } = useCategoryDrop(group.categoryId, actions?.drop);
+  const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
 
   return (
     <section
@@ -136,7 +138,11 @@ function StackGroup({
         group.isActive
           ? "border border-border"
           : "border border-dashed border-border bg-surface/40",
-        over && "border-accent",
+        // `AppShell`'s pair, as in the other three views — a ring rather than this column's own
+        // border colour, so the dashed edge that says "switched off" is not overwritten by the
+        // mark that says "drop here".
+        eligible && DROP_RING,
+        over && DROP_OVER,
       )}
     >
       {/* The app's own drop mark, the same one the deck's columns used to draw. */}

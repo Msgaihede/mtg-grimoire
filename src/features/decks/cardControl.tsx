@@ -23,7 +23,10 @@
  * view without a deck behind it, and it is why adding these changed no existing view test.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import {
+  dropTargetForElements,
+  monitorForElements,
+} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -231,10 +234,43 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
  * `onDrop` is a dependency of the registration, so hand it a stable function or every render
  * re-registers — the editor's `applyDrop` is a `useCallback` over three `mutate`s for exactly
  * this reason.
+ *
+ * ## Two flags, because a drop target has two things to say
+ *
+ * `eligible` is "a card is in the air and this pile could take it" and `over` is "and it is
+ * this one" — the sidebar's pair (`AppShell`'s `DROP_RING` / `DROP_OVER`) said on the four
+ * surfaces a reader actually drags between. Without the first, a card picked up in a fifteen-
+ * category deck lights nothing at all until the pointer happens to cross a target, so the
+ * reader has to hunt for the gesture's own affordance.
+ *
+ * **A monitor per group rather than one per view**, which is the trade worth naming: a deck has
+ * a dozen categories, so a dozen registrations — but pdnd only asks them at `dragstart` and at
+ * `drop`, never per pointer move. The alternative is one monitor at the top of each view and
+ * the flag drilled down through four different group components, which is four places for the
+ * four views to disagree again. `canMonitor` is `canDrop`'s own question, so "eligible" means
+ * this pile really would take *this* card and not merely that something is being dragged.
  */
 export function useCategoryDrop(categoryId: number | null, onDrop?: (write: DeckWrite) => void) {
   const [over, setOver] = useState(false);
+  const [eligible, setEligible] = useState(false);
   const enabled = categoryId !== null && onDrop !== undefined;
+
+  useEffect(() => {
+    if (categoryId === null || !onDrop) return;
+    return monitorForElements({
+      canMonitor: ({ source }) => {
+        const payload = readDragData(source.data);
+        return payload !== null && dropWrite(payload, { kind: "category", categoryId }) !== null;
+      },
+      onDragStart: () => setEligible(true),
+      // Fires for a cancelled drag as well as a completed one — the platform ends both the same
+      // way — so the ring stands down on Escape without this hearing a keypress.
+      onDrop: () => {
+        setEligible(false);
+        setOver(false);
+      },
+    });
+  }, [categoryId, onDrop]);
 
   // Named `attach` rather than `ref`, which is not fussiness: React's ref lint reads a hook
   // result called `ref` as a ref object and flags every read of the value beside it as a ref
@@ -264,7 +300,7 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
     [categoryId, onDrop],
   );
 
-  return { attach, over: over && enabled };
+  return { attach, over: over && enabled, eligible: eligible && enabled };
 }
 
 /**
