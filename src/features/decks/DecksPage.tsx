@@ -11,7 +11,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
-import { ART_ASPECT, cardImageUrl, imageOrigin } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
@@ -729,26 +729,29 @@ export function DecksPage() {
  * cover was never drawn *anywhere* on this screen — measured in the live window, where the tile
  * said "No cover" while the route answered the file 626×457 in 2 ms.
  *
- * **The artist rule belongs to the card-art arm and must never be moved onto the custom one.**
- * Scryfall's policy is about *Scryfall's* pictures: an `art` crop has no printed frame, so
- * wherever one is shown the illustrator is credited. A file the reader uploaded is theirs,
- * carries no Scryfall artist, and needs no credit — so a `coverArtist === null` test on this
- * arm would hide every custom cover for a second, quieter reason than the first. It reads like
- * a missing guard and is not one.
+ * **A card cover this app cannot credit is not drawn at all.** Scryfall's image policy is that
+ * an `art` crop, having no printed frame, may be shown only where the illustrator is named — so
+ * if the credit cannot be shown, neither can the crop. `DeckRow.coverArtist` is `null` exactly
+ * when the printing has left `cards`, and it comes back on the next sync that brings the
+ * printing back, so this is a state that heals itself and never a picture permanently withheld.
+ * The frame then says "No cover" rather than claiming a failure, because from the reader's side
+ * that is what it is: nothing to show yet.
  *
- * No cache-busting on the custom URL, deliberately. It names the **deck**, not the picture
- * (`/cover/<deckId>`), and the route answers `no-store` precisely so that a stable URL can
- * carry changing bytes — `images.rs`'s `cover_response`. A `?v=` here would be a second
- * mechanism for something already solved one floor down.
+ * **The rule belongs to the card-art arm and must never be moved onto the custom one.** The
+ * policy is about *Scryfall's* pictures. A file the reader uploaded is theirs, carries no
+ * Scryfall artist, and needs no credit — so a `coverArtist === null` test on that arm would
+ * hide every custom cover, and it would read like a missing guard rather than the bug it is.
  *
- * Spelled the way `DeckSettingsDialog`'s `CoverPreview` spells it, verbatim, because the two
- * draw the same picture. One `deckCoverUrl` in `@/lib/images` would be better than two literals
- * and is the right follow-up; it is not this fix, which must not touch a shared file while
- * three agents are live.
+ * `DeckSettingsDialog`'s `CoverPreview` makes the same two decisions in the same words, which is
+ * the point: the gallery and the dialog draw one picture and used to disagree about this exact
+ * case. If a third surface ever draws a cover, these four lines want a shared home rather than
+ * a third copy.
  */
 function coverUrl(deck: DeckRow): string | null {
-  if (deck.coverKind === "custom") return `${imageOrigin(navigator.userAgent)}/cover/${deck.id}`;
-  return deck.coverCardId === null ? null : cardImageUrl(deck.coverCardId, 0, "art");
+  if (deck.coverKind === "custom") return deckCoverUrl(deck.id);
+  return deck.coverCardId !== null && deck.coverArtist !== null
+    ? cardImageUrl(deck.coverCardId, 0, "art")
+    : null;
 }
 
 /** Every live deck filed in a folder **or in anything under it** — what a folder card draws
@@ -793,8 +796,15 @@ function FolderCard({
   const eligible = drag !== null && canDrop(drag);
 
   // Scryfall's image policy, applied to a strip exactly as it is to a cover: an `art` crop has
-  // no printed frame, so a cover this app cannot name an illustrator for is not drawn. That
-  // also excludes a reader's own uploaded cover, which has no Scryfall artist by construction.
+  // no printed frame, so a cover this app cannot name an illustrator for is not drawn.
+  //
+  // **This excludes a custom cover, and that is deliberate — do not "fix" it.** A deck wearing
+  // the reader's own picture therefore contributes its *card* art here (or nothing, if it has
+  // none), which is a small inconsistency with its own tile and the cheaper of the two
+  // mistakes. The strip is a sample of member card art under **one** credit line; letting an
+  // uploaded picture in would make that line cover something it cannot speak for, and the
+  // alternative — a credit line that names artists for some tiles in the strip and not others —
+  // is worse than the inconsistency. Ruled 2026-08-11 rather than left as an oversight.
   const arts = members
     .flatMap((deck) =>
       deck.coverCardId !== null && deck.coverArtist !== null

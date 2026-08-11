@@ -285,20 +285,34 @@ describe("DecksPage", () => {
   });
 
   /**
-   * The ruling's real case, and the only one that can put the word "null" on a tile: the deck
-   * *has* a cover, and the printing it names has left the card database — so `cards` answers
-   * no artist for it. The art still resolves (the id is still an id); the credit does not.
+   * **If the credit cannot be shown, neither can the crop.**
+   *
+   * The deck *has* a cover and the printing it names has left the card database, so `cards`
+   * answers no artist for it. The id still resolves to a URL — but Scryfall's image policy is
+   * that an `art` crop, having no printed frame, may be shown only where the illustrator is
+   * named, and `DeckRow.coverArtist`'s own doc records the ruling: "a cover with no artist is
+   * **not drawn** — an orphaned cover heals on the next sync". So the frame stays empty and
+   * says "No cover", which is what this is from the reader's side: nothing to show *yet*.
+   *
+   * **This case asserted the exact opposite until 2026-08-11** — that the `<img>` was present
+   * with only the credit line suppressed — and it was wrong from the day it was written, not
+   * made wrong by later code. `DeckSettingsDialog`'s `CoverPreview` had the policy right on the
+   * same picture, so the gallery and the dialog disagreed about one deck row. Corrected on a
+   * ruling, deliberately, and recorded here so the old assertion is never restored as a "fix":
+   * a tile drawing an uncreditable crop is a policy violation, not a feature.
+   *
+   * The rule stops at the card-art arm. A custom cover is the reader's own picture, carries no
+   * Scryfall artist and needs no credit — {@link
+   * "draws a custom cover for a deck that has no card art and no artist"} is that half.
    */
-  it("draws no credit for a cover whose printing has left the card database", async () => {
+  it("draws no card art at all for a cover it cannot credit", async () => {
     deckList.mockResolvedValue([{ ...BURN, coverArtist: null }]);
 
     wrap(<DecksPage />);
 
-    const tile = await tileFor("Burn");
-    expect(tile.querySelector("img")).toHaveAttribute(
-      "src",
-      cardImageUrl(BURN.coverCardId!, 0, "art"),
-    );
+    const tile = (await tileFor("Burn")).closest("li")!;
+    expect(tile.querySelector("img")).toBeNull();
+    expect(within(tile).getByText("No cover")).toBeInTheDocument();
     expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
   });
