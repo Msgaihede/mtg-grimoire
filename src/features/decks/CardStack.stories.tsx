@@ -52,7 +52,7 @@ export const Default: Story = {};
 
 /**
  * The flip-through itself: dwell on a card and it opens, cross to the next and the stack hands
- * over without ever closing, leave and it collapses after a beat.
+ * over without closing, leave and it collapses after a beat.
  *
  * **This story could not exist before, and the reason it could not is worth keeping.** The lift
  * used to be CSS `:hover`, and `userEvent.hover` dispatches pointer events without ever
@@ -67,9 +67,11 @@ export const Default: Story = {};
  * the shipped WebView2 over CDP, which is still the only one of the three that can see the
  * paint.
  *
- * What is asserted: the open card is the one dwelt on and there is only ever one; crossing to
- * the next card never leaves the stack closed; and **the list's height does not move through
- * any of it**, which is the property the whole component exists for.
+ * What is asserted: the open card is the one dwelt on, there is only ever one of them, the
+ * hand-over to the next card leaves exactly one open, and **the list's height does not move
+ * through any of it** — the property the whole component exists for. The *close delay* is the
+ * one rule left to `CardStack.test.tsx`, because proving it means catching a frame at a named
+ * millisecond, and only a fake clock can be at a named millisecond.
  */
 export const FlipThrough: Story = {
   play: async ({ canvasElement }) => {
@@ -88,8 +90,9 @@ export const FlipThrough: Story = {
     expect(open()).toHaveLength(1);
     expect(list.style.height).toBe(height);
 
-    // Crossing to the next card hands over: exactly one card is up at the moment the second
-    // one commits, and it is the second one.
+    // Crossing to the next card is a hand-over rather than a close and an open: moving between
+    // two cards never leaves the list, so nothing schedules a collapse in the first place, and
+    // exactly one card is up once the second commits.
     await userEvent.hover(cards[2]);
     await waitFor(() => expect(cards[2]).toHaveAttribute(STACK_OPEN_ATTR));
     expect(cards[1]).not.toHaveAttribute(STACK_OPEN_ATTR);
