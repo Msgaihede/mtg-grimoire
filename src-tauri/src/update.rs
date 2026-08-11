@@ -488,6 +488,52 @@ pub async fn check(
     updater: &Arc<Updater>,
     force: bool,
 ) -> Result<UpdateStatus, String> {
+    let result = check_inner(state, updater, force).await;
+    if let Err(e) = &result {
+        note_github(state, "check", e);
+    }
+    result
+}
+
+/// Note a failed dealing with GitHub in the error log.
+///
+/// **Classified from this module's own message strings**, which is only acceptable because
+/// they are this module's own: every one of them is written a few lines above, so this is a
+/// switch over an internal vocabulary rather than an attempt to parse someone else's prose.
+/// A failure to classify is `Other`, which is a true statement rather than a guess.
+///
+/// The startup check is the reason this matters. It runs in a spawned task whose only
+/// current report is an `eprintln!` — no window is listening, nothing is written down — so
+/// an update check that has been failing for a month is invisible in a shipped build.
+fn note_github(state: &Arc<AppState>, operation: &str, message: &str) {
+    let kind = if message.contains("rate limiting") {
+        crate::errors::Kind::RateLimited
+    } else if message.contains("not readable JSON") {
+        crate::errors::Kind::Parse
+    } else if message.contains("could not reach GitHub") {
+        crate::errors::Kind::Http
+    } else if message.contains("could not write") || message.contains("could not read") {
+        crate::errors::Kind::Io
+    } else {
+        crate::errors::Kind::Other
+    };
+    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        crate::errors::record(
+            &conn,
+            crate::errors::Source::GithubUpdate,
+            operation,
+            kind,
+            message,
+            None,
+        );
+    }
+}
+
+async fn check_inner(
+    state: &Arc<AppState>,
+    updater: &Arc<Updater>,
+    force: bool,
+) -> Result<UpdateStatus, String> {
     let now = unix_now();
     let last = {
         let conn = crate::sync::lock_db_read(state);
@@ -570,6 +616,18 @@ pub async fn check(
 /// Nothing is swapped here and nothing is launched. A download that succeeds leaves the app
 /// running exactly as it was, with one more file on disk.
 pub async fn download(
+    state: &Arc<AppState>,
+    updater: &Arc<Updater>,
+    app: &tauri::AppHandle,
+) -> Result<UpdateStatus, String> {
+    let result = download_inner(state, updater, app).await;
+    if let Err(e) = &result {
+        note_github(state, "download", e);
+    }
+    result
+}
+
+async fn download_inner(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
     app: &tauri::AppHandle,

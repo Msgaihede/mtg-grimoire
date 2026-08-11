@@ -172,7 +172,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -1041,6 +1041,58 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         // Literal `8`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 8;")?;
+        tx.commit()?;
+    }
+    if v < 9 {
+        let tx = conn.unchecked_transaction()?;
+        // The error log: what failed, when, how often, and nothing else.
+        //
+        // It exists because failure in this app was very nearly invisible. `sync_meta
+        // .last_error` is one string the next run overwrites, and everything else — the
+        // id-migration poll, the orphan sweep, the page reclaim, the compaction, an image the
+        // filesystem refused — was an `eprintln!`, which in a release build has no console to
+        // print to. The user could not see that anything had gone wrong, and neither could
+        // anyone trying to debug it.
+        //
+        // **The unique index is the whole design.** Without it, one bad afternoon writes a row
+        // per failed image: the path-MTU black hole this repo has already met produced ~600 of
+        // them in a single pass. Folding on (source, operation, kind, message) turns that into
+        // one row reading "x600", which is both smaller and truer — it is one fault, not six
+        // hundred. `detail` is deliberately OUTSIDE the key: it carries the URL or the card id,
+        // which is exactly the per-occurrence string that would defeat the folding, so it is
+        // overwritten with the most recent value instead of splitting the row.
+        //
+        // Nothing here touches `cards`, so no entry in `CARDS_INDEXES`; nothing is FTS-indexed
+        // and no rowid is renumbered, so no `cards_fts` rebuild is owed — the same reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS error_log (
+                id INTEGER PRIMARY KEY,
+                -- Unix seconds, like every stamp in this schema.
+                first_at INTEGER NOT NULL,
+                last_at INTEGER NOT NULL,
+                -- Which of the app's dealings with the outside world this was.
+                source TEXT NOT NULL CHECK (source IN
+                    ('scryfall_api','scryfall_image','github_update','database','image_store')),
+                -- The specific call: 'bulk_check', 'sets', 'migrations', 'image_fetch', …
+                -- Free text rather than a CHECK: a new call site must not need a migration
+                -- before it is allowed to report that it failed.
+                operation TEXT NOT NULL,
+                -- The shape of the failure, which is what a reader filters on.
+                kind TEXT NOT NULL CHECK (kind IN
+                    ('rate_limited','timeout','http','io','parse','other')),
+                message TEXT NOT NULL,
+                -- The URL, card id or path. Nullable, outside the grain, most recent wins.
+                detail TEXT,
+                count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0)
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_error_log_grain
+                ON error_log (source, operation, kind, message);
+             -- The read is always 'newest first, capped', and so is the eviction.
+             CREATE INDEX IF NOT EXISTS idx_error_log_recent ON error_log (last_at DESC);",
+        )?;
+        // Literal `9`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 9;")?;
         tx.commit()?;
     }
     Ok(())

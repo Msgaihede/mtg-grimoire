@@ -19,9 +19,13 @@ const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+// The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
+// resolve; what it is called with is asserted in its own test below.
+const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
+    prefetchImages,
     deckList,
     deckCreate,
     deckUpdate,
@@ -147,10 +151,28 @@ beforeEach(() => {
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
+  prefetchImages.mockClear();
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });
 });
 
 describe("DecksPage", () => {
+  /**
+   * The gallery warms the `art` crops its tiles draw — the same variant the deck builder
+   * uses and a different URL on the CDN from the `grid` the search wall warms.
+   *
+   * Custom covers are deliberately left out: `/cover/<deckId>` is a file the user picked,
+   * served straight off disk, and it touches Scryfall not at all.
+   */
+  it("warms card covers as art and never asks Scryfall for a custom one", async () => {
+    deckList.mockResolvedValue([BURN, DRAFT, { ...BURN, id: 7, coverKind: "custom" }]);
+
+    wrap(<DecksPage />);
+
+    // Exactly the one card cover: the custom-cover deck contributes nothing, and `DRAFT` has
+    // no cover at all.
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith([BURN.coverCardId], "art"));
+  });
+
   /**
    * An empty screen is an invitation to act: it says what the thing is and offers the one
    * action that makes one. Not "No decks found", which blames the reader for a table nobody

@@ -142,3 +142,25 @@ export const UpdateAvailable: Story = {
 export const ReadyToRestart: Story = {
   args: { update: update({ status: status({ staged: true }) }) },
 };
+
+/**
+ * The page with something to answer for — and the one story here that reaches the backend.
+ *
+ * `update` is a prop, but the error log is not: nothing else in the window reads it, so
+ * `SettingsPage` owns that hook itself and this story drives it through a **seeded world**
+ * (`fault: "errorLog"`). Which makes it the only place the Clear button is real: the fake's
+ * `error_log_clear` writes to the table, so pressing it here actually empties the panel.
+ *
+ * `Settings/ErrorLogPanel` stories the same three rows as arguments; this is the page they
+ * arrive on, in the column they arrive in, under a panel about something else entirely.
+ */
+export const SomethingFailed: Story = {
+  parameters: { fake: { fault: "errorLog" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("×617")).toBeInTheDocument();
+    // The panel's own heading, beside the update panel's — three sections now, and each one
+    // named by its own heading rather than by its position on the page.
+    await expect(canvas.getByRole("heading", { name: "Errors", level: 2 })).toBeInTheDocument();
+  },
+};
