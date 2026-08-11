@@ -550,6 +550,24 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   (`Cache`'s per-key mutex + a re-read of the disk). The waiter re-reads rather than being
   handed the bytes, so it degrades to a second fetch when the write connection was busy or
   the store failed — both acceptable, both documented at `images::fetch_and_store`.
+- **`mtgimg://` has a second route, and it touches Scryfall not at all: `/cover/<deckId>`.**
+  `images::serve` tries `parse_cover_path` **first**; it cannot collide with the card route
+  because `Variant::parse("cover")` is `None`. The bytes are a file the user picked, re-encoded
+  by `images::encode_cover` (magic-number sniff, `resize_to_fill` to the `art` crop's **626×457**,
+  lossless WEBP, source capped at `MAX_COVER_SOURCE_PIXELS`) and written to
+  `<data dir>/covers/<deckId>.webp`. **The route resolves that directory itself** — `decks
+  .cover_image_path` is a record of what was written, not what is read, which is what keeps a
+  portable install working after its folder moves. Served `no-store`, because it is the one image
+  URL whose content is *meant* to change under a fixed name; **404 when absent, never a
+  placeholder**. The `i64` parse is the whole path-traversal fence, since the id becomes a
+  filename (`a_cover_path_is_parsed_or_refused_and_never_repaired` pins `/cover/../../mtg.db`,
+  `/cover/..%2fmtg.db`, `/cover/7/8`, `/cover/7.webp`).
+- **The CSP did not change for it, and that is the point.** `img-src 'self' data: mtgimg:
+  http://mtgimg.localhost` already covered a fifth *path*; a route is not a source.
+  `images::tests::the_shipped_csp_is_untouched` asserts both the exact `img-src` and that the
+  policy does not mention `cover` at all. Measured 2026-08-11 in the shipped window: with no file
+  on disk the URL errors, and after one `deck_set_cover_image` the same URL loads **626×457 in
+  2 ms**.
 
 ## Frontend design (binding)
 - **All frontend work follows the `frontend-design` skill** (invoke it before UI tasks) and the
@@ -626,6 +644,17 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   *below* the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
+- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
+  `layers.test.ts` asserts every link of it. **`overlay` is one rung for a drawer *and* a modal,
+  deliberately, where two looks more careful**: the deck editor's four full-window surfaces —
+  Categories & tags, History, Theory diff, Deck settings — are held in **one** piece of state
+  (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and two
+  `"inner"` peers open at once are not ordered at all. At most one of the four is ever mounted,
+  so there is no pair for a second number to order and inventing one would be a claim about a
+  stack that cannot occur. They used to borrow `gate` and `dragTray` two apiece — each right in
+  effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
+  `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
+  and each hands focus back to the control that opened it.
 - **An anchored popup near the right of a row is pinned to its trigger's *right* edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
@@ -829,6 +858,26 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
+- **The audit log records facts; TypeScript writes the sentence.** `deck_audit` has no `summary`
+  column and never will — it holds `kind` (one of `add|remove|quantity|move|swap|tag|category|
+  folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a **JSON
+  `payload`** (`CHECK (json_valid(payload))`) and a signed `delta` for the day header's roll-up.
+  `src/features/decks/auditText.ts` is the only thing that reads that payload, and it is the only
+  thing that words it — because a sentence is domain logic and this table has to survive the day
+  the wording changes. Verified live 2026-08-11: a category move stored
+  `{"from":"Main deck","to":"Ramp"}` with `card_name` `"Vampiric Tutor"` and `delta` 0, and the
+  drawer read back "Moved Vampiric Tutor / Main deck → Ramp".
+- **Writing history is not a command.** There is no IPC write — `deck_audit::record(tx, …)` is
+  called *inside the caller's already-open transaction*, which is what makes
+  `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
+  behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives ~23
+  commands and asserts exactly one row each. The only command is the read,
+  `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` — **the low end is
+  load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.** It is append-only,
+  never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it. Four writes record
+  nothing on purpose: `delete_deck` (CASCADE takes the history with the deck, so a row would be
+  orphaned by its own event) and the three folder writes (a folder belongs to no deck, and
+  `deck_audit.deck_id` is `NOT NULL`).
 - **The six card commands, and what each takes.** `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
@@ -864,18 +913,30 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   (naming the category), a raced sync (the to-printing has left `cards`), and a **different
   oracle card** — the guard is inside the transaction, because "swap this printing" must never
   become "swap this card".
-- **The deck is rows, one view only** (2026-08-06: the stacked-card visual mode and its
-  toggle were removed on the user's direction — full card faces at column width were huge,
-  and its `STACK_MAX_WIDTH` cap was why the category columns would not take the editor's width). Each
-  row carries the printing's **`art` crop** (626×457) as an `aria-hidden`, `alt=""`,
-  `draggable={false}` thumbnail sharing the stepper's grid cell — a fourth grid column's gap
-  made the 221px squeezed column scroll sideways, and a hidden flex child charges nothing.
-  Below 17rem of *column* (a container query on the category scroller: the 1280px window with the
-  card pane docked) the picture yields and the row is the dense text row; orphans are fed
-  `null` and never fetch. **A printings row in the card pane is clickable to view that
-  printing** — `store.viewPrinting` sets `selectedCardId` *without* clearing
-  `paneDeckContext`, so the swap offers survive browsing; `setSelectedCardId` there instead
-  silently kills the affordance at its one moment of use.
+- **The deck has four views** — `Stacks | Table | Text | Grid`, `DeckEditor`'s `VIEWS`, crossed
+  with three `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical |
+  manaCost | price | type`). All twelve combinations were driven live 2026-08-11; grouping and
+  sorting were correct in every one, and an **inactive category stays its own group in all three
+  grouping modes** rather than being folded in by mana value or type. Only `Stacks` and `Grid`
+  fetch art (`cardImageUrl(…, "art")`); `Table` and `Text` are text and draw no picture at all —
+  which is why the old single-row view's thumbnail, its `17rem` container query and
+  `STACK_MAX_WIDTH` are gone rather than moved.
+- **`CardStack` is the signature interaction, and it is arithmetic, not taste.** A card is
+  **312px** (30px title bar + 256px art + 24px data line + 2 hairlines); collapsed it carries
+  `mb-[-278px]`, so each card advances the stack by exactly **34px** — its title bar. The list is
+  given a **fixed** `stackHeight(n) = 34(n−1) + 312 + 8`, and the lifted card's `hover:mb-2`
+  turns −278 into +8: **a 286px push-down of every card after it, out of the box and over what is
+  below, without the box changing size.** Measured in the shipped window 2026-08-11 (see the live
+  pass below) — heights matched the formula exactly for stacks of 1, 2, 5, 6, 8 and 10, and the
+  push-down measured 286px with the list's height unchanged. **The lift is pure CSS**
+  (`hover:` + `focus-within:`, `LAYER.raisedOnHover`/`raisedOnFocus`), so nothing in JavaScript
+  knows which card is up and the caret gets the interaction for free. The 2026-08-06 removal of
+  the *old* stacked mode is not contradicted: that one drew full card faces at column width, and
+  this one draws a column of 34px title bars.
+- **A printings row in the card pane is clickable to view that printing** —
+  `store.viewPrinting` sets `selectedCardId` *without* clearing `paneDeckContext`, so the swap
+  offers survive browsing; `setSelectedCardId` there instead silently kills the affordance at its
+  one moment of use.
 - **Four card surfaces outside the editor are drag sources, all through the one
   `cardDraggable`**, and the payload they all carry is `{ kind: "card"; cardId; name }` —
   search tiles, collection *table* rows (the collection's **card** mode is not one: only the
@@ -887,12 +948,87 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   from Search, Collection or Wishlist. So the sidebar's Decks target is reachable only from
   inside the Decks view (the docked panel, a deck card, the card pane).
 
-## Hard rules
+## Deck builder, driven in the shipped window (measured 2026-08-11)
+The whole rebuild had been proven by tests and by Storybook, and **neither runs in the window
+that ships**. This is what a CDP pass over the real WebView2 added, and the three bugs it found
+are all things no suite could have seen.
+
+- **The stack's push-down is real**: hovering a card moved its `margin-bottom` −278px → **8px**
+  and pushed every later card down by exactly **286px**, while the list's height stayed **490px**
+  across the whole gesture. `stackHeight` matched the formula for every stack on screen.
+  **Hovering a *middle* card means pointing at its title bar** — the cards overlap, so at any y
+  the topmost card is the last one whose top is above it, and `hover`'s default approach (from
+  directly above the element) lands on the *first* card of the stack and lifts that instead. Aim
+  at `li > button > span:first-child`, and approach sideways with `--from`.
+- **Reduced motion holds**: `transitionProperty` is `none` on the stack card and on the view
+  buttons under `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
+  — the exact false failure the harness section warns about, reproduced here on purpose.
+- **Both drags work with a real Chromium drag**, carrying pdnd's `application/vnd.pdnd`: a card
+  from one category to another (the target lit `border-accent` mid-flight; "Vampiric Tutor" moved
+  Main deck 10→9, Ramp 6→7 and survived the re-read) and a **deck tile onto a sidebar folder**
+  (folder 0→1, tile left "All decks"). **What that does not prove**: `Input.setInterceptDrags`
+  bypasses the OS drag loop entirely, so this is evidence about the app's own handlers and *not*
+  about WRY's OLE drop target. `"dragDropEnabled": false` remains the load-bearing fact, it is
+  embedded at **compile time**, and this exe was built from it.
+- **A category move is delete + insert, not an update** — the `deck_cards` row id changes. Worth
+  knowing before writing anything that holds one across a move (and it is why restoring a moved
+  row by id after a live pass silently does nothing).
+- **The allocator's triggers behave exactly as documented.** Seeding `collection_entries`
+  directly left the deck reading "66 of 66 missing" with `deck_allocations` empty; the first
+  category write rebuilt it (11 rows) and the shortage marks vanished from precisely the owned
+  cards. A card in an **inactive** category shows no shortage mark at all, because nothing was
+  claimed for it.
+- **Console over the whole pass: clean.** 377 recorded lines, no JavaScript error, no React
+  warning, no unhandled rejection. Everything else was `502` from `mtgimg://` — see the
+  unverified note below.
+
+**Three bugs found, all open** (none fixed in this pass):
+1. **The editor's title row collapses the deck name to 18px and overflows into the format
+   select, at the app's own default window.** The row is `flex min-w-0 flex-1` holding the name
+   input (`shrink: 1`) beside two `shrink-0` children — the Live/Theory group (102px) and the
+   "N cards differ" button (107px) — which together already exceed the container, so the input
+   absorbs the entire deficit. Measured: name width **18px at 1100, 1200 and 1280**, and the
+   container overflowing by **202px / 102px / 22px** respectively; `overflow` is `visible`, so at
+   1280 the button's last **9.9px** is painted over by, and hit-tests to, `select[aria-label=
+   "Deck format"]`. Fine at 1360 (76px) and above, and fine at 1024 (459px) where the toolbar
+   wraps — so the broken band is roughly **1060–1350px and the shipped 1280×800 sits inside it**.
+   Only bites when `theory_enabled` is on, which is why nothing caught it.
+2. **A custom deck cover never appears in the gallery.** `DecksPage`'s `Cover` takes only
+   `cardId` and builds `cardImageUrl(cardId, 0, "art")`; it has no `custom` arm, never reads
+   `deck.coverKind` and never forms the `/cover/<deckId>` URL that `DeckSettingsDialog` uses. So
+   a deck with `cover_kind = 'custom'` and a real file on disk renders **"No cover"** on the tile
+   — the one place the picture exists to be seen — while the settings dialog you chose it in
+   shows it correctly. Confirmed after a full reload, with the route itself proven working.
+3. **Table view starves the card name.** Seven fixed columns take **696px of 963px**, leaving the
+   two `fr` columns 147px between them: **Card name gets 84px** (`minmax(0,2fr)`) and Type 63px,
+   truncating names to ~10 characters, while the empty Tags column holds 112px and Owned 64px.
+
+**Unverified, and not by choice:**
+- **Card art could not be rendered at all.** `cards.scryfall.io` was unreachable from this
+  machine (a bare HTTPS HEAD times out; `api.scryfall.com` answers), so every fetch failed and
+  `data/images` was never created. What this *does* prove is that the `mtgimg://` handler is
+  registered and routing — the failures were the app's own **502**, its documented "failed
+  fetch", not a browser-level protocol error — and the `/cover/` route needs no network and was
+  verified end to end. But **no card image has been seen decoding in this build.**
+- **The system file picker was not driven.** `dialog:allow-open` opens a native window that CDP
+  cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
+  path. The encode → write → serve → render half is measured; **the picker → path half is not.**
+- **Linux remains entirely unrun**, as everywhere else in this file.
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.
 - Every `api.scryfall.com` request needs real `User-Agent` + `Accept` headers.
 - `cards.oracle_id/cmc/type_line` are NULLABLE. `collector_number` is TEXT. Prices are
   decimal strings. `legalities` is JSON (23 keys, grows). Finishes: enum, never boolean.
 - npm `xlsx` is banned (CVEs). TypeScript stays on 6.0.x until TS 7.1.
+- **`@tauri-apps/plugin-dialog` is here for exactly one thing — choosing a deck cover — and the
+  capability says so.** `capabilities/default.json` grants **`dialog:allow-open`**, one command,
+  not `dialog:default`'s five: save, message, ask and confirm are unreachable from the webview
+  however the plugin is initialised. The contract that makes this enough is that
+  `deck_set_cover_image` takes a **path**, not bytes — the page asks for a name and Rust opens
+  the file, so no filesystem permission of any kind is needed. **`tauri-plugin-fs` and `rfd`
+  entered `Cargo.lock` transitively** as that plugin's own dependencies and are **unreachable**:
+  `tauri_plugin_fs::init()` is never called (the three registrations are single-instance, opener
+  and dialog) and **no `fs:` permission is granted anywhere**, so the ACL would deny them even if
+  it were. Adding a plugin means adding its narrowest permission, never its `:default`.
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).
   The app palette maps `accent` to a **text** colour (gold), so rewrite a vendored
   component's `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite any more:
