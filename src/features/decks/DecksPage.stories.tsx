@@ -61,8 +61,23 @@ const meta = {
     docs: {
       description: {
         component:
-          "The decks, as a wall of the art they were built around. No summary strip, no filter " +
-          "row, and no colour that is not a card's own: a deck is picked by looking at it.\n\n" +
+          "The decks, filed. The folder tree on the left, and on the right the one drawer the " +
+          "reader is standing in — its sub-folders as dashed cards, then its decks as the art " +
+          "they were built around. No colour anywhere that is not a card's own: a deck is " +
+          "picked by looking at it.\n\n" +
+          "**The folder half of this screen cannot be storied yet, and the tree says so on " +
+          "every story below.** `.storybook/fake/` answers none of the five `deck_folder_*` " +
+          "commands (measured 2026-08-10: `db.ts` carries `folderId: null` on a deck row and " +
+          "nothing else), so `deck_folder_list` throws the fake's own “No fake handler " +
+          "registered” and the tree draws its refusal line. That line is the *correct* " +
+          "behaviour for a refused folder list and {@link FoldersUnavailable} is the story " +
+          "about it — but the tree, the folder cards, the drop targets and the two move " +
+          "pickers are all covered by `DecksPage.test.tsx` and by nothing here until the fake " +
+          "learns the commands.\n\n" +
+          "**A failed read is a `status`; a refused write is an `alert`.** The wall's " +
+          "“Reading your decks…” line and the tree's refusal are the first kind, the " +
+          "“Could not change your decks” banner the second — which is why the folder tree " +
+          "shouting on every story below does not make {@link Busy}'s assertion ambiguous.\n\n" +
           "Driven end to end by `.storybook/fake/`. **The three seeded decks are the three " +
           'states a gallery has** — measured 2026-08-10 over `readHandlers(seed("starter")).' +
           "deck_list()`, which answers them in this order: `Modern Goodstuff` (Modern, 60 " +
@@ -180,7 +195,9 @@ export const Archived: Story = {
     await expect(
       within(canvas.getByRole("list", { name: "Your decks" })).queryByText("Modern Goodstuff"),
     ).toBeNull();
-    // Archiving is not a refusal and says nothing: the tile moving is the whole report.
+    // Archiving is not a refusal and says nothing: the tile moving is the whole report. Still
+    // the *only* alert question worth asking with the tree reporting a refused folder list
+    // beside it, because that one is a failed **read** and is a `status` — see the note above.
     await expect(canvas.queryByRole("alert")).toBeNull();
   },
 };
@@ -270,6 +287,34 @@ export const NoCoverArtist: Story = {
       .closest("li");
     await expect(within(kept as HTMLElement).getByText("Art by Kieran Yanner")).toBeInTheDocument();
     await expect(canvas.getAllByText(/^Art by/)).toHaveLength(1);
+  },
+};
+
+/**
+ * The folder list refused — **and every deck still on the wall.**
+ *
+ * The one folder state the fake can produce today, and it is the one worth pinning: a deck whose
+ * `folderId` names a folder this screen does not have is drawn at the **top level**, the same
+ * rule the tree uses for a folder whose parent is missing. Towards the root, never towards
+ * nothing — hiding a tile because its drawer did not load is the one failure a filing cabinet
+ * must not have, and there is nowhere else the tile could be shown.
+ *
+ * The tree says what went wrong in its own corner and the wall goes on working. Both halves are
+ * the claim: the sentence, and the three seeded decks still countable beside it.
+ */
+export const FoldersUnavailable: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = canvas.getByRole("navigation", { name: "Folders" });
+    await expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible();
+
+    // Every live deck, at the top level, exactly as it would be with no folders at all.
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
+    await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
+    await expect(within(tree).getByRole("button", { name: "All decks, 2 decks" })).toBeVisible();
+    // The wall's own refusal line is a different one and is not up: nothing was written.
+    await expect(canvas.queryByText(/Could not change your decks/)).toBeNull();
   },
 };
 

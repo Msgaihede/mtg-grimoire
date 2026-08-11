@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { DeckRow, FormatSpec } from "@/lib/ipc";
+import type { DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { spec } from "./validation/fixtures";
 
@@ -12,10 +12,27 @@ const deckCreate = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckDuplicate = vi.hoisted(() => vi.fn());
+const deckSetFolder = vi.hoisted(() => vi.fn());
+const deckFolderList = vi.hoisted(() => vi.fn());
+const deckFolderCreate = vi.hoisted(() => vi.fn());
+const deckFolderMove = vi.hoisted(() => vi.fn());
+const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckList, deckCreate, deckUpdate, deckDelete, deckDuplicate, formatSpecs },
+  ipc: {
+    deckList,
+    deckCreate,
+    deckUpdate,
+    deckDelete,
+    deckDuplicate,
+    deckSetFolder,
+    deckFolderList,
+    deckFolderCreate,
+    deckFolderMove,
+    deckFolderDelete,
+    formatSpecs,
+  },
 }));
 
 import { DecksPage } from "./DecksPage";
@@ -56,6 +73,31 @@ const DRAFT: DeckRow = {
 /** Filed away: sorted last by `deck_list`, and behind a disclosure here. */
 const FILED: DeckRow = { ...BURN, id: 6, name: "Old Standard", archived: true, cardCount: 60 };
 
+/** Two folders, one inside the other — flat rows, because `deck_folders` has no notion of
+ *  depth and the tree is the reader's to build from `parentId`. */
+const EDH: DeckFolder = { id: 1, parentId: null, name: "Commander", sortOrder: 0 };
+const LEGENDS: DeckFolder = { id: 2, parentId: 1, name: "Legends", sortOrder: 0 };
+
+/** Filed one level down, and the only fixture that keeps a theory list. */
+const KENRITH: DeckRow = {
+  ...BURN,
+  id: 7,
+  name: "Kenrith Two-Drops",
+  formatKey: "commander",
+  formatName: "Commander",
+  coverArtist: "Kieran Yanner",
+  cardCount: 100,
+  folderId: 2,
+  theoryEnabled: true,
+};
+
+/** Two folders, three decks: `Burn` at the top level, `Sunday draft` in Commander and
+ *  `Kenrith Two-Drops` one level further down in Legends. */
+function withFolders() {
+  deckFolderList.mockResolvedValue([EDH, LEGENDS]);
+  deckList.mockResolvedValue([BURN, { ...DRAFT, folderId: 1 }, KENRITH]);
+}
+
 /**
  * The picker's rows as `format_specs` serves them: every seeded row, in `sort_order`,
  * including the one that is switched off.
@@ -94,6 +136,13 @@ beforeEach(() => {
   deckUpdate.mockReset().mockResolvedValue({ ...BURN, archived: true });
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 10, name: "Burn (copy)" });
+  deckSetFolder.mockReset().mockResolvedValue(BURN);
+  // No folders by default: the ordinary gallery is one that files nothing, and every case
+  // below that is about filing says so by overriding this.
+  deckFolderList.mockReset().mockResolvedValue([]);
+  deckFolderCreate.mockReset().mockResolvedValue(LEGENDS);
+  deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
+  deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });
 });
@@ -451,5 +500,242 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Duplicate Burn" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more.");
+  });
+
+  /**
+   * Which of a deck's two lists exist, on the tile — derived from the two fields `deck_list`
+   * already answers rather than stored, so the badge and the editor's Live/Theory switch can
+   * never disagree. A theory list beside an empty live one is a plan, not a deck.
+   */
+  it("badges a deck by which of its two lists exist", async () => {
+    deckList.mockResolvedValue([
+      BURN,
+      { ...KENRITH, folderId: null },
+      { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const burn = (await tileFor("Burn")).closest("li")!;
+    expect(within(burn).getByText("LIVE")).toBeInTheDocument();
+    const kenrith = (await tileFor("Kenrith Two-Drops")).closest("li")!;
+    expect(within(kenrith).getByText("LIVE + THEORY")).toBeInTheDocument();
+    const sketch = (await tileFor("Sketch")).closest("li")!;
+    expect(within(sketch).getByText("THEORY ONLY")).toBeInTheDocument();
+  });
+});
+
+describe("DecksPage folders", () => {
+  /** Nested and indented, with each row counting everything under it — a row reading 0 over a
+   *  sub-folder holding twelve decks is a lie the reader could only catch by clicking. */
+  it("draws the folders as a tree, counting every deck under each one", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+
+    const tree = screen.getByRole("navigation", { name: "Folders" });
+    expect(await within(tree).findByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
+    const commander = within(tree).getByRole("button", { name: "Commander, 2 decks" });
+    // Commander holds one deck directly and one through Legends.
+    const legends = within(tree).getByRole("button", { name: "Legends, 1 deck" });
+    // The indent *is* the nesting: there is no twisty, so a level is 14px of padding.
+    expect(commander).toHaveStyle({ paddingLeft: "22px" });
+    expect(legends).toHaveStyle({ paddingLeft: "36px" });
+  });
+
+  /** One drawer at a time. The top level holds the decks filed nowhere and the folders in it;
+   *  a deck two levels down is in neither until the reader walks there. */
+  it("shows the selected folder's own decks and its own sub-folders", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+
+    expect(await tileFor("Burn")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commander folder, 2 decks" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Sunday draft/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Commander, 2 decks" }));
+
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Legends folder, 1 deck" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Burn/ })).not.toBeInTheDocument();
+    // The heading names the drawer and counts what is in it, folders first.
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    expect(screen.getByText("1 folder · 1 deck")).toBeInTheDocument();
+  });
+
+  /**
+   * Scryfall's image policy reaches the folder cards too: an `art` crop has no printed frame,
+   * so every illustrator whose work is in the strip is named — and a cover the card database
+   * has no artist for is not drawn at all, exactly as on a deck tile.
+   */
+  it("draws a folder's member art only where it can credit the illustrator", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+
+    const card = (
+      await screen.findByRole("button", { name: "Commander folder, 2 decks" })
+    ).closest("li")!;
+    // `Sunday draft` has no cover and contributes nothing; Kenrith, one level down, does.
+    expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
+    expect(card.querySelectorAll("img")).toHaveLength(1);
+    expect(card.querySelector("img")).toHaveAttribute(
+      "src",
+      cardImageUrl(KENRITH.coverCardId!, 0, "art"),
+    );
+  });
+
+  /** A folder is made where it will live, at the indent it will have — and at **any** level,
+   *  which is the whole reason the control is on every row rather than only in the header. */
+  it("makes a folder inside another one", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "New folder in Commander" }));
+
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    // The row says where it lands, for a reader who cannot see the indent.
+    expect(screen.getByText("in Commander")).toBeInTheDocument();
+
+    await userEvent.type(field, "Legends");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(1, "Legends");
+  });
+
+  it("makes a folder at the top level", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "New folder at the top level" }),
+    );
+
+    await userEvent.type(await screen.findByLabelText("New folder name"), "Cubes");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(null, "Cubes");
+  });
+
+  /** The keyboard's half of the drag — a drop target nothing but a mouse can reach is half a
+   *  feature. */
+  it("files a deck into a folder from the tile's own control", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Move Burn to a folder" }));
+
+    const picker = screen.getByRole("dialog", { name: "Move Burn to a folder" });
+    await userEvent.click(within(picker).getByRole("button", { name: "Commander" }));
+
+    expect(deckSetFolder).toHaveBeenCalledWith(4, 1);
+  });
+
+  /**
+   * **The trap this screen exists to avoid.** `DeckPatch` writes every column with
+   * `coalesce(?n, column)`, so a bound NULL reads as "leave it alone": a move to the top level
+   * written as a patch is a write that silently does nothing. `deck_set_folder` is the one
+   * command where `null` means the root, and this is the assertion that keeps it that way.
+   */
+  it("moves a deck to the top level with deckSetFolder and never with a patch", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Move Sunday draft to a folder" }),
+    );
+
+    const picker = screen.getByRole("dialog", { name: "Move Sunday draft to a folder" });
+    // Where it already is is offered and inert: that write changes nothing and bumps
+    // `updated_at`.
+    expect(within(picker).getByRole("button", { name: /^Commander/ })).toBeDisabled();
+    await userEvent.click(within(picker).getByRole("button", { name: "All decks" }));
+
+    expect(deckSetFolder).toHaveBeenCalledWith(5, null);
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The opposite of what a reader will fear. `decks.folder_id` is `ON DELETE SET NULL`, so the
+   * decks inside surface at the top level; `deck_folders.parent_id` cascades onto itself, so
+   * the folders inside do go. The confirmation says both, reassuring half first.
+   */
+  it("says the decks in a folder are kept when the folder is deleted", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
+
+    const confirm = screen.getByRole("dialog", { name: "Delete Commander" });
+    expect(confirm).toHaveTextContent("The 2 decks in it are kept — they move to the top level.");
+    expect(confirm).toHaveTextContent("The 1 folder inside goes with it.");
+
+    await userEvent.click(within(confirm).getByRole("button", { name: "Delete folder" }));
+
+    expect(deckFolderDelete).toHaveBeenCalledWith(1);
+  });
+
+  /**
+   * A folder cannot go inside itself or inside anything it holds — the backend refuses it,
+   * because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk forever.
+   * The offer is greyed rather than left to be refused: the refusal is a fence, not the
+   * affordance.
+   */
+  it("will not offer a folder its own descendant as a destination, and says why", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Move folder…" }));
+
+    const picker = screen.getByRole("dialog", { name: "Move Commander into a folder" });
+    expect(within(picker).getByRole("button", { name: /^Commander/ })).toBeDisabled();
+    expect(within(picker).getByRole("button", { name: "Legends" })).toBeDisabled();
+    expect(picker).toHaveTextContent(
+      "A folder cannot go inside itself, or inside anything it holds.",
+    );
+    expect(deckFolderMove).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And when the fence is jumped anyway — another surface re-parented something between the
+   * read and the press — the refusal is surfaced rather than swallowed.
+   */
+  it("says so when a folder move is refused", async () => {
+    withFolders();
+    deckFolderMove.mockRejectedValue("A folder cannot be moved inside itself.");
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
+    await userEvent.click(screen.getByRole("button", { name: "Move folder…" }));
+    const picker = screen.getByRole("dialog", { name: "Move Legends into a folder" });
+    await userEvent.click(within(picker).getByRole("button", { name: "All decks" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A folder cannot be moved inside itself.",
+    );
+  });
+
+  /**
+   * A deck whose folder this screen's folder list does not carry is drawn at the top level —
+   * the same rule the tree uses for a folder whose parent is missing. It is what keeps every
+   * deck reachable on the launch where `deck_folder_list` is refused: there is nowhere else a
+   * tile could be shown, and hiding it would be the one failure a filing cabinet must not have.
+   */
+  it("still shows every deck when the folder list is refused", async () => {
+    deckFolderList.mockRejectedValue("The card database is busy finishing a sync.");
+    deckList.mockResolvedValue([BURN, { ...DRAFT, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+
+    expect(await tileFor("Burn")).toBeInTheDocument();
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Could not read your folders — The card database is busy/),
+    ).toBeInTheDocument();
   });
 });
