@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { MotionConfig } from "motion/react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CollectionPage } from "@/features/collection/CollectionPage";
@@ -89,16 +89,19 @@ export default function App() {
             <div className="min-w-0 flex-1">
               <ActiveView update={update} />
             </div>
-            {selectedCardId && (
-              <CardDetailPane
-                // Remounted per card, which is what makes the pane's opening behaviour —
-                // focus, scroll, the front face — belong to the card in it rather than to
-                // the first card that was ever opened.
-                key={selectedCardId}
-                cardId={selectedCardId}
-                onClose={closeCard}
-              />
-            )}
+            {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
+                purpose: it used to be `selectedCardId`, which was right when a close was
+                instant and is wrong the moment there is an exit, because every card-to-card
+                move would then be one pane leaving and another arriving — a 440ms cross-fade
+                where the reader pressed a printings row and expected the picture to change.
+                The per-card remount that keying bought is *kept*, one level down and inside
+                the animated element, where React can throw the body away without the box it
+                is in going anywhere. See `CardDetailPane`. */}
+            <AnimatePresence>
+              {selectedCardId && (
+                <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
+              )}
+            </AnimatePresence>
           </div>
         </AppShell>
       </QueryClientProvider>
