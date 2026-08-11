@@ -338,6 +338,14 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
     // Bound to a local rather than matched in tail position: the guard borrows from
     // `state`, and a `match` at the end of the body would still hold it when `state` is
     // dropped.
+    // Before the checkpoint, and with the same wait: any `image_cache` row still owed is
+    // bytes already on disk that nothing will ever serve, so paying the queue off here is
+    // the difference between a warm cache and re-fetching those images forever. It is one
+    // upsert per owed row and the queue is empty on a normal exit.
+    state
+        .images
+        .flush_records(&state.db, EXIT_CHECKPOINT_WAIT);
+
     let held = db::lock_for(&state.db, EXIT_CHECKPOINT_WAIT);
     match held {
         Some(conn) => {

@@ -440,7 +440,39 @@ pub struct Cache {
     /// then re-reads the disk — a 2 ms read instead of a shared buffer, for a fraction of
     /// the surface, and the network saving is identical.
     inflight: Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>,
+    /// Rows owed to `image_cache`: bytes that are **on disk** but that no row vouches for
+    /// yet, because the write connection was busy at the moment they landed.
+    ///
+    /// This queue is what makes "store it once, load it from disk from then on" true. The
+    /// bookkeeping row used to be written under a single `try_lock` and simply dropped when
+    /// that failed — and it was never retried, so the file sat on disk unread and *every*
+    /// later request for that key fetched it again, for the life of the installation. An
+    /// ingest holds the write connection for all but the gaps between its 2 000-row batches,
+    /// so the window is wide and a pre-warm running beside a sync lands squarely in it.
+    ///
+    /// Keyed by [`ImageKey`], so a key queued twice collapses to the newer URI rather than
+    /// growing the map.
+    pending: Mutex<HashMap<ImageKey, PendingRecord>>,
+    /// Rows dropped because [`MAX_PENDING_RECORDS`] was already full. Same reasoning as
+    /// [`Cache::store_failures`]: the cost is a re-fetch, and a number that only climbs is
+    /// what makes an invisible degradation findable.
+    dropped_records: AtomicU64,
 }
+
+/// What [`record`] needs, held until the write connection can take it.
+#[derive(Debug, Clone)]
+struct PendingRecord {
+    uri: String,
+    bytes: usize,
+}
+
+/// How many owed rows are held before the oldest are abandoned.
+///
+/// A bound rather than a budget: each entry is a key and a URI, so 4 096 of them is well
+/// under a megabyte, and the queue only grows while the write connection is held — a
+/// window measured in the gaps of one sync. If it ever fills, the app has a much larger
+/// problem than a re-fetch, and dropping is still better than growing without limit.
+const MAX_PENDING_RECORDS: usize = 4_096;
 
 impl Cache {
     pub fn new(images_dir: PathBuf) -> Cache {
@@ -450,7 +482,64 @@ impl Cache {
             gate: tokio::sync::Mutex::new(tokio::time::Instant::now()),
             store_failures: AtomicU64::new(0),
             inflight: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            dropped_records: AtomicU64::new(0),
         }
+    }
+
+    /// Hold a row until the write connection is free.
+    fn queue_record(&self, key: &ImageKey, uri: &str, bytes: usize) {
+        let mut pending = crate::sync::lock_plain(&self.pending);
+        if pending.len() >= MAX_PENDING_RECORDS && !pending.contains_key(key) {
+            self.dropped_records.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        pending.insert(
+            key.clone(),
+            PendingRecord {
+                uri: uri.to_owned(),
+                bytes,
+            },
+        );
+    }
+
+    /// Write every owed row, if the write connection can be had within `wait`.
+    ///
+    /// Returns how many landed. Cheap to call speculatively: it takes the pending mutex,
+    /// sees an empty map, and returns without going near the database — which is what lets
+    /// every served image try to pay off the queue without any of them paying for the
+    /// attempt.
+    ///
+    /// A row that fails to write individually is dropped rather than re-queued: the failure
+    /// is then the database refusing this exact statement, which retrying will not fix.
+    pub fn flush_records(&self, write: &Mutex<Connection>, wait: Duration) -> usize {
+        if crate::sync::lock_plain(&self.pending).is_empty() {
+            return 0;
+        }
+        let Some(conn) = crate::db::lock_for(write, wait) else {
+            return 0;
+        };
+        // Drained only once the connection is in hand, so a failed lock leaves the queue
+        // exactly as it was rather than losing it to a lock that never came.
+        let owed: Vec<(ImageKey, PendingRecord)> =
+            crate::sync::lock_plain(&self.pending).drain().collect();
+        let mut written = 0usize;
+        for (key, row) in owed {
+            if record(&conn, &key, &row.uri, row.bytes).is_ok() {
+                written += 1;
+            }
+        }
+        written
+    }
+
+    /// How many owed rows are waiting for the write connection.
+    pub fn pending_records(&self) -> usize {
+        crate::sync::lock_plain(&self.pending).len()
+    }
+
+    /// How many owed rows were abandoned because the queue was full.
+    pub fn dropped_records(&self) -> u64 {
+        self.dropped_records.load(Ordering::Relaxed)
     }
 
     /// The lock for one key, created if this is the first caller to ask.
@@ -531,6 +620,10 @@ impl Cache {
             // been deleted under us, and that is allowed — the cache is disposable, so a
             // missing file is a miss rather than an error.
             if let Ok(bytes) = tokio::fs::read(&path).await {
+                // A hit is the likeliest moment for the write connection to be free, so it
+                // is the best moment to pay off any rows owed from a busier one. Costs one
+                // uncontended mutex when nothing is owed, which is almost always.
+                self.flush_records(write, Duration::ZERO);
                 return Ok(Served {
                     bytes,
                     content_type: WEBP,
@@ -565,27 +658,26 @@ impl Cache {
     ///
     /// **What "one fetch per key" is conditional on.** The waiter does not receive the
     /// winner's bytes; it re-reads the cache, and the cache is the pair (file, row). So the
-    /// guarantee holds exactly when the winner leaves both behind, and it degrades to two
-    /// fetches in the two states where it cannot:
+    /// guarantee holds exactly when the winner leaves both behind.
     ///
-    /// * The **write connection was contended** — an ingest holds it, and `record`'s
-    ///   `try_lock` with [`Duration::ZERO`] declines to wait (deliberately: see the arm
-    ///   below). The bytes are on disk, but no row vouches for them, so the waiter's
-    ///   [`is_current`] misses and it fetches again. This is the common one: an ingest is
-    ///   the app's longest write, and it is holding the connection for all but the gaps
-    ///   between its 2 000-row batches. (Not for its whole ~44 s run — `ingest_gz` commits
-    ///   and releases per batch since Plan 3 — so this degradation is likely during an
-    ///   ingest rather than certain.)
-    /// * The **store failed** — a read-only data directory, a full disk. Nothing is on disk
-    ///   to re-read, and nothing may be recorded, so the waiter necessarily fetches.
+    /// It used to fail in the common case, and permanently. The row was written under a
+    /// single `try_lock` with [`Duration::ZERO`] and **dropped** when the write connection
+    /// was busy — which during an ingest it is, for all but the gaps between its 2 000-row
+    /// batches. That was justified here as costing "one extra request", and that was wrong:
+    /// nothing ever retried the row, so the bytes sat on disk that `is_current` would never
+    /// vouch for, and every later request for that key fetched it again for the life of the
+    /// installation. A pre-warm running beside a sync landed squarely in that window.
     ///
-    /// Both are acceptable rather than merely tolerated. The cost is one extra request to an
-    /// origin Scryfall documents as having no rate limit, still bounded by this cache's own
-    /// semaphore, in a window the app is already busy in — against a design
-    /// that would have to hold the fetched bytes in the single-flight map to hand them over,
-    /// which turns a map of empty mutexes into a map of image buffers whose lifetime nothing
-    /// currently bounds. That handoff is the upgrade if the degraded mode ever measures as a
-    /// problem; the ledger carries it.
+    /// Now the row is *owed*: queued in [`Cache::pending`] and paid off by whichever later
+    /// call finds the connection free. The zero-wait attempt is unchanged — parking a worker
+    /// thread per image through an ingest is still the wrong trade — but losing the race no
+    /// longer loses the row.
+    ///
+    /// One state still degrades to a second fetch, and honestly: the **store failed** — a
+    /// read-only data directory, a full disk. Nothing is on disk to re-read and nothing may
+    /// be recorded, so the waiter necessarily fetches. That is a storage problem wearing a
+    /// network cost, it is counted in [`Cache::store_failures`], and it is now also written
+    /// to the error log where somebody can see it.
     async fn fetch_and_store(
         &self,
         client: &scryfall::Client,
@@ -616,17 +708,15 @@ impl Cache {
         let bytes = self.fetch(client, uri).await?;
 
         match store(path, &bytes).await {
-            // Bookkeeping last, and optional. Losing the row costs one re-fetch from an
-            // origin with no rate limit — so this is a single `try_lock`
-            // ([`Duration::ZERO`]) rather than a wait: a *contended* write lock means an
-            // ingest, which holds it for one 2 000-row batch at a time and takes it
-            // straight back afterwards. Waiting would park a worker thread per image
-            // through a run that mostly is not going to hand it over, to save a re-fetch
-            // from an origin Scryfall documents as having no rate limit.
+            // Bookkeeping last, and **owed rather than optional**. The row is what
+            // `is_current` reads, so bytes on disk with no row are bytes nothing will ever
+            // serve: the file is re-fetched on every later request, forever. Queue it, then
+            // try to pay the whole queue off without waiting — a contended write connection
+            // means an ingest, and parking a worker thread per image through one is still
+            // the wrong trade. What changed is that losing the race no longer loses the row.
             Ok(()) => {
-                if let Some(conn) = crate::db::lock_for(write, Duration::ZERO) {
-                    let _ = record(&conn, key, uri, bytes.len());
-                }
+                self.queue_record(key, uri, bytes.len());
+                self.flush_records(write, Duration::ZERO);
             }
             // A cache that cannot be written is still a cache that can serve *this*
             // request: the bytes are already in hand, and refusing them because the data
@@ -1110,44 +1200,68 @@ pub async fn prefetch_images(
 /// interval that used to be here, is the thing not to remove.
 pub const MAX_PREWARM: usize = 2_000;
 
-/// The cards the user owns, wants, or has put in a deck, that have no cached image yet.
+/// The variant the collection and wishlist screens draw, and therefore the one worth
+/// pre-warming for them.
 ///
-/// Three arms rather than two since the decks landed, because the deck gallery and the
-/// deckbuilder show art like every other surface — and a user whose cards live only in
-/// decks would otherwise have nothing pre-warmed at all.
+/// Spec §5 says `thumb` + `grid`; the app has no `thumb` surface yet (the tables show no
+/// art), and fetching 9 KB per card for a view that does not exist is a download rather
+/// than a pre-warm.
+pub const COLLECTION_PREWARM: Variant = Variant::Grid;
+
+/// The variant every **deck** surface draws — and it is not the same one.
 ///
-/// **`grid` only.** Spec §5 says `thumb` + `grid`; the app has no `thumb` surface yet (the
-/// tables show no art), and fetching 9 KB per card for a view that does not exist is a
-/// download rather than a pre-warm. When a list view with art lands, this is one more
-/// variant in the call and nothing else.
-pub fn prewarm_keys(
-    conn: &Connection,
-    variant: Variant,
-    limit: usize,
-) -> rusqlite::Result<Vec<ImageKey>> {
+/// `CardStack`, `views/GridView`, the gallery's deck tiles and folder strips, the theory
+/// diff and the cover picker all render `cardImageUrl(…, "art")`. This constant exists
+/// because getting it wrong is invisible: a pre-warm that fetched `grid` for deck cards
+/// would report itself as having warmed every one of them, and the deck builder would still
+/// fetch every tile cold, because `art` is a different URL on the CDN.
+///
+/// That is not hypothetical — it is what this app did. Measured against the live database
+/// on 2026-08-11: all 17 deck cards had a `grid` row and only 12 had an `art` row, with an
+/// empty collection and wishlist, so the deck arm was the *only* work pre-warming had to do
+/// and it warmed a variant no deck surface asks for.
+pub const DECK_PREWARM: Variant = Variant::Art;
+
+/// The cards the user owns, wants, or has put in a deck, that have no cached image yet —
+/// **each paired with the variant the screen that shows it actually draws**.
+///
+/// Three arms rather than two since the decks landed, because a user whose cards live only
+/// in decks would otherwise have nothing pre-warmed at all. The pairing is the part that
+/// has to stay right: `NOT EXISTS` is checked against *that arm's* variant, so a card that
+/// is both owned and in a deck is warmed twice, once per picture the app will ask for.
+pub fn prewarm_keys(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<ImageKey>> {
     let mut stmt = conn.prepare(
-        "SELECT card_id FROM (
-            SELECT card_id FROM collection_entries
+        "WITH wanted(card_id, variant) AS (
+            SELECT card_id, ?1 FROM collection_entries
             UNION
-            SELECT card_id FROM wishlist_entries WHERE card_id IS NOT NULL
+            SELECT card_id, ?1 FROM wishlist_entries WHERE card_id IS NOT NULL
             UNION
-            SELECT card_id FROM deck_cards)
-          WHERE card_id NOT IN
-                (SELECT card_id FROM image_cache WHERE variant = ?1 AND face = 0)
-          LIMIT ?2",
+            SELECT card_id, ?2 FROM deck_cards)
+         SELECT w.card_id, w.variant FROM wanted w
+          WHERE NOT EXISTS (
+                SELECT 1 FROM image_cache c
+                 WHERE c.card_id = w.card_id AND c.variant = w.variant AND c.face = 0)
+          LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![variant.key(), limit as i64], |r| {
-        r.get::<_, String>(0)
-    })?;
+    let rows = stmt.query_map(
+        params![
+            COLLECTION_PREWARM.key(),
+            DECK_PREWARM.key(),
+            limit as i64
+        ],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )?;
     Ok(rows
         .filter_map(Result::ok)
-        .filter(|id| is_card_id(id))
+        .filter(|(id, _)| is_card_id(id))
         // Front faces only: the back of a double-faced card is not on screen until someone
         // opens the pane and flips it, and that fetch is one tile's worth.
-        .map(|card_id| ImageKey {
-            card_id,
-            face: 0,
-            variant,
+        .filter_map(|(card_id, variant)| {
+            Some(ImageKey {
+                card_id,
+                face: 0,
+                variant: Variant::parse(&variant)?,
+            })
         })
         .collect())
 }
@@ -1165,7 +1279,7 @@ pub async fn prewarm_collection(
     let state = state.inner().clone();
     let keys = {
         let conn = crate::sync::lock_db_read(&state);
-        prewarm_keys(&conn, Variant::Grid, MAX_PREWARM).map_err(|e| e.to_string())?
+        prewarm_keys(&conn, MAX_PREWARM).map_err(|e| e.to_string())?
     };
     let queued = keys.len();
     tauri::async_runtime::spawn(async move {
@@ -2891,15 +3005,40 @@ mod tests {
         )
         .unwrap();
 
-        let keys = prewarm_keys(&conn, Variant::Grid, 100).unwrap();
+        let keys = prewarm_keys(&conn, 100).unwrap();
         assert_eq!(keys.len(), 3, "owned, wished and decked, front faces only");
-        assert!(keys
-            .iter()
-            .all(|k| k.face == 0 && k.variant == Variant::Grid));
+        assert!(keys.iter().all(|k| k.face == 0));
 
-        // A card that is both owned and in a deck is one image, not two. `UNION` (never
-        // `UNION ALL`) is what makes that true, and it is the ordinary case rather than an
-        // edge one: a deck is built out of the binder, so most deck cards are owned cards.
+        // **The pairing this whole function exists to get right.** The collection and the
+        // wishlist draw `grid`; every deck surface draws `art`. Warming the deck arm at
+        // `grid` is the bug this replaced, and it was invisible because the pre-warm then
+        // reported having warmed every deck card while the deck builder fetched every tile
+        // cold — `art` being a different URL on the CDN.
+        let variant_of = |id: &str| {
+            keys.iter()
+                .find(|k| k.card_id == id)
+                .map(|k| k.variant)
+                .unwrap()
+        };
+        assert_eq!(
+            variant_of("0000419b-0bba-4488-8f7a-6194544ce91d"),
+            Variant::Grid,
+            "an owned card is drawn by the collection, which shows `grid`"
+        );
+        assert_eq!(
+            variant_of("11111111-1111-4111-8111-111111111111"),
+            Variant::Grid,
+            "a wished card is drawn by the wishlist, which shows `grid`"
+        );
+        assert_eq!(
+            variant_of("ab000000-0000-0000-0000-000000000001"),
+            Variant::Art,
+            "a deck card is drawn by the deck builder, which shows `art`"
+        );
+
+        // A card that is both owned and in a deck is **two** images, because the two screens
+        // that show it ask for two different pictures. (It was one key while both arms
+        // warmed `grid`, which is exactly why the deck builder never had its own.)
         conn.execute(
             "INSERT INTO deck_cards
                 (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
@@ -2910,19 +3049,105 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            prewarm_keys(&conn, Variant::Grid, 100).unwrap().len(),
-            3,
-            "owned and decked is one key"
+            prewarm_keys(&conn, 100).unwrap().len(),
+            4,
+            "owned and decked is one key per picture the app will ask for"
         );
 
         // Once the bytes are on disk the key is not selected again — which is the whole of
-        // "resumable", and it costs no bookkeeping of its own.
+        // "resumable", and it costs no bookkeeping of its own. Per variant: a cached `grid`
+        // must not mark the `art` the deck builder needs as done.
         conn.execute(
             "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
              VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'grid','https://x?1',10,unixepoch())",
             [],
         )
         .unwrap();
-        assert_eq!(prewarm_keys(&conn, Variant::Grid, 100).unwrap().len(), 2);
+        let after_grid = prewarm_keys(&conn, 100).unwrap();
+        assert_eq!(after_grid.len(), 3);
+        assert!(
+            after_grid
+                .iter()
+                .any(|k| k.card_id == "0000419b-0bba-4488-8f7a-6194544ce91d"
+                    && k.variant == Variant::Art),
+            "a cached `grid` must not stand in for the `art` the deck builder draws"
+        );
+
+        conn.execute(
+            "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
+             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'art','https://x?1',10,unixepoch())",
+            [],
+        )
+        .unwrap();
+        assert_eq!(prewarm_keys(&conn, 100).unwrap().len(), 2);
+    }
+
+    /// The bytes are on disk; the row that vouches for them is what a busy write connection
+    /// used to lose — and it was never retried, so the file sat unread and every later
+    /// request fetched it again for the life of the installation.
+    #[test]
+    fn a_record_owed_while_the_write_connection_is_busy_is_paid_off_later() {
+        let dir = std::env::temp_dir().join("mtg-grimoire-test-pending");
+        let cache = Cache::new(dir);
+        let conn = seeded();
+        let key = ImageKey {
+            card_id: "0000419b-0bba-4488-8f7a-6194544ce91d".into(),
+            face: 0,
+            variant: Variant::Grid,
+        };
+        let uri = "https://cards.scryfall.io/grid/front/0/0/x.webp?17";
+        let write = Mutex::new(conn);
+
+        // The connection is held, exactly as an ingest holds it between batches.
+        let held = write.lock().unwrap();
+        cache.queue_record(&key, uri, 1234);
+        assert_eq!(cache.pending_records(), 1, "the row is owed, not dropped");
+        assert_eq!(
+            cache.flush_records(&write, Duration::ZERO),
+            0,
+            "nothing can be written while the connection is held"
+        );
+        assert_eq!(
+            cache.pending_records(),
+            1,
+            "a failed flush must leave the queue intact, not lose it"
+        );
+        drop(held);
+
+        assert_eq!(cache.flush_records(&write, Duration::ZERO), 1);
+        assert_eq!(cache.pending_records(), 0);
+
+        let conn = write.lock().unwrap();
+        assert!(
+            is_current(&conn, &key, uri),
+            "the row landed, so the bytes on disk are served from now on"
+        );
+        // And the freshness rule is unchanged: a re-scanned card carries a new cache-buster,
+        // and that — not a clock, not an mtime — is what makes these bytes stale.
+        assert!(
+            !is_current(&conn, &key, "https://cards.scryfall.io/grid/front/0/0/x.webp?99"),
+            "a newer cache-buster is a different image and must be fetched"
+        );
+    }
+
+    /// The queue is bounded. Overflow is counted rather than grown without limit — the cost
+    /// is a re-fetch, and an app in this state has a larger problem than that.
+    #[test]
+    fn the_owed_record_queue_is_bounded_and_counts_what_it_drops() {
+        let cache = Cache::new(std::env::temp_dir().join("mtg-grimoire-test-pending-cap"));
+        for i in 0..MAX_PENDING_RECORDS + 5 {
+            cache.queue_record(
+                &ImageKey {
+                    // Distinct, and still shaped like a Scryfall id.
+                    card_id: format!("{i:08x}-0bba-4488-8f7a-6194544ce91d"),
+                    face: 0,
+                    variant: Variant::Grid,
+                },
+                "https://cards.scryfall.io/grid/front/0/0/x.webp?17",
+                10,
+            );
+        }
+        assert_eq!(cache.pending_records(), MAX_PENDING_RECORDS);
+        assert_eq!(cache.dropped_records(), 5);
     }
 }

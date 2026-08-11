@@ -12,7 +12,7 @@ import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
-import { ipcError, type DeckRow } from "@/lib/ipc";
+import { ipc, ipcError, type DeckRow } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
@@ -237,6 +237,23 @@ export function DecksPage() {
     setReturnedFor(returningDeck.id);
     setSelectedFolderId(folderOf(returningDeck));
   }
+
+  // Warm the covers this gallery draws, the way `DeckEditor` warms a deck's cards.
+  //
+  // A card cover is an `art` crop, the same variant the deck builder uses and a different
+  // URL on the CDN from the `grid` the search wall warms — so without this every tile on a
+  // first visit is a cold fetch, from a plain scroller that mounts them all at once. Custom
+  // covers are deliberately not included: they are served from `/cover/<deckId>`, which
+  // touches Scryfall not at all and needs no warming.
+  const coverKey = (query.data ?? [])
+    .map((d) => (d.coverKind === "custom" ? "" : (d.coverCardId ?? "")))
+    .filter((id) => id !== "")
+    .join(",");
+  useEffect(() => {
+    if (coverKey === "") return;
+    // Fire-and-forget, like every other prefetch: it resolves when the work is queued.
+    void ipc.prefetchImages([...new Set(coverKey.split(","))], "art").catch(() => {});
+  }, [coverKey]);
 
   // …and the hand-back itself. It waits for the query rather than running on mount, and it
   // clears the note either way once the answer is in, so a deck deleted from inside its own
