@@ -240,6 +240,30 @@ const COLLAPSE_REP: &str = "substr(max(coalesce(c.released_at,'0000-00-00') || c
 /// would file a row under a name it does not read as.
 const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
 
+/// Layouts that are not a card anyone plays: art series and their front cards, tokens,
+/// double-faced tokens, emblems.
+///
+/// A **ranking** term and never a filter — every printing that matched is still returned, in
+/// both modes. This only decides what a relevance-ranked page puts first.
+const NON_CARD_LAYOUTS: &str =
+    "('art_series','front_card','token','double_faced_token','emblem')";
+
+/// 1 for a non-card, 0 for a card — the first term of the relevance fallback.
+///
+/// It exists because searching `lightning bolt` returned
+/// **`Lightning Bolt // Lightning Bolt` (`astx 76s`, `art_series`) above the real Lightning
+/// Bolt**: the art card's name field holds the phrase twice, and bm25 rewards that.
+/// Collapsing does not fix it — art series carry their own `oracle_id`, so they survive
+/// grouping as their own rows.
+///
+/// Applied to the relevance fallback **only**. An explicit sort is what the reader asked
+/// for, and name order already files an art card beside the card it depicts. Measured
+/// 2026-08-11: the top five for "lightning bolt" went from two art cards and three real
+/// ones to five real ones, at **0.2 ms either way**.
+fn non_card_rank(alias: &str) -> String {
+    format!("(CASE WHEN {alias}.layout IN {NON_CARD_LAYOUTS} THEN 1 ELSE 0 END)")
+}
+
 /// The columns the search table's headers can sort on, and nothing else.
 ///
 /// `set` is the binder order — set code, then *natural* collector number, which is a `CAST`
@@ -400,12 +424,18 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // matches, so plain ascending order is best-first. The weights are (name, type_line,
     // search_text): a card whose name is what was typed beats one that merely mentions it
     // in its rules text, which alphabetical order had no way to express.
+    //
+    // [`non_card_rank`] leads it: an art card whose name repeats the query outscores the card
+    // it depicts, and relevance is the only order where that is wrong. See the constant.
     let fallback = if ranked {
-        "bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC"
+        format!(
+            "{} ASC, bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC",
+            non_card_rank("c")
+        )
     } else {
-        ORDER_NAME
+        ORDER_NAME.to_owned()
     };
-    let order = crate::sorting::order_by(req.sort.as_deref(), SEARCH_SORTS, fallback, "c.id ASC");
+    let order = crate::sorting::order_by(req.sort.as_deref(), SEARCH_SORTS, &fallback, "c.id ASC");
 
     let collapse = req.collapse.unwrap_or(false);
 
@@ -492,6 +522,13 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         // to a handful of rows) and catastrophic for a browse, where it would materialise
         // all 107 k paper rows before the grouping could touch the covering index. Unranked,
         // the group step reads `cards` directly and `idx_cards_collapse` does its job.
+        //
+        // `min()` over the non-card rank is exact rather than approximate, and the
+        // measurement is why: **no oracle group mixes the two kinds** — 3 610 groups are
+        // represented by an art or token row and 0 of them also contains a real printing
+        // (measured 2026-08-11). If that ever stopped holding, the term would degrade to
+        // "demote a group if any of its printings is a non-card", which is a ranking nudge
+        // and not a correctness failure.
         let (cte, group_from, group_where, score_select, score_term) = if ranked {
             (
                 format!(
@@ -502,11 +539,17 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                 ),
                 "m c".to_owned(),
                 "1=1".to_owned(),
-                "min(c.score) AS score,",
-                "min(c.score) ASC, ",
+                format!("min(c.score) AS score, min{} AS nc,", non_card_rank("c")),
+                format!("min{} ASC, min(c.score) ASC, ", non_card_rank("c")),
             )
         } else {
-            ("WITH".to_owned(), from_sql.to_owned(), where_sql.clone(), "", "")
+            (
+                "WITH".to_owned(),
+                from_sql.to_owned(),
+                where_sql.clone(),
+                String::new(),
+                String::new(),
+            )
         };
 
         let group_fallback = format!("{score_term}{ORDER_NAME_COLLAPSED}");
@@ -526,7 +569,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         let final_order = if sorts_after_join {
             format!("{order} LIMIT ? OFFSET ?")
         } else if ranked {
-            "g.score ASC, g.nm ASC, c.id ASC".to_owned()
+            "g.nc ASC, g.score ASC, g.nm ASC, c.id ASC".to_owned()
         } else {
             "g.nm ASC, c.id ASC".to_owned()
         };
@@ -1557,6 +1600,76 @@ mod tests {
             ["Lightning Bolt", "Emeritus of Conflict // Lightning Bolt"],
             "the exact name outranks the card that merely contains it, collapsed too"
         );
+    }
+
+    /// `Lightning Bolt // Lightning Bolt` (`astx 76s`, layout `art_series`) outranked the
+    /// real Lightning Bolt for the query "lightning bolt", because its name field contains
+    /// the phrase twice and bm25 rewards that. Collapse does not fix it — art series carry
+    /// their own `oracle_id` — so relevance demotes them instead.
+    ///
+    /// Nothing is hidden: the art card is still returned, below the card it depicts.
+    #[test]
+    fn art_cards_rank_below_the_card_they_depict() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                oracle_id,search_text,raw)
+             VALUES ('art','Lightning Bolt // Lightning Bolt','astx','76s','en','art_series',1,
+                     'o-art','Lightning Bolt Lightning Bolt','{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        for collapse in [None, Some(true)] {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    text: Some("lightning bolt".into()),
+                    collapse,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                r.items[0].name, "Lightning Bolt",
+                "the real card leads (collapse: {collapse:?})"
+            );
+            assert!(
+                r.items.iter().any(|c| c.id == "art"),
+                "and the art card is still returned, not hidden (collapse: {collapse:?})"
+            );
+        }
+    }
+
+    /// The demotion is on the relevance *fallback* only. An explicit sort is what the reader
+    /// asked for, and name order files an art card beside the card it depicts, which is
+    /// where it belongs.
+    #[test]
+    fn an_explicit_sort_is_not_demoted() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                oracle_id,search_text,raw)
+             VALUES ('art','Aardvark Art','astx','1','en','art_series',1,'o-art',
+                     'Aardvark Art','{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                sort: Some(vec![term("name", "asc")]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.items[0].id, "art", "alphabetical is alphabetical");
     }
 
     /// `collapse` is optional in the payload and absent means false, so every existing
