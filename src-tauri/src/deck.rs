@@ -3635,9 +3635,14 @@ mod tests {
         assert_eq!(decks[0].id, deck.id, "archived decks sort last");
         assert!(decks[1].archived);
         // The gallery's number and the validation panel's are one definition — the engine's
-        // `SIZE_KINDS`, which is `main` + `commander` and nothing else. A companion is the
+        // `SIZE_KINDS`, which is `main`, `commander` **and `maybe`**. A companion is the
         // reason this is pinned: EDH calls one "effectively a 101st card", so counting it here
         // would put 101 on the tile of a deck the panel had just called exactly 100.
+        //
+        // The Maybeboard is out of the number below because it is seeded **inactive**, not
+        // because of its kind — the switch decides whether a pile counts at all, and an
+        // *active* Maybeboard counts like any other pile. This comment used to say "`main` +
+        // `commander` and nothing else", which passes for the wrong reason.
         assert_eq!(
             decks[0].card_count, 3,
             "2 main + 1 commander; the companion, sideboard and Maybeboard are not the deck"
