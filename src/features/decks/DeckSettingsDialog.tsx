@@ -12,7 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
-import { ART_ASPECT, cardImageUrl, imageOrigin } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import {
   ipc,
   ipcError,
@@ -495,7 +495,7 @@ function CoverSection({
 function CoverPreview({ deck }: { deck: DeckRow }) {
   const custom = deck.coverKind === "custom";
   const url = custom
-    ? `${imageOrigin(navigator.userAgent)}/cover/${deck.id}`
+    ? deckCoverUrl(deck.id)
     : deck.coverCardId !== null && deck.coverArtist !== null
       ? cardImageUrl(deck.coverCardId, 0, "art")
       : null;
