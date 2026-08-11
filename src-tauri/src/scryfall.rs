@@ -53,6 +53,30 @@ const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";
 /// complete silence, though, is a connection that is not coming back.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// The whole of how long one card image may take.
+///
+/// The "no overall request timeout" rule above is about the **bulk download**, which
+/// legitimately runs for minutes. An image is not that: the largest variant this app stores
+/// is ~93 KB and a cold one measures ~127 ms, so ten seconds is 6 KB/s — slower than dial-up
+/// — and nothing that misses it was going to arrive.
+///
+/// It exists because the two timeouts above between them do not bound a host that accepts
+/// the connection and then goes silent. `connect_timeout` is already spent, the connection
+/// *was* made; `READ_TIMEOUT` is the backstop, and sixty seconds of a blank frame is not a
+/// backstop the reader can tell apart from a broken app. **Every failure affordance the app
+/// has is behind the `<img>`'s `error` event** — the card pane's "No image yet", `CardArt`'s
+/// "No image", `useImageRetry`'s two automatic retries — and none of them can fire until
+/// this call returns. While it does not, the request also holds one of
+/// `images::MAX_CONCURRENT_FETCHES`'s sixteen permits.
+///
+/// Not a hypothesis: measured 2026-08-11 against a path-MTU black hole between one machine
+/// and `cards.scryfall.io`. The TCP connect succeeded in **51 ms** and the TLS handshake
+/// never completed, because the path carried ~1 468 bytes and dropped the ICMP that says so,
+/// so the server's certificate flight vanished. Every card image in the app hung; the API
+/// host, on a different path, answered in 96 ms throughout. [`Client::fetch_image`] against
+/// that same stalled URL now answers `Timeout(10s)` in **10.011 s**.
+const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What Scryfall says a 429 costs: "your access being limited for 30 seconds". The floor
 /// when the response carries no `Retry-After` of its own.
 pub const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
@@ -123,6 +147,12 @@ pub enum ScryfallError {
     /// will never answer.
     #[error("not found")]
     NotFound,
+    /// The deadline passed with the response unfinished. Its own variant rather than an
+    /// [`Unexpected`](ScryfallError::Unexpected), because that one is *an* answer this app
+    /// did not expect and this is **no answer at all** — a distinction the caller acts on
+    /// (retryable, and worth naming in the log) and a reader needs to debug a silent host.
+    #[error("timed out after {0:?}")]
+    Timeout(std::time::Duration),
     #[error("unexpected response from Scryfall: {0}")]
     Unexpected(String),
 }
@@ -183,6 +213,11 @@ pub struct Migration {
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
+    /// The deadline one image gets. A field rather than a straight read of
+    /// [`IMAGE_TIMEOUT`] for the same reason `base_url` is one: the behaviour worth testing
+    /// is "the deadline is what ends the call", and a test that had to sit out the
+    /// production number to prove it would be a ten-second test.
+    image_timeout: std::time::Duration,
 }
 
 impl Client {
@@ -208,7 +243,15 @@ impl Client {
             // Trailing slash trimmed so joining a path can never produce `//`.
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
+            image_timeout: IMAGE_TIMEOUT,
         }
+    }
+
+    /// The same client with a different image deadline. See the field.
+    #[cfg(test)]
+    pub fn with_image_timeout(mut self, timeout: std::time::Duration) -> Client {
+        self.image_timeout = timeout;
+        self
     }
 
     /// The only way this module issues an API request, so no call site can forget the
@@ -511,7 +554,22 @@ impl Client {
     /// ~93 KB, and a file that small does not repay the temporary and the rename the 77 MB
     /// bulk download needs. **Read** as a stream all the same, so that "buffered into
     /// memory" is a bounded claim: see [`MAX_IMAGE_BYTES`].
+    ///
+    /// **Bounded end to end by [`IMAGE_TIMEOUT`]** — the request *and* the body, because a
+    /// host can go silent at either. The deadline is the whole call rather than a per-read
+    /// one for the same reason it is short: this is 93 KB from a CDN, not the 77 MB bulk
+    /// file, so there is no legitimate reason for one of these to be slow and every reason
+    /// for the `<img>` waiting on it to be told quickly when it is.
     pub async fn fetch_image(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
+        tokio::time::timeout(self.image_timeout, self.image_bytes(uri))
+            .await
+            .unwrap_or_else(|_| Err(ScryfallError::Timeout(self.image_timeout)))
+    }
+
+    /// The fetch itself, with no deadline of its own — [`fetch_image`](Client::fetch_image)
+    /// owns that, so there is exactly one place the bound is applied and no way to reach
+    /// this without it.
+    async fn image_bytes(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
         use futures_util::StreamExt;
 
         let resp = self.get_from(uri, None).await?;
@@ -925,6 +983,45 @@ mod tests {
                 .await,
             Err(ScryfallError::NotFound)
         ));
+    }
+
+    /// A host that takes the connection and then says nothing is the failure neither
+    /// timeout above catches: `connect_timeout` is spent (the connection was made) and
+    /// `READ_TIMEOUT` is a minute away. Until this call returns, the `<img>` that asked for
+    /// the image has had neither a `load` nor an `error` — so the frame is blank, the card
+    /// pane's "No image yet" panel is unreachable, `useImageRetry` schedules nothing, and
+    /// one of the image cache's sixteen permits is held the whole time.
+    ///
+    /// The delay stands in for a stalled response because from this side they are the same
+    /// thing: bytes that have not arrived yet.
+    #[tokio::test]
+    async fn a_stalled_image_gives_up_rather_than_hanging() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/stalled.webp");
+            then.status(200)
+                .header("content-type", "image/webp")
+                .delay(std::time::Duration::from_secs(2))
+                .body(vec![0x52u8, 0x49, 0x46, 0x46]);
+        });
+        let c = Client::new(server.base_url())
+            .with_image_timeout(std::time::Duration::from_millis(150));
+
+        let started = std::time::Instant::now();
+        let result = c
+            .fetch_image(&format!("{}/stalled.webp", server.base_url()))
+            .await;
+        let waited = started.elapsed();
+
+        assert!(
+            matches!(result, Err(ScryfallError::Timeout(_))),
+            "a silent host is a timeout, not bytes and not a hang: {result:?}"
+        );
+        assert!(
+            waited < std::time::Duration::from_secs(1),
+            "the deadline has to be what ends the call, not the response finally arriving \
+             ({waited:?})"
+        );
     }
 
     /// Scryfall limits access for 30 seconds on a 429 and bans repeat offenders, so the

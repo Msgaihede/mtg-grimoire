@@ -1096,6 +1096,16 @@ are all things no suite could have seen.
   registered and routing — the failures were the app's own **502**, its documented "failed
   fetch", not a browser-level protocol error — and the `/cover/` route needs no network and was
   verified end to end. But **no card image has been seen decoding in this build.**
+  **Diagnosed 2026-08-11, and it is not the app: a path-MTU black hole.** The host is *not*
+  unreachable — DNS answers (OVH, `57.130.33.1`/`15.204.104.240`, not Cloudflare like the API
+  host) and the TCP connect completes in **51 ms**. The TLS handshake is what never finishes:
+  `ping -f -l 1472` to it gets no reply where `-l 1440` does, so the path carries ~1 468 bytes
+  and swallows the ICMP that would say so, and the server's certificate flight — a full-size
+  segment — vanishes. curl, Node and reqwest all stall identically at the same point, after
+  ALPN and before ServerHello. **The tell is which half of the app breaks**: card *data* syncs
+  fine because `api.scryfall.com` rides a different path, while every picture hangs. Before
+  suspecting the image cache, probe the MTU. Nothing in this repo can fix it; lowering the
+  interface MTU (or clamping MSS) can.
 - **The system file picker was not driven.** `dialog:allow-open` opens a native window that CDP
   cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
   path. The encode → write → serve → render half is measured; **the picker → path half is not.**
