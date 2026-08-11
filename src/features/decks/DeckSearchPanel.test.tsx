@@ -16,7 +16,24 @@ const deckAddCard = vi.hoisted(() => vi.fn());
 const prefetchImages = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { searchCards, listSets, deckGet, deckAddCard, prefetchImages },
+  ipc: {
+    searchCards,
+    // The panel's filter row asks for facet counts beside the page. Answered **cold** —
+    // `ready: false`, every map empty — so nothing greys and every control keeps its name.
+    facetCards: vi.fn().mockResolvedValue({
+      colors: {},
+      manaValues: {},
+      formats: {},
+      sets: {},
+      owned: { owned: 0, missing: 0 },
+      total: 0,
+      ready: false,
+    }),
+    listSets,
+    deckGet,
+    deckAddCard,
+    prefetchImages,
+  },
 }));
 
 import { DeckSearchPanel } from "./DeckSearchPanel";

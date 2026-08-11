@@ -95,6 +95,21 @@ const CARDS_COLUMNS: &str = "
 /// put them all back. When these statements were written out twice — once in [`migrate`],
 /// once in the swap — an index added to one of them silently disappeared at the next sync
 /// on every machine that had already migrated. `IF NOT EXISTS` so `migrate` can rerun.
+///
+/// **This list describes the table at HEAD, so only the NEWEST migration step may replay
+/// it.** It names `legal_mask`, which the v10 step is what adds — so the v1 block that used
+/// to replay it would now fail on every fresh install with "no such column", the list
+/// describing a table nine versions ahead of the one in front of it. The steps below v10
+/// therefore create no index at all: v10's replay is where every database walking the ladder
+/// gets them, and every statement being `IF NOT EXISTS` is what makes that a bring-up-to-date
+/// rather than a rebuild. A step that *changes* a definition — as v10 changes this one —
+/// drops the old one first, or `IF NOT EXISTS` silently keeps what is already there.
+///
+/// The rule is a *moving* one: a v11 that touches `cards` must take the replay from v10, and
+/// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what fails if it does not.
+/// A step that leaves `cards` alone entirely — v8, the deck tables, and v9, the error log —
+/// neither needs the list nor may replay it, and neither takes the title of newest creator
+/// from v10.
 const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
@@ -110,8 +125,21 @@ const CARDS_INDEXES: &[&str] = &[
     // was built and measured, and is a straight loss: it made the name sort 38 → 61 ms and
     // left the sorts it was meant to help unchanged, because those cost row lookups rather
     // than index reads.
+    //
+    // **The trailing three are the filter columns, and they are why a *filtered* browse is
+    // cheap.** Without them every filter the search offers — format, colours, mana value —
+    // knocks the group scan off this index and into row lookups: 455–505 ms against
+    // 22–47 ms with them. They cost +0.89 MB (13.45 → 14.34 MB) and 4 ms on the *unfiltered*
+    // browse, which is the trade. **Measured 2026-08-11 through `node:sqlite`, against a
+    // page-for-page online backup of the live database** — the build behind a figure like
+    // this is SQLite's own C, identical under a debug or a release crate, so the fixture is
+    // what needs naming rather than a cargo profile.
+    //
+    // `legal_mask` and not `legalities`: a JSON path is not indexable, which is the whole
+    // reason [`crate::legalities`] exists.
     "CREATE INDEX IF NOT EXISTS idx_cards_collapse \
-     ON cards(oracle_id, is_paper, released_at, id, name, price_usd)",
+     ON cards(oracle_id, is_paper, released_at, id, name, price_usd, \
+              legal_mask, cmc, color_identity)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch.
@@ -172,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -390,15 +418,18 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // step fails the database stays at version 0 and the next run retries cleanly.
         // Bumping it before the FTS table exists would mark the database migrated with
         // no search index and no path back.
+        //
+        // The indexes are deliberately not here. [`CARDS_INDEXES`] describes the table at
+        // head and names columns later steps add, so the newest step replays it and no
+        // older one may — see the constant. A fresh install gets its indexes at v10, in the
+        // same `migrate` call as this.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS cards ({CARDS_COLUMNS});
-             {indexes}
              CREATE TABLE IF NOT EXISTS sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
                 set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
-             CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-            indexes = cards_indexes_sql()
+             CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         ))?;
         create_fts(&tx)?;
         tx.execute_batch("PRAGMA user_version = 1;")?;
@@ -810,21 +841,22 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     if v < 7 {
-        let tx = conn.unchecked_transaction()?;
-        // One index on `cards`, for the collapsed search. This re-runs the whole
-        // [`CARDS_INDEXES`] batch rather than naming the new one: every statement in it is
-        // `IF NOT EXISTS`, so the step means "bring the index list up to date" and the
-        // other three are untouched. A fresh install already has it from the v1 block and
-        // arrives here with nothing to do.
+        // v7 is `idx_cards_collapse`, the collapsed search's covering index — and it has no
+        // statements of its own any more. It used to replay [`CARDS_INDEXES`] here; v10 puts
+        // a column in that list which no step before v10 has added, so the replay moved down
+        // to v10 and this step's index is created there, in its widened form, for every
+        // database that walks past here. What is left is the version this step stands for,
+        // kept rather than deleted because the ladder is the record of what each version
+        // was — and because creating the narrow index only for v10 to drop it would be a
+        // 0.7 s index build over the live corpus, spent on nothing.
         //
         // Nothing here reads `raw`, so [`json_raw`] has no part to play. Nothing here
         // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
         // renumbered, so no `cards_fts` rebuild is owed — the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
-        tx.execute_batch(&cards_indexes_sql())?;
+        //
         // Literal `7`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA user_version = 7;")?;
-        tx.commit()?;
+        conn.execute_batch("PRAGMA user_version = 7;")?;
     }
     if v < 8 {
         let tx = conn.unchecked_transaction()?;
@@ -1027,8 +1059,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              -- and for the same reason turned one step forward: **this step is history the
              -- day it ships.** `DECK_CARD_GRAIN` has already been changed once on this
              -- branch — v8 is what changed it — and the change silently rewrote what v5 had
-             -- built until v5 was frozen. A v9 that widens the grain again would make this
-             -- step build an index over a column that does not exist at v8: a hard failure on
+             -- built until v5 was frozen. A later step that widens the grain again would make
+             -- this step build an index over a column that does not exist at v8: a hard failure on
              -- a **new** install and invisible on every upgraded one, because an upgraded
              -- database ran this step before the column was named. The constant is for
              -- everything that is not history — the `ON CONFLICT` targets in `deck.rs` and
@@ -1093,6 +1125,72 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         // Literal `9`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 9;")?;
+        tx.commit()?;
+    }
+    if v < 10 {
+        let tx = conn.unchecked_transaction()?;
+        // One `NOT NULL DEFAULT 0` column, and the index it goes into — the NOT NULL is the
+        // format filter's requirement and the paragraph below it says why. `CARDS_COLUMNS`
+        // stays frozen — a fresh install replays v1 and arrives here to do the same work an
+        // upgrade does.
+        //
+        // **The DROP is load-bearing.** Every statement in [`CARDS_INDEXES`] is
+        // `IF NOT EXISTS`, so replaying the batch over a database that already carries
+        // `idx_cards_collapse` in its narrow v7 form would keep that definition and skip
+        // the widening — silently, on exactly the machines that have the problem. v7 could
+        // replay the batch bare because its index was new; this one is not. Dropping it
+        // first is what makes the replay build the new one, and
+        // `the_v10_step_replaces_the_narrow_collapse_index_rather_than_skipping_it` is the
+        // fence: it fails without this line.
+        //
+        // The replay is this step's because [`CARDS_INDEXES`] describes the table at head
+        // and only the newest step may create from it (see the constant) — so these four
+        // statements are also where a fresh install, and every database that arrives here
+        // missing an index, gets them. Hence the whole batch rather than the one name.
+        // Two steps sit between this one and v7 and neither touches `cards` — v8 is the deck
+        // tables, v9 is `error_log` — so neither needs the list nor may replay it; that this
+        // step is still the newest is what keeps the constant's rule true, and
+        // `every_version_ends_with_the_same_schema_as_a_fresh_install` is what would fail if
+        // a v11 landed without moving the replay up.
+        //
+        // The backfill reads `legalities`, which is a plain JSON TEXT column and not `raw`,
+        // so [`json_raw`] has no part to play — [`crate::legalities::mask_sql`] says why
+        // `raw` could not be the argument even where it holds the same object. Nothing here
+        // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
+        // renumbered, so no `cards_fts` rebuild is owed — the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // It is paid exactly once: [`crate::card_row`] computes the mask natively from the
+        // next sync on, so this UPDATE is the only time it is ever derived in SQL. Unlike
+        // v2's and v5's backfills it cannot be narrowed to the rows that have something to
+        // give — every row needs a mask, and a row with no `legalities` needs the 0 that
+        // says "legal nowhere" rather than the NULL that would sit in the index meaning
+        // nothing. **The whole step is 3–5 s of launch, before there is a window to say so
+        // in**: measured 2026-08-11 over three runs against a *synthetic* 116 590-row,
+        // 469 MB stand-in for the corpus (release build), backfill 2.9–5.0 s and index build
+        // 0.46–0.63 s. About 2.2 s of the backfill is the full-table row rewrite that any
+        // UPDATE of every row pays — the 23 `json_extract`s are the rest, and are the reason
+        // the app will not be doing this at query time.
+        //
+        // **`NOT NULL DEFAULT 0`, and that is the filter's requirement rather than tidiness.**
+        // [`crate::filters::push_card_filters`] tests format with `legal_mask & ? != 0`, and
+        // `NULL & ?` is NULL — a row with a NULL mask would vanish from every format-filtered
+        // search instead of reading as "legal nowhere". No NULL can reach production today
+        // (this UPDATE fills every row, [`crate::legalities::mask_sql`] answers 0 for a NULL
+        // `legalities`, and `STAGING_INSERT` names the column so the ingest always binds it),
+        // but the column permitted one and v10 is still unshipped, so it costs nothing to
+        // close. `DEFAULT` is also what makes the `ALTER` legal at all: SQLite refuses to add
+        // a `NOT NULL` column without one. [`cards_column_defs`] reproduces both, so staging
+        // carries them and the swap survives.
+        tx.execute_batch("ALTER TABLE cards ADD COLUMN legal_mask INTEGER NOT NULL DEFAULT 0;")?;
+        tx.execute_batch(&format!(
+            "UPDATE cards SET legal_mask = {mask};",
+            mask = crate::legalities::mask_sql("legalities")
+        ))?;
+        tx.execute_batch("DROP INDEX IF EXISTS idx_cards_collapse;")?;
+        tx.execute_batch(&cards_indexes_sql())?;
+        // Literal `10`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 10;")?;
         tx.commit()?;
     }
     Ok(())
@@ -1541,9 +1639,17 @@ pub(crate) mod tests {
     }
 
     /// A database that migrated before the collapse index existed must gain it, and running
-    /// the step twice must be a no-op — every statement in [`CARDS_INDEXES`] is
-    /// `IF NOT EXISTS`, which is what lets the v7 step re-run the whole list rather than
-    /// naming one index.
+    /// `migrate` twice must be a no-op — every statement in [`CARDS_INDEXES`] is
+    /// `IF NOT EXISTS`, which is what lets the newest step replay the whole list rather than
+    /// naming the one index it changed.
+    ///
+    /// **Which step that is has moved, and moves again with every merge: the index arrives at
+    /// v10 now, not v7.** v7 used to replay [`CARDS_INDEXES`] itself; the list names
+    /// `legal_mask`, which v10 is what adds, so the replay moved to v10 and every step below
+    /// it creates no index at all. What this test asserts is unchanged and is deliberately
+    /// written in terms of the *outcome* — a pre-collapse-index database ends up with the
+    /// index, whichever step hands it over. That is why the renumber from v9 to v10 left this
+    /// test's body untouched.
     ///
     /// The fixture is [`v6_deck_database`] — a database genuinely *at* version 6, with
     /// `cards` in its v1 shape and the three indexes v1 created — rather than a head
@@ -1555,7 +1661,7 @@ pub(crate) mod tests {
     /// a failure no real upgrade could produce. It is the same trap [`v6_deck_database`]'s
     /// own doc names, arriving at a second test.
     #[test]
-    fn the_v7_step_is_idempotent_and_adds_the_index_to_an_existing_database() {
+    fn a_database_from_before_the_collapse_index_gains_it_and_a_rerun_is_a_no_op() {
         let conn = v6_deck_database();
         let before: i64 = conn
             .query_row(
@@ -2021,18 +2127,21 @@ pub(crate) mod tests {
 
     /// A database that stopped at version 1 — what every machine that ran Plan 1 has on
     /// disk. Built from the frozen v1 constant rather than by calling `migrate`, because
-    /// `migrate` now runs straight through to 2 and there is no way back.
+    /// `migrate` now runs straight through to head and there is no way back.
+    ///
+    /// No indexes, for the reason the v1 step creates none: [`CARDS_INDEXES`] describes the
+    /// table at head and names columns a v1 table does not have. The v10 step replays the
+    /// list, so a database built here has its indexes by the time `migrate` returns —
+    /// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what asserts it.
     fn v1_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!(
             "CREATE TABLE cards ({CARDS_COLUMNS});
-             {indexes}
              CREATE TABLE sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
                 set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
              CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             PRAGMA user_version = 1;",
-            indexes = cards_indexes_sql()
+             PRAGMA user_version = 1;"
         ))
         .unwrap();
         create_fts(&conn).unwrap();
@@ -2964,27 +3073,47 @@ pub(crate) mod tests {
     /// for whatever that immediate check cannot see: a dangling reference this transaction's
     /// own writes never touch.
     ///
-    /// **`cards` is here for the v7 step, which also runs.** [`migrate`] reads
+    /// **`cards` is here for the v10 step, which also runs.** [`migrate`] reads
     /// `user_version` once and then walks *every* step above it, so a database that says 6
-    /// runs the v7 index step and the v8 rebuild both — and v7's whole body is
-    /// `CREATE INDEX … ON cards(…)`, a hard error against a database with no `cards` table.
+    /// runs v7, the v8 rebuild, v9's error log and v10 alike — and v10's body is
+    /// `ALTER TABLE cards … / UPDATE cards … / CREATE INDEX … ON cards(…)`, a hard error
+    /// against a database with no `cards` table. (v7 used to be the step that needed it; it
+    /// has no statements of its own any more, because the [`CARDS_INDEXES`] replay moved up
+    /// to v10 where the list's newest column exists. The requirement moved with it, it did
+    /// not go away.)
+    ///
     /// It is built from [`CARDS_COLUMNS`], which is frozen to exactly the v1 shape and so is
     /// exactly what a v6 database has, and it carries the three indexes v1 created and *not*
     /// the fourth: not having `idx_cards_collapse` yet is precisely what makes this a pre-v7
     /// database, which is what
-    /// [`the_v7_step_is_idempotent_and_adds_the_index_to_an_existing_database`] reads it as.
-    /// Those three are spelled out as literals rather than interpolated from
+    /// [`a_database_from_before_the_collapse_index_gains_it_and_a_rerun_is_a_no_op`] reads it
+    /// as. Those three are spelled out as literals rather than interpolated from
     /// [`CARDS_INDEXES`] for that constant's own reason — this fixture is a description of
     /// history, and a later addition to the list must not silently rewrite what a v6
-    /// database had.
+    /// database had. That the *finished* database carries all four, widened, is
+    /// `every_version_ends_with_the_same_schema_as_a_fresh_install`'s to assert.
     ///
-    /// `migrate`'s `if v < 7` and `if v < 8` branches are the only two that can run once
-    /// `user_version` already says 6, so nothing earlier is needed — the same reasoning
-    /// `v1_database` uses further down the ladder.
+    /// `migrate`'s `if v < 7`, `if v < 8`, `if v < 9` and `if v < 10` branches are the only
+    /// four that can run once `user_version` already says 6, so nothing earlier is needed —
+    /// the same reasoning `v1_database` uses further down the ladder.
     fn v6_deck_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!(
             "CREATE TABLE cards ({CARDS_COLUMNS});
+             -- The five columns v2, v3 and v5 added to `cards`, replayed as literals
+             -- because `migrate` will not: it reads `user_version` once, sees 6, and skips
+             -- every step below v7 — so a fixture that stopped at the frozen v1 shape would
+             -- be a v1 `cards` wearing a v6 label, and would reach head missing five
+             -- columns a real v6 database has had since long before it. That is precisely
+             -- what `every_version_ends_with_the_same_schema_as_a_fresh_install` catches,
+             -- and it caught this. Literals for the same reason the three indexes below
+             -- are: this fixture describes history, and history does not change when a
+             -- later step adds a sixth.
+             ALTER TABLE cards ADD COLUMN image_uris TEXT;
+             ALTER TABLE cards ADD COLUMN face_image_uris TEXT;
+             ALTER TABLE cards ADD COLUMN artist TEXT;
+             ALTER TABLE cards ADD COLUMN power TEXT;
+             ALTER TABLE cards ADD COLUMN toughness TEXT;
              CREATE INDEX idx_cards_oracle ON cards(oracle_id);
              CREATE INDEX idx_cards_set_cn ON cards(set_code, collector_number);
              CREATE INDEX idx_cards_name ON cards(name);"
@@ -3558,5 +3687,304 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1, "the FTS index must survive the v5 backfill");
+    }
+
+    // ---- v10: `legal_mask` and the widened collapse index ---------------------------
+
+    /// A database that stopped at version 9 — the shape a machine that has run this app
+    /// before is in, one version below head.
+    ///
+    /// **The version it names is not this branch's to choose: it is head minus one, whatever
+    /// main last landed.** It was `v8_database` while our step was v9; main's own v9 (the
+    /// error log) pushed ours to v10 and this fixture to 9. What it *means* — "one version
+    /// below ours, so `migrate` runs our step and nothing else" — has never changed, and the
+    /// name has to keep saying it.
+    ///
+    /// [`v1_database`]'s trick cannot reach v9: only version 1's DDL is frozen, and every
+    /// version after it is an `ALTER` (or, at v8, a whole table rebuild) inside a step there
+    /// is no way back through. So this walks to head and undoes exactly what the v10 step
+    /// did — nothing more. `error_log`, which v9 creates, is therefore still standing, which
+    /// is exactly right: this is a v9 database, and a v9 database has it.
+    ///
+    /// **It rewinds to 9 and not one step further, and that is the trap
+    /// [`v6_deck_database`] exists for.** `migrate` reads `user_version` once and then walks
+    /// *every* step above it, so a rewind to 7 over a head-shaped database would re-run v8's
+    /// deck rebuild against tables already in their v8 shape and die on a duplicate column —
+    /// a failure no real upgrade can produce. Undoing v10's two statements is the whole of
+    /// what this fixture may claim, which is why it is named for the version it leaves
+    /// behind rather than for the one step it is testing.
+    ///
+    /// The index goes **before** the column: SQLite refuses to drop a column that an index
+    /// names, and the widened `idx_cards_collapse` names this one. The narrow definition
+    /// that goes back is a literal, not [`CARDS_INDEXES`]'s entry — this is a description of
+    /// history, and history does not change when the list does.
+    fn v9_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_cards_collapse;
+             ALTER TABLE cards DROP COLUMN legal_mask;
+             CREATE INDEX idx_cards_collapse
+                 ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
+             PRAGMA user_version = 9;",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// [`v9_database`] must really be **at** version 9, and the renumber is what makes this
+    /// worth asserting rather than assuming.
+    ///
+    /// The fixture is a head database with our step undone, so every way it can be wrong
+    /// leaves it looking like head — and a head-shaped "v9" would sail through
+    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] **vacuously**, because
+    /// `migrate` would have nothing to do and the comparison would be a fresh install against
+    /// itself. The next merge renumbers this fixture again (it has been `v8_database` once
+    /// already); this is the line that fails if the rewind and the ladder drift apart.
+    ///
+    /// Its three claims are the three things the v10 step goes on to change: the version, the
+    /// column, and the *narrow* index definition.
+    #[test]
+    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+        let conn = v9_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+
+        assert!(
+            !card_columns(&conn).contains(&"legal_mask".to_owned()),
+            "the v10 column must not be there yet"
+        );
+
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !sql.contains("legal_mask"),
+            "the collapse index must still be narrow: {sql}"
+        );
+
+        // And v9's own table is standing, because this *is* a v9 database — the rewind undoes
+        // our step and nothing main landed below it.
+        let has_error_log: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='error_log'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_error_log, 1, "a v9 database has `error_log`");
+    }
+
+    /// The mask every row on disk gets without waiting for a sync. `legalities` is a plain
+    /// TEXT column, so this backfill needs no [`json_raw`] guard — and the row is seeded
+    /// with a **gzip `raw`** anyway, because a step that reached for `raw` by mistake would
+    /// then fail here rather than in the field, where `json_extract` over a gzip member is a
+    /// hard `malformed JSON` error and not the NULL one might expect.
+    #[test]
+    fn the_v10_backfill_fills_legal_mask_and_leaves_gzip_raw_alone() {
+        let conn = v9_database();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,legalities,is_paper,raw)
+             VALUES ('1','Black Lotus','lea','232','en','normal',
+                     '{\"vintage\":\"restricted\",\"modern\":\"not_legal\"}',1,?1)",
+            [crate::card_row::gzip_raw("{}")],
+        )
+        .unwrap();
+
+        migrate(&conn).expect("a gzip `raw` must not fail the v10 step");
+
+        let mask: i64 = conn
+            .query_row("SELECT legal_mask FROM cards WHERE id='1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let vintage = crate::legalities::bit("vintage").unwrap() as i64;
+        let modern = crate::legalities::bit("modern").unwrap() as i64;
+        assert_ne!(mask & vintage, 0, "restricted is playable");
+        assert_eq!(mask & modern, 0);
+
+        // And the column the step must not have touched is still the bytes it was handed.
+        let stored: Vec<u8> = conn
+            .query_row(
+                "SELECT CAST(raw AS BLOB) FROM cards WHERE id='1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(crate::card_row::raw_json(&stored).as_deref(), Some("{}"));
+    }
+
+    /// The mask can never be NULL, and that is the format filter's requirement rather than
+    /// tidiness: [`crate::filters::push_card_filters`] asks `legal_mask & ? != 0`, and
+    /// `NULL & ?` is NULL — a printing with a NULL mask would drop out of every
+    /// format-filtered search **silently**, where a 0 reads as the true statement "legal
+    /// nowhere". Both halves are asserted through behaviour: the `DEFAULT` is what an
+    /// `INSERT` that does not name the column lands on (which is every fixture in this crate
+    /// and every hand-written row), and the `NOT NULL` is what refuses one that names it and
+    /// passes NULL.
+    #[test]
+    fn a_card_can_never_carry_a_null_legal_mask() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('1','Black Lotus','lea','232','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        let mask: Option<i64> = conn
+            .query_row("SELECT legal_mask FROM cards WHERE id='1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(mask, Some(0), "legal nowhere, not unknown");
+
+        let refused = conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw,legal_mask)
+             VALUES ('2','Mox Pearl','lea','264','en','normal','{}',NULL)",
+            [],
+        );
+        // On the message, not on `is_err`: a typo'd column name or a missing NOT NULL
+        // elsewhere in this INSERT would fail just as loudly and the test would still pass,
+        // pinning nothing about `legal_mask`.
+        let refused = refused.expect_err("a NULL mask must not be storable");
+        assert!(
+            refused
+                .to_string()
+                .contains("NOT NULL constraint failed: cards.legal_mask"),
+            "refused for the constraint, not for a broken statement: {refused}"
+        );
+    }
+
+    /// The widened index is what makes a *filtered* browse cheap — 505 ms to 41 ms, measured
+    /// 2026-08-11 over the live corpus. A v9 database already carries the narrow definition
+    /// (it has done since v7 built it), and every statement in [`CARDS_INDEXES`] is
+    /// `IF NOT EXISTS`, so the step has to DROP first or the widening is a silent no-op on
+    /// exactly the machines that need it.
+    #[test]
+    fn the_v10_step_replaces_the_narrow_collapse_index_rather_than_skipping_it() {
+        let conn = v9_database();
+
+        migrate(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.contains("legal_mask"), "widened: {sql}");
+        assert!(sql.contains("cmc"), "widened: {sql}");
+        assert!(sql.contains("color_identity"), "widened: {sql}");
+    }
+
+    /// The ladder ends where the constant says it does. Written as a literal so that
+    /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
+    /// step and forgetting the constant — fails here rather than in the field.
+    #[test]
+    fn the_schema_version_is_ten() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 10);
+    }
+
+    /// **Every route to head must arrive at the same schema.** A fresh install runs the whole
+    /// ladder in one `migrate`; an upgrade enters it partway and runs only the steps above
+    /// where it stopped. Those two are the same claim only while every step's DDL is
+    /// reachable from below it — and a merge that slides a step in *underneath* the one
+    /// replaying [`CARDS_INDEXES`] is exactly the event that can break it, because the list
+    /// is replayed by *one* step and a database entering above that step never sees it.
+    /// **This has now happened twice**: v8 landed between v7 and our step, and then main's
+    /// v9 did, each time pushing ours up the ladder. This test is what makes that
+    /// renumbering safe rather than merely careful.
+    ///
+    /// So this walks every fixture the ladder has a genuine starting point for and compares
+    /// the finished article against a fresh install: `cards`' columns **and** its indexes,
+    /// the latter by stored SQL rather than by name, because a narrow `idx_cards_collapse`
+    /// and a widened one share a name and differ in the only way that matters.
+    ///
+    /// The rewound fixtures are the honest ones available — [`v1_database`] is built from the
+    /// frozen v1 DDL, [`v6_deck_database`] is a hand-built v6, and [`v9_database`] undoes v10
+    /// over a head database. That last one is the case this merge added: a database sitting
+    /// at main's new v9, above every step that could hand it an index and below the one that
+    /// does. A rewind that skipped a step's own table rebuild would fail here for a reason no
+    /// upgrade could produce, which is why the fixtures are what they are and not a
+    /// `PRAGMA user_version` away from each other.
+    #[test]
+    fn every_version_ends_with_the_same_schema_as_a_fresh_install() {
+        let fresh = Connection::open_in_memory().unwrap();
+        migrate(&fresh).unwrap();
+        let want_cols = card_columns(&fresh);
+        let want_indexes = indexes_on_cards(&fresh);
+
+        // Every index the list names, and no declared index it does not. `sqlite_master`
+        // also carries `sqlite_autoindex_cards_1` — the implicit index behind `id`'s PRIMARY
+        // KEY, which is not ours to declare and is deliberately left in `want_indexes` so the
+        // per-version comparison below proves the primary key survived each route too.
+        let declared: Vec<&str> = want_indexes
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| !n.starts_with("sqlite_autoindex"))
+            .collect();
+        assert_eq!(
+            declared.len(),
+            CARDS_INDEXES.len(),
+            "a fresh install must carry every index in the list: {want_indexes:?}"
+        );
+        for stmt in CARDS_INDEXES {
+            let name = stmt
+                .split_whitespace()
+                .nth(5)
+                .expect("`CREATE INDEX IF NOT EXISTS <name> …`");
+            assert!(declared.contains(&name), "{name} missing: {declared:?}");
+        }
+
+        for (name, conn) in [
+            ("v1", v1_database()),
+            ("v6", v6_deck_database()),
+            ("v9", v9_database()),
+        ] {
+            migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
+
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, SCHEMA_VERSION, "{name} must reach head");
+            assert_eq!(
+                card_columns(&conn),
+                want_cols,
+                "{name} must end with a fresh install's `cards` columns"
+            );
+            assert_eq!(
+                indexes_on_cards(&conn),
+                want_indexes,
+                "{name} must end with a fresh install's `cards` indexes, definitions included"
+            );
+        }
+    }
+
+    /// `cards`' column names in ordinal order, which is what `PRAGMA table_info` gives and
+    /// what a fresh install and an upgrade have to agree on.
+    fn card_columns(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("PRAGMA table_info(cards)").unwrap();
+        let cols = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        cols
     }
 }

@@ -114,6 +114,7 @@ import type {
   EntryChange,
   EntryInput,
   EntryPatch,
+  FacetResponse,
   InstallKind,
   Printing,
   ReleaseInfo,
@@ -399,6 +400,12 @@ export interface FakeUpdate {
  *   sentences rather than one, because they are two different failures and the panel prints
  *   whichever it got.
  *
+ * **`indexCold`** is a third kind again: not a failure and not a row, but the search index
+ * mid-build. `facets::run_facets` answers a cold index with `ready: false` and **empty maps**
+ * rather than with an error or with zeros, and the UI leaves every control live on it —
+ * not-greyed has to mean "we do not know". The fake has no warm-up of its own, so this fault
+ * is the only way a story can stand in that state.
+ *
  * **`deckMeta`** is the one read failure among them, and it is a read failure on purpose.
  * `busy` is a *write* lock and no read here honours it; `gone` is a row that is not there.
  * This one is `deck_meta.rs`'s own "the deck folders could not be read: …" family, plus
@@ -413,6 +420,7 @@ export type Fault =
   | "syncError"
   | "imageFailures"
   | "gone"
+  | "indexCold"
   | "deckMeta"
   | "updateAvailable"
   | "updateError"
@@ -799,8 +807,9 @@ function matchesCardFilters(
     const cmc = card?.cmc ?? null;
     const exact = new Set(f.manaValues.filter((v) => v < MANA_VALUE_OPEN_ENDED));
     const openEnded = f.manaValues.some((v) => v >= MANA_VALUE_OPEN_ENDED);
-    // `cmc` is REAL and nullable: a card with no cost matches no chip, and neither does a
-    // fractional un-card cost.
+    // `cmc` is REAL and nullable: a card with no cost matches no chip, and a fractional
+    // un-card cost matches none *below* 8 (exact equality) but is returned by the open-ended
+    // chip, which is `>= 8` — the same split `push_card_filters` emits.
     const hit = cmc !== null && (exact.has(cmc) || (openEnded && cmc >= MANA_VALUE_OPEN_ENDED));
     if (!hit) return false;
   }
@@ -814,6 +823,74 @@ function matchesCardFilters(
     if (!card?.isPaper) return false;
   }
   return true;
+}
+
+/* ------------------------------------------------------------------ facet helpers ----- */
+
+/** `CardIndex::COLOR_KEYS` — the six colour chips, `C` last. */
+const COLOR_CHIPS = [...COLORS, "C"];
+
+/**
+ * `legalities::LEGALITY_KEYS`, the 23 keys `facets::compute` emits a count for.
+ *
+ * Declared rather than derived from the corpus, because {@link FacetResponse.formats}
+ * promises a key is never absent and a story passing a two-card corpus of its own would
+ * otherwise emit only the keys those two rows happen to carry. The order is Rust's, where it
+ * is bit positions in `cards.legal_mask` and therefore **append only**; here it decides
+ * nothing, and it is copied anyway so a reader can diff the two lists.
+ */
+const LEGALITY_KEYS = [
+  "alchemy",
+  "brawl",
+  "commander",
+  "competitivebrawl",
+  "duel",
+  "future",
+  "gladiator",
+  "historic",
+  "legacy",
+  "modern",
+  "oathbreaker",
+  "oldschool",
+  "pauper",
+  "paupercommander",
+  "penny",
+  "pioneer",
+  "predh",
+  "premodern",
+  "standard",
+  "standardbrawl",
+  "timeless",
+  "tlr",
+  "vintage",
+];
+
+/**
+ * Which filter a facet base leaves out — `facets::Skip`, minus its `Nothing` arm, which is
+ * `null` here.
+ *
+ * `sets` covers `setCode` **and** `sets`: they are one dimension, because the picker's counts
+ * have to ignore both or opening it on a request that already names a set would offer nothing
+ * but that set.
+ */
+type FacetSkip = "colors" | "mana" | "sets" | "formats" | "owned";
+
+/**
+ * The picked-colour string after one chip is pressed — `facets::toggle_colors`, which is
+ * itself the mirror of `toggleColor` in `useCardSearch.ts`.
+ *
+ * `C` is exclusive both ways, because the backend reads a `colors` of exactly `"C"` as
+ * colourless-only and anything else as subset-of-these-letters: `"RC"` would silently mean
+ * plain `"R"`, so pressing it clears the letters and pressing it again clears the filter.
+ *
+ * WUBRG order, so the string a count was computed for is the string the UI will send.
+ */
+function toggleColorString(picked: string, letter: string): string {
+  if (picked.includes(letter)) return [...picked].filter((c) => c !== letter).join("");
+  if (letter === "C") return "C";
+  const on = [...picked].filter((c) => c !== "C");
+  on.push(letter);
+  return COLORS.filter((c) => on.includes(c)).join("");
 }
 
 /** The text simplification, over a card. See simplification 1 in the file header. */
@@ -1990,6 +2067,137 @@ export function readHandlers(db: FakeDb) {
         items: rows.slice(req.offset, req.offset + limit),
         total: Math.min(counted, TOTAL_CAP),
         totalIsCapped: counted > TOTAL_CAP,
+      };
+    },
+
+    /**
+     * `index::facets::compute`.
+     *
+     * Derived from the same {@link matchesCardFilters} the fake's `search_cards` uses, so the
+     * two cannot disagree about what a filter means — which is the whole reason this file
+     * stores rows and derives DTOs rather than storing DTOs. Every count here is one option
+     * run through that mirror over its dimension's base.
+     *
+     * **Every dimension is counted over a base carrying every filter EXCEPT its own** —
+     * Solr's `excludeTags` rule. Counted over the full base, picking one set would report
+     * zero for every other set and grey the whole picker at the moment it was first used.
+     *
+     * Colours are the exception that proves it: `colors` is **subset** semantics, so with `U`
+     * on, pressing `W` asks for "castable in WU" — a superset. Their number is the size of the
+     * result *after* toggling, read against `total`. Every other dimension is a plain count.
+     *
+     * The index has no rarity dimension, so `facets::base` drops `rarity` from every base and
+     * a rarity-filtered request is faceted as though it were unfiltered — every count reads
+     * high. Mirrored rather than improved on: a fake that counted better than the backend
+     * would hide the divergence instead of the app showing it. Nothing sends it today; the
+     * search view's filter bar has no rarity control.
+     */
+    facet_cards: (args: { req: SearchRequest }): FacetResponse => {
+      // A cold index is an answer and never an error, and **every map is empty on it** —
+      // not a map of zeros. `ready: false` says "we did not count", which is what lets the
+      // UI leave every control live; zeros would say "this is empty" and grey the lot.
+      //
+      // **An empty corpus answers the same way**, and that is `facets::compute`'s own guard
+      // (`if ix.all.count() == 0`) rather than a convenience here. A first launch publishes
+      // an index over zero rows for the ~93 s its opening sync takes, and counted honestly
+      // every option is zero: the greying rule dims the whole row, and with no filter on
+      // there is no `Reset all` drawn to escape by. The `empty` seed is exactly that state,
+      // and it is the seed `Search/Page`'s `Empty`, `Decks/SearchPanel` and
+      // `Collection/Page` render — so without this line the workbench drew a dead filter row
+      // the shipped window cannot produce.
+      if (db.fault === "indexCold" || db.cards.length === 0) {
+        return {
+          colors: {},
+          manaValues: {},
+          formats: {},
+          sets: {},
+          owned: { owned: 0, missing: 0 },
+          total: 0,
+          ready: false,
+        };
+      }
+
+      const req = args.req;
+      const text = nonblank(req.text);
+      /** The result set under every filter except `skip`'s. */
+      const base = (skip: FacetSkip | null): FakeCard[] => {
+        const f: CardFilters = { ...req, text: undefined, rarity: undefined };
+        if (skip === "colors") f.colors = undefined;
+        if (skip === "mana") f.manaValues = undefined;
+        if (skip === "sets") {
+          f.sets = undefined;
+          f.setCode = undefined;
+        }
+        if (skip === "formats") f.format = undefined;
+        return db.cards.filter((c) => {
+          // Text is in every base **including its own**: it is not a facet, and a facet
+          // describes the search the reader is looking at.
+          if (text !== null && !cardMatchesText(c, text)) return false;
+          if (!matchesCardFilters(c, f, null)) return false;
+          // An entry and not a copy, exactly as `search_cards` reads it.
+          if (skip !== "owned" && req.owned !== undefined) {
+            const has = db.collectionEntries.some((e) => e.cardId === c.id);
+            if (req.owned !== has) return false;
+          }
+          return true;
+        });
+      };
+
+      /**
+       * One option's count over its dimension's base.
+       *
+       * `paperOnly: false` because the base has already applied the request's own paper
+       * decision — putting the default back here would drop the digital printings a
+       * `paperOnly: false` search asked for.
+       */
+      const countWith = (rows: FakeCard[], f: CardFilters) =>
+        rows.filter((c) => matchesCardFilters(c, { ...f, paperOnly: false }, null)).length;
+
+      // **Every code in the corpus, zeros included.** A set the search narrowed away arrives
+      // as an explicit 0, which is what lets the picker grey a row rather than drop it.
+      const sets: Record<string, number> = {};
+      for (const c of db.cards) sets[c.setCode] = 0;
+      for (const c of base("sets")) sets[c.setCode] += 1;
+
+      // Exact equality below 8 and a range at 8, which is `matchesCardFilters`' own reading
+      // of a chip list — so a fractional cost belongs to no chip below 8, exactly as the
+      // search's `cmc IN (…)` has it.
+      const manaBase = base("mana");
+      const manaValues: Record<string, number> = {};
+      for (let v = 0; v <= MANA_VALUE_OPEN_ENDED; v++) {
+        manaValues[String(v)] = countWith(manaBase, { manaValues: [v] });
+      }
+
+      const formatBase = base("formats");
+      const formats: Record<string, number> = {};
+      for (const key of LEGALITY_KEYS) formats[key] = countWith(formatBase, { format: key });
+
+      const colorBase = base("colors");
+      const colors: Record<string, number> = {};
+      const picked = nonblank(req.colors)?.toUpperCase() ?? "";
+      for (const letter of COLOR_CHIPS) {
+        colors[letter] = countWith(colorBase, { colors: toggleColorString(picked, letter) });
+      }
+
+      // Never greyed — these two are for the chip's tooltip — but still counted over the
+      // base with `owned` itself removed, so they describe both sides of the cycle.
+      const ownedBase = base("owned");
+      const owned = ownedBase.filter((c) =>
+        db.collectionEntries.some((e) => e.cardId === c.id),
+      ).length;
+
+      return {
+        colors,
+        manaValues,
+        formats,
+        sets,
+        owned: { owned, missing: ownedBase.length - owned },
+        // **Printings, always**: `collapse` is a view mode and not a filter, so this counts
+        // what the search matched rather than the rows it will draw.
+        total: base(null).length,
+        // A fake world has no warm-up, so past the guard above this is always ready; a
+        // story that wants the cold state sets `indexCold`.
+        ready: true,
       };
     },
 

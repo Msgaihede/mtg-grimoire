@@ -195,11 +195,14 @@ export const AllFiltersActive: Story = {
     await expect(reset).toHaveTextContent("6");
     // Three chips pressed against a badge reading 6: this is the whole of "kinds, not values",
     // and it is invisible in a screenshot of a row full of gold.
+    //
+    // **Matched on a prefix**, because the fake answers `facet_cards` and a chip's accessible
+    // name carries its count: "White — 3 printings". The label still comes first, which is
+    // what WCAG 2.5.3 asks of it and what keeps this query readable.
     for (const colour of ["White", "Blue", "Black"]) {
-      await expect(canvas.getByRole("button", { name: colour })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      await expect(
+        canvas.getByRole("button", { name: new RegExp(`^${colour}\\b`) }),
+      ).toHaveAttribute("aria-pressed", "true");
     }
     // The picker's label is a count of sets rather than their names: 64 codes will not fit on a
     // control that has to share a line with six colour chips.
@@ -229,21 +232,189 @@ export const Cleared: Story = {
     await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
     await expect(canvas.getByLabelText("Search cards")).toHaveValue("");
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
-    await expect(canvas.getByRole("button", { name: "White" })).toHaveAttribute(
+    // Prefix matches throughout: every chip's accessible name now ends in the count the fake's
+    // facets report for it, and the label is what has to come first.
+    await expect(canvas.getByRole("button", { name: /^White\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
-    await expect(canvas.getByRole("button", { name: "Mana value 1" })).toHaveAttribute(
+    await expect(canvas.getByRole("button", { name: /^Mana value 1\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
     await expect(canvas.getByRole("button", { name: "Set" })).toHaveTextContent("Any set");
     // The three-state chip is back to asking the first of its two questions, and the *label* is
     // what says so — an unpressed "Owned" cannot be mistaken for a pressed "Missing".
-    await expect(canvas.getByRole("button", { name: "Owned" })).toHaveAttribute(
+    await expect(canvas.getByRole("button", { name: /^Owned\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
+  },
+};
+
+/**
+ * The greying, on an ordinary search: **one colour on, and four mana chips out of reach.**
+ *
+ * The rule is one sentence — *an option greys when turning it on would not change the result
+ * set* — and this is the plain reading of it. 15 of the corpus' 41 paper printings are
+ * castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
+ * ignore a press. Standard goes with them in the format select.
+ *
+ * **The colour chips all stay live, and that is the interesting half.** `colors` is *subset*
+ * semantics, so pressing White with Red already on asks for "castable in RW" — a **superset**,
+ * which can only grow the result. A chip that greyed on "returns nothing" would be wrong here
+ * in both directions, which is why `colorDisabled` asks a different question from
+ * `optionDisabled`: it compares the size *after* the press against the size now.
+ *
+ * Nothing on this row is a hand-written count. The numbers come from the fake's `facet_cards`,
+ * which derives them from the same filter mirror its `search_cards` uses — so a story that
+ * disagreed with the results would be the two disagreeing, which is the bug worth catching.
+ */
+export const SomeUnavailable: Story = {
+  args: { preset: (search) => search.toggleColor("R") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // **The exact settled count, not a prefix.** The count rides in the accessible name, so
+    // waiting on one is how a story waits for the facets — but the row wears the *previous*
+    // search's counts while the next answer is in flight (`keepPreviousData`), and every
+    // state this passes through is also called "Red — N printings". 41 is the answer for a
+    // red search: pressing Red again would clear the filter, so its own chip counts the whole
+    // paper corpus rather than the red part of it.
+    await canvas.findByRole("button", { name: "Red — 41 printings" }, { timeout: 5000 });
+
+    // Empty over a red search, and saying so where a reader can hover it.
+    for (const value of [4, 5, 6, 7]) {
+      const chip = canvas.getByRole("button", { name: new RegExp(`^Mana value ${value}\\b`) });
+      await expect(chip).toHaveAttribute("aria-disabled", "true");
+      await expect(chip).toHaveAttribute("title", `Mana value ${value} — nothing in this search`);
+      // **`aria-disabled`, never the attribute.** A `disabled` button leaves the tab order,
+      // and a filter row that greys as the reader types would shrink and grow under a
+      // keyboard caret. Asserted here because it is invisible in a screenshot and is the
+      // whole reason `ManaChip` guards its own `onClick` instead.
+      await expect(chip).not.toBeDisabled();
+    }
+    // …and the ones that are not empty are untouched.
+    for (const value of [0, 1, 2, 3, 8]) {
+      await expect(
+        canvas.getByRole("button", { name: new RegExp(`^Mana value ${value}\\b`) }),
+      ).not.toHaveAttribute("aria-disabled");
+    }
+
+    // Every colour stays pressable, including the four that are not in the result at all:
+    // pressing one broadens. Red itself is *selected*, and a selected option is never greyed
+    // whatever its count — that is the way out of a dead end.
+    for (const colour of ["White", "Blue", "Black", "Red", "Green", "Colorless"]) {
+      await expect(
+        canvas.getByRole("button", { name: new RegExp(`^${colour}\\b`) }),
+      ).not.toHaveAttribute("aria-disabled");
+    }
+
+    // The format select is the one place a real `disabled` is right — a native `<option>` is
+    // not a tab stop there is anything to lose.
+    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
+    const off = [...format.options].filter((o) => o.disabled).map((o) => o.value);
+    await expect(off).toEqual(["standard"]);
+  },
+};
+
+/**
+ * One card left, and a row that is almost entirely out of reach — **with the way out still
+ * open.**
+ *
+ * `lotus` finds Black Lotus and nothing else, and from there every question the row can ask
+ * has the same answer. Eight of the nine mana chips are empty. Six of the seven formats are
+ * empty; only Vintage is not, which is the correct answer about Black Lotus and not a fixture
+ * coincidence. And **all six colour chips grey**, by the arm no other story reaches: Lotus is
+ * colourless, subset semantics put a colourless card inside every colour, so pressing White
+ * would return the same one card. `after === total` — the press would change nothing — so the
+ * chip greys even though it returns something.
+ *
+ * The last assertion is the one that keeps this from being a trap. When a search greys most
+ * of the row, `Reset all` is the escape, and it is drawn because the text filter is on. A
+ * greyed row with no reset is the failure mode the "a selected option is never greyed" rule
+ * exists to prevent, and it is what an *unfiltered* empty corpus would produce — which is why
+ * `facets::compute` answers a corpus of zero rows `ready: false` rather than counting it
+ * honestly.
+ */
+export const MostlyUnavailable: Story = {
+  args: { preset: (search) => search.setText("lotus") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // **Waited on the exact count**, and the timeout is generous, because the search box is
+    // debounced by `DEBOUNCE_MS` (300 ms) before a keystroke becomes a query. A prefix match
+    // here passed against the *unfiltered* answer — "White — 14 printings" — which is the row
+    // as it stands for the third of a second before the term lands, and every assertion below
+    // then read a live chip and failed. That is the same window a reader can press into; the
+    // live pass measured it at ~300–330 ms.
+    await canvas.findByRole("button", { name: "White — 1 printing" }, { timeout: 5000 });
+
+    // Only a nought is castable.
+    await expect(canvas.getByRole("button", { name: /^Mana value 0\b/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    for (const value of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      await expect(
+        canvas.getByRole("button", { name: new RegExp(`^Mana value ${value}\\b`) }),
+      ).toHaveAttribute("aria-disabled", "true");
+    }
+
+    // The subset arm: every colour would return the same single colourless card, so pressing
+    // one changes nothing and all six grey. The tooltip says the count rather than "nothing",
+    // because there *is* something there — it just would not move.
+    for (const colour of ["White", "Blue", "Black", "Red", "Green", "Colorless"]) {
+      const chip = canvas.getByRole("button", { name: new RegExp(`^${colour}\\b`) });
+      await expect(chip).toHaveAttribute("aria-disabled", "true");
+      await expect(chip).toHaveAttribute("title", `${colour} — 1 printing`);
+    }
+
+    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
+    const live = [...format.options].filter((o) => !o.disabled).map((o) => o.value);
+    // "Any format" is never greyed — it is how a format filter is taken off.
+    await expect(live).toEqual(["", "vintage"]);
+
+    // The escape, and the whole reason this row is allowed to look like this.
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+  },
+};
+
+/**
+ * The index still warming — and **every control live**, which is the whole of failing open.
+ *
+ * `facet_cards` answers a cold index `ready: false` with every map **empty** rather than
+ * zeroed, and `facetsOrUndefined` collapses that to `undefined` at the door. Not-greyed means
+ * "we don't know" and greyed means "this is empty", and only one of those is safe to guess
+ * with no counts in hand — so the same row that {@link MostlyUnavailable} draws almost
+ * entirely dim is drawn entirely live here, on the identical search.
+ *
+ * The second assertion is the one a screenshot cannot make: **no chip carries a count in its
+ * accessible name**. `facetTitle` returns `undefined` for an absent count, so the chips keep
+ * the plain labels they had before this feature existed. A response of zeros would have
+ * greyed the lot *and* captioned every chip "nothing in this search"; this is how the two
+ * are told apart.
+ *
+ * The fake has no warm-up of its own, so `fault: "indexCold"` is the only way to stand here —
+ * the same state a real first launch is in for the ~767 ms its index takes to build, and for
+ * the whole of the opening sync, where the corpus is empty and `compute` answers the same way.
+ */
+export const IndexCold: Story = {
+  args: { preset: (search) => search.setText("lotus") },
+  parameters: { fake: { fault: "indexCold" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The preset lands in an effect, so the first query waits for the render it caused.
+    await canvas.findByRole("button", { name: /^Reset all/ });
+
+    const chips = canvas.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
+    await expect(chips.length).toBeGreaterThan(0);
+    for (const chip of chips) await expect(chip).not.toHaveAttribute("aria-disabled");
+
+    for (const label of ["White", "Colorless", "Mana value 0", "Mana value 8 or more"]) {
+      // Exact, not a prefix: an unfaceted chip's name is its label and nothing after it.
+      await expect(canvas.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+
+    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
+    await expect([...format.options].filter((o) => o.disabled)).toHaveLength(0);
   },
 };
 

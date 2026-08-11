@@ -172,6 +172,7 @@ real window over CDP.
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
+
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
 `drag <source css> <target css>` · `hover <css> [--rest ms] [--probe expr]` ·
@@ -188,6 +189,17 @@ synthesises, so one `onClick` reading `e.shiftKey` serves the mouse and the keyb
 the app mid-pass and every later interaction goes unwatched while the file still exists and
 still holds its `attached` line. Re-attach after any relaunch, and check the line count.
 
+- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
+  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
+  index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
+  the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
+  "live" **twice** against a binary that did not contain it, and the tell is cheap —
+  `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
+  `ls dist/assets/*.js`, or just the exe's own mtime. `touch src-tauri/src/main.rs` first,
+  which is the same rule this file already gives for `tauri.conf.json` and for the same reason.
+  **`npm run tauri dev` does not have this problem** (Vite serves the frontend), which is
+  exactly why it is the command above — a worktree pass that builds instead inherits the trap.
+  And stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
 - **`key` and `press` are two commands because Enter is two things.** `key` sends a
   `rawKeyDown`, which carries no `text` — the page *hears* the key and Chromium activates
   nothing, so `key Enter` on a focused button is a keydown and not a click (measured live
@@ -262,8 +274,12 @@ the user's, and it is never committed. Seed **user tables only**: `cards` and `s
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
 ## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-11)
-`npm run storybook` · `npm run build-storybook`. **326 stories across 43 story files, 42 docs
-pages** — counted off `storybook-static/index.json`, which is the only place the three agree.
+`npm run storybook` · `npm run build-storybook`. **332 stories across 43 story files, 42 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree
+(`Object.values(index.entries)`, grouped by `type`; the 44th `importPath` is the `.mdx`).
+**Re-count them in the same commit that adds a story.** This line read 326 for three stories'
+worth of drift and then took three more without noticing, because a prose-only edit routes to
+neither CI job — the same rot that left the fault list below saying four.
 **41 of the 43 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
@@ -285,10 +301,17 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, faults `busy`/`syncError`/`imageFailures`/
-  `gone`/`deckMeta`/`updateAvailable`/`updateError`. Saying nothing gets `starter` with no
+  seeds `empty`/`starter`/`needsReview`/`large`, **eight** faults — `busy`/`syncError`/
+  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`. Saying nothing
+  gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the *app* does with a
-  refusal rather than what one mocked call returns. **`deckMeta` is the one that refuses
+  refusal rather than what one mocked call returns. **`indexCold` is the one that is not a
+  failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
+  with every map **empty** rather than zeroed, and the filter row leaves every control live on
+  it. The fake has no warm-up of its own, so it is the only way a story can stand there.
+  Counting the list is worth doing when one is added: this line said *four* for three faults'
+  worth of drift, because a prose-only edit routes to neither CI job and nothing goes red.
+  **`deckMeta` is the one that refuses
   *reads*** — the six a deck screen makes *beside* the deck (`deck_category_list`,
   `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
   `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
@@ -337,7 +360,8 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (236 plays today, in a file of 239 tests — the other three are its own), which is what puts a
+  (**242** plays today, in a file of **245** tests — the other three are its own; `grep -rE
+  "^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
@@ -487,13 +511,53 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   forcing a Refresh; an orphan flag needs the day's ingest.
 - Searches keep answering through every second of a sync — 20 timed searches across one,
   every one correct, none stalled (that is what `db_read` bought).
-- **Sorting an unfiltered browse costs 310–345 ms, and the browse it replaces costs 277 ms.**
-  Measured 2026-08-09 over the live 107 337-row paper corpus, medians of five after a warm-up:
-  `set` 313 · `rarity` 325 · `rarity+price` 339 · `price` 345, against **277 ms for the
-  default name order**. So a header press costs 35–70 ms more than doing nothing, not 300.
-  **With any text filter every one of them is 12–15 ms**, because FTS narrows the set first.
-  No index was added: a multi-term sort cannot use one past its leading column, and
-  `schema::swap_staging` drops and replays every index on `cards` on each ~93 s sync.
+- **A header press now costs *hundreds* of milliseconds more than doing nothing, and
+  `idx_cards_collapse` is why the gap grew.** Re-measured 2026-08-11 end to end through
+  `invoke` on a **release** build over the live 107 346-row paper corpus, medians of five,
+  collapsed (the app's own default) — with the uncollapsed figure beside it:
+
+  | order | collapsed | uncollapsed |
+  |---|---|---|
+  | **name** (the default browse) | **134.6 ms** | 32.3 ms |
+  | **price** | 134.8 ms | 26.0 ms |
+  | `set` | **524.2 ms** | 609.0 ms |
+  | `rarity` | **489.7 ms** | 570.2 ms |
+  | `rarity+price` | **512.4 ms** | 529.8 ms |
+
+  **The split is whether the sort's column is in the index.** `name` and `price_usd` are, and
+  cost the browse and nothing more; `set_code` and `rarity` are not, and cost ~490–610 ms —
+  which is `schema.rs`'s own note that widening the index with those two "left the sorts it
+  was meant to help unchanged, because those cost row lookups rather than index reads".
+  The 2026-08-09 table (`set` 313 · `rarity` 325 · `rarity+price` 339 · `price` 345 against
+  **277 ms**) predates the index and **every number in it is superseded**, in both directions:
+  the browse got ~2× cheaper and the two uncovered sorts got ~1.6× dearer, so a press that
+  used to cost +36 ms now costs +390 ms. The earlier claim that this was a "fraction more"
+  survived one rewrite of this bullet on nothing but plausibility; it was false when written.
+- **"A text filter makes every sort cheap" is only true of a *narrow* term**, and the old
+  12–15 ms figure named none. Measured the same way, collapsed, over three breadths:
+  `bolt` (45 matches) **4.4–4.5 ms** and the three orders indistinguishable; `dragon` (722)
+  **68.7–77.6 ms**; `a` (capped at 5 000) **2 077–2 432 ms**. FTS narrowing first is real, but
+  what it buys scales with how much it narrowed. No index was added *for sorting*: a
+  multi-term sort cannot use one past its leading column, and `schema::swap_staging` drops and
+  replays every index on `cards` on each sync. (**That sync's ~93 s is a debug figure**,
+  measured 2026-08-05 under `tauri dev`; the one release first-run measured 2026-08-11 had the
+  facet index answering `ready: true` 21 s after launch, which puts the whole opening sync
+  inside ~20 s. Every "~93 s sync" in this file is the debug number until someone times a
+  release sync end to end.)
+- **The browse today: 27.4 ms uncollapsed, 131.8 ms collapsed.** Measured 2026-08-11 end to
+  end through the shipped window over the live 107 346-row paper corpus — a **release** build,
+  `invoke("search_cards")` from the webview, medians of nine after two warm-ups — which puts
+  the IPC hop and the DTO serialisation inside the figure, unlike the `run_search` numbers
+  below (25 ms / 145 ms). The two **corroborate** each other rather than decompose into each
+  other: they are different sessions on different corpus days, and the pair straddles the
+  `run_search` figures in *both* directions (27.4 > 25, 131.8 < 145), so no per-call overhead
+  can be read out of the difference. `idx_cards_collapse` is why both are what
+  they are, and the stale 277 ms is what the uncollapsed one replaces.
+  **Name the build**: the identical measurement on a *debug* build is 38.4 ms / 181.6 ms.
+  The gap is only ~1.4× because the work is inside SQLite, which is C compiled with
+  optimisations either way — but a figure with no build named is still not a figure.
+  **The collapsed browse's cost is the count, not the page**: at `limit: 1` it is 119.9 ms of
+  the 131.8, because `TOTAL_CAP` walks the grouping until it has 5 000 cards.
 - **The search collapses printings into one row per card, and `idx_cards_collapse` is what
   pays for it.** Measured 2026-08-11 through `run_search` itself (release build, read-only
   copy of the live corpus, medians of five): **today's un-indexed browse 397 ms** (`SCAN c`,
@@ -506,6 +570,18 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   exactly that way: the uncollapsed baseline was taken before the index existed and the
   collapsed figures after, which credited the grouping with a 2.3× win the index had paid
   for. A `#[test]` calling `run_search` found it in one run.
+- **v9 widened `idx_cards_collapse` to carry `legal_mask`, `cmc` and `color_identity`, and a
+  filtered collapsed browse went 505 ms → 41 ms for it.** Measured 2026-08-11 over the live
+  corpus: 455–505 ms without the three columns against 22–47 ms with them, because without
+  them the filter predicate knocks the group scan off the index and into per-row lookups. The
+  cost is **+0.89 MB** and **4 ms** on the unfiltered browse, which the paragraph above is
+  about.
+- **That win exists only because `filters.rs` stopped parsing JSON, and the index alone made
+  things *worse*.** With the widened index in place, the same format-filtered collapsed browse
+  is **40.6 ms** through `legal_mask` and **591 ms** through `json_extract` — slightly worse
+  than the 505 ms before widening, because a wider index is a larger thing to scan when the
+  predicate cannot use it. An index and the query that reads it are one change; shipping the
+  first without the second buys the whole cost and none of the benefit.
 - **The collapsed shape is a `GROUP BY` step that also computes the representative's id, then
   a primary-key join back.** `substr(max(coalesce(released_at,'0000-00-00') || id), 11)` is
   the newest printing's id — the date is fixed-width, so the concatenation orders as
@@ -528,8 +604,12 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
   unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
 - Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
-  gives up its `LIMIT` and the sort runs after the join: 670 ms on a completely unfiltered
-  browse, 88 ms with any text. Name and price are answered by the grouping itself (145/150 ms).
+  gives up its `LIMIT` and the sort runs after the join; name and price are answered by the
+  grouping itself. The mechanism stands; **its numbers are superseded and must not be quoted**
+  — the 670 ms unfiltered figure by the end-to-end table above (collapsed `set` 524.2 ms,
+  `rarity` 489.7 ms), and "88 ms with any text" by the breadth bullet above, which is the
+  finding that a text filter's help scales with how far it narrowed (4.4 ms on `bolt`, 69–78 ms
+  on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is not "any text".
 - **Art series outrank the card they depict, and collapse does not fix it.**
   `Lightning Bolt // Lightning Bolt` (`astx 76s`, `layout='art_series'`) held the phrase twice
   in its name field and bm25 rewarded it; art series carry their own `oracle_id`, so grouping
@@ -538,7 +618,10 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   exactly as the reader asked for it. `min()` over that term is exact because no oracle group
   mixes the two kinds: 3 610 groups are represented by an art or token row and **0** of them
   also contains a real printing.
-- **The default browse's 277 ms is a full table scan, and one `DESC` is why.** `ORDER_NAME`
+- **The default browse used to be a full table scan, and one `DESC` was why.** (Superseded as
+  a *number* — it was the 277 ms above, and `idx_cards_collapse` has since taken the
+  uncollapsed browse to 27.4 ms — but the mechanism is unchanged and still decides the sort.)
+  `ORDER_NAME`
   is `c.name ASC, c.released_at DESC` — `idx_cards_name` can satisfy a leading `c.name` and
   block-sort **one** trailing term within each group of identically-named printings, and with
   two it gives up and sorts all 107 k rows through a temp b-tree. Measured against
@@ -563,13 +646,61 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v9.** v9 adds `error_log` — see "Talking to Scryfall" below. v8 replaced
-  `deck_cards.zone` with a user-owned category and added the
-  deck's four new tables — the paragraph under "Hard rules — decks" describes it. v7 re-runs
-  `cards_indexes_sql()` to add `idx_cards_collapse` to databases that migrated before it
-  existed — every statement in `CARDS_INDEXES` is `IF NOT EXISTS`, so the step is "bring the
-  index list up to date" and is idempotent. (v6 added `app_meta`; the paragraph below
-  describes v5.)
+- **Schema is v10.** v10 adds `cards.legal_mask`, backfills it, and widens
+  `idx_cards_collapse` to carry the filter columns. **Our step sits *below* main's v8 and v9
+  in the ladder deliberately** — it has now been renumbered **twice**, from v8 when main's
+  deck-category step landed and from v9 when main's error log did, and each time it had to
+  move *down* the file as well as up in number. `migrate` reads `user_version` **once** and
+  then walks every block above it, so a higher-numbered block placed above a lower one commits
+  its version and then has the lower block write back over it. Position in the file is the
+  order of execution; the number is only the gate. **Expect a third renumber**, and treat
+  "renumber, then move to the bottom, then re-point the fixtures" as one operation.
+  v9 adds `error_log` — see "Talking to Scryfall" below. v8 replaced `deck_cards.zone` with a
+  user-owned category and added the deck's four new tables — the paragraph under "Hard rules
+  — decks" describes it.
+  v7 is the collapse index's version and has **no statements of its own**: `CARDS_INDEXES`
+  describes the table *at head* and now names `legal_mask`, so **only the newest step may
+  create from that list**, and every step below v10 creates no index at all. Every statement
+  in it is `IF NOT EXISTS`, which is what makes v10's replay "bring the index list up to date"
+  rather than a rebuild — but a step that *changes* a definition must `DROP` it first, or the
+  widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
+  paragraph below describes v5.)
+- **`legal_mask` is Scryfall's `legalities` object as one integer, and its key order is
+  frozen.** `legalities::LEGALITY_KEYS` is 23 keys and bit *k* is `LEGALITY_KEYS[k]` — **bit
+  positions are stored data**, held in every `cards` row, so reordering the list silently
+  reinterprets the whole corpus. Keys may only ever be **appended**: a key Scryfall removes
+  keeps its bit and stops being set, a key Scryfall adds sets no bit until it is appended
+  *and* a sync has run. `restricted` counts as playable alongside `legal` — a Vintage search
+  that hid Black Lotus would be wrong. It buys two things: a facet pass over the live corpus
+  is **16.8 ms against 695 ms** for 23 `json_extract`s per row, and a JSON path cannot be
+  indexed while a bitwise test on a column can. **Name the build**: that pair, and every
+  other SQL figure this branch added (`filters.rs`'s 40.6/591 ms, `schema.rs`'s 455–505 →
+  22–47 ms and +0.89 MB, `index/mod.rs`'s 2 238/62/106–167 ms) was timed 2026-08-11 through
+  `node:sqlite` against a **page-for-page online backup** of the live database — SQLite's own
+  C, which is compiled the same whether the caller is a debug or a release crate, so the
+  fixture is the thing worth naming and a cargo profile would say nothing. It is derived natively by `card_row` from the
+  next sync on, so the v9 backfill's `legalities::mask_sql` is the only time it is ever
+  computed in SQL. **Verified live 2026-08-11 over the whole 116 695-row corpus**, both ways
+  in: the migration backfill and a full fresh ingest each agree with `json_extract` on all 23
+  keys, 0 rows disagreeing and 0 NULL masks.
+- **Our `legal_mask` migration on a real database is ~7 s of launch, before there is a window
+  to say so in.** Measured 2026-08-11 on the live 563 MB / 116 695-row file (debug build,
+  67 MB WAL to replay), when the step was still numbered v9: `user_version` flipped **7.0 s**
+  after the process started, and the app
+  came up on the corpus rather than on "move `mtg.db` aside". That is process start, WAL
+  recovery, the `ALTER`, the full-table backfill and the index rebuild together — the
+  synthetic 469 MB stand-in the step's own comment quotes measured the backfill alone at
+  2.9–5.0 s in a release build, and this is the first time the step has run against real data.
+- **A migration that touches `cards` must take the `CARDS_INDEXES` replay from the step below
+  it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
+  what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
+  `cards`' columns *and* its indexes — by stored SQL, since a narrow and a widened
+  `idx_cards_collapse` share a name. **The v9 fixture is "head minus one" and is renamed on
+  every renumber** (`v8_database` → `v9_database` so far) — it means "the version below ours",
+  never a fixed number. It is also why a rewind fixture may only undo the steps
+  *above* where it claims to sit: `migrate` reads `user_version` once and walks every step
+  above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
+  tables and dies on a duplicate column — a failure no real upgrade can produce.
 - v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
   and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
   (2026) makes a commander out of a Vehicle or Spacecraft *with a P/T box*, and that is
@@ -579,6 +710,121 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   columns NULL means unknown, never "no P/T box"**, and `deck::get_deck` repairs the rows
   that ask (`fill_unknown_power_toughness`, gunzipped in Rust, gated on a type line that
   could have one).
+
+## Search filter faceting (`src-tauri/src/index/`, driven live 2026-08-11)
+The filter bar greys the options this search cannot reach. **The rule is one sentence: an
+option greys when turning it on would not change the result set.** A *selected* option is
+never greyed — that is the way out of a dead end — and every failure fails **open**:
+not-greyed means "we don't know", greyed means "this is empty", and only one of those is safe
+to guess.
+
+- **`CardIndex` is an in-memory index over the corpus, in the shape a search engine uses**,
+  and it exists because faceting needs a count per option per dimension on every keystroke.
+  The three SQL shapes were measured 2026-08-11 (see the build note under `legal_mask`): a
+  four-dimension pass costs **2 238 ms** against `cards` as it stands, 62 ms with a covering
+  index and the mask, 106–167 ms over a rowid-aligned shadow table. **The in-memory column of
+  that comparison is a projection** — the design doc's §3.2 says 0.31 ms and a 57 ms worst
+  case from a *JS harness* over a structure that did not exist yet, and its own header calls
+  that "a conservative bound on Rust". It was not one: the shipped `facets::compute` measures
+  **1.8 ms** unfiltered (release, synthetic corpus, best of five), 5.8× the projection and
+  still two orders inside the 100 ms budget. Quote `facets::compute` for what this costs;
+  quote §3.2 only for what the design was decided on. **Low cardinality gets a bitset, high cardinality an
+  ordinal array**: giving each of the 986 **paper** set codes its own bitset was the first
+  design and was wrong by 18× on memory and 35× on speed (14.3 MB / 11 ms against
+  0.78 MB / 0.12 ms). **986 and 1 047 are both right and mean different things** — 986 paper
+  sets against 1 047 codes over every printing, because `set_ord` covers the whole corpus and
+  a digital-only set still needs an ordinal (`index/mod.rs`). The picker's counts use 1 047.
+- **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
+  the one dimension a user changes without a sync. `cards` is dropped and recreated by every
+  sync, which renumbers every rowid, so a stale index does not go gently out of date — **it
+  points at the wrong cards**. Hence: rebuilt after every staging swap, and every path
+  **clears before it fills** rather than swapping at the end.
+- **A stale index is worse than no index, which is what decides the whole lifecycle.**
+  `facets::compute` counts an option it has never heard of as **zero**, so an index one sync
+  behind greys out sets the search would happily return printings for. Cold is therefore a
+  supported state and the only safe guess: `ready: false`, every map **empty** rather than
+  zeroed, and `facetsOrUndefined` collapses that to `undefined` so all five controls stay
+  live. Nothing here is fatal either — if the index cannot be built the app runs exactly as it
+  did before the feature existed.
+- **A failed build is recorded in `error_log`, because failing open is otherwise completely
+  silent.** The UI's answer to a cold index is to leave every control live, which looks
+  exactly like a warm index that greyed nothing — so nothing on screen distinguishes "the
+  index is fine" from "the index has never built". `lifecycle::note_index_failure` is
+  `sync.rs`'s `note_database` pattern (`Source::Database`, `Kind::Io`, operations
+  `index_build` and `index_owned_refresh`) and it keeps the `eprintln!` beside it for a dev
+  console. It takes the **write** lock, which is only safe because both call sites hold
+  nothing: `spawn_build` is on its own thread, and `collection::with_write_owned` releases
+  its guard *before* calling `invalidate_owned`. The "build superseded" message stays an
+  `eprintln!` and is deliberately **not** recorded — it is an expected interleaving, not a
+  failure, and whatever superseded it owes a rebuild of its own.
+- **The warm-up is ~767 ms** (median of five, 762–783, release build, warm page cache), so a
+  launch answers not-ready for about that long. On this machine the webview does not reach
+  first paint until ~2.6 s, so **the cold path is not reachable through the UI on a warm
+  start** — which is why the Storybook fake carries an `indexCold` fault at all.
+- **A not-ready answer corrects itself, and nothing else in the app would ever correct it.**
+  `useCardFacets` carries `refetchInterval: (q) => q.state.data?.ready === false ? 500 : false`
+  — polling only while cold, and switched off by the first ready answer. It is there because
+  `sync.rs` calls `lifecycle::spawn_build` and `emit_done` on consecutive lines, and
+  `spawn_build` runs its `clear` **synchronously on the caller's thread**, so `done` is
+  emitted over a cold index *by construction*. `useSyncInvalidation` invalidates `["cards"]`,
+  which prefix-matches the facet key, so the one refetch a finished sync produces lands inside
+  the ~767 ms build and caches `ready: false`: a success (no retry), same filters (no new key),
+  inside `staleTime` (not stale). **Found in the shipped window 2026-08-11** — after a sync the
+  unfiltered row showed no counts while `facet_cards` called directly answered `ready: true`.
+  Touching any filter healed it instantly, which is what bounds the damage to the unfiltered
+  row. Gated on the *meaning* rather than on one cause, so it also covers the launch build, the
+  empty corpus, and a build that failed and will never announce anything.
+  **Verified on a real first run, untouched**: chips plain through the whole opening sync, then
+  captioned ("White — 30,223 printings") the moment the index published — and the query's
+  `dataUpdateCount` stopped dead at 40 (≈40 × 500 ms over a ~20 s cold window) rather than
+  climbing, which is the half of the claim that says it does not poll a healthy index forever.
+- **An index over an *empty* corpus answers `ready: false` too**, and that is the state a new
+  user is in for the whole of the opening sync — **~20 s** *inferred* on the release build this
+  was driven on (2026-08-11: the index answered `ready: true` 21 s after launch, and a ready
+  index needs an ingested, swapped corpus), against the ~93 s the Data & sync section quotes
+  from a *debug* run. Nobody has stopwatched a release sync end to end.
+  Counted honestly every option is zero,
+  the greying rule dims the entire row, and with no filter on there is no `Reset all` drawn to
+  escape by. Verified in the shipped window 2026-08-11 against a cleared `data/`: **0 of 19
+  chips greyed, 0 of 8 format options disabled, and no chip carrying a count in its name**,
+  held for the whole sync.
+- **Greying on the real corpus, measured in the shipped window 2026-08-11.** A `Lightning
+  Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing in this
+  search", opacity 0.45); a `standard` format filter greys **26 of the 50 set rows on screen**
+  out of 384–592 of the 1 047 codes the picker knows. (1 047 against the 986 quoted in
+  `index/mod.rs`: that one is the **paper** corpus the index is built over, this one is every
+  code `list_sets` returns.) A facet pass costs **4.4–47.6 ms** end to end through `invoke` on
+  a **debug** build (medians of five; worst is a colour dimension at 47.6 ms) and
+  **4.7–6.0 ms** on a **release** one — so the design's 57 ms budget is cleared with the
+  pessimistic figure. Name the build: the ~8× between those two lines is the whole reason
+  this sentence carries both.
+- **`aria-disabled`, never the `disabled` attribute** — a `disabled` button leaves the tab
+  order, and a filter row that greys as the reader types would shrink and grow under a
+  keyboard caret. Verified live: a greyed chip has `tabIndex 0`, no `disabled` attribute, is
+  **reached by a real Tab** from its neighbour, and takes Enter and Space with **0**
+  `aria-pressed` flips against 1 and 2 for the same two keys on a live chip. Count
+  activations, never whether one happened: Space activates on keyup. The one place a real
+  `disabled` is right is the format `<option>` — a native listbox option is not a tab stop
+  there is anything to lose.
+- **A chip greyed by the previous search swallows a press for ~300–330 ms after the box is
+  cleared, and the defect is the swallowed press — not "greying while not knowing".**
+  Measured live: pressing "Mana value 7" 5, 167 and 288 ms after clearing `Lightning Bolt`
+  did nothing; at 336 ms and beyond it acted. The *trigger* is `DEBOUNCE_MS` (300). **The app
+  is not guessing during those 300 ms**: the search's query key and the facet request are
+  both built from `debouncedText` (`useCardSearch.ts`) and both hold previous data, so the
+  counts describe *exactly* the search the results list is still showing — the caption still
+  reads "7 cards" and the chip agrees with every row on screen. What it disagrees with is the
+  **box**, which is already empty. So the harm is narrow and real: a press is silently dropped
+  on a control the reader can see is dim beside a search box they can see they have cleared.
+  It is shipped deliberately, and the fix, when it is wanted, is **inside faceting** rather
+  than in the search box. Note what one line buys: failing open while `text !== debouncedText`
+  closes the debounce window and **not** the in-flight one — `keepPreviousData` holds the
+  previous *filter set's* answer for the ~32 ms a facet call is in flight (a format change
+  swaps the counts within **6 ms** when the new filter set is already in React Query's cache),
+  which is the same disagreement one filter wide instead of one search wide. Only
+  `!query.isPlaceholderData` closes both, at the cost of the flicker `keepPreviousData` exists
+  to prevent. That is a design call between a chip that can be one answer stale and a row that
+  blinks on every keystroke — not a debt someone forgot to pay.
 
 ## Image cache (measured 2026-08-04, live)
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`

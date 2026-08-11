@@ -29,17 +29,34 @@ export const FILTER_CONTROL =
   "h-9 rounded-md border text-sm transition-colors duration-150 motion-reduce:transition-none";
 
 /**
- * On and off, for a control whose two states are told apart by its border.
+ * A control this search cannot reach.
+ *
+ * One string for the whole filter row, shared with `SetCombobox`'s capped rows, because
+ * "unavailable" arriving in two different treatments is two different words for one thing.
+ * Never `disabled`: see {@link ManaChip}.
+ */
+export const FILTER_UNAVAILABLE = "cursor-not-allowed opacity-45";
+
+/**
+ * On, off, and out of reach — for a control whose state is told apart by its border.
  *
  * Gold border and gold text for on; a hairline and dim text for off, brightening on hover
  * so the row answers a mouse. Not a fill: the direction's colour budget is spent on the
  * mana chips and the card art, and a row of filled gold chips would out-shout both.
  *
+ * `unavailable` dims whichever of those two it is and **drops the hover response**, because
+ * a control that brightens under the mouse and then ignores the press is a control that
+ * lies. It does not clear the on state: a selected option is never greyed (see
+ * `features/search/facets.ts`), so the two do not co-occur, and if they ever did the honest
+ * drawing is "on, and out of reach" rather than one of the two silently winning.
+ *
  * Exported because the layout toggle that rides the same row is not a filter and wears the
  * same clothes — one hand-copied pair of class lists is how two rows start to differ.
  */
-export function filterChipState(pressed: boolean): string {
-  return pressed ? "border-accent text-accent" : "border-border text-dim hover:text-text";
+export function filterChipState(pressed: boolean, unavailable = false): string {
+  const on = pressed ? "border-accent text-accent" : "border-border text-dim";
+  if (unavailable) return cn(on, FILTER_UNAVAILABLE);
+  return pressed ? on : cn(on, "hover:text-text");
 }
 
 /** The mana-value chips. The last one is open-ended — `8` means "8 or more". */
@@ -52,23 +69,42 @@ export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
  * same chip dimmed rather than a different chip, so the row reads as one control with
  * some of it switched on — and so a colourblind reader has the symbol's *shape*, which is
  * what Wizards designed it to carry, and not only the hue.
+ *
+ * **`disabled` is `aria-disabled` and never the attribute.** A `disabled` button leaves the
+ * tab order, and a filter row that greys as the reader types would shrink and grow under a
+ * keyboard reader's caret. The chip stays focusable, keeps saying whether it is pressed, and
+ * ignores the press.
  */
 export function ManaChip({
   symbol,
   pressed,
   onClick,
+  disabled = false,
+  title,
 }: {
   symbol: ManaKey;
   pressed: boolean;
   onClick: () => void;
+  /** Drawn dim and unpressable, without leaving the tab order. */
+  disabled?: boolean;
+  /**
+   * The tooltip, **and the accessible name with it** — a `title` that disagrees with the
+   * name is announced as a second, competing sentence. Defaults to the colour's name, and
+   * a caller adding a count to it has to keep that name at the front (WCAG 2.5.3).
+   */
+  title?: string;
 }) {
+  const name = title ?? MANA_LABEL[symbol];
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => {
+        if (!disabled) onClick();
+      }}
       aria-pressed={pressed}
-      aria-label={MANA_LABEL[symbol]}
-      title={MANA_LABEL[symbol]}
+      aria-disabled={disabled || undefined}
+      aria-label={name}
+      title={name}
       style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
       className={cn(
         "grid size-9 place-items-center rounded-full text-lg leading-none text-black",
@@ -79,9 +115,11 @@ export function ManaChip({
         // and become six shades of the same brown, which is the moment the row goes back
         // to being letters in circles. The gold ring is what says "on"; the dimming only
         // has to say "and these are not".
-        pressed
-          ? "opacity-100 ring-2 ring-accent ring-offset-2 ring-offset-bg"
-          : "opacity-60 hover:opacity-85",
+        pressed && "opacity-100 ring-2 ring-accent ring-offset-2 ring-offset-bg",
+        !pressed && !disabled && "opacity-60 hover:opacity-85",
+        // Last, so tailwind-merge resolves the opacity in its favour: a chip that is somehow
+        // both on and out of reach keeps its ring and takes the dimming.
+        disabled && FILTER_UNAVAILABLE,
       )}
     >
       {/* The glyph itself comes from the bundled `mana-font`; the fill is ours, because
@@ -91,13 +129,26 @@ export function ManaChip({
   );
 }
 
-/** The mana-value row, 0 through 8-or-more. Mono numerals, because a cost is data. */
+/**
+ * The mana-value row, 0 through 8-or-more. Mono numerals, because a cost is data.
+ *
+ * The two facet props are **per value**, because this one component draws nine chips: a
+ * plain `disabled` boolean here could only grey the row. `title` is handed the chip's own
+ * accessible label as well as its value, so a caller composing a count onto it cannot drift
+ * from what the chip actually says — "8 or more" is spelled here and nowhere else.
+ */
 export function ManaValueChips({
   selected,
   onToggle,
+  disabled,
+  title,
 }: {
   selected: readonly number[];
   onToggle: (value: number) => void;
+  /** Whether one chip is out of reach. `aria-disabled`, never `disabled` — see {@link ManaChip}. */
+  disabled?: (value: number) => boolean;
+  /** One chip's tooltip and accessible name, given its value and the label it would carry. */
+  title?: (value: number, label: string) => string | undefined;
 }) {
   return (
     <div role="group" aria-label="Mana value" className="flex gap-1">
@@ -106,18 +157,25 @@ export function ManaValueChips({
         // nobody filters by exact cost, and the backend reads it the same way.
         const open = value === MANA_VALUES[MANA_VALUES.length - 1];
         const on = selected.includes(value);
+        const off = disabled?.(value) ?? false;
+        const label = open ? `Mana value ${value} or more` : `Mana value ${value}`;
+        const name = title?.(value, label) ?? label;
         return (
           <button
             key={value}
             type="button"
-            onClick={() => onToggle(value)}
+            onClick={() => {
+              if (!off) onToggle(value);
+            }}
             aria-pressed={on}
-            aria-label={open ? `Mana value ${value} or more` : `Mana value ${value}`}
+            aria-disabled={off || undefined}
+            aria-label={name}
+            title={name}
             className={cn(
               FILTER_CONTROL,
               FILTER_FOCUS,
               "size-9 font-mono text-xs tabular-nums",
-              filterChipState(on),
+              filterChipState(on, off),
             )}
           >
             {open ? `${value}+` : value}
@@ -146,20 +204,34 @@ export function ToggleChip({
   pressed,
   onClick,
   hint,
+  title,
 }: {
   label: string;
   pressed: boolean;
   onClick: () => void;
   /** What the label is short for. Becomes the tooltip, and joins the accessible name. */
   hint?: string;
+  /**
+   * The tooltip and the accessible name together, replacing both of `hint`'s contributions.
+   * The two never co-occur today — `hint` expands an abbreviation on the collection's
+   * condition chips, this carries a facet count on the search's Owned chip — and if they
+   * ever do, the sentence built for this chip wins over the one built for its label.
+   *
+   * **No `disabled` here, deliberately.** The one faceted chip of this kind is Owned, which
+   * is never greyed: it is a single button cycling off → owned → missing → off, and greying
+   * it would strand whoever is mid-cycle. A prop no caller may ever set is one more state to
+   * reason about and no behaviour at all.
+   */
+  title?: string;
 }) {
+  const name = title ?? (hint ? `${label}, ${hint}` : undefined);
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={pressed}
-      title={hint}
-      aria-label={hint ? `${label}, ${hint}` : undefined}
+      title={title ?? hint}
+      aria-label={name}
       className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(pressed))}
     >
       {label}

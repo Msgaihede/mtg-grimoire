@@ -3,6 +3,7 @@ import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { ipc, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
+import { useCardFacets, type FacetRequest } from "./useCardFacets";
 
 /** Rows per request. The backend clamps at 200; 50 is one screenful plus slack. */
 export const PAGE_SIZE = 50;
@@ -260,6 +261,24 @@ export function useCardSearch() {
 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
 
+  /**
+   * The same filters the page above is built from, and nothing else.
+   *
+   * Written out rather than derived from the query's own payload, because the two differ in
+   * exactly the way that matters: the page carries a sort, an offset and a collapse, and a
+   * facet answer depends on none of the three. {@link FacetRequest} is the fence — it cannot
+   * hold them — and this object is what has to stay in step with the payload above it.
+   */
+  const facetReq: FacetRequest = {
+    text: debouncedText || undefined,
+    format: format || undefined,
+    colors: colorsParam,
+    sets: setsParam,
+    manaValues: manaParam,
+    owned,
+  };
+  const facets = useCardFacets(facetReq);
+
   return {
     text,
     setText,
@@ -313,6 +332,17 @@ export function useCardSearch() {
     },
     query,
     rows,
+    /**
+     * How many printings each filter option would leave, for the row that draws them —
+     * `undefined` whenever that is not known, which is what every control reads as "leave
+     * this live". See `useCardFacets`, which owns that collapse, and `facets.ts`, which owns
+     * the rule the controls apply to it.
+     *
+     * **`facets.total` is not {@link total}.** This one counts printings and is exact; that
+     * one counts the rows the list will draw (collapsed to one per card) and stops at 5 000.
+     * Only the former is what a colour count is read against.
+     */
+    facets,
     /**
      * Identity of the current search, for anything that has to react to "this is a
      * different search now" — resetting the scroll position, above all. Derived from the

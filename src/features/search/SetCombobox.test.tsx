@@ -179,7 +179,8 @@ describe("SetCombobox", () => {
   });
 
   /**
-   * `search.rs` filters on at most `MAX_SET_FILTER` sets and silently truncates past it,
+   * `filters.rs`'s `picked_sets` keeps at most `MAX_SET_FILTER` sets and silently truncates
+   * past it,
    * so a 65th pick would leave the button claiming "65 sets" over results computed from
    * 64. The button is not allowed to say something the search will not do.
    */
@@ -296,5 +297,68 @@ describe("SetCombobox", () => {
       expect.stringContaining("Planeshift"),
       expect.stringContaining("The List"),
     ]);
+  });
+
+  /**
+   * **Greyed, not hidden.** The `cardCount > 0` filter above drops sets the corpus holds
+   * nothing for, which is a fact about the database; this is a fact about the search the
+   * reader is halfway through typing, and dropping those rows would make the list jump under
+   * the cursor on every keystroke.
+   *
+   * The same `aria-disabled` treatment the `MAX_SETS` cap already uses, so the picker has one
+   * vocabulary for unavailable rather than two.
+   */
+  it("greys a set this search has nothing in, and keeps it in the list", async () => {
+    listSets.mockResolvedValue(sets);
+    const onToggle = vi.fn();
+    wrap(<SetCombobox selected={[]} onToggle={onToggle} counts={{ lea: 0, neo: 12 }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+    const alpha = await screen.findByRole("option", { name: /Alpha/ });
+    expect(alpha).toHaveAttribute("aria-disabled", "true");
+    expect(alpha).toHaveAttribute("title", "Limited Edition Alpha — nothing in this search");
+    expect(screen.getByRole("option", { name: /Kamigawa/ })).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(alpha);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  /** The keyboard reaches the same rows, so it has to hit the same wall. Without this the
+   *  list refuses the mouse and takes the Enter. */
+  it("refuses a greyed set from the keyboard too", async () => {
+    listSets.mockResolvedValue(sets);
+    const onToggle = vi.fn();
+    wrap(<SetCombobox selected={[]} onToggle={onToggle} counts={{ lea: 0, neo: 12 }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await screen.findByRole("option", { name: /Alpha/ });
+    // The cursor opens on the first row, which is the greyed one.
+    await userEvent.keyboard("{Enter}");
+    expect(onToggle).not.toHaveBeenCalled();
+
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    expect(onToggle).toHaveBeenCalledWith("neo");
+  });
+
+  /** A picked set is never greyed however its count reads — unpicking it is the way out. And
+   *  with no counts at all, nothing is greyed: not-greyed means "we don't know". */
+  it("leaves a picked set live, and everything live with no counts", async () => {
+    listSets.mockResolvedValue(sets);
+    const { rerender } = wrap(
+      <SetCombobox selected={["lea"]} onToggle={vi.fn()} counts={{ lea: 0, neo: 0 }} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(await screen.findByRole("option", { name: /Alpha/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    expect(screen.getByRole("option", { name: /Kamigawa/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    rerender(<SetCombobox selected={["lea"]} onToggle={vi.fn()} />);
+    expect(screen.getByRole("option", { name: /Kamigawa/ })).not.toHaveAttribute("aria-disabled");
   });
 });

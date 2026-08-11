@@ -7,9 +7,10 @@ import {
   ResetAll,
   ToggleChip,
 } from "@/components/FilterChips";
-import { MANA_KEYS } from "@/lib/mana";
+import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { colorDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
 import { FORMATS, type CardSearch } from "./useCardSearch";
 
@@ -41,6 +42,15 @@ export function FilterBar({
    */
   layoutToggle?: boolean;
 }) {
+  /**
+   * How many printings each option would leave, or `undefined` when that is not known.
+   *
+   * Every control below reads it through `facets.ts`, which is where the rule lives:
+   * greyed means "turning this on would not change the result set", not-greyed means "we
+   * don't know" — so `undefined` here leaves the whole row live, which is what a cold index,
+   * a failed query and the first render all arrive as.
+   */
+  const facets = search.facets;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <label htmlFor="card-search-text" className="sr-only">
@@ -67,14 +77,33 @@ export function FilterBar({
             key={key}
             symbol={key}
             pressed={search.colors.includes(key)}
+            // The one control on this row that does not ask "would this return nothing".
+            // `colors` is subset semantics, so pressing a chip with another already on
+            // *broadens* — the count is the size of the result set after the press, read
+            // against `facets.total`. And that total is the facets' own: printings, exact,
+            // and not the collapsed, capped number the results caption prints.
+            disabled={colorDisabled(
+              facets?.colors[key],
+              facets?.total ?? 0,
+              search.colors.includes(key),
+            )}
+            title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
             onClick={() => search.toggleColor(key)}
           />
         ))}
       </div>
 
-      <ManaValueChips selected={search.manaValues} onToggle={search.toggleManaValue} />
+      <ManaValueChips
+        selected={search.manaValues}
+        onToggle={search.toggleManaValue}
+        disabled={(value) =>
+          optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
+        }
+        // The chip hands its own label back, so "8 or more" is spelled in one place.
+        title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
+      />
 
-      <SetCombobox selected={search.sets} onToggle={search.toggleSet} />
+      <SetCombobox selected={search.sets} onToggle={search.toggleSet} counts={facets?.sets} />
 
       <label htmlFor="card-search-format" className="sr-only">
         Format
@@ -92,7 +121,15 @@ export function FilterBar({
       >
         <option value="">Any format</option>
         {FORMATS.map((f) => (
-          <option key={f.value} value={f.value}>
+          // The one place a real `disabled` is right: `<option disabled>` is native, and a
+          // listbox option is not a tab stop there is anything to lose. No count rides here
+          // — a `title` on an `<option>` is not drawn by Windows' native dropdown, so it
+          // would be a sentence nobody can read.
+          <option
+            key={f.value}
+            value={f.value}
+            disabled={optionDisabled(facets?.formats, f.value, search.format === f.value)}
+          >
             {f.label}
           </option>
         ))}
@@ -102,10 +139,19 @@ export function FilterBar({
           card: everything left of it describes cardboard, and this describes the reader's
           relationship to it. One chip and three states — the word on it is what says which
           of the two questions is being asked, so an unpressed "Owned" cannot be mistaken
-          for a pressed "Missing". */}
+          for a pressed "Missing".
+
+          **Never greyed**, whatever its counts say: greying a chip mid-cycle would strand
+          whoever is in it. The tooltip counts what the chip's *word* names, which is one
+          rule reading correctly in both directions — unpressed, it is what pressing would
+          give; pressed, it is what the reader is already looking at. */}
       <ToggleChip
         label={search.owned === false ? "Missing" : "Owned"}
         pressed={search.owned !== undefined}
+        title={facetTitle(
+          search.owned === false ? "Missing" : "Owned",
+          search.owned === false ? facets?.owned.missing : facets?.owned.owned,
+        )}
         onClick={search.toggleOwned}
       />
 

@@ -1,6 +1,6 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 /// Ceiling on the write-ahead log *file* after a checkpoint, in bytes.
@@ -87,6 +87,22 @@ pub fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// [`lock_plain`] over the one type most of this crate locks.
 pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     lock_plain(mutex)
+}
+
+/// The same rule over an `RwLock` — the shape [`crate::sync::AppState::index`] uses, because
+/// every facet request reads it and only a sync or a collection write replaces it.
+///
+/// Recovering from poisoning matters more here than it looks: `read().ok()` would report a
+/// poisoned index as **cold**, which is at least safe, but `write().ok()` would silently drop
+/// the publish and leave it cold *forever* — one panic anywhere and the app never faceted
+/// again until it was restarted.
+pub fn lock_read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// [`lock_read`]'s other half.
+pub fn lock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(|e| e.into_inner())
 }
 
 /// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,

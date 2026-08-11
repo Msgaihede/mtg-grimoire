@@ -211,6 +211,18 @@ export const TableView: Story = {
  * is a statement about the *database* and not about the query; "No cards match these filters"
  * here would blame the reader for a sync that has not run. `summaryOf` decides between the two on
  * `unfiltered`, and `seed: "empty"` is the only seed whose `cards` table is empty.
+ *
+ * **And the filter row above it is fully live**, which is the second claim and the one that
+ * had no test. Counted honestly an empty corpus puts every option at zero, the greying rule
+ * dims the whole row, and — with no filter on — there is no `Reset all` drawn to escape by:
+ * the first screen a new user ever sees would be a dead control panel. So `facets::compute`
+ * guards on `ix.all.count() == 0` and answers `ready: false`, the same shape a cold index
+ * has, and the fake's `facet_cards` carries the same guard. It went in without one: the fake
+ * answered `ready: true` unconditionally, mirroring a `compute` that no longer existed, and
+ * this story plus `Decks/SearchPanel` and `Collection/Page` all drew a fully-greyed row the
+ * shipped window cannot produce. Nothing went red, because no `play` looked at the row.
+ * Verified live 2026-08-11 against a cleared `data/`: 0 of 19 chips greyed for the whole of
+ * the opening sync.
  */
 export const Empty: Story = {
   args: { view: "grid" },
@@ -220,6 +232,15 @@ export const Empty: Story = {
     await expect(
       await canvas.findByText("Card database is empty — waiting for the first sync to finish."),
     ).toBeInTheDocument();
+
+    const chips = canvas.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
+    await expect(chips.length).toBeGreaterThan(0);
+    for (const chip of chips) await expect(chip).not.toHaveAttribute("aria-disabled");
+    // No count in any name either — an empty corpus is "we have not counted", so `facetTitle`
+    // is handed nothing and the chips keep the plain labels they had before this feature.
+    await expect(canvas.getByRole("button", { name: "White" })).toBeInTheDocument();
+    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
+    await expect([...format.options].filter((o) => o.disabled)).toHaveLength(0);
   },
 };
 
@@ -390,7 +411,9 @@ export const OwnedCountsEntries: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("36 cards");
 
-    await userEvent.click(canvas.getByRole("button", { name: "Owned" }));
+    // A prefix, because the chip's accessible name carries its facet count — "Owned — 9
+    // printings" — and the label is what has to come first.
+    await userEvent.click(canvas.getByRole("button", { name: /^Owned\b/ }));
     await waitFor(async () => {
       await expect(canvas.getByText("9 cards")).toBeInTheDocument();
     });
