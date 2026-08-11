@@ -258,9 +258,12 @@ Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug
 the user's, and it is never committed. Seed **user tables only**: `cards` and `sync_meta`
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
-## Storybook (measured 2026-08-09/10)
-`npm run storybook` · `npm run build-storybook`. **275 stories across 35 story files, 36 docs
-pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
+## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-11)
+`npm run storybook` · `npm run build-storybook`. **326 stories across 43 story files, 42 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree.
+**41 of the 43 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
+stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a
@@ -280,9 +283,13 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
   seeds `empty`/`starter`/`needsReview`/`large`, faults `busy`/`syncError`/`imageFailures`/
-  `gone`. Saying nothing gets `starter` with no fault. A fault is set on the world, so a story
-  about `BUSY` shows what the *app* does with a refusal rather than what one mocked call
-  returns.
+  `gone`/`deckMeta`/`updateAvailable`/`updateError`. Saying nothing gets `starter` with no
+  fault. A fault is set on the world, so a story about `BUSY` shows what the *app* does with a
+  refusal rather than what one mocked call returns. **`deckMeta` is the one that refuses
+  *reads*** — the six a deck screen makes *beside* the deck (`deck_category_list`,
+  `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
+  `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
+  `deck_list`: a screen that could not read the deck would not be showing a panel about it.
 - **A world belongs to a story, not to the module — because a docs page mounts every story on
   it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
   so a fake built on module globals looks right and answers all ten stories of a docs page as
@@ -301,9 +308,11 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   store's `set`. So the four story files that write it during render (`AppShell`,
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
-  **frame** and with it its own module graph. The other 28 render inline. A new story file that
-  writes the store needs the same parameter or its docs page shows one story's view under every
-  heading.
+  **frame** and with it its own module graph. `DeckSettingsDialog` carries the same parameter
+  for an unrelated reason — its scrim is `fixed inset-0`, so inline it would cover the docs page
+  rather than its own block — and the other **36 docs pages render inline**. A new story file
+  that writes the store needs the same parameter or its docs page shows one story's view under
+  every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
@@ -325,7 +334,8 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (195 plays today), which is what puts a story's own claim inside `npm run verify` —
+  (236 plays today, in a file of 239 tests — the other three are its own), which is what puts a
+  story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.

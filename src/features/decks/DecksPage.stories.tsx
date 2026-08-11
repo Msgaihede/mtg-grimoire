@@ -243,25 +243,28 @@ export const DeleteAsksFirst: Story = {
 };
 
 /**
- * A cover whose printing has left the card database — **so no illustrator is named, and none is
- * invented.**
+ * A cover whose printing has left the card database — **so no illustrator is named, and the art
+ * is not drawn either.**
  *
- * Scryfall's image policy is why the line is conditional rather than a slot that says something:
- * an art crop carries no printed frame, so the illustrator is credited wherever one is *shown*,
- * and a credit the app cannot substantiate is worse than no credit. The tile draws its art, its
- * name and its caption exactly as its neighbour does; the one line that would have said who
- * painted it is simply not there. **It heals on the next sync that brings the printing back** —
- * `coverArtist` is a lookup at read time (`db.ts:855`, the `LEFT JOIN cards c ON c.id =
- * d.cover_card_id` at `deck.rs:235`), not a stored column, so nothing has to notice.
+ * Scryfall's image policy is the whole of it: an `art` crop carries no printed frame, so the
+ * illustrator must be credited wherever one is *shown* — which means a cover this app cannot name
+ * an artist for cannot be shown at all. Not a picture with the credit line quietly missing; no
+ * picture. `DeckRow.coverArtist`'s doc is where that ruling lives, and `CoverPreview` has always
+ * behaved this way.
  *
- * Told **per tile**, which is the claim: Kenrith Two-Drops keeps its credit in the same wall on
- * the same render. And distinct from {@link NewDeck}: this deck *has* a cover, so the frame does
- * not say "No cover" — "the deck has not picked one" and "the art is not there" are two different
- * things to do something about, and `Cover` tells them apart in as many words.
+ * **So an orphaned cover and an absent one are one state, on purpose**, and they get the same
+ * word: "No cover". That is a deliberate loss of a distinction rather than an oversight — the two
+ * differ only in *why* there is nothing to draw, and neither is something the reader can act on
+ * differently. {@link NewDeck} is the same frame reached the other way.
  *
- * The `needsReview` seed because that is where the orphan id lives, and it is the honest world for
- * this state: the sync that took the printing away is the same sync that flagged the deck row
- * naming it.
+ * **It heals on the next sync that brings the printing back** — `coverArtist` is a lookup at read
+ * time (the `LEFT JOIN cards c ON c.id = d.cover_card_id` in `deck.rs`'s `DECK_SELECT`), not a
+ * stored column, so nothing has to notice.
+ *
+ * Told **per tile**, which is the claim: Kenrith Two-Drops keeps its art and its credit in the
+ * same wall on the same render. The `needsReview` seed because that is where the orphan id lives,
+ * and it is the honest world for this state: the sync that took the printing away is the same
+ * sync that flagged the deck row naming it.
  */
 export const NoCoverArtist: Story = {
   parameters: { fake: { seed: "needsReview" } },
@@ -277,8 +280,12 @@ export const NoCoverArtist: Story = {
     const tile = within(orphaned as HTMLElement);
     // No credit, and no claim that there is nothing to credit: the line is absent, not blank.
     await expect(tile.queryByText(/^Art by/)).toBeNull();
-    // And it is not the empty-cover state — this deck chose a face, the face just is not there.
-    await expect(tile.queryByText("No cover")).toBeNull();
+    // **And the art is not drawn either, so the frame says "No cover".** An orphaned cover and
+    // an absent one are deliberately one state: an `art` crop carries no printed frame, so the
+    // illustrator must be credited wherever one is shown — and a cover this app cannot name an
+    // artist for therefore cannot be shown at all. `DeckRow.coverArtist`'s own doc is the
+    // ruling ("a cover with no artist is **not drawn**"); this tile is what it looks like.
+    await expect(tile.getByText("No cover")).toBeInTheDocument();
 
     // The neighbour, unaffected, on the same render: the rule is a fact about one cover.
     const kept = within(wall)
