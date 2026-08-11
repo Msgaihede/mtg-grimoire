@@ -5,6 +5,7 @@ pub mod db;
 pub mod deck;
 pub mod filters;
 pub mod images;
+pub mod index;
 pub mod ingest;
 pub mod legalities;
 pub mod maintenance;
