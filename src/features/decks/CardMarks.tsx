@@ -11,6 +11,18 @@
  * the card's art against its title bar) and the card's own edge, which only a rule break
  * changes. The place is the caller's — a 150px grid tile and a 224px stacked card put them in
  * different corners — so it rides in `className`; the other three are here.
+ *
+ * ## Every one of these is `aria-hidden`, and that is deliberate
+ *
+ * It is `FoilOverlay`'s rule, for `FoilOverlay`'s reason. Three of these five surfaces draw a
+ * card as a **button with an explicit `aria-label`**, and an `aria-label` *replaces* the
+ * element's content for naming purposes — so an `sr-only` span inside one of these marks is
+ * announced to nobody at all, which is worse than no text, because it looks accessible. The
+ * mark is the decoration; the **statement** is `deckCardName` in `cardControl.ts` on those
+ * three, and text the surface owns on the two that are not buttons (`TableView` writes its
+ * own `sr-only` beside the badge, in a cell, where it is really read).
+ *
+ * Adding a mark here means asking which of those two says it in words.
  */
 import { cn } from "@/lib/utils";
 import { tagColorCss } from "./tagColors";
@@ -19,9 +31,7 @@ import { tagColorCss } from "./tagColors";
  * The one tag a card wears, as an 8px chip in its own colour with the name one hover away.
  *
  * A dot rather than a word: a tag is a mark the reader put there and already knows, and a
- * 224px column has no room for a second label beside a card's name. The name is not lost —
- * it is the `title` and it is read aloud, so the colour is a shortcut rather than the only
- * way to know.
+ * 224px column has no room for a second label beside a card's name.
  */
 export function TagDot({
   name,
@@ -35,12 +45,11 @@ export function TagDot({
 }) {
   return (
     <span
+      aria-hidden="true"
       title={name}
       style={{ backgroundColor: tagColorCss(color) }}
       className={cn("size-2 shrink-0 rounded-[2px] shadow-[0_0_0_1px_var(--color-bg)]", className)}
-    >
-      <span className="sr-only">Tagged {name}</span>
-    </span>
+    />
   );
 }
 
@@ -54,6 +63,7 @@ export function TagDot({
 export function GameChangerBadge({ className }: { className?: string }) {
   return (
     <span
+      aria-hidden="true"
       title="Game changer"
       className={cn(
         "shrink-0 rounded-[2px] border border-pie-gold px-0.5 font-mono text-[0.5625rem]",
@@ -61,8 +71,7 @@ export function GameChangerBadge({ className }: { className?: string }) {
         className,
       )}
     >
-      <span aria-hidden="true">GC</span>
-      <span className="sr-only">Game changer</span>
+      GC
     </span>
   );
 }
@@ -79,6 +88,7 @@ export function GameChangerBadge({ className }: { className?: string }) {
 export function RuleBreakMark({ text, className }: { text: string; className?: string }) {
   return (
     <span
+      aria-hidden="true"
       title={text}
       className={cn(
         "rounded-[3px] border border-destructive/50 bg-bg/85 px-1 py-px",
@@ -86,8 +96,7 @@ export function RuleBreakMark({ text, className }: { text: string; className?: s
         className,
       )}
     >
-      <span aria-hidden="true">RULE BREAK</span>
-      <span className="sr-only">Rule break: {text}</span>
+      RULE BREAK
     </span>
   );
 }

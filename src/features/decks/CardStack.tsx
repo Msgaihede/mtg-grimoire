@@ -10,6 +10,7 @@ import { usdPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "./CardMarks";
+import { deckCardName, FOCUS_INSET } from "./cardControl";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -50,10 +51,6 @@ export function stackHeight(count: number): number {
   if (count === 0) return 0;
   return STACK_ADVANCE * (count - 1) + STACK_CARD_HEIGHT + STACK_LIFTED_MARGIN;
 }
-
-/** Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
- *  control's edge, never a ring. */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
  * The pie deep one colour letter is drawn in — `DeckStats`' own `PIP_COLOR`, which is not
@@ -190,19 +187,6 @@ function StackedCard({
   // switch, never the kind: a Maybeboard switched *on* is short of copies like any other pile.
   const short = card.categoryActive && card.ownedQuantity < card.quantity;
 
-  // The button's name, said once and in the order a reader would: the card, then how many,
-  // then the two marks that are the reason this stack is being read at all. It begins with
-  // the visible name, which is what WCAG 2.5.3 asks of a control whose label is drawn on it.
-  const name = [
-    card.name,
-    card.quantity > 1 ? `${card.quantity} copies` : null,
-    card.tagName,
-    card.gameChanger ? "game changer" : null,
-    ruleBreakText && `rule break: ${ruleBreakText}`,
-  ]
-    .filter(Boolean)
-    .join(", ");
-
   return (
     <li
       className={cn(
@@ -231,9 +215,13 @@ function StackedCard({
     >
       <button
         type="button"
-        aria-label={name}
+        // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
+        // reader gets — including the red shortage figure, which nothing else would say.
+        aria-label={deckCardName(card, ruleBreakText)}
         onClick={onSelect ? () => onSelect(card) : undefined}
-        className={cn("block w-full cursor-pointer text-left", FOCUS)}
+        // Inset, because this button fills an `overflow-hidden` card: an outline standing off
+        // its edge is painted entirely in the clipped region and is never seen.
+        className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
       >
         {/* The title bar — the card's own, rebuilt: how many, what it is called, what it
             costs. Tinted by colour identity, which is the one thing on this screen colour is
@@ -294,18 +282,15 @@ function StackedCard({
           <span className="shrink-0 tabular-nums text-text">{usdPrice(card.unitPriceUsd)}</span>
           {/* Drawn only where it says something: a fully covered card prints nothing at all,
               because sixty ticks are sixty things to read past on the way to the three that
-              matter. */}
+              matter. Decoration, like every other mark on this card — the words are in the
+              button's name, which is the only place inside a labelled button that is read. */}
           {short && (
             <span
+              aria-hidden="true"
               title={`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`}
               className="shrink-0 tabular-nums text-destructive"
             >
-              <span aria-hidden="true">
-                {card.ownedQuantity}/{card.quantity}
-              </span>
-              <span className="sr-only">
-                You own {card.ownedQuantity} of {card.quantity}
-              </span>
+              {card.ownedQuantity}/{card.quantity}
             </span>
           )}
         </span>

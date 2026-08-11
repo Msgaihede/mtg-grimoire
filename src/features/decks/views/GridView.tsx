@@ -16,12 +16,11 @@ import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { identityTint } from "../CardStack";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "../CardMarks";
+import { deckCardName, FOCUS_INSET } from "../cardControl";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { GroupHeader } from "./GroupHeader";
-
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 export function GridView({
   groups,
@@ -89,15 +88,6 @@ function GridCard({
   // card face would print the name twice. `null` for an orphan — nothing fetches a picture of
   // a card that is not in the database.
   const art = useImageRetry(card.needsReview === null ? cardImageUrl(card.cardId, 0, "art") : null);
-  const name = [
-    card.name,
-    card.quantity > 1 ? `${card.quantity} copies` : null,
-    card.tagName,
-    card.gameChanger ? "game changer" : null,
-    ruleBreakText && `rule break: ${ruleBreakText}`,
-  ]
-    .filter(Boolean)
-    .join(", ");
 
   return (
     <li
@@ -108,9 +98,11 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={name}
+        aria-label={deckCardName(card, ruleBreakText)}
         onClick={onSelect ? () => onSelect(card) : undefined}
-        className={cn("block w-full cursor-pointer text-left", FOCUS)}
+        // Inset, for the stacked card's reason: this button fills a tile that clips its own
+        // corners, and an outline standing off its edge is never drawn at all.
+        className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
       >
         {/* The same colour-identity tint the stacked card's title bar carries — this tile *is*
             the stacked card at 42 %, so a reader switching views is looking at one object. */}

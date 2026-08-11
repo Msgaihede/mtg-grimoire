@@ -7,7 +7,7 @@ import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
 import { buildGroups, type CardGroup } from "../grouping";
 import { GridView } from "./GridView";
-import { StackView } from "./StackView";
+import { StackView, STACK_COLUMN_ATTR } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 
@@ -178,6 +178,42 @@ describe.each(VIEWS.filter((v) => v.name !== "TableView"))("$name", ({ render: r
     setup();
     expect(screen.getByRole("list", { name: "Ramp" })).toBeInTheDocument();
   });
+
+  /**
+   * **A keyboard reader has to be able to see where they are** — WCAG 2.4.7, and the failure
+   * mode is invisible to anyone testing with a mouse.
+   *
+   * The trap is the offset's sign. A card in the stack and a tile in the grid are both a
+   * button *filling* a box that clips its own corners, so an outline standing 2px off the
+   * button is painted entirely in the clipped region and never drawn — `VirtualTable` already
+   * documents this for its rows. The text row is not that shape and keeps the positive
+   * offset the rest of the app uses, so this asserts an outline is asked for rather than
+   * which side of the edge it lands on.
+   */
+  it("gives every card control a focus outline", () => {
+    setup();
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.className).toContain("focus-visible:outline-2");
+      expect(button.className).toContain("focus-visible:outline-accent");
+    }
+  });
+});
+
+/**
+ * The two surfaces whose control fills a clipped box. Written as a sweep because the offset
+ * is one character and reverting it silently removes the focus indicator altogether.
+ */
+describe.each([
+  ["CardStack", (props: ViewProps) => <StackView {...props} />],
+  ["GridView", (props: ViewProps) => <GridView {...props} />],
+] as const)("%s", (_name, renderView) => {
+  it("keeps its focus outline inside the box that clips it", () => {
+    render(renderView({ groups: GROUPS }));
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.className).toContain("focus-visible:-outline-offset-2");
+      expect(button.className).not.toContain("focus-visible:outline-offset-2");
+    }
+  });
 });
 
 describe("the views that are not the table", () => {
@@ -201,26 +237,63 @@ describe("the views that are not the table", () => {
 });
 
 describe("StackView columns", () => {
+  const columns = () => [...document.querySelectorAll(`[${STACK_COLUMN_ATTR}]`)];
+  /** By the id each section is `aria-labelledby`, which is the heading's own handle rather
+   *  than a guess at the header's shape. */
+  const headingsIn = (column: Element) =>
+    [...column.querySelectorAll('[id^="group-"]')].map((n) => n.textContent);
+
   /**
    * Groups are packed into columns in the reader's own order and never split — so a category
    * that outgrows a column keeps every one of its cards, and the pile after it starts a fresh
    * one rather than being interleaved.
+   *
+   * The columns are read out of the DOM rather than inferred from the cards being present:
+   * the first draft of this asserted only that both piles were drawn and twelve cards were in
+   * Ramp, which is true of a layout that packed everything into a single column and did no
+   * work at all.
    */
   it("packs groups into columns without reordering or splitting them", () => {
-    const many = Array.from({ length: 12 }, (_, i) =>
-      card({ name: `Card ${String(i).padStart(2, "0")}` }),
-    );
+    const three = (kind: "main" | "commander") =>
+      Array.from({ length: 3 }, (_, i) =>
+        card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
+      );
     render(
       <StackView
-        groups={buildGroups(many, [RAMP, COMMANDER], "category", "alphabetical")}
-        columnHeight={400}
+        groups={buildGroups(
+          [...three("commander"), ...three("main")],
+          [COMMANDER, RAMP, MAYBE],
+          "category",
+          "alphabetical",
+        )}
+        // A three-card group is 454px here (46 of header and padding, `stackHeight(3)` = 388,
+        // 20 of gap). Two fit in 950; the empty Maybeboard's 66 does not, so it starts the
+        // second column — which is what makes this assert a *pack* rather than a single box.
+        columnHeight={950}
       />,
     );
 
-    // Both piles are drawn, the Commander column first, and the twelve cards are all in Ramp.
-    const ramp = screen.getByRole("list", { name: "Ramp" });
-    expect(within(ramp).getAllByRole("listitem")).toHaveLength(12);
-    expect(screen.getByText("Commander")).toBeInTheDocument();
+    expect(columns()).toHaveLength(2);
+    // In the sortOrder the reader set, never a shape the packer preferred.
+    expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
+    expect(headingsIn(columns()[1])).toEqual(["Maybeboard"]);
+    // And never split: all three of Ramp's cards are in the one Ramp stack.
+    expect(
+      within(screen.getByRole("list", { name: "Ramp" })).getAllByRole("listitem"),
+    ).toHaveLength(3);
+  });
+
+  /** One column when everything fits — the case the assertion above would have passed
+   *  against by accident, pinned deliberately instead. */
+  it("uses one column when the groups all fit in one", () => {
+    render(
+      <StackView
+        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
+        columnHeight={4000}
+      />,
+    );
+
+    expect(columns()).toHaveLength(1);
   });
 });
 
@@ -275,6 +348,36 @@ describe("TableView", () => {
     expect(screen.getByText("Rule break: Sol Ring is banned here.")).toBeInTheDocument();
     expect(screen.getByTitle("Sol Ring is banned here.")).toBeInTheDocument();
     expect(screen.getByTitle("Game changer")).toBeInTheDocument();
+  });
+
+  /**
+   * A `role="row"` that owns no `role="cell"` is malformed to assistive tech — a row that
+   * owns nothing — so the band's heading sits in one real cell spanning every column. That is
+   * the design canvas's `colspan="9"`, said in ARIA because these rows are divs.
+   */
+  it("gives the band one real cell spanning every column", () => {
+    setup();
+
+    const band = screen.getByText("Ramp").closest("[role=row]");
+    const cells = band!.querySelectorAll("[role=cell]");
+    expect(cells).toHaveLength(1);
+    expect(cells[0]).toHaveAttribute("aria-colspan", "9");
+
+    // And a card row still owns one cell per column, so the two kinds of row agree about how
+    // wide the table is.
+    const cardRow = screen.getByText("Arcane Signet").closest("[role=row]");
+    expect(cardRow!.querySelectorAll("[role=cell]")).toHaveLength(9);
+  });
+
+  /** A cell announced by two `sr-only` words the marks no longer carry: in a cell they are
+   *  really read, which is why the table states them and the three button views do not. */
+  it("says a game changer and a rule break in words a cell really reads", () => {
+    setup();
+
+    expect(screen.getByText("Game changer")).toHaveClass("sr-only");
+    expect(screen.getByText("Rule break: Sol Ring is banned here.")).toHaveClass("sr-only");
+    // The badge itself is decoration in every view.
+    expect(screen.getByTitle("Game changer")).toHaveAttribute("aria-hidden", "true");
   });
 
   it("bands the rows with a heading that is not itself a row you can open", async () => {

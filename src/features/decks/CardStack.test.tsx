@@ -14,11 +14,24 @@ import {
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
 
+/** Sol Ring is the only card here the collection cannot cover, so the shortage is legible in
+ *  one place and its absence is legible everywhere else. */
 const CARDS: DeckCard[] = [
   card({ name: "Sol Ring", quantity: 2, ownedQuantity: 1, unitPriceUsd: 1.99, rarity: "uncommon" }),
-  card({ name: "Arcane Signet", unitPriceUsd: 0.99, colorIdentity: null }),
-  card({ name: "The Great Henge", unitPriceUsd: 38.5, colorIdentity: "G", gameChanger: true }),
+  card({ name: "Arcane Signet", ownedQuantity: 1, unitPriceUsd: 0.99, colorIdentity: null }),
+  card({
+    name: "The Great Henge",
+    ownedQuantity: 1,
+    unitPriceUsd: 38.5,
+    colorIdentity: "G",
+    gameChanger: true,
+  }),
 ];
+
+/** The names those three cards answer to, once every mark is folded into them. */
+const SOL_RING = "Sol Ring, 2 copies, you own 1 of 2";
+const SIGNET = "Arcane Signet";
+const HENGE = "The Great Henge, game changer";
 
 const list = () => screen.getByRole("list", { name: "Ramp" });
 const items = () => screen.getAllByRole("listitem");
@@ -89,7 +102,7 @@ describe("CardStack does not reflow", () => {
 
     // The first card, which every card after it would be pushed down by; then the last,
     // which nothing follows.
-    for (const name of ["Sol Ring, 2 copies", "The Great Henge, game changer"]) {
+    for (const name of [SOL_RING, HENGE]) {
       await user.hover(screen.getByRole("button", { name }));
       expect(list().style.height).toBe(before);
       await user.unhover(screen.getByRole("button", { name }));
@@ -98,7 +111,7 @@ describe("CardStack does not reflow", () => {
 
     // And the caret, which does the same thing the pointer does.
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Sol Ring, 2 copies" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: SOL_RING }));
     expect(list().style.height).toBe(before);
   });
 
@@ -141,13 +154,29 @@ describe("CardStack cards", () => {
     render(<CardStack cards={CARDS} label="Ramp" onSelect={onSelect} />);
 
     await user.tab();
-    expect(screen.getByRole("button", { name: "Sol Ring, 2 copies" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: SOL_RING })).toHaveFocus();
     await user.tab();
-    expect(screen.getByRole("button", { name: "Arcane Signet" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: SIGNET })).toHaveFocus();
     await user.keyboard("{Enter}");
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect.mock.calls[0][0].name).toBe("Arcane Signet");
+  });
+
+  /**
+   * **The focus outline is drawn inside the card's own edge**, and it has to be: the button
+   * fills an `overflow-hidden` `<li>`, so an outline standing 2px *off* it is painted
+   * entirely in the clipped region and is never seen. A positive offset here is not a
+   * smaller ring — it is no focus indicator at all, WCAG 2.4.7, and invisible to anyone
+   * testing with a mouse. `VirtualTable`'s rows already document the same trap.
+   */
+  it("keeps the focus outline inside the box that clips it", () => {
+    render(<CardStack cards={CARDS} label="Ramp" />);
+
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.className).toContain("focus-visible:-outline-offset-2");
+      expect(button.className).not.toContain("focus-visible:outline-offset-2");
+    }
   });
 
   it("draws the copies, the name, the cost, the rarity, the printing and its own price", () => {
@@ -164,13 +193,21 @@ describe("CardStack cards", () => {
     expect(document.querySelectorAll("i.ms-cost").length).toBeGreaterThan(0);
   });
 
-  it("says how many copies are missing, and only when some are", () => {
+  /**
+   * The shortage is drawn as a red figure and **said in the button's name**, which is the
+   * only text inside an `aria-label`-ed button that anybody hears. An `sr-only` span here
+   * would be announced to nobody — which is how a keyboard reader came to get no word of the
+   * one number on this card that is about them.
+   */
+  it("says how many copies are missing, in the figure and in the name", () => {
     render(<CardStack cards={CARDS} label="Ramp" />);
 
-    expect(screen.getByText("You own 1 of 2")).toBeInTheDocument();
     expect(screen.getByText("1/2")).toBeInTheDocument();
-    // Two of the three rows are fully covered and print nothing.
+    expect(screen.getByRole("button", { name: SOL_RING })).toBeInTheDocument();
+    expect(SOL_RING).toContain("you own 1 of 2");
+    // The two fully covered rows print nothing and say nothing.
     expect(screen.queryByText("1/1")).not.toBeInTheDocument();
+    expect(SIGNET).not.toContain("you own");
   });
 
   /** The allocator claims no copy for an inactive category, so every card in one reads 0
@@ -189,13 +226,73 @@ describe("CardStack cards", () => {
   it("shows a tag as a dot with its name behind it", () => {
     render(
       <CardStack
-        cards={[card({ name: "Sol Ring", tagId: 1, tagName: "Wincon", tagColor: "moss" })]}
+        cards={[
+          card({
+            name: "Sol Ring",
+            ownedQuantity: 1,
+            tagId: 1,
+            tagName: "Wincon",
+            tagColor: "moss",
+          }),
+        ]}
         label="Ramp"
       />,
     );
 
-    expect(screen.getByText("Tagged Wincon")).toBeInTheDocument();
+    // A `title` for the pointer; the word itself in the button's name, which is the only
+    // place a reader inside a labelled button hears anything.
+    expect(screen.getByTitle("Wincon")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByRole("button", { name: "Sol Ring, Wincon" })).toBeInTheDocument();
+  });
+
+  /**
+   * Every mark on a card is decoration and says so, which is `FoilOverlay`'s rule for
+   * `FoilOverlay`'s reason: an `aria-label` replaces its element's content, so an `sr-only`
+   * span inside one of these buttons is announced to nobody and only looks accessible.
+   */
+  it("marks every badge as decoration, and says all of it in the name instead", () => {
+    render(
+      <CardStack
+        cards={[
+          card({
+            name: "Mana Crypt",
+            quantity: 2,
+            ownedQuantity: 0,
+            gameChanger: true,
+            tagId: 1,
+            tagName: "Fast mana",
+            tagColor: "ember",
+          }),
+        ]}
+        label="Ramp"
+        violations={
+          new Map([
+            [
+              "c-Mana Crypt",
+              [
+                {
+                  severity: "error" as const,
+                  code: "banned",
+                  message: "Mana Crypt is banned in Commander.",
+                  cardIds: ["c-Mana Crypt"],
+                },
+              ],
+            ],
+          ])
+        }
+      />,
+    );
+
+    for (const label of ["GC", "RULE BREAK", "0/2"]) {
+      expect(screen.getByText(label)).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(screen.getByTitle("Fast mana")).toHaveAttribute("aria-hidden", "true");
+
+    expect(
+      screen.getByRole("button", {
+        name: "Mana Crypt, 2 copies, you own 0 of 2, Fast mana, game changer, rule break: Mana Crypt is banned in Commander.",
+      }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -228,18 +325,25 @@ describe("CardStack marks", () => {
   it("tells a rule break and a game changer apart four ways", () => {
     withIssue();
     const [first, second] = screen.getAllByRole("listitem");
+    const mark = screen.getByText("RULE BREAK");
 
-    // The words, and the whole sentence behind them.
-    expect(screen.getByText("RULE BREAK")).toBeInTheDocument();
-    expect(screen.getByText("Rule break: Mana Crypt is banned in Commander.")).toBeInTheDocument();
+    // The words, and the whole sentence behind them — in the mark's `title` for the pointer
+    // and in the card's own name for everyone else.
+    expect(mark).toBeInTheDocument();
+    expect(mark).toHaveAttribute("title", "Mana Crypt is banned in Commander.");
+    expect(
+      screen.getByRole("button", {
+        name: /rule break: Mana Crypt is banned in Commander\./,
+      }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("GC")).toHaveLength(2);
 
     // The colour: destructive for the break, the pie gold for the badge.
-    expect(screen.getByText("RULE BREAK").parentElement?.className).toContain("text-destructive");
-    expect(screen.getAllByText("GC")[0].parentElement?.className).toContain("text-pie-gold");
+    expect(mark.className).toContain("text-destructive");
+    expect(screen.getAllByText("GC")[0].className).toContain("text-pie-gold");
 
     // The place: the break is over the art, the badge is in the title bar.
-    expect(screen.getByText("RULE BREAK").parentElement?.className).toContain("absolute");
+    expect(mark.className).toContain("absolute");
 
     // The edge: only the card that breaks a rule gets one.
     expect(first.className).toContain("border-destructive");

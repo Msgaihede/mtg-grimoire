@@ -185,7 +185,12 @@ describe("auditSentence", () => {
     });
   });
 
-  it("says which folder a deck was filed in", () => {
+  /**
+   * **`folder` is nullable and null is the root**, which is a place rather than an absence: a
+   * deck at the top level is not a deck with no folder, it is a deck in the one folder that
+   * has no name. "Out of its folder" read as a removal.
+   */
+  it("says which folder a deck was filed in, the top level included", () => {
     const filed = auditSentence(
       entry(
         "folder",
@@ -199,7 +204,7 @@ describe("auditSentence", () => {
       auditSentence(
         entry("folder", { action: "move", folder: null }, { cardId: null, cardName: null }),
       ),
-    ).toEqual({ text: "Moved the deck out of its folder", detail: null });
+    ).toEqual({ text: "Moved the deck to the top level", detail: null });
   });
 
   it("says which field of the deck changed", () => {
@@ -256,6 +261,31 @@ describe("auditSentence", () => {
   });
 
   /**
+   * **Two different rows wear `field: "theory"`.** The copy row carries `copied` and no
+   * `from`/`to` at all; the toggle carries `to` and no `copied`. Reading only the toggle
+   * answers a copy as `flag(undefined)` — "Turned the theory list off" — which is a sentence
+   * about the opposite of what happened.
+   */
+  it("tells the theory copy apart from the theory toggle", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "theory", copied: 99 })).toEqual({
+      text: "Copied the live deck into theory",
+      detail: "99 cards",
+    });
+    expect(deck({ field: "theory", copied: 1 })).toEqual({
+      text: "Copied the live deck into theory",
+      detail: "1 card",
+    });
+    // An empty live deck copies nothing, and says so by saying nothing more.
+    expect(deck({ field: "theory", copied: 0 })).toEqual({
+      text: "Copied the live deck into theory",
+      detail: null,
+    });
+  });
+
+  /**
    * Total, and that is the point of storing facts rather than sentences: this table outlives
    * every wording, so a row written by a newer build — or one whose payload lost a field —
    * still reads as a line of history rather than taking the drawer down.
@@ -306,10 +336,22 @@ describe("auditSentence over a contract it does not fully know", () => {
     ).toEqual({ text: "Changed category Ramp", detail: null });
   });
 
+  /**
+   * The arm really switches. Written to fail against the version that did not: it returned
+   * the move sentence whatever the action was, so this test passed while proving nothing —
+   * and a row that says "Moved the deck to X" for something that was not a move is a history
+   * that lies rather than one that admits it does not know.
+   */
   it("renders a plain line for a folder action it has never heard of", () => {
     expect(
-      auditSentence(entry("folder", { action: "invert" }, { cardId: null, cardName: null })),
-    ).toEqual({ text: "Moved the deck out of its folder", detail: null });
+      auditSentence(
+        entry(
+          "folder",
+          { action: "invert", folder: "Commander › Legends" },
+          { cardId: null, cardName: null },
+        ),
+      ),
+    ).toEqual({ text: "Changed the deck's folder", detail: null });
   });
 });
 
