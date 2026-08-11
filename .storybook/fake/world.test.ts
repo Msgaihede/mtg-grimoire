@@ -119,7 +119,7 @@ describe("per-story isolation", () => {
     const db = installWorld(undefined).db;
     expect(db.fault).toBeNull();
     expect(db.cards).toBe(seed("starter").cards);
-    expect(db.decks).toHaveLength(3);
+    expect(db.decks).toHaveLength(4);
   });
 });
 
@@ -325,12 +325,20 @@ describe("the seeds", () => {
   it("starter's decks are the three sizes the plan asked for", () => {
     const db = seed("starter");
     /** Copies filed under one deck's categories of these kinds — the kind, because that is
-     *  what the sizes are about; the category ids are per deck. */
+     *  what the sizes are about; the category ids are per deck. **`live` only**: a size is a
+     *  fact about the deck that is sleeved up, and a plan appears on no tile and in no format
+     *  rule. Two of the four seeded decks now carry a theory list, so this filter is what the
+     *  numbers below have always meant. */
     const quantityIn = (deckId: number, kinds: string[]) =>
       db.deckCards
         .filter((dc) => {
           const category = db.deckCategories.find((c) => c.id === dc.categoryId);
-          return dc.deckId === deckId && category !== undefined && kinds.includes(category.kind);
+          return (
+            dc.deckId === deckId &&
+            dc.variant === "live" &&
+            category !== undefined &&
+            kinds.includes(category.kind)
+          );
         })
         .reduce((n, dc) => n + dc.quantity, 0);
 
@@ -533,19 +541,45 @@ describe("the seeded rows agree with the cards they name", () => {
     }
   });
 
-  it("every deck owns the five categories the v8 migration leaves it, and no more", () => {
+  /**
+   * The three migrated decks own exactly the five rows schema v8's migration leaves them, and
+   * the fourth owns the shape a deck the app makes **today** has.
+   *
+   * Both are real and the split is deliberate: `create_deck` seeds the four predefined at 0–3
+   * and every `main` category arrives later, by name, from the first add — so a deck made today
+   * has no "Main deck" at all and any number of piles the reader named. A fixture with only the
+   * migrated shape would let a story be written against the accident that its main pile sorts
+   * second and is called that.
+   */
+  it("every deck owns the categories its own shape gives it, and no more", () => {
+    const migrated = [
+      ["commander", "Commander", true, 0],
+      ["main", "Main deck", true, 1],
+      ["side", "Sideboard", true, 2],
+      ["companion", "Companion", true, 3],
+      // Seeded off, which is the whole of what makes a Maybeboard special.
+      ["maybe", "Maybeboard", false, 4],
+    ];
     for (const name of names) {
       const db = seed(name);
       for (const deck of db.decks) {
         const mine = db.deckCategories.filter((c) => c.deckId === deck.id);
-        expect(mine.map((c) => [c.kind, c.name, c.isActive, c.sortOrder])).toEqual([
-          ["commander", "Commander", true, 0],
-          ["main", "Main deck", true, 1],
-          ["side", "Sideboard", true, 2],
-          ["companion", "Companion", true, 3],
-          // Seeded off, which is the whole of what makes a Maybeboard special.
-          ["maybe", "Maybeboard", false, 4],
-        ]);
+        expect(mine.map((c) => [c.kind, c.name, c.isActive, c.sortOrder])).toEqual(
+          deck.id === 4
+            ? [
+                ["commander", "Commander", true, 0],
+                ["side", "Sideboard", true, 1],
+                ["companion", "Companion", true, 2],
+                ["maybe", "Maybeboard", false, 3],
+                ["main", "Ramp", true, 4],
+                ["main", "Card advantage", true, 5],
+                // A pile the *reader* made and switched off. `isActive` is the whole of
+                // "counts toward nothing", and nothing downstream reads `kind` for it — which
+                // is what makes this row behave exactly like the Maybeboard above it.
+                ["main", "Cut list", false, 6],
+              ]
+            : migrated,
+        );
       }
       // Ids are unique across the store, not per deck: `categoryById` searches one table.
       const ids = db.deckCategories.map((c) => c.id);
@@ -553,13 +587,25 @@ describe("the seeded rows agree with the cards they name", () => {
     }
   });
 
+  /**
+   * Every seeded cover names a printing the corpus still has — **or names none at all**, which
+   * is the one deck showing a cover of the reader's own.
+   *
+   * `coverCardId` and `coverKind` are separate columns because a deck may carry both, and
+   * `coverArtist` follows the *card id*: an uploaded picture has no Scryfall illustrator, so a
+   * deck that has only ever had one credits nobody. That is deck 4, and it is the only null.
+   */
   it("starter's cover cards are printings the corpus still has", () => {
     const db = seed("starter");
     const known = new Set(db.cards.map((c) => c.id));
     for (const deck of db.decks) {
-      expect(deck.coverCardId).not.toBeNull();
-      expect(known.has(deck.coverCardId!)).toBe(true);
+      if (deck.coverCardId === null) {
+        expect(deck.coverKind).toBe("custom");
+        continue;
+      }
+      expect(known.has(deck.coverCardId)).toBe(true);
     }
+    expect(db.decks.filter((d) => d.coverCardId === null).map((d) => d.id)).toEqual([4]);
   });
 
   it("the corpus keys the seeds are written against are unique", () => {

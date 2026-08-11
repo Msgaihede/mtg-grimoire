@@ -31,9 +31,19 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { CLOCK_BASE, makeDb, neverCheckedUpdate } from "./db";
-import type { FakeDb, FakeDeck, FakeDeckCard, FakeDeckCategory, FakeEntry, FakeWish } from "./db";
+import type {
+  FakeDb,
+  FakeDeck,
+  FakeDeckAudit,
+  FakeDeckCard,
+  FakeDeckCategory,
+  FakeDeckFolder,
+  FakeDeckTag,
+  FakeEntry,
+  FakeWish,
+} from "./db";
 import { DECK_CATEGORIES, printing } from "./fixtures";
-import type { CategoryKind } from "@/lib/ipc";
+import type { CategoryKind, DeckAuditKind, DeckVariant } from "@/lib/ipc";
 
 export type SeedName = "empty" | "starter" | "needsReview" | "large";
 
@@ -155,23 +165,27 @@ function anyPrintingWish(
 }
 
 /**
- * Five `deck_categories` rows per deck, which is what schema v8's migration leaves every deck
- * that predates it: one built out of each zone that held cards, plus whichever of the four
- * predefined ones that first pass missed.
+ * The categories of all four seeded decks, in **two different shapes**, because the app has two.
  *
- * All three seeded decks hold `main` cards, so all three come out of that migration with the
- * same five — `DECK_CATEGORIES`, sort orders and all. **A deck the app makes today is in the
- * other shape**: `create_deck` seeds the four predefined at 0–3 and every `main` category
- * arrives later, by name, from the first add. Both are real; a *seeded* world is the first,
- * which is why the Commander column sorts ahead of the main deck here.
+ * Decks 1–3 get the five rows schema v8's migration leaves a deck that predates it: one built
+ * out of each zone that held cards, plus whichever of the four predefined ones that first pass
+ * missed. All three hold `main` cards, so all three come out with the same five —
+ * `DECK_CATEGORIES`, sort orders and all, which is why the Commander column sorts ahead of the
+ * main deck there.
  *
- * Ids are handed out deck by deck, so category 1 is deck 1's Commander and category 6 is deck
- * 2's. Nothing outside this file may assume that arithmetic — {@link categoryOf} is how a row
- * finds its category.
+ * **Deck 4 is in the shape a deck the app makes today is in**: `create_deck` seeds the four
+ * predefined at 0–3, and every `main` category arrives later, by name, from the first add. So
+ * it has no "Main deck" at all and three piles the reader named instead. Both shapes are real,
+ * and having one of each is what stops a story from being written against the accident of the
+ * older one.
+ *
+ * Ids are handed out deck by deck from one sequence, so category 1 is deck 1's Commander and
+ * category 6 is deck 2's. Nothing outside this file may assume that arithmetic —
+ * {@link categoryOf} and {@link categoryNamed} are how a row finds its category.
  */
-function starterCategories(deckIds: number[]): FakeDeckCategory[] {
+function starterCategories(): FakeDeckCategory[] {
   const next = ids();
-  return deckIds.flatMap((deckId) =>
+  const migrated = [1, 2, 3].flatMap((deckId) =>
     DECK_CATEGORIES.map((c) => ({
       id: next(),
       deckId,
@@ -181,11 +195,38 @@ function starterCategories(deckIds: number[]): FakeDeckCategory[] {
       sortOrder: c.sortOrder,
     })),
   );
+  /** Deck 4's, `(kind, name, isActive)` in `sortOrder` — the four predefined first, because
+   *  `create_deck` writes them before the reader has added anything. */
+  const testbed: [CategoryKind, string, boolean][] = [
+    ["commander", "Commander", true],
+    ["side", "Sideboard", true],
+    ["companion", "Companion", true],
+    ["maybe", "Maybeboard", false],
+    ["main", "Ramp", true],
+    ["main", "Card advantage", true],
+    // **The point of the whole fixture.** A pile the *reader* made and switched off, which
+    // counts toward nothing — no size, no copy limit, no legality check — and claims no copies,
+    // exactly as the Maybeboard above it does. Nothing in the engine, the allocator or the
+    // stats knows which of the two is which, and the illegal card filed here is how a story can
+    // show that: switch it on and the deck reports a banned card.
+    ["main", "Cut list", false],
+  ];
+  return [
+    ...migrated,
+    ...testbed.map(([kind, name, isActive], sortOrder) => ({
+      id: next(),
+      deckId: 4,
+      name,
+      kind,
+      isActive,
+      sortOrder,
+    })),
+  ];
 }
 
-/** One deck's category of a given kind. Every seeded deck has exactly one of each of the five
- *  — a *user's* deck may own any number of `main` ones, which is why this throws rather than
- *  taking the first match of many. */
+/** One deck's category of a given kind. Decks 1–3 have exactly one of each of the five, which
+ *  is why this throws rather than taking the first match of many — deck 4 owns three `main`
+ *  categories and is addressed with {@link categoryNamed} instead. */
 function categoryOf(
   categories: FakeDeckCategory[],
   deckId: number,
@@ -194,6 +235,18 @@ function categoryOf(
   const found = categories.filter((c) => c.deckId === deckId && c.kind === kind);
   if (found.length !== 1) throw new Error(`Deck ${deckId} has ${found.length} ${kind} categories`);
   return found[0];
+}
+
+/** One deck's category by name — `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so this is exact
+ *  wherever {@link categoryOf} is ambiguous. */
+function categoryNamed(
+  categories: FakeDeckCategory[],
+  deckId: number,
+  name: string,
+): FakeDeckCategory {
+  const found = categories.find((c) => c.deckId === deckId && c.name === name);
+  if (!found) throw new Error(`Deck ${deckId} has no category called ${name}`);
+  return found;
 }
 
 /** A deck row, filed under one of its own deck's categories — which is what schema v8 replaced
@@ -345,7 +398,8 @@ function starterWishes(): FakeWish[] {
 }
 
 /**
- * Three decks: a Modern draft, a built Commander deck, and an archived one.
+ * Four decks: a Modern draft, a built Commander deck, an archived one, and the deck schema v8
+ * is *about*.
  *
  * `updatedAt` is staggered and every value is **below** `CLOCK_BASE`, for two reasons. The
  * gallery sorts `archived` last then `updated_at DESC`, so the order here is the order a
@@ -355,9 +409,34 @@ function starterWishes(): FakeWish[] {
 const HOUR = 3_600;
 const DAY = 86_400;
 
+/**
+ * The folder the fourth deck is filed in — and the reason decks 1–3 stay at the **root**.
+ *
+ * The gallery draws the folder it is standing in, so a deck filed away is not on the wall the
+ * reader opens on. Keeping the first three unfiled is what leaves every gallery story about
+ * them saying exactly what it said before folders existed, while
+ * {@link starterFolders} still gives the tree something real to draw and
+ * `deck_set_folder` something real to move between.
+ */
+const FILED_DECK_FOLDER = 2;
+
 function starterDecks(): FakeDeck[] {
+  /** The v8 columns default to their DDL values, so a deck below says only what is unusual
+   *  about it. Deck 4 spells all four out and is written without this. */
+  const deck = (
+    over: Omit<FakeDeck, "coverKind" | "folderId" | "notes" | "theoryEnabled"> &
+      Partial<Pick<FakeDeck, "coverKind" | "folderId" | "notes" | "theoryEnabled">>,
+  ): FakeDeck => ({
+    coverKind: "card_art",
+    folderId: null,
+    notes: null,
+    // Off on the first three: the Live/Theory control **is** this boolean, and a deck that
+    // draws one is a deck every story about it has to say which list it is looking at.
+    theoryEnabled: false,
+    ...over,
+  });
   return [
-    {
+    deck({
       id: 1,
       name: "Modern Goodstuff",
       formatKey: "modern",
@@ -368,8 +447,8 @@ function starterDecks(): FakeDeck[] {
       isBuilt: false,
       archived: false,
       updatedAt: CLOCK_BASE - HOUR,
-    },
-    {
+    }),
+    deck({
       id: 2,
       name: "Kenrith Two-Drops",
       formatKey: "commander",
@@ -383,8 +462,8 @@ function starterDecks(): FakeDeck[] {
       isBuilt: true,
       archived: false,
       updatedAt: CLOCK_BASE - DAY,
-    },
-    {
+    }),
+    deck({
       id: 3,
       name: "Old School 93/94",
       formatKey: "oldschool",
@@ -392,8 +471,61 @@ function starterDecks(): FakeDeck[] {
       coverCardId: printing("lea", "232").id,
       isBuilt: false,
       archived: true,
+      // **A plan that is an exact copy of the deck**, which is not a degenerate fixture: it is
+      // the state `theoryEnabled: true` *produces*, because switching the list on seeds it from
+      // live. So this is the deck whose two lists genuinely agree — the answer
+      // `deck_theory_diff` gives when there is nothing to buy, which is a sentence rather than a
+      // blank panel. An archived deck is the cheapest place to keep it: nothing else opens it.
+      theoryEnabled: true,
       updatedAt: CLOCK_BASE - 30 * DAY,
+    }),
+    {
+      id: 4,
+      name: "Rhystic Testbed",
+      formatKey: "commander",
+      description: "The plan beside the deck: a theory list, a pile switched off, two labels.",
+      // **The one deck showing a cover of the reader's own**, and the only seeded deck with no
+      // `coverCardId` at all — which is exactly why it credits nobody: `coverArtist` follows the
+      // card id and an uploaded picture has no Scryfall illustrator to name.
+      //
+      // A deck carrying *both* covers at once is the commoner state and is deliberately not
+      // seeded: it is reachable through `deck_set_cover_image`, which is the path a reader
+      // actually takes to it, and seeding one here would put a card-art credit on the folder
+      // card of every gallery story that has nothing to do with covers. There is no
+      // `cover/<deckId>` route on the fake image handler either, so what a tile draws for this
+      // is the no-cover affordance — the state, not the bytes, is what this seeds.
+      coverCardId: null,
+      coverKind: "custom",
+      isBuilt: false,
+      archived: false,
+      // Filed, so the root wall is still the three decks every gallery story was written
+      // against — see {@link FILED_DECK_FOLDER}.
+      folderId: FILED_DECK_FOLDER,
+      notes:
+        "Bracket 3, so two game changers is the budget. The Cut list is switched off rather " +
+        "than emptied — the cards are still there when I change my mind.",
+      // **The one deck with a plan.** Everything the theory list is for is only reachable from
+      // a deck that has one: the editor's Live/Theory control, `deck_theory_diff`, and the two
+      // theory commands.
+      theoryEnabled: true,
+      updatedAt: CLOCK_BASE - 2 * HOUR,
     },
+  ];
+}
+
+/**
+ * The filing tree: two roots and one child.
+ *
+ * Flat rows, exactly as `deck_folders` is — the tree is the reader's to build from `parentId`,
+ * and this shape is the smallest one that makes that worth doing. `Ideas` is empty on purpose:
+ * an empty folder is a real thing a reader has, and a tree that only ever drew folders with
+ * decks in them would never show the state a new folder starts in.
+ */
+function starterFolders(): FakeDeckFolder[] {
+  return [
+    { id: 1, parentId: null, name: "Constructed", sortOrder: 0 },
+    { id: FILED_DECK_FOLDER, parentId: 1, name: "Commander", sortOrder: 0 },
+    { id: 3, parentId: null, name: "Ideas", sortOrder: 1 },
   ];
 }
 
@@ -492,20 +624,247 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
     main(3, printing("lea", "47"), 1),
     main(3, printing("lea", "161"), 4),
     main(3, printing("lea", "288"), 16),
+    // Its plan, copy for copy — what `seed_from_live` leaves behind, and the only pair of lists
+    // in any seed that `deck_theory_diff` answers **nothing** about.
+    ...[
+      [printing("lea", "232"), 1],
+      [printing("lea", "47"), 1],
+      [printing("lea", "161"), 4],
+      [printing("lea", "288"), 16],
+    ].map(([card, quantity]) =>
+      deckCard(next(), 3, card as FakeCard, categoryOf(categories, 3, "main"), quantity as number, {
+        variant: "theory",
+      }),
+    ),
+  ];
+}
+
+/**
+ * Deck 4's two lists — **the only rows in any seed with a `theory` variant**, and the only ones
+ * carrying a tag.
+ *
+ * Everything schema v8 added is reachable from this one deck, and each piece is here to be seen
+ * rather than to be counted:
+ *
+ * * **A real difference between the two lists.** The plan wants a Smuggler's Copter and a Jace
+ *   the deck does not have, and wants *one* Sol Ring where the deck holds two — so
+ *   `deck_theory_diff` answers two rows and not three: what live has and theory dropped is a
+ *   cut the reader already made, and this list runs one direction only.
+ * * **A card with a rule violation.** Two Sol Rings in a singleton format, which the engine
+ *   reports against the card. The plan is the fix, which is what a plan is for.
+ * * **Two game changers**, Rhystic Study and Consecrated Sphinx, so the editor's game-changer
+ *   figure is a number rather than a zero.
+ * * **A card in a switched-off pile the reader named.** Black Lotus is `commander: "banned"`,
+ *   and filed under the inactive "Cut list" it produces no issue at all — the same silence the
+ *   Maybeboard gives, from a category with no special kind. Switch it on and the deck reports a
+ *   banned card.
+ * * **A tagged card.** One label on one row; the deck's other label is worn by nothing, which
+ *   is the state `DeckDetail.tags` exists to describe — a palette exists whether or not a row
+ *   is using it.
+ */
+function testbedDeckCards(
+  categories: FakeDeckCategory[],
+  tags: FakeDeckTag[],
+  startId: number,
+): FakeDeckCard[] {
+  let id = startId;
+  const cut = tags.find((t) => t.deckId === 4 && t.name === "Cut candidate")!;
+  const filed = (
+    card: FakeCard,
+    name: string,
+    quantity: number,
+    variant: DeckVariant,
+    over: Partial<FakeDeckCard> = {},
+  ) =>
+    deckCard(id++, 4, card, categoryNamed(categories, 4, name), quantity, { variant, ...over });
+
+  return [
+    // --- live: what is sleeved up -------------------------------------------------------
+    filed(printing("eld", "303"), "Commander", 1, "live"),
+    // Two copies in a singleton format, wearing the label that says the reader knows.
+    filed(printing("c21", "263"), "Ramp", 2, "live", { tagId: cut.id }),
+    filed(printing("pcy", "45"), "Card advantage", 1, "live"),
+    filed(printing("mp2", "8"), "Card advantage", 1, "live"),
+    // Banned in Commander, and silent because the pile it is in is switched off.
+    filed(printing("lea", "232"), "Cut list", 1, "live"),
+
+    // --- theory: the plan ---------------------------------------------------------------
+    filed(printing("eld", "303"), "Commander", 1, "theory"),
+    // One, not two: the plan is where the copy limit gets fixed. And **not a diff row** — a
+    // card live has more of is a cut the reader already made, which this list does not carry.
+    filed(printing("c21", "263"), "Ramp", 1, "theory"),
+    // **Wanted in an active pile while the live copy sits in the switched-off one**, which is
+    // the case that proves the exclusion runs on *both* sides: the Cut list's Black Lotus is
+    // not "held", so the plan is short of one. It is also the corpus's only unpriced card —
+    // `lea` Black Lotus is quoted in euros and in nothing else — so this is the row whose cost
+    // a total cannot count, and the figure says so rather than rounding it to zero.
+    filed(printing("lea", "232"), "Ramp", 1, "theory"),
+    // Wanted and not held. The collection records this printing without holding a copy, so it
+    // reads no spare either — a zero that came from the real arithmetic.
+    filed(printing("kld", "235"), "Ramp", 2, "theory"),
+    filed(printing("mh2", "259"), "Ramp", 1, "theory"),
+    filed(printing("pcy", "45"), "Card advantage", 1, "theory"),
+    filed(printing("mp2", "8"), "Card advantage", 1, "theory"),
+    filed(printing("wwk", "31"), "Card advantage", 1, "theory"),
+  ];
+}
+
+/**
+ * Two labels on the deck that has a plan, and two on the archived deck.
+ *
+ * The archived deck's exist for `deck_tag_suggestions` and for nothing else: that command is
+ * **global**, grouping on the `(name, colour)` pair across every deck and answering most-used
+ * first, so a palette that came from one deck could never show the ordering it is built around.
+ * Two decks spelling "Cut candidate" the same way is what puts it above the other two, and
+ * `Budget swap` is the one name deck 4 has *not* used — so the panel opened on deck 4 has
+ * exactly one offer to make, which is the state a suggestion list is worth drawing in.
+ */
+function starterTags(): FakeDeckTag[] {
+  return [
+    { id: 1, deckId: 3, name: "Cut candidate", color: "ember" },
+    { id: 2, deckId: 3, name: "Budget swap", color: "moss" },
+    { id: 3, deckId: 4, name: "Cut candidate", color: "ember" },
+    // Worn by no row. A tag is a label the reader made, and it exists before anything is
+    // wearing it — which is the state a palette has to be able to draw.
+    { id: 4, deckId: 4, name: "Combo piece", color: "gold" },
+  ];
+}
+
+/**
+ * A timestamp `daysAgo` days back at a fixed local hour — **the one clock in this file that is
+ * not {@link CLOCK_BASE}**, and the exception is forced.
+ *
+ * Every other timestamp here is an *ordering* number and `db.ts`'s simplification 8 says so:
+ * nothing renders one as a date. `deck_audit.at` is the exception, because `auditText`'s day
+ * grouping renders exactly that — so a history dated from a fixed instant in the past would
+ * file every row under one absolute heading and put "Today" and "Yesterday" out of reach.
+ * A fixed *hour* rather than an offset in seconds, because an offset crosses midnight and files
+ * a story's entries under the wrong day whenever the catalogue is opened late.
+ */
+function daysAgo(days: number, hour: number, minute: number): number {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(hour, minute, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
+
+/**
+ * What has happened to the seeded decks — **the past their writes wrote**, which is what makes
+ * a drawer opened on the first frame of a story show a history rather than a blank column.
+ * Every write in `db.ts` appends to this same table, so a change made during a story lands
+ * above these under "Today".
+ *
+ * **Deck 4 carries a week of building**, three days of three different shapes: one that gained
+ * and cut, one that only cut, and the day the deck was made. Every kind is represented, because
+ * the drawer's filter chips are only worth pressing if there is something behind each of them.
+ *
+ * **Deck 3 carries rows written by a build that knew more than this one** — a `kind` this app
+ * has never met and a payload it cannot parse. That is not a curiosity: a database outlives the
+ * app that wrote it, so this build may be older *or* newer than the one that wrote a row, and
+ * `auditText.ts` is total over both. An archived deck is the honest place for it.
+ *
+ * **Decks 1 and 2 carry none**, which is a state too: the drawer's empty column, and the one a
+ * reader meets on a deck they have not edited since the table existed.
+ */
+function starterAudit(): FakeDeckAudit[] {
+  let id = 0;
+  const row = (
+    deckId: number,
+    kind: DeckAuditKind,
+    at: number,
+    payload: string,
+    over: Partial<FakeDeckAudit> = {},
+  ): FakeDeckAudit => ({
+    id: (id += 1),
+    deckId,
+    at,
+    variant: "live",
+    kind,
+    cardId: null,
+    cardName: null,
+    payload,
+    delta: 0,
+    ...over,
+  });
+  /** A row about one printing, named as the backend denormalises it — the card's own name,
+   *  copied at write time, which is the one name a history line keeps when the printing goes. */
+  const card = (
+    deckId: number,
+    kind: DeckAuditKind,
+    at: number,
+    setCode: string,
+    collectorNumber: string,
+    payload: string,
+    delta: number,
+  ): FakeDeckAudit => {
+    const p = printing(setCode, collectorNumber);
+    return row(deckId, kind, at, payload, { cardId: p.id, cardName: p.name, delta });
+  };
+
+  return [
+    // --- deck 4: a week of building, oldest first (the read sorts it) --------------------
+    row(4, "folder", daysAgo(6, 18, 0), '{"action":"move","folder":"Constructed › Commander"}'),
+    row(4, "deck", daysAgo(6, 18, 1), '{"field":"format","from":"casual","to":"commander"}'),
+    card(4, "add", daysAgo(6, 18, 2), "eld", "303", '{"category":"Commander","quantity":1}', 1),
+    // The one `deck`-kind row that can move the day header's arithmetic, and by five — every
+    // *other* nonzero delta in this table belongs to a card-shaped kind. `copy_from_live` seeds
+    // the plan and carries the copies it wrote, in the payload and in `delta` both.
+    row(4, "deck", daysAgo(6, 18, 3), '{"field":"theory","copied":5}', {
+      variant: "theory",
+      delta: 5,
+    }),
+
+    row(4, "category", daysAgo(1, 20, 15), '{"action":"deactivate","name":"Cut list"}'),
+    // The one shape a `quantity` row takes in a singleton deck: basic lands, which CR 100.2a
+    // exempts from every copy limit.
+    card(4, "quantity", daysAgo(1, 22, 24), "lea", "288", '{"category":"Ramp","from":3,"to":7}', 4),
+    card(4, "remove", daysAgo(1, 22, 31), "isd", "51", '{"category":"Ramp","quantity":1}', -1),
+
+    card(4, "tag", daysAgo(0, 11, 4), "c21", "263", '{"tag":"Cut candidate","previous":null}', 0),
+    row(
+      4,
+      "category",
+      daysAgo(0, 11, 20),
+      '{"action":"rename","name":"Card advantage","previousName":"Value"}',
+    ),
+    card(4, "remove", daysAgo(0, 13, 51), "mp2", "8", '{"category":"Draw","reason":"cut for the curve"}', -1),
+    card(4, "swap", daysAgo(0, 13, 58), "c21", "263", '{"fromSet":"c21","toSet":"sld","folded":true}', 0),
+    card(4, "move", daysAgo(0, 14, 9), "avr", "6", '{"from":"Creature","to":"Maybeboard"}', 0),
+    card(4, "add", daysAgo(0, 14, 12), "kld", "235", '{"category":"Ramp","quantity":1}', 1),
+
+    // --- deck 3: written by a build that knew more than this one -------------------------
+    card(3, "add", daysAgo(0, 15, 55), "mh2", "138", '{"category":"Main deck","quantity":1}', 1),
+    // A payload that is not JSON at all. `auditText.ts` degrades to the shortest honest
+    // sentence rather than throwing, and the row keeps its date, its delta and its place.
+    row(3, "category", daysAgo(0, 16, 12), "{oh dear"),
+    // A kind this build has never heard of, which lands in the drawer's sixth chip — the one
+    // that exists only when such a row does. A row that matched no chip and quietly vanished
+    // would be a log with a hole in it.
+    row(3, "teleported" as DeckAuditKind, daysAgo(0, 16, 40), '{"whither":"the shadow realm"}', {
+      delta: 3,
+    }),
   ];
 }
 
 function starterSeed(): FakeDb {
   const decks = starterDecks();
-  const deckCategories = starterCategories(decks.map((d) => d.id));
+  const deckCategories = starterCategories();
+  const deckTags = starterTags();
+  const migrated = starterDeckCards(deckCategories);
   return makeDb({
     collectionEntries: starterEntries(),
     wishlistEntries: starterWishes(),
     decks,
+    deckFolders: starterFolders(),
     deckCategories,
-    // No tags: a tag is a label the user puts on, and no seed has anything to say by putting
-    // one on. `deck_tags` is empty in every world, and `DeckDetail.tags` with it.
-    deckCards: starterDeckCards(deckCategories),
+    deckTags,
+    // One id sequence over both halves, `INTEGER PRIMARY KEY`'s own behaviour: deck 4's rows
+    // continue where decks 1–3's stopped rather than starting again and colliding.
+    deckCards: [
+      ...migrated,
+      ...testbedDeckCards(deckCategories, deckTags, migrated.length + 1),
+    ],
+    deckAudit: starterAudit(),
   });
 }
 

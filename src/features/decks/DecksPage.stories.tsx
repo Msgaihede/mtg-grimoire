@@ -65,26 +65,25 @@ const meta = {
           "reader is standing in — its sub-folders as dashed cards, then its decks as the art " +
           "they were built around. No colour anywhere that is not a card's own: a deck is " +
           "picked by looking at it.\n\n" +
-          "**The folder half of this screen cannot be storied yet, and the tree says so on " +
-          "every story below.** `.storybook/fake/` answers none of the five `deck_folder_*` " +
-          "commands (measured 2026-08-10: `db.ts` carries `folderId: null` on a deck row and " +
-          "nothing else), so `deck_folder_list` throws the fake's own “No fake handler " +
-          "registered” and the tree draws its refusal line. That line is the *correct* " +
-          "behaviour for a refused folder list and {@link FoldersUnavailable} is the story " +
-          "about it — but the tree, the folder cards, the drop targets and the two move " +
-          "pickers are all covered by `DecksPage.test.tsx` and by nothing here until the fake " +
-          "learns the commands.\n\n" +
+          "**The folder half is real here now.** The fake answers all five `deck_folder_*` " +
+          "commands and `deck_set_folder`, and `seeds.ts` carries two root folders and a child " +
+          "— so the tree, the folder cards and the counts are all driven rather than described. " +
+          "{@link Folders} is the story about the shape; {@link FoldersUnavailable} is the one " +
+          "about a refused read, which now needs the `deckMeta` fault rather than a missing " +
+          "handler.\n\n" +
           "**A failed read is a `status`; a refused write is an `alert`.** The wall's " +
           "“Reading your decks…” line and the tree's refusal are the first kind, the " +
-          "“Could not change your decks” banner the second — which is why the folder tree " +
-          "shouting on every story below does not make {@link Busy}'s assertion ambiguous.\n\n" +
-          "Driven end to end by `.storybook/fake/`. **The three seeded decks are the three " +
-          'states a gallery has** — measured 2026-08-10 over `readHandlers(seed("starter")).' +
-          "deck_list()`, which answers them in this order: `Modern Goodstuff` (Modern, 60 " +
-          "cards, cover art by Simon Dominic), `Kenrith Two-Drops` (Commander, 100, Kieran " +
-          "Yanner) and `Old School 93/94` (Old School, 22, Christopher Rush), the last one " +
-          "**archived**. `deck::list_decks` sorts archived last, then most recently touched " +
-          "first, so that order is the wall's.\n\n" +
+          "“Could not change your decks” banner the second — which is what keeps " +
+          "{@link Busy}'s assertion unambiguous.\n\n" +
+          "Driven end to end by `.storybook/fake/`. **Four seeded decks, and the wall shows " +
+          'three** — measured 2026-08-11 over `readHandlers(seed("starter")).deck_list()`, ' +
+          "which answers them in this order: `Modern Goodstuff` (Modern, 60 cards, cover art " +
+          "by Simon Dominic), `Rhystic Testbed` (Commander, 5, no cover art), `Kenrith " +
+          "Two-Drops` (Commander, 100, Kieran Yanner) and `Old School 93/94` (Old School, 22, " +
+          "Christopher Rush), the last one **archived**. `deck::list_decks` sorts archived " +
+          "last, then most recently touched first, so that order is the wall's. The Testbed is " +
+          "filed under `Constructed › Commander`, so the wall the reader opens on is the other " +
+          "three: **a wall is the drawer you are standing in**, not an inventory.\n\n" +
           "**A tile's count is not the deck's row count.** `cardCount` is summed over " +
           "`SIZE_KINDS` — the `main` and `commander` kinds, in categories that are switched " +
           "on (`db.ts:1017-1023`, mirroring `DeckRow.cardCount`) — so the Modern deck's 15 " +
@@ -291,28 +290,67 @@ export const NoCoverArtist: Story = {
 };
 
 /**
+ * The tree, filed and standing at the root.
+ *
+ * Two roots and a child, and a deck in one of them: `Constructed › Commander` holds the fourth
+ * seeded deck, `Ideas` holds nothing at all. The empty one is not an oversight — a folder starts
+ * empty, and a tree that only ever drew folders with decks in them would never show the state a
+ * reader meets the moment they make one.
+ *
+ * **The wall is the drawer the reader is standing in, not everything they own.** Standing at the
+ * root, `Rhystic Testbed` is not on it — it is inside `Constructed`, which is on it as a dashed
+ * card with its member count. The count in the tree's own root row is the other number, and the
+ * two disagreeing is the whole point of having both.
+ */
+export const Folders: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = await canvas.findByRole("navigation", { name: "Folders" });
+
+    // Every deck the reader has, counted once, whichever drawer it is in.
+    await expect(within(tree).getByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
+    await expect(within(tree).getByRole("button", { name: /^Constructed/ })).toBeVisible();
+    await expect(within(tree).getByRole("button", { name: /^Ideas/ })).toBeVisible();
+
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    // The two unfiled decks, and the folder standing in for the filed one.
+    await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
+    await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
+    await expect(within(wall).queryByText("Rhystic Testbed")).toBeNull();
+    await expect(
+      within(wall).getByRole("button", { name: "Constructed folder, 1 deck" }),
+    ).toBeVisible();
+    // An empty folder says so rather than drawing a blank strip.
+    await expect(within(wall).getByText("Empty")).toBeInTheDocument();
+  },
+};
+
+/**
  * The folder list refused — **and every deck still on the wall.**
  *
- * The one folder state the fake can produce today, and it is the one worth pinning: a deck whose
- * `folderId` names a folder this screen does not have is drawn at the **top level**, the same
- * rule the tree uses for a folder whose parent is missing. Towards the root, never towards
- * nothing — hiding a tile because its drawer did not load is the one failure a filing cabinet
- * must not have, and there is nowhere else the tile could be shown.
+ * The state worth pinning: a deck whose `folderId` names a folder this screen does not have is
+ * drawn at the **top level**, the same rule the tree uses for a folder whose parent is missing.
+ * Towards the root, never towards nothing — hiding a tile because its drawer did not load is the
+ * one failure a filing cabinet must not have, and there is nowhere else the tile could be shown.
+ * So the filed deck surfaces here, beside the two that were never filed.
  *
  * The tree says what went wrong in its own corner and the wall goes on working. Both halves are
- * the claim: the sentence, and the three seeded decks still countable beside it.
+ * the claim: the sentence, and the three live decks still countable beside it.
  */
 export const FoldersUnavailable: Story = {
+  parameters: { fake: { fault: "deckMeta" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const tree = canvas.getByRole("navigation", { name: "Folders" });
     await expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible();
 
-    // Every live deck, at the top level, exactly as it would be with no folders at all.
+    // Every live deck, at the top level, exactly as it would be with no folders at all —
+    // including the one that *is* filed, whose drawer this screen cannot see.
     const wall = await canvas.findByRole("list", { name: "Your decks" });
     await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
     await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
-    await expect(within(tree).getByRole("button", { name: "All decks, 2 decks" })).toBeVisible();
+    await expect(within(wall).getByText("Rhystic Testbed")).toBeInTheDocument();
+    await expect(within(tree).getByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
     // The wall's own refusal line is a different one and is not up: nothing was written.
     await expect(canvas.queryByText(/Could not change your decks/)).toBeNull();
   },
