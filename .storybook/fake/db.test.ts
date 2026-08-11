@@ -97,6 +97,10 @@ function deck(over: Partial<FakeDeck> = {}): FakeDeck {
     formatKey: "modern",
     description: null,
     coverCardId: null,
+    coverKind: "card_art",
+    folderId: null,
+    notes: null,
+    theoryEnabled: false,
     isBuilt: false,
     archived: false,
     updatedAt: WHEN,
@@ -1709,10 +1713,21 @@ describe("the busy fault", () => {
       wish: { cardId: BOLT.id, quantity: 1 },
       deck: { name: "Burn", formatKey: "modern" },
       patch: {},
+      // Schema v8's writes: a category, a tag, a folder and a cover each name their own
+      // arguments, and every one of them is here because `invoke` matches by name.
+      name: "Ramp",
+      color: "ember",
+      isActive: false,
+      ids: [categoryId(1, "main")],
+      moveToCategoryId: null,
+      tagId: null,
+      parentId: null,
+      folderId: null,
+      sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
     };
-    // 21 commands in the table, the five above excluded: 16 that really take the lock.
+    // 38 commands in the table, the five above excluded: 33 that really take the lock.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(16);
+    expect(names).toHaveLength(33);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -1861,5 +1876,324 @@ describe("the update state", () => {
     available.update.latestSeen = available.update.remote;
     expect(() => writeHandlers(available).update_download()).toThrow(/published checksum/);
     expect(available.update.staged).toBeNull();
+  });
+});
+
+/**
+ * Schema v8's satellite tables, and only the things a story could be wrong about.
+ *
+ * Not a restatement of every handler: what is pinned here is each place the fake had to make a
+ * decision the DTO does not force — a count that is variant-scoped, a delete that folds, a
+ * cascade that reaches sideways, a comparison that is by oracle card rather than by printing.
+ */
+describe("categories, tags, folders, history and the plan", () => {
+  /** The row a write just appended. `Array.prototype.at` is out of `.storybook`'s lib target,
+   *  which `tsc -p .storybook` enforces and the app's own program does not. */
+  const lastAudit = (db: FakeDb) => db.deckAudit[db.deckAudit.length - 1];
+
+  /** `[variant, quantity]` pairs, ordered so an assertion does not depend on row order. */
+  const cmpRow = (a: (string | number)[], b: (string | number)[]) =>
+    String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0;
+
+  /** Deck 4 of the `starter` seed, which is the one deck carrying all of it. */
+  const testbed = () => {
+    const db = seed("starter");
+    return { db, r: readHandlers(db), w: writeHandlers(db) };
+  };
+
+  it("scopes a category's two numbers to the variant and its identity to neither", () => {
+    const { r } = testbed();
+    const live = r.deck_category_list({ deckId: 4, variant: "live" });
+    const theory = r.deck_category_list({ deckId: 4, variant: "theory" });
+
+    // The same seven columns either way — switching lists changes what is *in* them, never
+    // which there are, which is what keeps the headings still while a reader reads.
+    expect(theory.map((c) => c.id)).toEqual(live.map((c) => c.id));
+    const ramp = (rows: typeof live) => rows.find((c) => c.name === "Ramp")!;
+    expect(ramp(live).cardCount).toBe(2);
+    expect(ramp(theory).cardCount).toBe(5);
+    // A pile holding nothing priced reads `null` and not `0`: SQL's `sum()` of no non-NULL
+    // terms is NULL, and "nothing here has a price" is a different statement from "free".
+    expect(live.find((c) => c.name === "Cut list")!.totalPriceUsd).toBeNull();
+  });
+
+  it("refuses to rename or delete a predefined category and switches every one of them off", () => {
+    const { db, r, w } = testbed();
+    const commander = r.deck_category_list({ deckId: 4, variant: "live" })[0];
+
+    expect(() => w.deck_category_rename({ id: commander.id, name: "Generals" })).toThrow(
+      /required by this deck's rules/,
+    );
+    expect(() => w.deck_category_delete({ id: commander.id, moveToCategoryId: null })).toThrow(
+      /required by this deck's rules/,
+    );
+    // The one write every kind answers to. Deactivating the commander is legal (if unwise) and
+    // the validation engine reporting a missing commander is the honest cost.
+    expect(w.deck_category_set_active({ id: commander.id, isActive: false }).isActive).toBe(false);
+    expect(lastAudit(db)?.payload).toContain("deactivate");
+  });
+
+  it("moves a deleted category's cards in both variants, or lets them go", () => {
+    const { db, r, w } = testbed();
+    const of = (name: string) =>
+      r.deck_category_list({ deckId: 4, variant: "live" }).find((c) => c.name === name)!.id;
+    const ramp = of("Ramp");
+    const advantage = of("Card advantage");
+
+    w.deck_category_delete({ id: ramp, moveToCategoryId: advantage });
+
+    // **Both lists move**, and neither into the other: a category is not variant-scoped, so the
+    // cascade and the move both take the plan's rows along with the deck's.
+    const landed = db.deckCards.filter((dc) => dc.categoryId === advantage);
+    expect(landed.filter((dc) => dc.variant === "live").length).toBe(3);
+    expect(landed.filter((dc) => dc.variant === "theory").length).toBe(7);
+    // Counted in copies before anything moved, over both variants, which is the number the
+    // confirm dialog warned about and the only part of a deleted category nobody gets back.
+    expect(JSON.parse(lastAudit(db)!.payload)).toMatchObject({ action: "delete", cards: 7 });
+
+    // The destructive half, on a fresh copy of the fixture.
+    const second = testbed();
+    const doomed = second.r
+      .deck_category_list({ deckId: 4, variant: "live" })
+      .find((c) => c.name === "Cut list")!.id;
+    second.w.deck_category_delete({ id: doomed, moveToCategoryId: null });
+    expect(second.db.deckCards.some((dc) => dc.categoryId === doomed)).toBe(false);
+  });
+
+  /** The half the seed cannot stage — it holds no printing filed in two of deck 4's piles at
+   *  once — so it is directed rather than fixture-driven. */
+  it("folds a moved card into a row the target already holds, per variant", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, categoryKind: "main", variant: "theory", quantity: 3 }),
+        deckCard({ id: 3, categoryId: 99, quantity: 4 }),
+        deckCard({ id: 4, categoryId: 99, variant: "theory", quantity: 1 }),
+      ],
+      deckCategories: [
+        ...categoriesOf([deck({ id: 1 })]),
+        { id: 99, deckId: 1, name: "Doomed", kind: "main", isActive: true, sortOrder: 9 },
+      ],
+    });
+
+    writeHandlers(db).deck_category_delete({
+      id: 99,
+      moveToCategoryId: categoryId(1, "main"),
+    });
+
+    // One row per variant, each the sum of its own pair — never 2+3+4+1 in one row.
+    expect(
+      db.deckCards.map((dc) => [dc.variant, dc.quantity]).sort((a, b) => cmpRow(a, b)),
+    ).toEqual([
+      ["live", 6],
+      ["theory", 4],
+    ]);
+  });
+
+  it("untags a deleted tag's cards rather than deleting them", () => {
+    const { db, w } = testbed();
+    const tag = db.deckTags.find((t) => t.deckId === 4 && t.name === "Cut candidate")!;
+    expect(db.deckCards.filter((dc) => dc.tagId === tag.id).length).toBeGreaterThan(0);
+
+    w.deck_tag_delete({ id: tag.id });
+
+    expect(db.deckCards.filter((dc) => dc.tagId === tag.id)).toHaveLength(0);
+    expect(db.deckCards.filter((dc) => dc.deckId === 4)).not.toHaveLength(0);
+    // An id that resolves to nothing is a success: the caller wanted that tag gone.
+    expect(() => w.deck_tag_delete({ id: tag.id })).not.toThrow();
+  });
+
+  it("offers the tag palette of every deck, most-used first, grouped on the pair", () => {
+    const { r } = testbed();
+    // "Cut candidate" is spelled the same way by two decks; the other two are used once each
+    // and tie, so the name breaks it. No deck id anywhere in the call.
+    expect(r.deck_tag_suggestions()).toEqual([
+      { name: "Cut candidate", color: "ember" },
+      { name: "Budget swap", color: "moss" },
+      { name: "Combo piece", color: "gold" },
+    ]);
+  });
+
+  it("refuses a tag of another deck on a card, and a card that has moved", () => {
+    const { db, w } = testbed();
+    const mine = db.deckTags.find((t) => t.deckId === 4)!;
+    const theirs = db.deckTags.find((t) => t.deckId === 3)!;
+    const row = db.deckCards.find((dc) => dc.deckId === 4 && dc.variant === "live")!;
+
+    expect(() =>
+      w.deck_card_set_tag({
+        deckId: 4,
+        cardId: row.cardId,
+        categoryId: row.categoryId,
+        variant: "live",
+        tagId: theirs.id,
+      }),
+    ).toThrow(/belongs to a different deck/);
+    expect(() =>
+      w.deck_card_set_tag({
+        deckId: 4,
+        cardId: row.cardId,
+        // A category of this deck that this card is not in — the stale editor's case.
+        categoryId: db.deckCategories.find((c) => c.deckId === 4 && c.name === "Sideboard")!.id,
+        variant: "live",
+        tagId: mine.id,
+      }),
+    ).toThrow(/not in this deck's category any more/);
+  });
+
+  it("takes a folder's sub-folders and leaves its decks at the root", () => {
+    const { db, w } = testbed();
+    // Deck 4 is in `Constructed › Commander`; deleting the *parent* cascades onto the child.
+    w.deck_folder_delete({ id: 1 });
+
+    expect(db.deckFolders.map((f) => f.name)).toEqual(["Ideas"]);
+    expect(db.decks.find((d) => d.id === 4)!.folderId).toBeNull();
+    expect(db.decks).toHaveLength(4);
+  });
+
+  it("refuses a folder move that would make a cycle", () => {
+    const { w } = testbed();
+    expect(() => w.deck_folder_move({ id: 1, parentId: 1 })).toThrow(/inside itself/);
+    // Into its own descendant, which is the case a one-level check misses.
+    expect(() => w.deck_folder_move({ id: 1, parentId: 2 })).toThrow(/inside itself/);
+    expect(w.deck_folder_move({ id: 2, parentId: null }).parentId).toBeNull();
+  });
+
+  it("records a deck's filing as a folder row carrying the path, and the root as null", () => {
+    const { db, w } = testbed();
+    w.deck_set_folder({ deckId: 1, folderId: 2 });
+    expect(JSON.parse(lastAudit(db)!.payload)).toEqual({
+      action: "move",
+      // The path rather than the id: a bare number is something no reader could resolve once
+      // the folder was renamed.
+      folder: "Constructed › Commander",
+    });
+
+    w.deck_set_folder({ deckId: 1, folderId: null });
+    expect(JSON.parse(lastAudit(db)!.payload)).toEqual({ action: "move", folder: null });
+    // A deck that did not move records nothing.
+    const before = db.deckAudit.length;
+    w.deck_set_folder({ deckId: 1, folderId: null });
+    expect(db.deckAudit).toHaveLength(before);
+  });
+
+  it("clamps the history's limit at both ends and answers nothing for a deck that is gone", () => {
+    const { r } = testbed();
+    // SQLite reads a negative `LIMIT` as *no limit at all*, which is what the clamp stops.
+    expect(r.deck_audit_list({ deckId: 4, limit: -1 })).toHaveLength(1);
+    expect(r.deck_audit_list({ deckId: 4, limit: 0 })).toHaveLength(1);
+    expect(r.deck_audit_list({ deckId: 4, limit: 500 })).toHaveLength(13);
+    // The history of a deck that does not exist is nothing, not an error.
+    expect(r.deck_audit_list({ deckId: 99, limit: 10 })).toEqual([]);
+    // Newest first, and the id breaks a same-second tie.
+    const rows = r.deck_audit_list({ deckId: 4, limit: 500 });
+    expect(rows[0].at).toBeGreaterThanOrEqual(rows[1].at);
+  });
+
+  it("compares the two lists by oracle card, one direction, skipping inactive piles", () => {
+    const { r } = testbed();
+    const diff = r.deck_theory_diff({ deckId: 4 });
+
+    expect(diff.map((d) => [d.name, d.quantity])).toEqual([
+      // Live's copy is in the switched-off "Cut list", which is excluded from *both* sides —
+      // so the plan is short of one, and the row is unpriced because `lea` Black Lotus is
+      // quoted in euros and in nothing else.
+      ["Black Lotus", 1],
+      ["Smuggler's Copter", 2],
+      ["Urza's Saga", 1],
+      ["Jace, the Mind Sculptor", 1],
+    ]);
+    expect(diff[0].unitPriceUsd).toBeNull();
+    // The deck holds two Sol Rings and the plan wants one. A cut is not a purchase, so there
+    // is no row for it in either direction.
+    expect(diff.some((d) => d.name === "Sol Ring")).toBe(false);
+    // A plan that is a copy of its deck asks for nothing.
+    expect(r.deck_theory_diff({ deckId: 3 })).toEqual([]);
+  });
+
+  it("seeds the plan from the deck without overwriting what the plan already says", () => {
+    const { db, w } = testbed();
+    const ramp = db.deckCategories.find((c) => c.deckId === 4 && c.name === "Ramp")!;
+    const planned = db.deckCards.find(
+      (dc) => dc.deckId === 4 && dc.variant === "theory" && dc.categoryId === ramp.id,
+    )!;
+    const before = planned.quantity;
+
+    w.deck_theory_copy_from_live({ deckId: 4 });
+
+    // The reader's own plan for that card is untouched — `DO NOTHING`, never a fold, because
+    // topping it up with the live count would overwrite the edit the plan exists to hold.
+    expect(planned.quantity).toBe(before);
+    // The one `deck`-kind row that moves the day header's arithmetic.
+    const row = lastAudit(db)!;
+    expect(row.variant).toBe("theory");
+    expect(row.delta).toBeGreaterThan(0);
+    expect(JSON.parse(row.payload)).toMatchObject({ field: "theory", copied: row.delta });
+  });
+
+  it("wishes for the plan's shortfall without netting out the spare copies", () => {
+    const { db, r, w } = testbed();
+    const diff = r.deck_theory_diff({ deckId: 4 });
+    const lotus = diff.find((d) => d.name === "Black Lotus")!;
+    // The row a naive subtraction would drop: wanted 1, and one spare in the box.
+    expect(lotus.ownedSpare).toBe(1);
+
+    expect(w.deck_theory_missing_to_wishlist({ deckId: 4 })).toBe(diff.length);
+
+    const wish = db.wishlistEntries.find((x) => x.name === "Black Lotus")!;
+    // Any printing, always: a shopping list is not a printing preference.
+    expect(wish.cardId).toBeNull();
+    expect(wish.quantity).toBeGreaterThanOrEqual(1);
+  });
+
+  it("switching the plan on seeds it from live, and switching it off keeps every row", () => {
+    const { db, w } = testbed();
+    const rowsOf = (variant: string) =>
+      db.deckCards.filter((dc) => dc.deckId === 1 && dc.variant === variant).length;
+    const live = rowsOf("live");
+    expect(rowsOf("theory")).toBe(0);
+
+    // Deck 1 has no plan at all, so the flag fills it in the same write — an empty plan beside
+    // a full deck reads as data loss rather than as a blank page.
+    expect(w.deck_update({ id: 1, patch: { theoryEnabled: true } }).theoryEnabled).toBe(true);
+    expect(rowsOf("theory")).toBe(live);
+
+    // Off keeps every row: it hides a switch, it does not delete a list.
+    w.deck_update({ id: 1, patch: { theoryEnabled: false } });
+    expect(rowsOf("theory")).toBe(live);
+  });
+
+  it("puts a custom cover on without clearing the card underneath it", () => {
+    const { db, w } = testbed();
+    const row = w.deck_set_cover_image({ deckId: 1, sourcePath: "C:\\pictures\\sleeve.png" });
+
+    expect(row.coverKind).toBe("custom");
+    // Switching back to card art is `deck_update({ coverCardId })` and loses nothing either way,
+    // which is only coherent because `coverKind` is the one answer to which is showing.
+    expect(row.coverCardId).not.toBeNull();
+    expect(w.deck_update({ id: 1, patch: { coverCardId: row.coverCardId! } }).coverKind).toBe(
+      "card_art",
+    );
+    // Recorded even when both sides read `custom`: the payload does not name the file, so the
+    // two sides matching is what "a different picture" looks like from here.
+    expect(db.deckAudit.filter((a) => a.payload.includes('"field":"cover"'))).toHaveLength(2);
+  });
+
+  it("refuses every satellite read under the deckMeta fault, and the deck itself under none", () => {
+    const db = seed("starter");
+    db.fault = "deckMeta";
+    const r = readHandlers(db);
+
+    expect(() => r.deck_category_list({ deckId: 4, variant: "live" })).toThrow(/categories/);
+    expect(() => r.deck_tag_list({ deckId: 4, variant: "live" })).toThrow(/tags/);
+    expect(() => r.deck_tag_suggestions()).toThrow(/palette/);
+    expect(() => r.deck_folder_list()).toThrow(/folders/);
+    expect(() => r.deck_audit_list({ deckId: 4, limit: 10 })).toThrow(/history/);
+    expect(() => r.deck_theory_diff({ deckId: 4 })).toThrow(/theory list/);
+    // The deck is not a satellite: a screen that could not read it would not be showing a
+    // panel about it.
+    expect(r.deck_get({ id: 4, variant: "live" })).not.toBeNull();
+    expect(r.deck_list()).toHaveLength(4);
   });
 });

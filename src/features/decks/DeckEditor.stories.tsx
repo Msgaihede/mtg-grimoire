@@ -134,16 +134,20 @@ const meta = {
           '`"dragDropEnabled": false` in `tauri.conf.json`, which is embedded at compile time. ' +
           "**A green drag here would prove nothing about the real app**; that is the live CDP " +
           "pass's to prove, and `Chrome/AppShell` already exercises the payload boundary.\n\n" +
-          "Driven end to end by `.storybook/fake/`. The three seeded decks, measured 2026-08-10 " +
+          "Driven end to end by `.storybook/fake/`. The seeded decks, measured 2026-08-11 " +
           'over `readHandlers(seed("starter")).deck_get`: **deck 1 `Modern Goodstuff`** is 18 ' +
           "rows — 60 main, 15 sideboard, 2 on the Maybeboard — and validates **clean**; " +
           "**deck 2 `Kenrith Two-Drops`** is 99 main + 1 commander + 1 companion and produces " +
-          "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards. All " +
-          "three came through the v8 migration, so their five groups read Commander, Main " +
-          "deck, Sideboard, Companion, Maybeboard — a deck made *today* has only the four " +
-          "predefined ones ({@link EmptyDeck}). The categories, tags, history and theory " +
-          "commands the four overlays read are Task 19's to add to the fake, so those surfaces " +
-          "degrade honestly here rather than being staged.",
+          "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards. " +
+          "Those three came through the v8 migration, so their five groups read Commander, " +
+          "Main deck, Sideboard, Companion, Maybeboard — a deck made *today* starts with only " +
+          "the four predefined ones ({@link EmptyDeck}) and grows the rest by name. **Deck 4 " +
+          "`Rhystic Testbed`** is that second shape filled in: three piles the reader named, " +
+          "one of them switched off, two game changers, a tagged card, a copy limit broken on " +
+          "purpose and a theory list that differs from the deck. The categories, tags, history " +
+          "and theory commands the four overlays read are all the fake's now, so those " +
+          "surfaces are driven rather than degraded — see `Decks/CategoriesPanel`, " +
+          "`Decks/AuditDrawer` and `Decks/TheoryDiffDialog` for what each of them draws.",
       },
     },
   },
@@ -499,9 +503,9 @@ export const FilterAndStats: Story = {
  * hand-backs would race for the caret. A union cannot express that state; five booleans can, and
  * the failure is invisible to any test that opens one layer at a time.
  *
- * The categories drawer's own contents are Task 19's to teach the fake, so what this story
- * asserts is the *arrangement*: pressing the second trigger leaves exactly one dialog on screen,
- * and it is the second one.
+ * What this story asserts is the *arrangement* rather than either layer's contents: pressing the
+ * second trigger leaves exactly one dialog on screen, and it is the second one. The drawer's own
+ * contents are `Decks/CategoriesPanel`'s.
  */
 export const NeverTwoLayers: Story = {
   args: { deckId: 2 },

@@ -5,21 +5,17 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
 /**
  * Everything about a deck that is not the cards in it.
  *
- * **Two of this dialog's four backends are not in the fake yet, and the stories say so rather
- * than working around it.** `deck_get`, `deck_update` and `format_specs_list` are answered, so
- * the cover grid, the name, the format and the description are live here — picking art really
- * writes, and the credit line underneath the picture really changes. `deck_folder_list` and
- * `deck_set_folder` are not, so the Folder row draws its own read failure and disables the
- * move; `deck_set_cover_image` is not either. That is the honest picture of the surface today,
- * and the alternative — teaching the fake here — would mean this component's stories were the
- * one place the fake and the mirror disagreed.
+ * **Every backend on this screen is the fake's now** — `deck_get`, `deck_update`,
+ * `format_specs_list`, `deck_folder_list`, `deck_set_folder` and `deck_set_cover_image` — so
+ * picking art really writes, the credit line underneath the picture really changes, the Folder
+ * select really files the deck, and the notes field and the theory switch really stick.
  *
- * The **upload** is a third kind of gap and not the fake's to close: its picker is the
- * operating system's, so no browser can show it. See `PickerUnavailable`.
- *
- * The **notes** field and the **theory** switch are a subtler version of the same gap: the fake
- * accepts their patch and answers the row's DDL defaults, so both write and neither sticks.
- * Nothing below asserts that they do.
+ * **One gap is left, and it is not the fake's to close.** The upload's picker is the operating
+ * system's: `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and outside the
+ * app window there is nothing behind it. So the press ends in a refusal line, which is exactly
+ * what the component does when a picker cannot be opened — see {@link PickerUnavailable}. The two
+ * answers a *working* picker gives, a chosen path and a cancel, are unit-tested instead, because
+ * only the OS can produce either.
  */
 const meta = {
   title: "Decks/Settings dialog",
@@ -46,8 +42,12 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Deck 1, the Modern shell: a cover it can credit, sixty cards' worth of art to choose from,
- * and a folder row that says what it could not read.
+ * Deck 1, the Modern shell: a cover it can credit, sixty cards' worth of art to choose from, and
+ * a deck filed nowhere.
+ *
+ * "Top level" is a real answer rather than a placeholder — the select's `""` is
+ * `deckSetFolder(id, null)`, the one thing a `DeckPatch` cannot express, because
+ * `coalesce(?n, folder_id)` reads a bound NULL as "leave it".
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
@@ -58,6 +58,71 @@ export const Default: Story = {
     // credited wherever one is shown.
     await expect(canvas.getByText(/^Art by /)).toBeInTheDocument();
     await expect(canvas.getByLabelText("Format")).toHaveValue("modern");
+    await expect(canvas.getByLabelText("Folder")).toHaveValue("");
+    // The caption beside the label, not the option inside the select — both say the words, and
+    // only one of them is the deck's own state.
+    const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
+    await expect(caption.getByText("Top level")).toBeVisible();
+  },
+};
+
+/**
+ * Filing the deck, and then un-filing it.
+ *
+ * The round trip is the claim: the caption under the label is `deck.folderId` resolved against
+ * the folder list, so a path that appears there is a write that landed. The second half is the
+ * one a patch could not do — **`""` means the root**, and reaching it is why `deck_set_folder`
+ * exists as a command rather than as a `DeckPatch` field.
+ *
+ * The options are **paths**, not names: two folders may be called the same thing in different
+ * parents, and a select that offered "Commander" twice would be a control the reader cannot use.
+ */
+export const FilingTheDeck: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const select = await canvas.findByLabelText("Folder");
+    // The caption, which is the deck's own state — the select carries the same words as options.
+    const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
+
+    await userEvent.selectOptions(select, "Constructed › Commander");
+    await waitFor(async () => {
+      await expect(caption.getByText("Constructed › Commander")).toBeVisible();
+    });
+
+    await userEvent.selectOptions(select, "");
+    await waitFor(async () => {
+      await expect(caption.getByText("Top level")).toBeVisible();
+    });
+  },
+};
+
+/**
+ * The notebook and the plan switch, both of which write and stick.
+ *
+ * `notes` is **not** `description` — a caption is what the gallery tile shows and this is the
+ * long-form thing nothing else draws. And switching the theory list on **seeds it from live**
+ * in the same write when it is empty, because an empty plan beside a full deck reads as data
+ * loss rather than as a blank page; switching it off keeps every row.
+ */
+export const NotesAndTheory: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    const notes = await canvas.findByLabelText("Notes");
+    await userEvent.type(notes, "Swap the Bolts for Bowmasters when the sideboard arrives.");
+    // Blur, which is what commits a text field here.
+    await userEvent.click(canvas.getByLabelText("Name"));
+
+    // A `switch`, named by the heading beside it *and* by its own visible word — `aria-label`
+    // would replace "Disabled" with something that does not contain it, which is the WCAG 2.5.3
+    // failure a control labelled by its own text exists to avoid.
+    const theory = canvas.getByRole("switch", { name: "Theory deck Disabled" });
+    await userEvent.click(theory);
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("switch", { name: "Theory deck Enabled" })).toBeChecked();
+    });
+    await expect(notes).toHaveValue("Swap the Bolts for Bowmasters when the sideboard arrives.");
   },
 };
 
