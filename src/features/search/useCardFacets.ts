@@ -30,14 +30,25 @@ export type FacetRequest = Omit<SearchRequest, "sort" | "collapse" | "limit" | "
  * and a query that errored are three different states and all three mean "we don't know",
  * and a control that has to tell them apart is a control that will get it wrong.
  *
- * There is deliberately **no `isError` arm**, and that is a measured decision rather than an
- * omission. React Query only ever holds `data` and an error apart, never together: a failed
- * *first* fetch and a failed fetch under a *new* key both leave `data` undefined — the held
- * previous answer goes with them — so `facetsOrUndefined` already answers those. And a failed
- * background re-read of a key that is already loaded is swallowed whole (measured
- * 2026-08-11: `status: "success"`, `isError: false`, `error: null`, previous data intact), so
- * an `isError` arm could not fire there either. What that leaves standing is the right
- * behaviour anyway: those counts describe the very search still on screen.
+ * There is deliberately **no `isError` arm**, and the reason is not that it could not fire.
+ * A failed *first* fetch and a failed fetch under a *new* key both leave `data` undefined —
+ * the held previous answer goes with them — so `facetsOrUndefined` answers those on its own.
+ * A failed re-read of a key that is **already loaded** is the third case and it is different:
+ * React Query keeps the data and records the error beside it, which it names `isRefetchError`
+ * (measured 2026-08-11 against 5.101.4: cache `status: "error"`, `errorUpdateCount: 1`, data
+ * intact). That path is live here — the app's `QueryClient` runs `staleTime: 30_000`,
+ * `retry: 1` and refetch-on-focus, so a window focus or a remount re-reads a loaded facet
+ * key. An arm would have fired.
+ *
+ * It is unwanted because of what it would do when it fired. The retained answer is keyed on
+ * *that exact filter set*, so it describes the search still on screen — counts that are still
+ * true, thrown away to grey nothing over results they correctly describe. Failing open is for
+ * not knowing, and here we know.
+ *
+ * A second-order note for anyone adding a read to this function: v5 notifies on the props a
+ * render actually touched, and this one touches `data` alone. An error beside unchanged data
+ * therefore does not even re-render — reading `query.isError` here would *make* it, which is
+ * the mechanism behind the paragraph above rather than a reason for it.
  */
 export function useCardFacets(req: FacetRequest): FacetResponse | undefined {
   const query = useQuery({

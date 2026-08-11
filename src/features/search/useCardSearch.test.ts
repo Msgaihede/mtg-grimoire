@@ -86,8 +86,10 @@ describe("toggleColor", () => {
   });
 });
 
+/** One client per test, reachable from the test body so it can drive a re-read of a key that
+ *  is already loaded — the only way to reach "an answer, and an error beside it". */
+let qc: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return createElement(QueryClientProvider, { client: qc }, children);
 }
 
@@ -106,6 +108,7 @@ const lastFacetRequest = () =>
 
 describe("the facet request useCardSearch builds", () => {
   beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
     facetCards.mockReset().mockResolvedValue(READY);
   });
@@ -203,11 +206,6 @@ describe("the facet request useCardSearch builds", () => {
    * …but only while it is *in flight*. A query that failed is not a slow query: the counts it
    * was holding belong to a search the reader has since left, and greying options by them
    * would be the one failure mode this feature is not allowed to have.
-   *
-   * The complementary case is deliberately not asserted because it does not happen: a failed
-   * background re-read of a search that is *still on screen* keeps its answer, which React
-   * Query decides and `useCardFacets` documents. Those counts still describe what is being
-   * looked at.
    */
   it("drops the counts it was holding when the next facet query fails", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
@@ -217,5 +215,43 @@ describe("the facet request useCardSearch builds", () => {
     act(() => result.current.toggleColor("R"));
 
     await waitFor(() => expect(result.current.facets).toBeUndefined());
+  });
+
+  /**
+   * And the other half of that, which is the opposite answer to a failure and is meant to be.
+   *
+   * A **re-read of the search still on screen** is a case the app really reaches — the app's
+   * `QueryClient` runs `staleTime: 30_000`, `retry: 1` and refetch-on-focus — and React Query
+   * keeps the data and records the error beside it rather than clearing one for the other.
+   * The counts that survive are keyed on this exact filter set, so they still describe what
+   * the reader is looking at. Failing open is for not knowing; here we know, and throwing
+   * them away would grey nothing over results they correctly describe.
+   */
+  it("keeps the counts when a re-read of the same search fails", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.facets).toEqual(READY));
+
+    facetCards.mockRejectedValue(new Error("the index could not be read"));
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: ["cards", "facets"] });
+    });
+
+    // The re-read really happened and really failed — without this the assertion below would
+    // pass against a hook that never asked again.
+    const cached = qc.getQueryCache().findAll({ queryKey: ["cards", "facets"] });
+    expect(cached).toHaveLength(1);
+    expect(cached[0].state.status).toBe("error");
+    expect(cached[0].state.data).toEqual(READY);
+
+    // **The flush matters, and reading without it is how the first version of this comment
+    // came to say something false.** `refetchQueries` resolves when the fetch settles, which
+    // is a tick before React Query's notifier has told the observer about it — so an
+    // assertion here reads the state *before* the error, and would hold whatever the hook
+    // did with it. A hook that dropped its counts on `isError` passes without this line.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(result.current.facets).toEqual(READY);
   });
 });

@@ -282,6 +282,24 @@ fn union_sets(ix: &CardIndex, req: &SearchRequest) -> Option<BitSet> {
 /// case runs it up to 24 times over ~107 k docs and still lands two orders of magnitude
 /// inside spec §2's 100 ms budget, so [`BitSet`] needs no new operation for this.
 pub fn compute(ix: &CardIndex, req: &SearchRequest, text: Option<&BitSet>) -> FacetResponse {
+    // **An index over an empty corpus is not meaningfully ready**, and it answers exactly as
+    // a cold one does — `ready: false`, every map empty, so the UI leaves every control live.
+    //
+    // This is the *opening sync*, not a filter result. `lib.rs` spawns a build at setup, and
+    // on a first launch that build succeeds over zero rows a good ninety seconds before the
+    // corpus arrives. Counted honestly, every option is at zero and the greying rule dims the
+    // lot — and with no filter on, no `Reset all` is drawn either, so the first screen a new
+    // user sees is a filter row that is entirely dead with no visible way out. The rule is not
+    // wrong there (with no results, toggling anything changes nothing); the premise is. Zero
+    // printings in the corpus means the answer is not known yet, which is what `ready: false`
+    // is for.
+    if ix.all.count() == 0 {
+        return FacetResponse {
+            ready: false,
+            ..Default::default()
+        };
+    }
+
     let prep = Prepared {
         sets: union_sets(ix, req),
         mana: req.mana_values.as_deref().and_then(|v| union_mana(ix, v)),
@@ -376,6 +394,10 @@ fn toggle_colors(picked: &str, letter: char) -> String {
 /// control stays live — see [`super::lifecycle`], which owns why that is the only safe guess.
 /// It does not build one either: a facet request arrives on every keystroke and a build is
 /// ~767 ms.
+///
+/// There are **two** ways to get that answer and [`compute`] owns the second: no index at
+/// all, and an index over an empty corpus, which is a first launch waiting out its opening
+/// sync.
 pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse, String> {
     let Some(ix) = super::lifecycle::current(state) else {
         return Ok(FacetResponse {
@@ -782,6 +804,41 @@ mod tests {
         assert!(
             crate::index::lifecycle::current(&state).is_none(),
             "and a facet request does not spend a build"
+        );
+    }
+
+    /// The other way to be not-ready, and the one a new user meets: the index built fine, it
+    /// just built over nothing.
+    ///
+    /// `lib.rs` spawns a build at setup, so on a first launch there is a published index over
+    /// zero rows for the ~93 s the opening sync takes. Counted honestly every option is zero,
+    /// the greying rule dims all of them, and — with no filter on — no `Reset all` is drawn
+    /// to escape by. The rule holds and the app reads as broken, so the corpus being empty is
+    /// treated as "not counted yet" rather than as a result.
+    ///
+    /// The last assertion is the whole difference from the test above: this is a real index,
+    /// published, answering not-ready on its own account.
+    #[test]
+    fn an_index_over_an_empty_corpus_answers_not_ready() {
+        let state = state("empty-corpus-facets");
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            conn.execute("DELETE FROM cards", []).unwrap();
+            conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+                .unwrap();
+        }
+        crate::index::lifecycle::build_now(&state).unwrap();
+
+        let f = run_facets(&state, &req(|_| {})).unwrap();
+        assert!(!f.ready, "an opening sync is not an empty result");
+        assert_eq!(f.total, 0);
+        assert!(
+            f.sets.is_empty() && f.formats.is_empty() && f.mana_values.is_empty(),
+            "the same shape a cold answer has: empty maps, never zeroed ones"
+        );
+        assert!(
+            crate::index::lifecycle::current(&state).is_some(),
+            "and the index really was built — this is not the cold path"
         );
     }
 
