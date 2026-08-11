@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.5.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.4.0...v0.5.0) (2026-08-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **decks:** hand the frontend categories where it had zones
+* **decks:** address deck cards by category instead of zone
+
+### Features
+
+* **activity:** a provider, a registration hook, and the appearance delay ([46c7deb](https://github.com/Msgaihede/mtg-grimoire/commit/46c7deb50a4e13fd388436aacdbfe43cc4a3faac))
+* **activity:** register what the app is doing, and rank it ([f77a049](https://github.com/Msgaihede/mtg-grimoire/commit/f77a0495aaae86ed9362894334efc107a8140eff))
+* **cards:** mark foil printings on the art, and price them with a glyph ([c551fe0](https://github.com/Msgaihede/mtg-grimoire/commit/c551fe00aaaf77fa759fed4c92a00623b9085403))
+* **decks:** address deck cards by category instead of zone ([360f693](https://github.com/Msgaihede/mtg-grimoire/commit/360f693bc172f0a8f8682c05e672967e44b773b6))
+* **decks:** categories, tags and folders ([ae011b6](https://github.com/Msgaihede/mtg-grimoire/commit/ae011b6625e1575f11baa8f4cae299c3f15e5e55))
+* **decks:** custom deck cover images ([c2fb6aa](https://github.com/Msgaihede/mtg-grimoire/commit/c2fb6aad4cd379b0ecbc39607d3a5e99209c9724))
+* **decks:** deck settings, notes and cover picking ([46ca220](https://github.com/Msgaihede/mtg-grimoire/commit/46ca2209de46e92452ef3ac7840840649da06fc1))
+* **decks:** give the cards their editing controls back ([c529d46](https://github.com/Msgaihede/mtg-grimoire/commit/c529d4680cc3569d07f5a65eddc23582ff9b668e))
+* **decks:** grouping, sorting, auto-category and audit-text rules ([d0fcdaa](https://github.com/Msgaihede/mtg-grimoire/commit/d0fcdaa741dcbe47272cc6a779ae91b2b1e653ba))
+* **decks:** hand the frontend categories where it had zones ([0afd326](https://github.com/Msgaihede/mtg-grimoire/commit/0afd3266524c9c3ecee2207a386c5f90cc007234))
+* **decks:** hooks for categories, tags, folders and history ([f0a6c4d](https://github.com/Msgaihede/mtg-grimoire/commit/f0a6c4d7ace82c5b7d151d08397ff660749df912))
+* **decks:** live and theory deck variants with a difference list ([fc61e17](https://github.com/Msgaihede/mtg-grimoire/commit/fc61e170122f8f058ccb585b8827246e38c8265c))
+* **decks:** manage categories and tags ([2a2d9a0](https://github.com/Msgaihede/mtg-grimoire/commit/2a2d9a026b0a225d9f2fe07f14022eed3ce2a088))
+* **decks:** one drop-target vocabulary across the four views ([1787aa8](https://github.com/Msgaihede/mtg-grimoire/commit/1787aa8a06e02046639a799f0a56df35740b1282))
+* **decks:** organise decks into folders ([e4d988b](https://github.com/Msgaihede/mtg-grimoire/commit/e4d988bb39389047015542e5468a45b8b9070ac5))
+* **decks:** record every deck change in an audit log ([d259372](https://github.com/Msgaihede/mtg-grimoire/commit/d25937234b938213846b77dc304ccec83b501178))
+* **decks:** rename a folder, and move the folder write beside its siblings ([322c2ea](https://github.com/Msgaihede/mtg-grimoire/commit/322c2ea686ddb348cea643cfa630da2b3c98caac))
+* **decks:** stack, table, text and grid views ([45abe98](https://github.com/Msgaihede/mtg-grimoire/commit/45abe987d45da3d26fb39fba3819487c82ab2118))
+* **decks:** the card stack ([b92d5f5](https://github.com/Msgaihede/mtg-grimoire/commit/b92d5f5f3e79a250e1e790356e93c2ce8a6eb9f7))
+* **decks:** the deck history drawer ([767895f](https://github.com/Msgaihede/mtg-grimoire/commit/767895f2b6e49d9efd103b902ff528bbfd474655))
+* **decks:** the rebuilt deck editor ([ea70573](https://github.com/Msgaihede/mtg-grimoire/commit/ea70573e66f701ba4b74dc7238433f5813b2a5eb))
+* **decks:** the theory-to-live difference list ([147944a](https://github.com/Msgaihede/mtg-grimoire/commit/147944a2451a0de750cf5de3fe58d6bc8f9bb09d))
+* **errors:** record what fails, where anyone can see it (schema v9) ([1ddc24b](https://github.com/Msgaihede/mtg-grimoire/commit/1ddc24b50ad4657f455757fd378d65c39b650bf6))
+* **ipc:** mirror the category, tag, folder, audit and theory contract ([c6b505d](https://github.com/Msgaihede/mtg-grimoire/commit/c6b505d9dd3d0f9b321f2953c1009b2be49f3ce5))
+* **ribbon:** drive the activity line from the registry ([35e4385](https://github.com/Msgaihede/mtg-grimoire/commit/35e4385b149a099bd921a66bc8478aad60383950))
+* **ribbon:** say what the app is doing while the mana line fills ([0e7626d](https://github.com/Msgaihede/mtg-grimoire/commit/0e7626d9a0d25e9ed46efc07c0e80a7d5e5b4289))
+* **schema:** index cards for the collapsed search ([f4378d8](https://github.com/Msgaihede/mtg-grimoire/commit/f4378d824902db577999bd9834557b2d6f1e2fd8))
+* **schema:** v7 replaces the deck zone with user-owned categories ([25d0f5b](https://github.com/Msgaihede/mtg-grimoire/commit/25d0f5b74b3c804a881c6a511a1402e036b94e71))
+* **scryfall:** pace, back off and retry against the published API limits ([3ca03bf](https://github.com/Msgaihede/mtg-grimoire/commit/3ca03bfd82079c2e551c14cda31ed3bd51d2e307))
+* **search:** add legal_mask and widen the collapse index to cover filters ([4074c29](https://github.com/Msgaihede/mtg-grimoire/commit/4074c2922a33fce9183063af5bca0c2e7e20428f))
+* **search:** add the bitset the card index counts with ([a5a205e](https://github.com/Msgaihede/mtg-grimoire/commit/a5a205ef0e31b245eadc990750558d9ad5155a89))
+* **search:** add the facet_cards command and its mirror ([1486a4c](https://github.com/Msgaihede/mtg-grimoire/commit/1486a4c3243896de0d0a7e04d178fb4563852999))
+* **search:** build the card index at launch and after every sync ([ac78361](https://github.com/Msgaihede/mtg-grimoire/commit/ac78361129edfc2c4ef253b35716a06ce8acbe3c))
+* **search:** build the in-memory card index ([4db72a9](https://github.com/Msgaihede/mtg-grimoire/commit/4db72a921b20c332f40035573b47c375be1be92f))
+* **search:** carry a printing count and a price range on every row ([faab019](https://github.com/Msgaihede/mtg-grimoire/commit/faab01965c917c4fe9980a778fb3fa39aca2a03f))
+* **search:** collapse printings into one row per card ([bd4a8d4](https://github.com/Msgaihede/mtg-grimoire/commit/bd4a8d47c649d4fb13ea152224760a8f21104517))
+* **search:** count facets over the card index ([b3f1f2f](https://github.com/Msgaihede/mtg-grimoire/commit/b3f1f2f114e2383634a89be6bf894f3f4b085515))
+* **search:** grey the filter options this search cannot reach ([0bc4338](https://github.com/Msgaihede/mtg-grimoire/commit/0bc4338082f6127653945abc7d5da129ac5f0bca))
+* **search:** grey the filter options this search cannot reach ([79f2ab3](https://github.com/Msgaihede/mtg-grimoire/commit/79f2ab33e21cd550223c0a4a23b115d74499c3d2))
+* **search:** map Scryfall legalities onto one frozen bitmask ([09ef726](https://github.com/Msgaihede/mtg-grimoire/commit/09ef72685fc541fe56b1902c06489791c15af6a0))
+* **search:** show one row per card, with a way back to the printings ([f6792bf](https://github.com/Msgaihede/mtg-grimoire/commit/f6792bfb28878dd4507a37fd7d866c004f086965))
+* **search:** show what a collapsed row stands for ([62ba194](https://github.com/Msgaihede/mtg-grimoire/commit/62ba194421119d759a10bd0f00ef2f564e66a422))
+* **search:** sort and rank a collapsed search ([8c339cf](https://github.com/Msgaihede/mtg-grimoire/commit/8c339cf5ad5f1a8413ff105b7772fa848148a354))
+* **settings:** show the error log, with repeats folded ([da3090d](https://github.com/Msgaihede/mtg-grimoire/commit/da3090dc1d8615cfa8335d7c0395854ec077f832))
+
+
+### Bug Fixes
+
+* **cards:** make the foil sheen visible, and keep it out of the a11y tree ([eea3849](https://github.com/Msgaihede/mtg-grimoire/commit/eea3849e744e1409f93619e6c272474b42065f19))
+* **decks:** a theory list reserves nothing, even beside a live deck that reserves everything ([dfcadb7](https://github.com/Msgaihede/mtg-grimoire/commit/dfcadb761f353e3703009f2145feeaf8a1e8c21a))
+* **decks:** do not draw a cover we cannot credit ([aff05aa](https://github.com/Msgaihede/mtg-grimoire/commit/aff05aa94783fb0273d9243d2bf2f3d1b441d0e6))
+* **decks:** draw a deck's custom cover in the gallery ([9446020](https://github.com/Msgaihede/mtg-grimoire/commit/9446020e41ccaa39b27c771e56054b6b060e32f9))
+* **decks:** draw lands last, and say what RULE means ([a74183a](https://github.com/Msgaihede/mtg-grimoire/commit/a74183a4b074c8e48983add27a3d6288ea394022))
+* **decks:** draw the focus ring, and stop three tests overclaiming ([c555064](https://github.com/Msgaihede/mtg-grimoire/commit/c5550641a88a00a8bcca9ba64d7b058bcd354f1c))
+* **decks:** keep the deck name readable, and the table's names with it ([9ea06b1](https://github.com/Msgaihede/mtg-grimoire/commit/9ea06b1a09abae976eb8972c4e26ede5ec5a44ec))
+* **decks:** make every overlay say the same thing to a keyboard as to a pointer ([23af1cd](https://github.com/Msgaihede/mtg-grimoire/commit/23af1cd29555c41de544c7a4f06b38b7936d0d5e))
+* **decks:** put the caret in the rename field ([10761c1](https://github.com/Msgaihede/mtg-grimoire/commit/10761c188fb2971659e75347527341d289fab43a))
+* **decks:** read category list off db_read, cover folder/category/tag CRUD success paths ([ccad56d](https://github.com/Msgaihede/mtg-grimoire/commit/ccad56d66a8ebb6cb780b7745e745f292b68dab7))
+* **decks:** record the decks a folder delete un-files, and bound the cycle walk ([d47eaae](https://github.com/Msgaihede/mtg-grimoire/commit/d47eaae67e56beb5235acb0f8dece3542960767e))
+* **decks:** review round 1 — seven doc and guard fixes across the mirror ([f49d0a4](https://github.com/Msgaihede/mtg-grimoire/commit/f49d0a4abc7589740f0b531a8e9112ff07e0141f))
+* **decks:** review round 1 — six fixes across the audit, theory and cover work ([59547fd](https://github.com/Msgaihede/mtg-grimoire/commit/59547fd957386356628a7d3114eecc54a87c9f0e))
+* **decks:** say how many cards a category delete really takes ([6850448](https://github.com/Msgaihede/mtg-grimoire/commit/685044806b928ff40debcd7466471ebd68ad0024))
+* **decks:** say what a tag delete really takes, and put the caret in the question ([1b8b143](https://github.com/Msgaihede/mtg-grimoire/commit/1b8b14369c5d4897ab5f334d96d2729c84d3216f))
+* **decks:** scope a tag's count to the variant asked for, and size a switched-on Maybeboard ([51b43bb](https://github.com/Msgaihede/mtg-grimoire/commit/51b43bbf72a2152d2feb5e303101fa30995988bc))
+* **decks:** take the cover encode out of the write lock, and bound it by pixels ([cfa2cc7](https://github.com/Msgaihede/mtg-grimoire/commit/cfa2cc719477b59aeb5f1d6172042a4101139d5a))
+* **images:** bound a card image fetch so a silent host cannot hang a frame ([3aa666c](https://github.com/Msgaihede/mtg-grimoire/commit/3aa666cfc2b199b9854aa63ecd732f43e83d816c))
+* **images:** bound a card image fetch so a silent host cannot hang a frame ([a5e575f](https://github.com/Msgaihede/mtg-grimoire/commit/a5e575f93e3f3c979db47610642f21439b539828))
+* **images:** store every fetched image once and warm the variant each screen draws ([290d6f2](https://github.com/Msgaihede/mtg-grimoire/commit/290d6f2428a12325b30a35b1019ac4d38b7453cf))
+* **schema:** correct the stale FK-count doc and prove the v7 rebuild under foreign_keys=ON ([ecb48f0](https://github.com/Msgaihede/mtg-grimoire/commit/ecb48f04a9dff101f965b7e6634adea4234957a3))
+* **schema:** freeze every migration index as a literal ([d62e51f](https://github.com/Msgaihede/mtg-grimoire/commit/d62e51f033bb6acf3fb0b8e97a7a9b82a7bf75ec))
+* **schema:** make the v6-&gt;v7 test prove FK integrity over the rebuild, not a disconnected chain ([2aa01a7](https://github.com/Msgaihede/mtg-grimoire/commit/2aa01a7b23c1c1a820e6288d35661ea785e2797b))
+* **search:** let a not-ready facet answer correct itself ([a201a1f](https://github.com/Msgaihede/mtg-grimoire/commit/a201a1f4efff06e84141f97dddd545387d83713c))
+* **search:** pin the index's collection read and its fractional costs ([a2dcffd](https://github.com/Msgaihede/mtg-grimoire/commit/a2dcffd9e998fdc3b7404683d6e9f04d0e0016e9))
+* **search:** rank art cards below the card they depict ([9e9cc1f](https://github.com/Msgaihede/mtg-grimoire/commit/9e9cc1fc02fe741e26a0b9bf9df526161ff7802c))
+* **search:** refuse an index publish that a clear has superseded ([b6aed74](https://github.com/Msgaihede/mtg-grimoire/commit/b6aed747e155bb66ddb4d00f90ebf7feb847f129))
+* **search:** treat an empty corpus as not-ready, and correct a false measurement ([407888d](https://github.com/Msgaihede/mtg-grimoire/commit/407888dcfbc7390ac213ebae87060cf384e7ac57))
+* **sync:** clear the facet index before unlinking the bulk file ([85591b8](https://github.com/Msgaihede/mtg-grimoire/commit/85591b8044e18dae16c006b8b190fc704487147c))
+
+
+### Performance Improvements
+
+* **search:** filter format through the mask so it can use the index ([2dcf0d0](https://github.com/Msgaihede/mtg-grimoire/commit/2dcf0d0d987aace2a17160af333123751f4783df))
+
 ## [0.4.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.3.0...v0.4.0) (2026-08-10)
 
 
