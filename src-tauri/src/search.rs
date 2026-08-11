@@ -782,8 +782,25 @@ mod tests {
                 VALUES (?1,?2,?3,?4,'en','normal',?5,?6,?7,?8,?9,?10,?11,?2,'{}')",
                 rusqlite::params![id,name,set,cn,tl,c,ci,r,usd,leg,paper]).unwrap();
         }
+        fill_legal_mask(&conn);
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');").unwrap();
         conn
+    }
+
+    /// The `legal_mask` the ingest writes beside `legalities`, filled the way the v8
+    /// migration fills it: [`crate::legalities::mask_sql`] over the column the fixture rows
+    /// already carry.
+    ///
+    /// Every fixture here writes its rows by hand, so nothing has computed a mask — and the
+    /// format filter reads the mask now rather than the JSON. Without this a format search
+    /// over a fixture answers with an empty list, which is a fixture that is wrong rather
+    /// than a filter that is.
+    fn fill_legal_mask(conn: &Connection) {
+        conn.execute_batch(&format!(
+            "UPDATE cards SET legal_mask = {};",
+            crate::legalities::mask_sql("legalities")
+        ))
+        .unwrap();
     }
 
     #[test]
@@ -861,6 +878,10 @@ mod tests {
         assert_eq!(r.items[0].name, "God-Pharaoh's Gift");
     }
 
+    /// `restricted` counts as playable — a Vintage search that hid Black Lotus would be
+    /// wrong. The rule survived the move to `legal_mask` because the **mask** encodes it
+    /// (`legalities::PLAYABLE`), which is why the SQL no longer says so and why this test is
+    /// the one that would notice if it stopped being true.
     #[test]
     fn format_filter_includes_restricted() {
         let conn = seeded();
@@ -874,6 +895,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.total, 1);
+        assert_eq!(
+            r.items[0].name, "Lightning Bolt",
+            "the restricted card is the one that came back, not some other row"
+        );
+    }
+
+    /// A format this build has never heard of matches nothing. `json_extract` of an absent
+    /// key was NULL and `NULL IN (…)` is NULL, so the old form returned no rows; the mask
+    /// form has to be *told* to, because a key with no bit has nothing to test and leaving
+    /// the clause out would turn an unknown format into no filter at all — the whole corpus,
+    /// silently, which is the failure nobody reports because a list showing too much still
+    /// looks like a list.
+    #[test]
+    fn a_format_the_build_does_not_know_matches_nothing() {
+        let conn = seeded();
+        let unfiltered = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            unfiltered.total, 2,
+            "there is something here to over-return"
+        );
+
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                format: Some("some_format_scryfall_invented".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.total, 0);
+        assert!(r.items.is_empty());
     }
 
     #[test]
@@ -2022,8 +2082,10 @@ mod tests {
     }
 
     /// An "Any …" dropdown option with an empty value sends `Some("")`. Blank must mean
-    /// "no filter": `set_code = ''` matches nothing, and a blank format would make the
-    /// json path `'$.'`, which SQLite rejects — failing the entire search, not one filter.
+    /// "no filter": `set_code = ''` matches nothing, and `""` is a format no build knows,
+    /// which the mask filter spells `0` — an empty list rather than an absent filter. Before
+    /// the mask it was worse still: a blank made the json path `'$.'`, which SQLite rejects,
+    /// failing the entire search rather than one filter.
     #[test]
     fn blank_filters_are_ignored_not_matched() {
         let conn = seeded();
@@ -2086,6 +2148,7 @@ mod tests {
             )
             .unwrap();
         }
+        fill_legal_mask(&conn);
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
         conn

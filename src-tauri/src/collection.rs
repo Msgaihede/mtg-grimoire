@@ -2014,6 +2014,16 @@ mod tests {
         let conn = seeded();
         add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
         add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+        // The surviving printing is Modern-legal, so the format filter below is a filter
+        // that finds something — otherwise "the orphan is not in the list" would be true of
+        // an empty list and would prove nothing. Both columns, the way a synced row carries
+        // them, so the assertion holds whichever of the two the filter reads.
+        conn.execute(
+            "UPDATE cards SET legalities = '{\"modern\":\"legal\"}', legal_mask = ?1
+             WHERE id = 'bolt-jp'",
+            [crate::legalities::bit("modern").unwrap() as i64],
+        )
+        .unwrap();
         conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
             .unwrap();
 
@@ -2061,6 +2071,19 @@ mod tests {
         });
         assert_eq!(commons.total, 1, "the orphan has no rarity to match");
         assert_eq!(commons.items[0].card_id, "bolt-jp");
+
+        // Format is the same claim through a different column, and the reason it is spelled
+        // out separately: the filter is `c.legal_mask & ? != 0`, and the LEFT JOIN gives an
+        // orphan a NULL alias, so the test is `NULL & ?`, which is NULL — false, exactly as
+        // `json_extract(NULL, …) IN (…)` was before the mask. An implementation reaching for
+        // `coalesce(c.legal_mask, …)` or moving the column onto the entry would list a
+        // printing that is gone as legal in a format nobody can check.
+        let modern = filtered(crate::filters::CardFilters {
+            format: Some("modern".into()),
+            ..Default::default()
+        });
+        assert_eq!(modern.total, 1, "the orphan has no legalities to match");
+        assert_eq!(modern.items[0].card_id, "bolt-jp");
     }
 
     /// The digital-printing rule the search applies does **not** apply here: the user owns

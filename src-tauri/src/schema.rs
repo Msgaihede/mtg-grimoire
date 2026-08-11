@@ -780,7 +780,18 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // 0.46–0.63 s. About 2.2 s of the backfill is the full-table row rewrite that any
         // UPDATE of every row pays — the 23 `json_extract`s are the rest, and are the reason
         // the app will not be doing this at query time.
-        tx.execute_batch("ALTER TABLE cards ADD COLUMN legal_mask INTEGER;")?;
+        //
+        // **`NOT NULL DEFAULT 0`, and that is the filter's requirement rather than tidiness.**
+        // [`crate::filters::push_card_filters`] tests format with `legal_mask & ? != 0`, and
+        // `NULL & ?` is NULL — a row with a NULL mask would vanish from every format-filtered
+        // search instead of reading as "legal nowhere". No NULL can reach production today
+        // (this UPDATE fills every row, [`crate::legalities::mask_sql`] answers 0 for a NULL
+        // `legalities`, and `STAGING_INSERT` names the column so the ingest always binds it),
+        // but the column permitted one and v8 is still unshipped, so it costs nothing to
+        // close. `DEFAULT` is also what makes the `ALTER` legal at all: SQLite refuses to add
+        // a `NOT NULL` column without one. [`cards_column_defs`] reproduces both, so staging
+        // carries them and the swap survives.
+        tx.execute_batch("ALTER TABLE cards ADD COLUMN legal_mask INTEGER NOT NULL DEFAULT 0;")?;
         tx.execute_batch(&format!(
             "UPDATE cards SET legal_mask = {mask};",
             mask = crate::legalities::mask_sql("legalities")
@@ -2764,6 +2775,40 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(crate::card_row::raw_json(&stored).as_deref(), Some("{}"));
+    }
+
+    /// The mask can never be NULL, and that is the format filter's requirement rather than
+    /// tidiness: [`crate::filters::push_card_filters`] asks `legal_mask & ? != 0`, and
+    /// `NULL & ?` is NULL — a printing with a NULL mask would drop out of every
+    /// format-filtered search **silently**, where a 0 reads as the true statement "legal
+    /// nowhere". Both halves are asserted through behaviour: the `DEFAULT` is what an
+    /// `INSERT` that does not name the column lands on (which is every fixture in this crate
+    /// and every hand-written row), and the `NOT NULL` is what refuses one that names it and
+    /// passes NULL.
+    #[test]
+    fn a_card_can_never_carry_a_null_legal_mask() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('1','Black Lotus','lea','232','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        let mask: Option<i64> = conn
+            .query_row("SELECT legal_mask FROM cards WHERE id='1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(mask, Some(0), "legal nowhere, not unknown");
+
+        let refused = conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw,legal_mask)
+             VALUES ('2','Mox Pearl','lea','264','en','normal','{}',NULL)",
+            [],
+        );
+        assert!(refused.is_err(), "a NULL mask must not be storable");
     }
 
     /// The widened index is what makes a *filtered* browse cheap — 505 ms to 41 ms, measured

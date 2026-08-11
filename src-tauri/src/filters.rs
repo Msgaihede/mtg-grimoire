@@ -7,9 +7,10 @@
 //! is the invariant the whole builder rests on: `?` binds by position, so a fragment and
 //! its parameter must never be separated.
 //!
-//! Only two kinds of thing are ever interpolated into the SQL — a colour letter from
-//! [`COLORS`] and a `?`-placeholder list whose *length* is all it carries. No user text
-//! reaches the parser.
+//! Only three kinds of thing are ever interpolated into the SQL — a colour letter from
+//! [`COLORS`], a `?`-placeholder list whose *length* is all it carries, and the literal `0`
+//! an unrecognised format collapses to. No user text reaches the parser: even the format
+//! key is looked up in [`crate::legalities`] and bound as the integer bit it names.
 
 use serde::Deserialize;
 
@@ -137,13 +138,29 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         None => format!("{alias}.set_code"),
     };
 
-    // `restricted` counts as playable — a Vintage search that hid Black Lotus would be
-    // wrong. Formats the card has no entry for yield NULL, which fails the IN.
+    // **The mask, not `json_extract`.** A JSON path cannot be indexed, so the old form
+    // knocked the collapsed browse's scan off `idx_cards_collapse` and into a row lookup per
+    // card: 591 ms against 40.6 ms through the mask, measured 2026-08-11 over the live corpus
+    // with the widened index in place. [`crate::legalities`] exists for this.
+    //
+    // `restricted` still counts as playable — that lives in the mask now rather than in this
+    // SQL, which is why the predicate no longer says so.
+    //
+    // A key this build has never heard of matches nothing, which is what the old form did
+    // too: `json_extract` of an absent key is NULL and `NULL IN (…)` is NULL. Spelled `0`
+    // rather than left out, because leaving it out would turn an unknown format into "no
+    // filter at all" and quietly return the whole corpus.
+    //
+    // An orphan fails this exactly as it failed the old form: the collection's LEFT JOIN
+    // gives it a NULL alias, and `NULL & ? != 0` is NULL. The column is `NOT NULL DEFAULT 0`
+    // so that a *card* row can never be the NULL here — a mask nobody filled would drop its
+    // printing out of every format search silently, reading as nothing rather than as "legal
+    // nowhere".
     if let Some(v) = nonblank(&f.format) {
-        p.push(
-            format!("json_extract({alias}.legalities, '$.' || ?) IN ('legal','restricted')"),
-            Box::new(v.to_owned()),
-        );
+        match crate::legalities::bit(v) {
+            Some(b) => p.push(format!("({alias}.legal_mask & ?) != 0"), Box::new(b as i64)),
+            None => p.wheres.push("0".to_owned()),
+        }
     }
 
     // Subset semantics, as in a deckbuilder: show what this identity can *cast*, so "RW"
@@ -239,8 +256,39 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
 /// A filter the user actually set: trimmed, and `None` when blank.
 ///
 /// A UI whose "Any set"/"Any format" option carries an empty value sends `Some("")`. Taken
-/// literally that would mean `set_code = ''` (matches nothing) or the json path `'$.'` —
-/// which is a *SQLite error*, failing the whole query rather than one filter.
+/// literally that would mean `set_code = ''` (matches nothing) or a format no build has a
+/// bit for, which the arm above spells `0` — an empty list where the user asked for every
+/// card. Before the mask it was worse: the json path `'$.'` is a *SQLite error*, failing the
+/// whole query rather than one filter.
 pub fn nonblank(v: &Option<String>) -> Option<&str> {
     v.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The filter has to reach the index, and it cannot while it parses JSON per row.
+    /// Measured on the live corpus with the widened `idx_cards_collapse` in place: 40.6 ms
+    /// through the mask against 591 ms through `json_extract`.
+    ///
+    /// The only test here that reads the SQL rather than an answer, because the shape *is*
+    /// the claim: what the filter matches is identical either way, and that is exactly why
+    /// a results test cannot tell whether the query can use the index. The three behaviours
+    /// that must *survive* the rewrite are pinned where they can be asked of a real query:
+    /// `search::tests::format_filter_includes_restricted`,
+    /// `search::tests::a_format_the_build_does_not_know_matches_nothing`, and the format arm
+    /// of the collection's orphan test.
+    #[test]
+    fn the_format_filter_tests_the_mask_rather_than_parsing_json() {
+        let mut p = Predicates::default();
+        let f = CardFilters {
+            format: Some("modern".into()),
+            ..Default::default()
+        };
+        push_card_filters(&mut p, &f, "c", None);
+        let sql = p.where_sql();
+        assert!(sql.contains("legal_mask"), "{sql}");
+        assert!(!sql.contains("json_extract"), "{sql}");
+    }
 }
