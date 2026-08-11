@@ -234,12 +234,15 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   to fail was the first. **The press must land somewhere visible** — a row whose centre is
   below the fold starts nothing, which is what `--press`/`--from` are for, and a scroller left
   scrolled hides rows from `click` the same way. **The target has the same problem and a
-  worse failure**: `boxOf` reads a layout rectangle, and a zone column wrapped onto the deck
-  editor's second (scrolled-away) line reports coordinates *outside* its scroller's clip — so
-  a drop dispatched there lands on whatever is painted at that point, which during a
-  `deck-card` drag is the remove tray. Measured 2026-08-06: a drop aimed at the Companion
-  column took the card out of the deck instead. Scroll the zones row first and hit-test the
-  point (`document.elementFromPoint(...)` inside the target) before believing a centre.
+  worse failure**: `boxOf` reads a layout rectangle, and a drop target scrolled out of its own
+  scroller's clip still reports coordinates *inside* the window — so a drop dispatched there
+  lands on whatever is painted at that point, which during a deck-card drag was the remove
+  tray. Measured 2026-08-06 **against the zone-column editor Plan 8 replaced**: a column
+  wrapped onto the editor's second, scrolled-away line took the drop, and a card aimed at the
+  Companion column left the deck instead. The vocabulary is gone (categories are columns now,
+  and the editor scrolls differently); the trap is not. Scroll the target into view first and
+  hit-test the point (`document.elementFromPoint(...)` inside the target) before believing a
+  centre.
 - **`hover <css> [--from x,y] [--rest ms] [--probe expr]`** is a real dwell — `mouseMoved`
   events, so React synthesises `onMouseEnter`/`onMouseLeave` from Chromium's own hover
   pipeline and a `dispatchEvent` out of `eval` proves nothing. Two facts it cost a session to
@@ -600,6 +603,28 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   is *element identity*, which is what `CardImage.test.tsx` and the two integration tests
   assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
   independently by keying its whole `Preview` on the printing.
+- **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
+  credited.** Scryfall's image policy, quoted in full at
+  `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55`: use the art crop and the
+  artist's name must appear elsewhere in the same interface. A `grid`/`thumb`/`display` image
+  carries the printed credit itself and needs nothing; the 626×457 `art` variant does not.
+  This has been ruled on twice and is written here because four surfaces cite it as living
+  here. Two consequences hold everywhere a **cover** is drawn — the gallery's deck tiles, its
+  folder strips and `DeckSettingsDialog`'s `CoverPreview`, all three of which print the
+  artist: **a card cover whose artist is unknown is not drawn at all** (`DeckRow.coverArtist`
+  is `null` when `cards` has no row for that printing; the orphan heals on the next sync rather
+  than being shown uncredited), and **a custom cover carries no artist and needs none**,
+  because the rule is Scryfall's and a user's own file is not Scryfall's — which is also why a
+  folder strip drops custom covers rather than crediting some of its tiles and not others.
+  **The standing gap, recorded rather than quietly inherited** (`DeckSettingsDialog.tsx`'s
+  `ChoiceTile` doc): four surfaces draw the crop with no credit — the deck's stack rows
+  (`CardStack`), its grid tiles (`views/GridView`), the theory diff's rows and the cover
+  picker's own tiles — because `DeckCardRow` carries no per-row `artist`, and a picker stricter
+  than the views it picks *from* would be an inconsistency a reader can see where this one is
+  not. Every one of those crops sits inside a control that names the card, and the card pane
+  credits the illustrator ("Illustrated by …"). Closing it for all four at once is one column
+  on `DeckCardRow`. Never distort, blur, recolour or watermark a card image, and never crop off
+  a printed credit.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. Five surfaces draw a card and each had
   rebuilt part of it. The card pane's main art is the deliberate exception: it keeps a flip
@@ -627,8 +652,11 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
-  gate only delayed the pictures about to be looked at. The deck zone columns keep it: they
-  are plain scrollers, where a 100-card list really is 100 mounted rows.
+  gate only delayed the pictures about to be looked at. **The deck feature's plain scrollers
+  keep it**: the stack and grid views (`CardStack.tsx`, `views/GridView.tsx`), the gallery's
+  deck tiles and folder strips (`DecksPage.tsx`), the theory diff (`TheoryDiffDialog.tsx`) and
+  the cover art picker (`DeckSettingsDialog.tsx`) — where a 100-card list really is 100 mounted
+  rows. (It used to say "the deck zone columns", a component the rebuild deleted.)
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
   phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
@@ -880,14 +908,22 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
 - **Writing history is not a command.** There is no IPC write — `deck_audit::record(tx, …)` is
   called *inside the caller's already-open transaction*, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
-  behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives ~23
-  commands and asserts exactly one row each. The only command is the read,
-  `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` — **the low end is
-  load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.** It is append-only,
-  never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it. Four writes record
-  nothing on purpose: `delete_deck` (CASCADE takes the history with the deck, so a row would be
-  orphaned by its own event) and the three folder writes (a folder belongs to no deck, and
-  `deck_audit.deck_id` is `NOT NULL`).
+  behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
+  **23** cases and asserts exactly one row each (count the list in `deck_audit.rs`, never a
+  remembered number — it has been written down wrong twice). "Exactly one" is per
+  *command*, not per field: **`deck_update` records one row per changed field**
+  (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
+  satisfies that test only because every one of its cases changes exactly one field. The only
+  command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
+  **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
+  It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
+  **Six writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
+  deck, so a row would be orphaned by its own event); **both** `missing_to_wishlist` commands,
+  `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); and **three of the four
+  folder writes** — create, rename and move — because a folder belongs to no deck and
+  `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
+  `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
+  per deck it un-filed.
 - **The six card commands, and what each takes.** `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
