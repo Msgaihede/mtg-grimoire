@@ -71,6 +71,18 @@ pub struct WishRow {
     pub lang: Option<String>,
     pub rarity: Option<String>,
     pub mana_cost: Option<String>,
+    /// The joined card's type line, and it is here for exactly one reader: a **pinned wish
+    /// dragged onto the sidebar's Decks entry**, which lands in a deck with no column to have
+    /// been pointed at. The pile is then named by TypeScript's `autoCategoryFor`, whose only
+    /// input this is — so without it a wish carried into a deck would file under
+    /// `Uncategorised` while the same card carried from the search wall filed under `Creature`.
+    ///
+    /// `None` exactly when the `LEFT JOIN` found nothing — which is **not** the same as an
+    /// any-printing wish, because that join coalesces to the newest printing of the wish's
+    /// oracle card. So a wish for the card is described as well as a wish for the cardboard,
+    /// and only a genuine orphan (no pinned printing, no oracle match) answers `None`. Same
+    /// `None` as `rarity` and `mana_cost` beside it, for the same reason.
+    pub type_line: Option<String>,
     pub quantity: i64,
     pub preferred_finish: Option<String>,
     /// The cheapest way to satisfy this wish, per copy: the preferred finish's price if one
@@ -431,7 +443,12 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                             WHEN 'foil' THEN '$.eur_foil'
                             ELSE '$.eur' END) AS REAL) END AS unit_price_eur,
                 {OWNED_SQL} AS owned_quantity,
-                w.notes, w.needs_review, w.updated_at
+                w.notes, w.needs_review, w.updated_at,
+                -- Appended rather than placed beside `c.mana_cost` where it belongs in the
+                -- struct: every `r.get(n)` below is a positional index, so inserting a column
+                -- mid-list renumbers eight of them by hand. Last costs one index and nothing
+                -- else.
+                c.type_line
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
@@ -452,6 +469,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     lang: r.get(6)?,
                     rarity: r.get(7)?,
                     mana_cost: r.get(8)?,
+                    type_line: r.get(17)?,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
                     unit_price_usd: r.get(11)?,
@@ -1077,6 +1095,7 @@ mod tests {
             lang: None,
             rarity: Some("common".into()),
             mana_cost: Some("{R}".into()),
+            type_line: Some("Instant".into()),
             quantity: 4,
             preferred_finish: Some("foil".into()),
             unit_price_usd: Some(40.0),
@@ -1092,7 +1111,7 @@ mod tests {
             serde_json::json!({
                 "id": 3, "oracleId": "o1", "cardId": null, "name": "Lightning Bolt",
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
-                "manaCost": "{R}", "quantity": 4, "preferredFinish": "foil",
+                "manaCost": "{R}", "typeLine": "Instant", "quantity": 4, "preferredFinish": "foil",
                 "unitPriceUsd": 40.0, "unitPriceEur": 32.0, "ownedQuantity": 2, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000
             })

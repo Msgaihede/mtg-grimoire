@@ -158,6 +158,9 @@ const tileDrag = (card: CardSummary): DragPayload => ({
   kind: "card",
   cardId: card.id,
   name: card.name,
+  // What files the card when it is let go somewhere with no column to point at — the sidebar's
+  // Decks entry. `autoCategoryFor`'s only input, carried rather than looked up (`dnd.ts`).
+  typeLine: card.typeLine,
 });
 
 /**

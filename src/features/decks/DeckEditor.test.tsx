@@ -14,6 +14,7 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { dragOnto, startDrag } from "@/test-drag";
+import { DECK_CARD_VARIANT } from "./cardControl";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -301,21 +302,24 @@ beforeEach(() => {
 
 describe("DeckEditor", () => {
   /**
-   * The deck's own images are warmed as `art`, and that is the whole of the fix.
+   * The deck warms **the variant its own views draw**, and the variant is the point of the effect
+   * rather than an incidental argument: each is a different URL on the CDN, so a fully warm cache
+   * of the wrong one contributes nothing at all and the builder fetches every tile cold. Measured
+   * against the live database on 2026-08-11, when the two disagreed: all 17 deck cards had a
+   * `grid` row, 12 had an `art` one, and the deck arm of the pre-warm was the only work there was.
    *
-   * Every deck surface renders `cardImageUrl(…, "art")` while both warming paths used to
-   * produce `grid` — a different URL on the CDN, so a fully warm `grid` cache contributed
-   * nothing here and the builder fetched every tile cold. Measured against the live database
-   * on 2026-08-11: all 17 deck cards had a `grid` row, 12 had an `art` one, and the deck arm
-   * of the pre-warm was the only work there was to do.
+   * Asserted through `DECK_CARD_VARIANT` rather than against the word, because the contract is
+   * that this effect and the views agree — spelling the variant out here would let them drift
+   * apart and still pass. It is `grid` today, which is what the collection and the search wall
+   * warm too, so a card that is both owned and in a deck is one cache key rather than two.
    */
-  it("warms the art its own views draw, not the grid the search wall uses", async () => {
+  it("warms the variant its own card views draw", async () => {
     await open();
 
     await waitFor(() =>
       expect(prefetchImages).toHaveBeenCalledWith(
         expect.arrayContaining(["c-Lightning Bolt", "c-Bear"]),
-        "art",
+        DECK_CARD_VARIANT,
       ),
     );
   });
@@ -790,10 +794,15 @@ describe("DeckEditor", () => {
 
   /**
    * The fastest way to put a card in a deck whose name you already know — one search for the
-   * best match's newest printing, then the same `deck_add_card` the panel's button sends. Where
-   * it lands is the panel's "Add to": one control for one decision.
+   * best match's newest printing, then the same `deck_add_card` the panel's button sends.
+   *
+   * **Where it lands is the card's own type line**, because "Add to" defaults to
+   * `AUTO_CATEGORY`: no `categoryId` and the name `autoCategoryFor` answers, which
+   * `deck_add_card` finds or creates. `found()` is a `Creature — Goblin`, so the pile is
+   * `Creature` — and the deck fixture has no such category, which is the case worth driving:
+   * an auto add may have to *make* the pile it names.
    */
-  it("adds the best match for a typed name", async () => {
+  it("adds the best match for a typed name, filed by its type line", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],
       total: 1,
@@ -801,16 +810,37 @@ describe("DeckEditor", () => {
     });
 
     await open();
+    await userEvent.type(screen.getByLabelText("Quick add a card"), "goblin guide{Enter}");
+
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", 1),
+    );
+    // Cleared on a hit, because the next action is the next card.
+    expect(screen.getByLabelText("Quick add a card")).toHaveValue("");
+  });
+
+  /**
+   * …and an explicit "Add to" overrides the rule, which is the other half of it: a reader filing
+   * ten cards into the Sideboard makes one choice and then ten presses, and every press sends
+   * the **id** with no name at all.
+   */
+  it("sends the picked category instead when the reader named one", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+    await userEvent.selectOptions(await screen.findByLabelText("Add to"), String(SIDE));
     await userEvent.type(
-      screen.getByLabelText("Quick add a card to Main deck"),
+      screen.getByLabelText("Quick add a card to Sideboard"),
       "goblin guide{Enter}",
     );
 
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", SIDE, null, "live", 1),
     );
-    // Cleared on a hit, because the next action is the next card.
-    expect(screen.getByLabelText("Quick add a card to Main deck")).toHaveValue("");
   });
 
   /** A miss is said in words rather than swallowed, and the field keeps what was typed —
@@ -818,14 +848,11 @@ describe("DeckEditor", () => {
   it("says when a quick add finds nothing, and keeps what was typed", async () => {
     await open();
 
-    await userEvent.type(
-      screen.getByLabelText("Quick add a card to Main deck"),
-      "Blakc Lotus{Enter}",
-    );
+    await userEvent.type(screen.getByLabelText("Quick add a card"), "Blakc Lotus{Enter}");
 
     expect(await screen.findByText("No card found for “Blakc Lotus”.")).toBeInTheDocument();
     expect(deckAddCard).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Quick add a card to Main deck")).toHaveValue("Blakc Lotus");
+    expect(screen.getByLabelText("Quick add a card")).toHaveValue("Blakc Lotus");
   });
 
   /**
@@ -848,7 +875,7 @@ describe("DeckEditor", () => {
 
     screen.getByRole("button", { name: /^Lightning Bolt/ }).focus();
     await userEvent.keyboard("{Escape}");
-    screen.getByLabelText("Quick add a card to Main deck").focus();
+    screen.getByLabelText("Quick add a card").focus();
     await userEvent.keyboard("{Escape}");
     // The name field is the third way in, and the one that *does* consume a press — but only
     // while it is holding something to revert.
@@ -896,19 +923,23 @@ describe("DeckEditor", () => {
     });
 
     await open();
+    // The button names the pile it computed, so a reader knows where the press lands before
+    // making it — `Creature`, off this card's type line.
     await userEvent.click(
-      await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     );
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", 1);
   });
 
-  /** Every category the deck has, in the order the groups are drawn — one list, one source. */
-  it("offers every category as an add target", async () => {
+  /** Every category the deck has, in the order the groups are drawn — one list, one source —
+   *  behind the one option that is not a category and is the default. */
+  it("offers auto first, then every category, as add targets", async () => {
     await open();
 
     const select = (await screen.findByLabelText("Add to")) as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual([
+      "Auto (by card type)",
       "Main deck",
       "Sideboard",
       // Modern requires no commander, and the group and the option are here anyway: a category
@@ -917,6 +948,9 @@ describe("DeckEditor", () => {
       "Companion",
       "Maybeboard",
     ]);
+    // The default, and the whole of the fix: it used to be `categories[0]`, which on a deck with
+    // no user category of its own is the seeded **Commander** pile.
+    expect(select.value).toBe("0");
   });
 
   /**
@@ -924,10 +958,12 @@ describe("DeckEditor", () => {
    * renamed away — and a select left holding an id that is not among its own options shows
    * nothing selected while every press files a card into a group nothing is drawing.
    *
-   * The fallback is the **first** category rather than a hard-coded word: there is no `main` to
-   * fall back to any more, and a deck always has at least the four predefined piles.
+   * The fallback is **auto** rather than another category: the reader's choice is gone, so the
+   * honest replacement is "nobody has said", not somebody else's first column. It used to be
+   * `categories[0]`, which was also what the initial state fell through — see the select's
+   * default above.
    */
-  it("falls back to the first category when the one it was holding leaves the deck", async () => {
+  it("falls back to auto when the category it was holding leaves the deck", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],
       total: 1,
@@ -950,10 +986,11 @@ describe("DeckEditor", () => {
 
     // Read off the Add button rather than off the select, because the select cannot see this
     // bug: HTML selects the first option when the selected one is removed, so the control
-    // *shows* "Main deck" whatever the state behind it says. Without the reset, every press
-    // would still file its card into a category the editor is no longer drawing.
+    // *shows* the first option whatever the state behind it says. Without the reset, every press
+    // would still file its card into a category the editor is no longer drawing — and now that
+    // the first option *is* auto, reading the select would pass even with the reset deleted.
     expect(
-      await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     ).toBeInTheDocument();
   });
 
@@ -1458,7 +1495,7 @@ describe("DeckEditor", () => {
 
     await open();
     await userEvent.click(
-      await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     );
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();

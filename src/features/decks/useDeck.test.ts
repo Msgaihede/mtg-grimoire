@@ -311,21 +311,80 @@ describe("useDeck", () => {
   });
 
   /**
-   * The add with no column to point at — the docked panel's button and the sidebar's Decks
-   * drop target, neither of which has a category under the cursor.
+   * The add with no column to point at — the docked panel's button under `Auto`, the toolbar's
+   * quick add, and the sidebar's Decks drop target, none of which has a category under the
+   * cursor.
    *
-   * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is the v8
-   * migration's own word for the pile it filed every legacy main-deck row into: a deck that
-   * predates categories and one made since agree about where a plain add goes. A placeholder
-   * until `autoCategoryFor` exists, and one pile rather than a guess this hook invents.
+   * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is
+   * `autoCategoryFor`'s: the card's type line and nothing else. The rule is applied here, on the
+   * one definition, and the *fact* it reads travels from the call site — which is what keeps
+   * `autoCategoryFor` a single rule in TypeScript without any add paying a round trip to
+   * discover what it is adding.
    */
-  it("files an add that names no category under the default pile, by name", async () => {
+  it("files an add that names no category by the card's type line", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Legendary Artifact",
+      quantity: 1,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Artifact", "live", 1);
+  });
+
+  /**
+   * A type line the rule has no bucket word for, and one that is missing outright — an orphan
+   * whose printing has left `cards`, or a layout this app has no column for (a Dungeon, a Plane).
+   *
+   * Both answer `Uncategorised`, which is `autoCategoryFor`'s own answer and needs no second
+   * fallback here. The pile is a real category the reader can rename, reorder or switch off; what
+   * it may never be is `""`, which the backend's find-or-create would accept as a heading nobody
+   * can see.
+   */
+  it("files a card it cannot place under Uncategorised", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: null, quantity: 1 });
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorised", "live", 1);
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Dungeon", quantity: 1 });
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorised", "live", 1);
+  });
+
+  /**
+   * **Absent** is not `null`, and this is the difference: a caller that passes no type line at
+   * all has said nothing about the card, where one passing `null` has said the app cannot
+   * describe it. The first gets `DEFAULT_CATEGORY_NAME`, the second `Uncategorised`.
+   *
+   * No surface in the app takes this arm today — every add either points at a column or carries a
+   * type line — so it is a fence, and the test is what says the fence is where it was left.
+   */
+  it("files an add that says nothing at all under the default pile", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
     await result.current.addCard.mutateAsync({ cardId: "p2", quantity: 1 });
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Main deck", "live", 1);
+  });
+
+  /** An explicit category wins outright, and no name is sent beside it — the drag path, and the
+   *  panel's under a pick. A type line handed in with an id is simply not read. */
+  it("ignores a type line when a category was named", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      typeLine: "Artifact",
+      quantity: 1,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "live", 1);
   });
 
   /**

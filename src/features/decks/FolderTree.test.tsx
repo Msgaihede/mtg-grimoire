@@ -142,7 +142,12 @@ describe("readDeckDrag", () => {
   });
 
   it("refuses a card drag, and a card drop target refuses a deck drag", () => {
-    const card = dragData({ kind: "card", cardId: "abc", name: "Black Lotus" });
+    const card = dragData({
+      kind: "card",
+      cardId: "abc",
+      name: "Black Lotus",
+      typeLine: "Artifact",
+    });
     const deckDrag = deckDragData({ deckId: 4, name: "Burn" });
 
     expect(readDeckDrag(card)).toBeNull();

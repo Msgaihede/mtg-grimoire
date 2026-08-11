@@ -31,6 +31,7 @@ const BOLT: WishRow = {
   lang: "en",
   rarity: "common",
   manaCost: "{R}",
+  typeLine: "Instant",
   quantity: 4,
   preferredFinish: "foil",
   unitPriceUsd: 400.5,
@@ -509,7 +510,7 @@ describe("WishlistPage", () => {
     stop();
 
     expect(carried.map(readDragData)).toEqual([
-      { kind: "card", cardId: "c1", name: "Lightning Bolt" },
+      { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
 

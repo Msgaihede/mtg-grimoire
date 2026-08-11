@@ -9,6 +9,7 @@ import { useCardSearch } from "@/features/search/useCardSearch";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { autoCategoryFor } from "./autoCategory";
 import { FOCUS } from "./cardControl";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
@@ -35,6 +36,27 @@ const NO_ROOM = "Not enough room — close the card details or widen the window"
  */
 export const PANEL_WIDTH_PX = 384;
 const PANEL_WIDTH = "w-96";
+
+/**
+ * The "Add to" value meaning **the card's type line decides** — the default, and the one value
+ * in that select that is not a category.
+ *
+ * `0`, because `deck_categories.id` is an `INTEGER PRIMARY KEY` and `dnd.ts`'s `isCategoryId`
+ * refuses anything but a positive safe integer, so no real category can ever collide with it.
+ * `DeckEditor` already held `0` as a sentinel meaning "nothing picked yet", replaced by its
+ * clamp on the first render that had a deck — and *that* is what made a fresh deck file every
+ * quick add into `categories[0]`, which is the seeded **Commander** pile. Giving the sentinel a
+ * meaning instead of a replacement is the whole of the fix: nothing overwrites it, so an add
+ * nobody filed is filed by `autoCategoryFor`.
+ *
+ * Exported because the editor owns the state and this panel draws the choice; one constant is
+ * one place for the two of them to agree what zero means.
+ */
+export const AUTO_CATEGORY = 0;
+
+/** What the select calls {@link AUTO_CATEGORY}. Named for what it reads rather than for what it
+ *  does — "Auto" alone would not say *how*, and the how is the whole predictability of it. */
+const AUTO_LABEL = "Auto (by card type)";
 
 /**
  * The wall's tile floor in here, and the number that decides whether this column shows one
@@ -117,7 +139,8 @@ export function DeckSearchPanel({
   const categoryFieldId = useId();
 
   /**
-   * What the picked id is *called*, for the two names every Add button carries.
+   * What the picked id is *called*, for the two names every Add button carries — or `null` under
+   * {@link AUTO_CATEGORY}, where the pile is not chosen here at all and is named per card below.
    *
    * The editor clamps `targetCategoryId` to a category it is drawing, so the miss below is not
    * a state this panel expects — but it is one a single render can be caught in, because a
@@ -127,7 +150,10 @@ export function DeckSearchPanel({
    * stale `deck_add_card` refuses it in words (`category_of_deck`) into the alert above the
    * wall. Reading `.name` off `undefined` would instead take the whole panel down over a label.
    */
-  const targetName = categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck";
+  const auto = targetCategoryId === AUTO_CATEGORY;
+  const targetName = auto
+    ? null
+    : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
   const search = useCardSearch();
   const { query, rows, searchKey } = search;
@@ -233,7 +259,15 @@ export function DeckSearchPanel({
       element
         ? cardDraggable({
             element,
-            payload: () => ({ kind: "search-card", cardId: card.id, name: card.name }),
+            payload: () => ({
+              kind: "search-card",
+              cardId: card.id,
+              name: card.name,
+              // Carried even though every drop target inside this editor is a category that
+              // names itself: a tile can also be let go on the sidebar's Decks entry, which
+              // names none. One payload shape, whichever target takes it (`dnd.ts`).
+              typeLine: card.typeLine,
+            }),
           })
         : undefined,
     [],
@@ -295,6 +329,10 @@ export function DeckSearchPanel({
               onChange={(e) => onTargetCategoryChange(Number(e.target.value))}
               className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
             >
+              {/* First and default. A pick made here *stays* picked, which is what makes
+                  "everything into the Sideboard" one choice and then ten presses rather than ten
+                  choices — and why this is a plain option rather than a mode that resets. */}
+              <option value={String(AUTO_CATEGORY)}>{AUTO_LABEL}</option>
               {categories.map((category) => (
                 <option key={category.id} value={String(category.id)}>
                   {category.name}
@@ -367,34 +405,52 @@ export function DeckSearchPanel({
           onSelect={selectCard}
           tileRef={tileRef}
           badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
-          action={(card) => (
-            <button
-              type="button"
-              // The tile is draggable and this is its one control: a press that slips a few
-              // pixels is a press, not a drag (`cardDraggable`).
-              data-no-drag=""
-              // Named for the card *and* where it is going: two tiles' buttons both called
-              // "Add" are two controls a screen reader cannot tell apart, and the category is
-              // the one thing about this press that is not visible on the tile.
-              aria-label={`Add ${card.name} to ${targetName}`}
-              title={`Add to ${targetName}`}
-              // Never disabled while a write is in flight, and that is the behaviour rather
-              // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
-              // three times is three copies. Disabling would drop presses two and three, and
-              // "press it again for another one" is how a deck gets built.
-              onClick={() =>
-                add.mutate({ cardId: card.id, categoryId: targetCategoryId, quantity: 1 })
-              }
-              className={cn(
-                "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
-                "transition-colors duration-150 motion-reduce:transition-none",
-                "hover:border-accent hover:text-accent",
-                FOCUS,
-              )}
-            >
-              <Plus className="size-3.5" aria-hidden="true" />
-            </button>
-          )}
+          action={(card) => {
+            // Where this card would land, named before the press rather than reported after it.
+            // Under `Auto` that is `autoCategoryFor`'s own answer for *this* card, which is the
+            // whole reason the rule reads the type line and nothing else: it is the only kind of
+            // answer a button can promise in advance and a reader can predict from the card in
+            // their hand. Found or created on the way in, so a deck with no Artifact pile grows
+            // one and the button said so.
+            const landsIn = targetName ?? autoCategoryFor(card);
+            return (
+              <button
+                type="button"
+                // The tile is draggable and this is its one control: a press that slips a few
+                // pixels is a press, not a drag (`cardDraggable`).
+                data-no-drag=""
+                // Named for the card *and* where it is going: two tiles' buttons both called
+                // "Add" are two controls a screen reader cannot tell apart, and the category is
+                // the one thing about this press that is not visible on the tile.
+                aria-label={`Add ${card.name} to ${landsIn}`}
+                title={`Add to ${landsIn}`}
+                // Never disabled while a write is in flight, and that is the behaviour rather
+                // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
+                // three times is three copies. Disabling would drop presses two and three, and
+                // "press it again for another one" is how a deck gets built.
+                //
+                // Under `Auto` this sends **no category and the card's type line**, which is what
+                // puts the rule on `useDeck`'s single definition rather than here: this component
+                // computes the *word on the button* and the hook computes the word it sends, from
+                // the same function over the same fact.
+                onClick={() =>
+                  add.mutate(
+                    auto
+                      ? { cardId: card.id, typeLine: card.typeLine, quantity: 1 }
+                      : { cardId: card.id, categoryId: targetCategoryId, quantity: 1 },
+                  )
+                }
+                className={cn(
+                  "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
+                  "transition-colors duration-150 motion-reduce:transition-none",
+                  "hover:border-accent hover:text-accent",
+                  FOCUS,
+                )}
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
+              </button>
+            );
+          }}
           onNeedNextPage={() => {
             if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
               void query.fetchNextPage();

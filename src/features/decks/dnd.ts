@@ -29,11 +29,23 @@ import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
  * **`"deck-card"` is carried by every card in every view**, through `cardControl.tsx`'s
  * `useDeckCardDrag` — one registration, four surfaces, so a card picked up in the table means
  * exactly what the same card picked up in the stack means.
+ *
+ * **The two adding kinds carry a `typeLine`, and `"deck-card"` deliberately does not.** A drop
+ * that adds may have no category to land in — the sidebar's Decks entry is a nav item several
+ * views away from the deck, with no column for a reader to have pointed at — and the rule that
+ * files it is `autoCategoryFor`, which reads a type line and nothing else. Carrying the line in
+ * the payload is what lets that rule run without a round trip: every one of the five sources
+ * has it in hand at registration (`CardSummary`, a collection row, a wish, the pane's
+ * printings, the panel's tile). A move or a removal names a category by construction, so
+ * `"deck-card"` has nothing to compute and is left alone.
+ *
+ * `null` is a real value here and means the app does not know — an orphaned row whose printing
+ * has left `cards`. `autoCategoryFor` answers `Uncategorised` for it, which is the honest pile.
  */
 export type DragPayload =
-  | { kind: "search-card"; cardId: string; name: string }
+  | { kind: "search-card"; cardId: string; name: string; typeLine: string | null }
   | { kind: "deck-card"; cardId: string; name: string; fromCategoryId: number }
-  | { kind: "card"; cardId: string; name: string };
+  | { kind: "card"; cardId: string; name: string; typeLine: string | null };
 
 /** Where a payload was let go: one of the deck's categories, or the tray that takes cards
  *  out. */
@@ -205,9 +217,16 @@ export function cardDraggable({
  */
 export function readDragData(data: Record<string, unknown>): DragPayload | null {
   if (data[MARK_KEY] !== MARK) return null;
-  const { kind, cardId, name, fromCategoryId } = data;
+  const { kind, cardId, name, fromCategoryId, typeLine } = data;
   if (!isId(cardId) || typeof name !== "string") return null;
-  if (kind === "search-card" || kind === "card") return { kind, cardId, name };
+  if (kind === "search-card" || kind === "card") {
+    // A type line is normalised to `null` rather than refused, and that is the difference
+    // between this field and the two above it: `cardId` and `name` decide *what* is being
+    // dropped and a bad one has to stop the drop, while this only decides which pile the card
+    // lands in — and `autoCategoryFor` already has an answer for not knowing. A source that
+    // sends nothing (or sends rubbish) files under `Uncategorised` instead of failing to drop.
+    return { kind, cardId, name, typeLine: typeof typeLine === "string" ? typeLine : null };
+  }
   if (kind === "deck-card" && isCategoryId(fromCategoryId)) {
     return { kind, cardId, name, fromCategoryId };
   }

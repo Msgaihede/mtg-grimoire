@@ -452,17 +452,21 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   `source_uri` character for character, and Scryfall's `?<epoch>` cache-buster **equals**
   `image_updated_at` — so "has the art been updated more recently than ours" needs no clock and
   no mtime. A re-scanned card refetches; nothing else does.
-- **Every deck surface draws `art`, and both warming paths used to produce `grid`.** Measured
-  against the live database 2026-08-11: all 17 deck cards had a `grid` row, **12** had an
-  `art` one, and with an empty collection and wishlist the `deck_cards` arm was the *only* work
-  pre-warming had to do — so it warmed a variant no deck surface asks for, while
-  `prewarm_keys`' own comment said the arm existed for the deck builder. `art` is a different
-  URL on the CDN, so a 100 %-warm `grid` cache contributed nothing: the builder fetched every
-  tile cold, from plain scrollers that mount every row at once against 16 permits, and on a
-  slow link that reads as timeouts. `prewarm_keys` now pairs each arm with the variant its
-  screen draws (`COLLECTION_PREWARM`/`DECK_PREWARM`), and `DeckEditor`/`DecksPage` call
-  `prefetchImages(ids, "art")` the way `SearchPage` calls it with `"grid"`. **A card that is
-  both owned and in a deck is two keys now, not one** — two screens, two pictures.
+- **`prewarm_keys` pairs each arm with the variant its screen draws, and the pairing is the
+  contract — the variants agreeing today is not.** `COLLECTION_PREWARM`/`DECK_PREWARM`, mirrored
+  in TS as `cardControl.tsx`'s `DECK_CARD_VARIANT`, which `DeckEditor` passes to
+  `prefetchImages`. Getting it wrong is **invisible**: the pre-warm reports having warmed every
+  card and the screen then fetches every tile cold anyway, each variant being a different URL on
+  the CDN. Measured against the live database 2026-08-11, when the deck arm was warming `grid`
+  and every deck surface drew `art`: all 17 deck cards had a `grid` row, **12** had an `art` one,
+  and with an empty collection and wishlist the `deck_cards` arm was the *only* work there was —
+  a 100 %-warm cache that bought nothing, from plain scrollers that mount every row at once
+  against 16 permits, which on a slow link reads as timeouts.
+  **Both arms are `Grid` since the deck's stack and grid views draw the whole card**, so a card
+  that is both owned and in a deck is **one** key again rather than two — the `UNION` (never
+  `UNION ALL`) collapses it with no code noticing. They stay two constants because a future
+  surface could move one without the other. `DecksPage` still warms `"art"` and is not this: it
+  warms **covers**, which are 626×457 by construction.
 
 ## Data & sync (measured against the live Scryfall API, 2026-08-04/05)
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
@@ -965,15 +969,25 @@ to guess.
   than being shown uncredited), and **a custom cover carries no artist and needs none**,
   because the rule is Scryfall's and a user's own file is not Scryfall's — which is also why a
   folder strip drops custom covers rather than crediting some of its tiles and not others.
-  **The standing gap, recorded rather than quietly inherited** (`DeckSettingsDialog.tsx`'s
-  `ChoiceTile` doc): four surfaces draw the crop with no credit — the deck's stack rows
-  (`CardStack`), its grid tiles (`views/GridView`), the theory diff's rows and the cover
-  picker's own tiles — because `DeckCardRow` carries no per-row `artist`, and a picker stricter
-  than the views it picks *from* would be an inconsistency a reader can see where this one is
-  not. Every one of those crops sits inside a control that names the card, and the card pane
-  credits the illustrator ("Illustrated by …"). Closing it for all four at once is one column
-  on `DeckCardRow`. Never distort, blur, recolour or watermark a card image, and never crop off
-  a printed credit.
+  **The standing gap is down to two, and it closed by accident rather than by a credit line**
+  (`DeckSettingsDialog.tsx`'s `ChoiceTile` doc): it was four — the deck's stack rows
+  (`CardStack`), its grid tiles (`views/GridView`), the theory diff's rows and the cover picker's
+  own tiles — and the first two now draw the **whole card**, which carries its printed credit. So
+  the remaining two are the theory diff and the picker, both still uncredited because
+  `DeckCardRow` carries no per-row `artist`, and both sitting inside a control that names the
+  card while the pane credits the illustrator ("Illustrated by …"). **The picker being stricter
+  than the views it picks from is a real inconsistency now that those views are compliant** —
+  which is an argument for the one column on `DeckCardRow`, not against it. Never distort, blur,
+  recolour or watermark a card image, and never crop off a printed credit.
+- **A quantity is `−` button, free-typed field, `+` button — and the field's own native spin
+  buttons are suppressed.** `type="number"` is kept for the numeric keyboard and the `min`/`max`
+  it reports to assistive tech, and WebView2 charges for that by drawing ▲▼ *inside* the box: at
+  the deck's `xs` size the field is 32×20px, so two native steps crowd the digits out of a box
+  that has to hold "10" — three pixels from two controls that already do the job.
+  `appearance: none` is **not enough on Chromium**; the spinner is a pseudo-element and needs
+  `::-webkit-inner-spin-button`/`::-webkit-outer-spin-button` addressed as one. It lives on
+  `QuantityStepper` so it lands on every surface that draws one. The field stays free-typed
+  because typing `12` is one action and pressing `+` eleven times is eleven.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. Five surfaces draw a card and each had
   rebuilt part of it. The card pane's main art is the deliberate exception: it keeps a flip
@@ -1284,6 +1298,28 @@ to guess.
   categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
   variant must be one the schema knows, and the category must belong to *this* deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
+- **An add that names no category is filed by the card's type line; an add that names one is
+  untouched.** So every *drag* overrides the rule by construction — pointing at a column is
+  naming a category — and nothing in the write path has to tell a gesture from a press. The rule
+  is `autoCategoryFor` and it is applied on **`useDeck.addCard`'s single definition**, which takes
+  an optional `typeLine`; the *fact* travels from the call site, because that is where a type line
+  already exists. That arrangement is the whole point: the rule stays one TypeScript function
+  (CLAUDE.md's boundary — Rust supplies facts, TS draws conclusions) and **no add pays a round
+  trip to discover what it is adding**. `null` (an orphan, or a layout with no bucket word) is
+  `Uncategorised`; **absent** — a caller with nothing to say — is `DEFAULT_CATEGORY_NAME`, a
+  fence no surface reaches today.
+- **The "Add to" select's default is `AUTO_CATEGORY`, which is `0`, and that zero fixed a real
+  bug.** `DeckEditor` already held `0` as a sentinel meaning "nothing picked yet" that its clamp
+  replaced with `categories[0]` on the first render with a deck — and a deck's seeded categories
+  are `PREDEFINED_CATEGORIES` in order, so **`categories[0]` is Commander**: on a fresh deck every
+  quick add and every panel press landed in the Commander pile, with the field labelled "Quick add
+  a card to Commander". Zero now *means* auto, nothing overwrites it, and the clamp narrows to
+  what its own first sentence always claimed — repairing an id whose category has actually left
+  the deck (which now falls back to auto, not to somebody else's first column). An explicit pick
+  **stays** picked, so ten cards into the Sideboard is one choice and ten presses. Each tile's
+  `+` names the pile it computed ("Add Sol Ring to Artifact"), which only works because
+  `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
+  promise the answer before the press.
 - **A write to what is *in* a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
   add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
@@ -1313,31 +1349,56 @@ to guess.
   manaCost | price | type`). All twelve combinations were driven live 2026-08-11; grouping and
   sorting were correct in every one, and an **inactive category stays its own group in all three
   grouping modes** rather than being folded in by mana value or type. Only `Stacks` and `Grid`
-  fetch art (`cardImageUrl(…, "art")`); `Table` and `Text` are text and draw no picture at all —
+  fetch a picture, and it is the **whole card** — `cardImageUrl(…, DECK_CARD_VARIANT)`, which is
+  `grid`; `Table` and `Text` are text and draw nothing —
   which is why the old single-row view's thumbnail, its `17rem` container query and
   `STACK_MAX_WIDTH` are gone rather than moved.
-- **`CardStack` is the signature interaction, and it is arithmetic, not taste.** A card is
-  **312px** (30px title bar + 256px art + 24px data line + 2 hairlines); collapsed it carries
-  `mb-[-278px]`, so each card advances the stack by exactly **34px** — its title bar. The list is
-  given a **fixed** `stackHeight(n) = 34(n−1) + 312 + 8`, and the lifted card's `hover:mb-2`
-  turns −278 into +8: **a 286px push-down of every card after it, out of the box and over what is
-  below, without the box changing size.** Measured in the shipped window 2026-08-11 (see the live
-  pass below) — heights matched the formula exactly for stacks of 1, 2, 5, 6, 8 and 10, and the
-  push-down measured 286px with the list's height unchanged. **The lift is pure CSS**
+- **A deck card is the whole card, and the app's marks are overlays on it.** Both picture views
+  drew the 626×457 `art` crop inside three app-built bands until 2026-08-12, which showed the one
+  part of a card that does not say what it is: no printed frame, no type line, no rules text, no
+  P/T. Now the picture *is* the card and the frame is gone — with it went `identityTint` (a
+  printed frame is already that colour) and the app-drawn name and mana cost, which is why
+  `deckCardName` on the button is the **only** name a screen reader gets and the fallback writes
+  the name in text. **The marks go right, never left**: a printed name is left-aligned and a
+  collapsed stack is read down its reveal strip, so a quantity chip on the left would cover the
+  one thing identifying the card. It covers the printed mana cost instead — the table view, the
+  pane and the curve all still carry that.
+- **`CardStack` is the signature interaction, and it is arithmetic, not taste — and the card's
+  height is now *derived* rather than chosen.** It is a Magic card's aspect (the `grid` image's own
+  488×680) applied to the 210px that `StackView`'s **fixed** `14rem` column leaves after its
+  padding and the card's border: **295px**. Collapsed it carries `mb-[-261px]`, so each card
+  advances by **34px** — a legibility floor for the overlaid chip rather than a fraction, and
+  unchanged from when 34 was the app's own title bar. The list is given a **fixed**
+  `stackHeight(n) = 34(n−1) + 295 + 8`, and the lifted card's `hover:mb-2` turns −261 into +8:
+  **a 269px push-down of every card after it, out of the box and over what is below, without the
+  box changing size.** The column is never measured, which is what keeps `stackHeight` a function
+  of the count alone. **The lift is pure CSS**
   (`hover:` + `focus-within:`, `LAYER.raisedOnHover`/`raisedOnFocus`), so nothing in JavaScript
-  knows which card is up and the caret gets the interaction for free. The 2026-08-06 removal of
-  the *old* stacked mode is not contradicted: that one drew full card faces at column width, and
-  this one draws a column of 34px title bars.
+  knows which card is up and the caret gets the interaction for free.
+  **The 2026-08-11 live measurements of this are superseded as numbers** (312px cards, −278px,
+  a 286px push-down, a 490px list) — the mechanism they proved is unchanged, and nobody has
+  re-driven the shipped window since. The 2026-08-06 removal of the *old* stacked mode is still
+  not contradicted, and now for a narrower reason: that one drew full card faces **at column
+  width with no overlaid chrome and no 34px reveal**, so a ten-card stack was ten full cards to
+  scroll past rather than a column of title bars.
 - **A printings row in the card pane is clickable to view that printing** —
   `store.viewPrinting` sets `selectedCardId` *without* clearing `paneDeckContext`, so the swap
   offers survive browsing; `setSelectedCardId` there instead silently kills the affordance at its
   one moment of use.
 - **Four card surfaces outside the editor are drag sources, all through the one
-  `cardDraggable`**, and the payload they all carry is `{ kind: "card"; cardId; name }` —
+  `cardDraggable`**, and the payload they all carry is
+  `{ kind: "card"; cardId; name; typeLine }` —
   search tiles, collection *table* rows (the collection's **card** mode is not one: only the
   search wall is handed `CardGrid`'s `dragPayload`), **pinned** wishes only (an any-printing
-  wish names no printing to drag), and the card pane's printings rows. A category column treats `"card"` exactly as the panel's `"search-card"`: add
-  one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
+  wish names no printing to drag), and the card pane's printings rows. The **`typeLine`** is
+  carried by the two adding kinds and never by `"deck-card"`, and it is there for the one drop
+  with no column to point at — the sidebar's Decks entry, which files by `autoCategoryFor`. It is
+  **normalised rather than validated**: `readDragData` refuses a bad `cardId` or `name` (they
+  decide *what* is dropped) and turns anything unusable here into `null`, because the pile is all
+  this decides and `Uncategorised` is already the answer for not knowing. The pane's rows carry
+  the **card's** type line, not the printing's — a `Printing` has none, and which pile a card
+  belongs in is a fact about the card. A category column treats `"card"` exactly as the panel's
+  `"search-card"`: add one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
   it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
   deck open, which — because `setActiveView` clears `openDeckId` — is *every* drag started
   from Search, Collection or Wishlist. So the sidebar's Decks target is reachable only from
@@ -1351,10 +1412,15 @@ are all things no suite could have seen.
 - **The stack's push-down is real**: hovering a card moved its `margin-bottom` −278px → **8px**
   and pushed every later card down by exactly **286px**, while the list's height stayed **490px**
   across the whole gesture. `stackHeight` matched the formula for every stack on screen.
+  **Every number in that sentence is superseded by the 2026-08-12 geometry** (−261 → 8, a 269px
+  push-down) and the *finding* is not: what was measured is that the margin trick pushes cards
+  out of a box whose height does not change, and that is unchanged. Nobody has re-driven it.
   **Hovering a *middle* card means pointing at its title bar** — the cards overlap, so at any y
   the topmost card is the last one whose top is above it, and `hover`'s default approach (from
   directly above the element) lands on the *first* card of the stack and lifts that instead. Aim
-  at `li > button > span:first-child`, and approach sideways with `--from`.
+  at `li > button > span:first-child` — **which the whole-card rewrite moved**: a card is one
+  `<span>` holding the image now, so the strip to aim at is the card's own top ~34px rather than a
+  first-child band. Approach sideways with `--from`.
 - **Reduced motion holds**: `transitionProperty` is `none` on the stack card and on the view
   buttons under `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
   — the exact false failure the harness section warns about, reproduced here on purpose.
@@ -1418,6 +1484,12 @@ are all things no suite could have seen.
 - **The system file picker was not driven.** `dialog:allow-open` opens a native window that CDP
   cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
   path. The encode → write → serve → render half is measured; **the picker → path half is not.**
+- **The whole-card frame (2026-08-12) has never been seen painted.** Its geometry is pinned by
+  `CardStack.test.tsx` — the derivation, the two Tailwind literals and the no-reflow property —
+  and its *pixels* are unproven for the reason directly above: no card image has decoded in this
+  build on this machine. What a live pass would still have to answer is whether the printed name
+  is legible in a 34px reveal at 210px card width, and whether the quantity chip over the printed
+  mana cost reads as a badge rather than as damage.
 - **Linux remains entirely unrun**, as everywhere else in this file.
 - Scryfall bulk data is gzipped **JSONL** (one object/line). Old JSON-array endpoints 404.
 - Every `api.scryfall.com` request needs real `User-Agent` + `Accept` headers.

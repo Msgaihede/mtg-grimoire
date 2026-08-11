@@ -28,7 +28,12 @@ import { dragData, dropWrite, readDragData, type DragPayload } from "./dnd";
 const MAIN = 1;
 const SIDE = 2;
 
-const SEARCH: DragPayload = { kind: "search-card", cardId: "c-bolt", name: "Lightning Bolt" };
+const SEARCH: DragPayload = {
+  kind: "search-card",
+  cardId: "c-bolt",
+  name: "Lightning Bolt",
+  typeLine: "Instant",
+};
 const ROW: DragPayload = {
   kind: "deck-card",
   cardId: "c-bolt",
@@ -37,7 +42,12 @@ const ROW: DragPayload = {
 };
 /** The printing every other surface in the app carries: a search tile, a collection row, a
  *  wish, a printings row. No category, because none of them is inside a deck. */
-const CARD: DragPayload = { kind: "card", cardId: "c-bolt", name: "Lightning Bolt" };
+const CARD: DragPayload = {
+  kind: "card",
+  cardId: "c-bolt",
+  name: "Lightning Bolt",
+  typeLine: "Instant",
+};
 
 describe("dragData / readDragData", () => {
   /** The round trip, every way a drag can start. */
@@ -75,6 +85,27 @@ describe("dragData / readDragData", () => {
     expect(readDragData(marked({ cardId: "" }))).toBeNull();
     expect(readDragData(marked({ cardId: 7 }))).toBeNull();
     expect(readDragData(marked({ name: null }))).toBeNull();
+  });
+
+  /**
+   * …**except the type line, which is normalised rather than refused**, and the asymmetry is the
+   * point. `cardId` and `name` decide *what* is being dropped, so a bad one has to stop the drop.
+   * A type line only decides which pile the card lands in, and `autoCategoryFor` already has an
+   * answer for not knowing — so a source that sends nothing, or sends rubbish, files the card
+   * under `Uncategorised` instead of silently failing to drop it at all.
+   */
+  it("normalises an unusable type line instead of refusing the payload", () => {
+    const marked = (fields: Record<string, unknown>) => ({ ...dragData(CARD), ...fields });
+
+    for (const bad of [undefined, null, 7, {}]) {
+      expect(readDragData(marked({ typeLine: bad }))).toEqual({ ...CARD, typeLine: null });
+    }
+  });
+
+  /** A deck-card payload carries no type line at all — it is a move or a removal, and both name
+   *  a category already — so reading one back must not invent the field. */
+  it("leaves a deck-card payload without a type line", () => {
+    expect(readDragData(dragData(ROW))).not.toHaveProperty("typeLine");
   });
 
   /**

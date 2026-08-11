@@ -577,8 +577,11 @@ describe("CardDetailPane", () => {
     stop();
 
     expect(carried.map(readDragData)).toEqual([
-      { kind: "card", cardId: "p1", name: detail.name },
-      { kind: "card", cardId: "p2", name: detail.name },
+      // The **card's** type line on both rows, not the printing's: a `Printing` carries none,
+      // and which pile a card belongs in is a fact about the card rather than about the piece of
+      // cardboard it was picked up from.
+      { kind: "card", cardId: "p1", name: detail.name, typeLine: detail.typeLine },
+      { kind: "card", cardId: "p2", name: detail.name, typeLine: detail.typeLine },
     ]);
   });
 

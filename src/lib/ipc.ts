@@ -600,6 +600,16 @@ export interface WishRow {
   lang: string | null;
   rarity: string | null;
   manaCost: string | null;
+  /**
+   * The joined card's type line, for one reader: a **pinned wish dragged onto the sidebar's
+   * Decks entry**, which lands in a deck with no column to have been pointed at, so
+   * `autoCategoryFor` names the pile from this and nothing else.
+   *
+   * `null` only when the join found no card at all — an orphan. An *any-printing* wish does
+   * carry one, because the query coalesces to the newest printing of its oracle card, the same
+   * way `rarity` and `manaCost` beside it do. Nothing on the wishlist draws it.
+   */
+  typeLine: string | null;
   quantity: number;
   preferredFinish: string | null;
   /** The cheapest way to satisfy this wish, per copy: the preferred finish's price if one is

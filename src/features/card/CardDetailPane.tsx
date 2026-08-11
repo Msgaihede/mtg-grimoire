@@ -772,16 +772,21 @@ function PrintingRow({
   //
   // The dwell's own `onDragStart` above takes the hover preview down as this starts — wired
   // where the preview lives, so it was already right on the day these rows grew a drag.
+  // The type line is the **card's**, not this row's, and a `Printing` carries none anyway: it
+  // is what `autoCategoryFor` files by when the row is carried somewhere with no column to
+  // point at, and which pile a card belongs in is a fact about the card rather than about which
+  // piece of cardboard it was picked up from.
   const printingId = printing.id;
   const cardName = card.name;
+  const cardTypeLine = card.typeLine;
   useEffect(() => {
     const element = rowRef.current;
     if (!element) return;
     return cardDraggable({
       element,
-      payload: () => ({ kind: "card", cardId: printingId, name: cardName }),
+      payload: () => ({ kind: "card", cardId: printingId, name: cardName, typeLine: cardTypeLine }),
     });
-  }, [printingId, cardName]);
+  }, [printingId, cardName, cardTypeLine]);
 
   return (
     <li

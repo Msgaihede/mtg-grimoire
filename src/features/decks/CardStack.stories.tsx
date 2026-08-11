@@ -82,7 +82,7 @@ export const FixedHeightFromTheCardCount: Story = {
     expect(list.style.height).toBe(`${stackHeight(RAMP.length)}px`);
     // The canvas's own formula, and the slack that lets a lifted card overflow rather than
     // resize its group.
-    expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 286);
+    expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 269);
     expect(stackHeight(RAMP.length) - stackHeight(RAMP.length - 1)).toBe(34);
   },
 };

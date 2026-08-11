@@ -28,6 +28,26 @@ const BUTTON =
   "motion-reduce:transition-none";
 
 /**
+ * The field's own **native** spin buttons, suppressed — so the two steps this control offers
+ * are the two buttons it draws.
+ *
+ * `type="number"` is kept for the numeric keyboard and the `min`/`max` the field reports to
+ * assistive tech, and WebView2 pays for that by drawing its own ▲▼ *inside* the box. At `xs`
+ * the box is 32×20px, so those steps crowd the digits out of a field that has to hold "10" —
+ * and they are a second, tinier way to do what `−` and `+` already do, three pixels from each
+ * other. `appearance: none` alone is not enough on Chromium: the spinner is a pseudo-element
+ * and has to be addressed as one, hence all three declarations.
+ *
+ * Written out as whole class names rather than built up, because Tailwind scans source text and
+ * a class assembled by interpolation emits no rule at all.
+ */
+const NO_NATIVE_STEPS = cn(
+  "[appearance:textfield]",
+  "[&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none",
+  "[&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none",
+);
+
+/**
  * A quantity, and the two buttons that change it.
  *
  * The number is an `<input type="number">` rather than a label: typing `12` is one action
@@ -117,6 +137,7 @@ export function QuantityStepper({
         onBlur={() => setDraft(null)}
         className={cn(
           "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
+          NO_NATIVE_STEPS,
           ring,
           field,
         )}

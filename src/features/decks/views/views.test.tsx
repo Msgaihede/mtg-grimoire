@@ -6,6 +6,7 @@ import { PRICES_AS_OF } from "@/lib/prices";
 import { dragOnto } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
+import { stackHeight } from "../CardStack";
 import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
@@ -486,10 +487,16 @@ describe("StackView columns", () => {
           "category",
           "alphabetical",
         )}
-        // A three-card group is 454px here (46 of header and padding, `stackHeight(3)` = 388,
-        // 20 of gap). Two fit in 950; the empty Maybeboard's 66 does not, so it starts the
-        // second column — which is what makes this assert a *pack* rather than a single box.
-        columnHeight={950}
+        // Exactly two three-card groups tall, and **derived rather than typed**: a group is
+        // `46 + stackHeight(n) + 20` (header and padding, the stack, the gap), and a card's height
+        // is now a Magic card's aspect applied to the column width rather than a number somebody
+        // chose — so a hard-coded ceiling here silently stops testing a pack the day the card
+        // frame changes shape. It did: this read 950 against a 388px three-card stack, which is
+        // 371 now, and all three groups fitted in one column.
+        //
+        // At exactly two groups the empty Maybeboard's 66 does not fit, so it starts the second
+        // column — which is what makes this assert a *pack* rather than a single box.
+        columnHeight={2 * (66 + stackHeight(3))}
       />,
     );
 

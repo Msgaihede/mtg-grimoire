@@ -232,7 +232,15 @@ describe("DeckSearchPanel", () => {
     panel();
 
     expect(screen.getByLabelText("Add to")).toHaveValue(String(MAIN.id));
-    expect(categoryOptions()).toEqual(["Main deck", "Sideboard", "Maybeboard"]);
+    expect(categoryOptions()).toEqual([
+      // Not a category, first, and the editor's default — where a card is filed by its own type
+      // line (`AUTO_CATEGORY`). This panel is driven with an explicit `targetCategoryId` here,
+      // which is why the value above is still `MAIN`.
+      "Auto (by card type)",
+      "Main deck",
+      "Sideboard",
+      "Maybeboard",
+    ]);
   });
 
   /** The other half of the same rule, and the reason the list is a prop: the categories are
@@ -243,7 +251,7 @@ describe("DeckSearchPanel", () => {
     seeded.unmount();
 
     panel({ categories: [MAIN, category({ id: 9, name: "Ramp", sortOrder: 2 })] });
-    expect(categoryOptions()).toEqual(["Main deck", "Ramp"]);
+    expect(categoryOptions()).toEqual(["Auto (by card type)", "Main deck", "Ramp"]);
   });
 
   /**
@@ -271,7 +279,9 @@ describe("DeckSearchPanel", () => {
     stop();
 
     expect(carried.map(readDragData)).toEqual([
-      { kind: "search-card", cardId: BOLT.id, name: BOLT.name },
+      // The type line rides along even though every drop target *inside* the editor names its
+      // own category: a tile can also be let go on the sidebar's Decks entry, which names none.
+      { kind: "search-card", cardId: BOLT.id, name: BOLT.name, typeLine: BOLT.typeLine },
     ]);
   });
 
