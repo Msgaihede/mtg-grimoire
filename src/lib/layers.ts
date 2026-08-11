@@ -37,6 +37,25 @@ export const LAYER = {
    * it is expanded. Written out whole; see the note above.
    */
   raisedWhenPopupOpen: "has-[[aria-expanded=true]]:z-10",
+  /**
+   * The deck stack's lift: a card comes forward while the pointer is on it, and the stack it
+   * is in comes forward with it.
+   *
+   * A stacked card overlaps its neighbours by design, and while one is lifted the cards
+   * *after* it slide down out of the group's fixed height — so both the card (over the cards
+   * before it) and the whole list (over the groups below it in the column) have to leave the
+   * flow's paint order. Still at `raised`: the editor's toolbar and its popups are above.
+   */
+  raisedOnHover: "hover:z-10",
+  /**
+   * The same lift, for the caret. A stack only a mouse can read is a stack half the readers
+   * cannot — so focus does what hover does, here as everywhere in this component.
+   *
+   * `focus-within` rather than `focus`, because the thing that takes focus is the card's own
+   * button and the thing that has to come forward is the list item around it. Written out
+   * whole for the reason above.
+   */
+  raisedOnFocus: "focus-within:z-10",
   /** A table's sticky header row, over the rows scrolling under it. */
   header: "z-20",
   /** Anchored to a control and floating over the page: pickers, quick-adds, menus, previews. */

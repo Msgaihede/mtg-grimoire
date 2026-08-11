@@ -42,13 +42,7 @@ export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price";
  * `src-tauri/src/collection.rs`.
  */
 export type CollectionSortKey =
-  | "name"
-  | "set"
-  | "finish"
-  | "quantity"
-  | "value"
-  | "price"
-  | "added";
+  "name" | "set" | "finish" | "quantity" | "value" | "price" | "added";
 
 /**
  * The wishlist's sortable columns.
@@ -653,6 +647,71 @@ export interface DeckTag {
   color: string;
   /** Copies carrying it, `sum(quantity)` like {@link DeckCategory.cardCount}. */
   cardCount: number;
+}
+
+/**
+ * What one `deck_audit` row says happened — `schema::AUDIT_KINDS`, narrowed.
+ *
+ * A `String` on the Rust struct and a CHECK constraint in SQL, a union here: the database
+ * is the enforcement and this is the mirror, which is the same arrangement
+ * {@link CategoryKind} and {@link DeckVariant} are in.
+ *
+ * The nine split three ways, and the split is why {@link DeckAuditEntry.cardId} is nullable:
+ * `add`/`remove`/`quantity`/`move`/`swap`/`tag` are about **one card**; `category` and
+ * `folder` are about a pile or a filing cabinet; `deck` is about the deck itself.
+ */
+export type DeckAuditKind =
+  "add" | "remove" | "quantity" | "move" | "swap" | "tag" | "category" | "folder" | "deck";
+
+/**
+ * One line of a deck's history — **what happened, not how to say it.**
+ *
+ * The whole design of this table is in {@link DeckAuditEntry.payload}: Rust records the
+ * facts inside the transaction that made the change, and `features/decks/auditText.ts`
+ * turns them into the sentence a person reads. A row that stored the sentence would be a
+ * history that has to be migrated the day the wording changes, and one that could not be
+ * re-rendered in another language or at another length at all.
+ *
+ * Recorded **inside** the caller's transaction, always: an audit row that committed while
+ * the change it describes rolled back is a history that lies.
+ */
+export interface DeckAuditEntry {
+  id: number;
+  deckId: number;
+  /** Unix **seconds**, like {@link DeckRow.updatedAt} — not milliseconds. `auditText`'s
+   *  day grouping multiplies by 1000 exactly once, where the `Date` is built. */
+  at: number;
+  /** Which of the deck's two lists the change was made to. A Theory edit is history too. */
+  variant: DeckVariant;
+  kind: DeckAuditKind;
+  /**
+   * The card the change was about, **softly** referenced like every card id in a user table
+   * — and `null` for the three kinds that are about no card at all (`category`, `folder`,
+   * `deck`).
+   */
+  cardId: string | null;
+  /** Denormalized at write time, for the reason `deck_cards.name` is: a history line still
+   *  names its card the day that printing leaves the card database. */
+  cardName: string | null;
+  /**
+   * **JSON text**, not an object — `payload TEXT NOT NULL CHECK (json_valid(payload))`, so
+   * it arrives as a string and is parsed by the one module that reads it.
+   *
+   * The shape depends entirely on {@link DeckAuditEntry.kind}, and the nine shapes are
+   * written out in `features/decks/auditText.ts`, which is the only place in the app that
+   * looks inside this string. It is deliberately schemaless here: adding a fact to one kind
+   * is a change to a sentence rather than a migration, which is what a log of "all changes"
+   * needs in order to survive being useful.
+   */
+  payload: string;
+  /**
+   * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
+   * remove, the difference on a quantity change, and `0` on everything else.
+   *
+   * Zero is the common case and means "this changed no card count", never "nothing
+   * happened" — a rename, a reorder and a printing swap all record `0`.
+   */
+  delta: number;
 }
 
 /**
@@ -1263,7 +1322,8 @@ export const ipc = {
     toCardId: string,
     categoryId: number,
     variant: DeckVariant,
-  ) => invoke<SwapResult>("deck_swap_printing", { deckId, fromCardId, toCardId, categoryId, variant }),
+  ) =>
+    invoke<SwapResult>("deck_swap_printing", { deckId, fromCardId, toCardId, categoryId, variant }),
   /**
    * Everything this deck is short of, onto the wishlist. Answers how many **wishes were
    * touched** — one per oracle card, so the same card short in two categories is one wish for

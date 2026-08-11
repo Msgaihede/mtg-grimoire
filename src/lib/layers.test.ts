@@ -40,6 +40,16 @@ describe("the layer scale", () => {
   });
 
   /**
+   * The deck stack's two lifts, for the same reason and with the same trap — and they are a
+   * *pair* on purpose: focus does what hover does, so a stack read with the caret comes
+   * forward exactly as far as one read with the pointer.
+   */
+  it("spells the stack lifts out whole, at the raised layer, and pairs them", () => {
+    expect(LAYER.raisedOnHover).toBe(`hover:${LAYER.raised}`);
+    expect(LAYER.raisedOnFocus).toBe(`focus-within:${LAYER.raised}`);
+  });
+
+  /**
    * A scale nothing is obliged to use is a comment. Written as a sweep rather than as a
    * review rule because the failure it prevents — an inline `z-20` losing to a header by
    * document order — is invisible in every test that does not paint.
