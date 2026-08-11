@@ -9,7 +9,7 @@ import {
   type TagSuggestion,
 } from "@/lib/ipc";
 import { autoCategoryFor, UNCATEGORISED } from "./autoCategory";
-import { DEFAULT_CATEGORY_NAME, opened } from "./useDeck";
+import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./useDeck";
 
 /** Stable identities for "not loaded yet", so a consumer's `useMemo` does not re-run on every
  *  render of a panel that is still waiting. */
@@ -51,7 +51,7 @@ const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORISED];
  * its own. It costs nothing here — the row a mutation answers with is its result and is never
  * written into the cache; the invalidation re-reads through this hook's own variant.
  */
-export function useDeckMeta(deckId: number | null, variant: DeckVariant = "live") {
+export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAULT_VARIANT) {
   const queryClient = useQueryClient();
 
   const categoriesQuery = useQuery({
@@ -159,6 +159,14 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = "live"
    * * It only moves cards out of an **active** category. Moving one out of a switched-off pile
    *   would make it count toward size, copies and legality again — a rules change nobody
    *   pressed, in a button labelled "tidy".
+   * * It only moves cards **into** an active category, which is the same hazard seen from the
+   *   other end and is reachable by accident: a reader may own a category called "Creature"
+   *   and have switched it off. Filing a card there would take it *out* of the deck — no size,
+   *   no copy limit, no legality check, no claim — with nothing on screen saying so. This is
+   *   the mirror of the collision `autoCategory.ts` guards against by keeping the rule's answers
+   *   clear of the predefined names, and it needs its own fence because a *user's* category can
+   *   be called anything. Such a card is left where it is; switching the pile back on and
+   *   pressing again files it.
    * * It leaves a card the rule cannot place where it is. `autoCategoryFor` answers
    *   {@link UNCATEGORISED} for an orphan or a layout it has no word for, and moving those from
    *   one loose pile into another is churn dressed as work.
@@ -187,11 +195,20 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = "live"
         .filter(({ card, target }) => target !== UNCATEGORISED && target !== card.categoryName);
       if (moves.length === 0) return 0;
 
+      // The deck as it is now, not as this panel last read it.
+      const existing = await ipc.deckCategoryList(deck, variant);
+      // Only **active** piles are somewhere a card may be filed. An inactive one of the right
+      // name is not a target, and it is not something to create over either: the name is taken,
+      // so `deck_category_create` would refuse it. Both facts are read off the same list.
       const idByName = new Map(
-        (await ipc.deckCategoryList(deck, variant)).map((c) => [c.name, c.id] as const),
+        existing.filter((c) => c.isActive).map((c) => [c.name, c.id] as const),
       );
+      const switchedOff = new Set(existing.filter((c) => !c.isActive).map((c) => c.name));
+
       for (const target of new Set(moves.map((m) => m.target))) {
-        if (!idByName.has(target)) {
+        // A pile this deck has not got at all is made, and is active by construction —
+        // `deck_category_create` seeds `is_active` true.
+        if (!idByName.has(target) && !switchedOff.has(target)) {
           idByName.set(target, (await ipc.deckCategoryCreate(deck, target)).id);
         }
       }
@@ -201,7 +218,8 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = "live"
         const to = idByName.get(target);
         // A target that is somehow the card's own category is skipped rather than sent: the
         // backend would refuse a move to where the card already is, and failing the whole
-        // press over one such row would undo nothing and finish nothing.
+        // press over one such row would undo nothing and finish nothing. A target that is only
+        // held by a switched-off pile is skipped the same way, and reaches here as `undefined`.
         if (to === undefined || to === card.categoryId) continue;
         await ipc.deckMoveCard(deck, card.cardId, card.categoryId, to, variant);
         moved += 1;

@@ -326,6 +326,47 @@ describe("useDeckMeta.autoCategorise", () => {
     expect(deckMoveCard).not.toHaveBeenCalled();
   });
 
+  /**
+   * **The mirror image of the guard above, and the one reachable by accident.**
+   *
+   * A reader may own a category called "Creature" and have switched it off. Filing a card there
+   * would take it *out* of the deck — no size, no copy limit, no legality check, no claim —
+   * with nothing on screen saying so. Nor may the pile be created over: the name is taken, so
+   * `deck_category_create` would refuse it and the whole press would fail.
+   *
+   * So the card stays where it is, and switching the pile back on and pressing again files it.
+   */
+  it("will not file a card into a pile the reader switched off, or create over its name", async () => {
+    deckCategoryList.mockResolvedValue([
+      MAIN,
+      category({ id: 7, name: "Creature", isActive: false }),
+    ]);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(2));
+
+    const moved = await result.current.autoCategorise.mutateAsync([CREATURE]);
+
+    expect(moved).toBe(0);
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    // And it did not try to make a second "Creature" either — the name is taken by the pile
+    // that is switched off, so a create would be refused and take the whole press with it.
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+  });
+
+  /** The same deck once the pile is switched back on: the card files, into the pile that was
+   *  already there rather than into a new one. */
+  it("files into that pile once it is switched back on", async () => {
+    deckCategoryList.mockResolvedValue([MAIN, category({ id: 7, name: "Creature" })]);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(2));
+
+    const moved = await result.current.autoCategorise.mutateAsync([CREATURE]);
+
+    expect(moved).toBe(1);
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, "live");
+  });
+
   /** `autoCategoryFor` answers "Uncategorised" for an orphan or a layout it has no word for.
    *  Moving those from one loose pile into another is churn dressed as work. */
   it("leaves a card the rule cannot place where it is", async () => {

@@ -797,7 +797,23 @@ export interface DeckAuditEntry {
   /** Unix **seconds**, like {@link DeckRow.updatedAt} — not milliseconds. `auditText`'s
    *  day grouping multiplies by 1000 exactly once, where the `Date` is built. */
   at: number;
-  /** Which of the deck's two lists the change was made to. A Theory edit is history too. */
+  /**
+   * Which of the deck's two lists the change was made to — **for the kinds that are about a
+   * list at all.** `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so every row
+   * has to carry *something*, and for four kinds that something is filler.
+   *
+   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of `tag`,
+   * and for the one `deck` row that records a theory copy (which deliberately says `theory`).
+   * It is **filler for the rest**: a category write, a folder filing, a label being created or
+   * deleted and every other `deck` field all record the column's DDL default, `live`, because
+   * none of them is a fact about one variant's cards. `deck_audit::DECK_LEVEL` is literally
+   * `DECK_VARIANTS[0]`.
+   *
+   * So **do not filter a history by variant** — a Theory reader who did would be shown every
+   * category rename and deck setting they had ever changed, and a Live reader would lose half
+   * their history to nothing more than a CHECK constraint. {@link DeckAuditEntry.cardId} draws
+   * the same line one field down, and for the same reason.
+   */
   variant: DeckVariant;
   kind: DeckAuditKind;
   /**
@@ -846,10 +862,17 @@ export interface DeckAuditEntry {
   payload: string;
   /**
    * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
-   * remove, the difference on a quantity change, and `0` on everything else.
+   * remove, the difference on a quantity change, and **`+n` on the one `deck` row that records
+   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the live list and
+   * carries the copies it wrote. `0` on everything else.
+   *
+   * That fourth case is the one worth naming, because it is the exception to the shape of this
+   * list: every *other* nonzero delta belongs to a card-shaped kind, and a reader who took
+   * "card kinds move the number, deck kinds do not" as the rule would be wrong exactly once —
+   * on a row that can move it by ninety-nine.
    *
    * Zero is the common case and means "this changed no card count", never "nothing
-   * happened" — a rename, a reorder and a printing swap all record `0`.
+   * happened" — a rename, a reorder, a move, a tag and a printing swap all record `0`.
    */
   delta: number;
 }
@@ -1438,8 +1461,10 @@ export const ipc = {
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
-   * `variant` scopes the **cards** and nothing else: every category and every tag comes back
-   * either way, so the columns do not change when the reader switches between the two lists.
+   * `variant` scopes the **cards, and the two counts on every category and tag row** — it is
+   * threaded into all three reads. What it does *not* scope is which categories and tags come
+   * back: every one of them does either way, so switching between the two lists changes the
+   * numbers in the column headings and never the columns themselves.
    */
   deckGet: (id: number, variant: DeckVariant) =>
     invoke<DeckDetail | null>("deck_get", { id, variant }),

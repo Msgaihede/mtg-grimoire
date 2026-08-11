@@ -26,8 +26,10 @@ const NO_TAGS: readonly DeckTag[] = [];
  * existed. It is a **default argument** rather than a constant now: a caller with a Live/Theory
  * control passes what the reader chose, and a caller that has none (the sidebar's drop target,
  * the card pane) gets the deck as it stands.
+ *
+ * Exported so every deck hook in this folder defaults to the same word from the same place.
  */
-const DEFAULT_VARIANT: DeckVariant = "live";
+export const DEFAULT_VARIANT: DeckVariant = "live";
 
 /**
  * What an add is filed under when the caller names no category.

@@ -33,6 +33,19 @@ export interface PaneDeckContext {
   /** The printing the deck holds in that slot — the swap's `from`, and normally the card the
    *  pane is showing. */
   cardId: string;
+  /**
+   * **Missing, and known: there is no `variant` here.**
+   *
+   * Schema v8 made a deck two lists and put `variant` in `DECK_CARD_GRAIN`, so this context
+   * names three of the four parts of a slot. `useSwapFromPane` therefore defaults to `live`,
+   * and a pane opened from a **Theory** row either has its swap refused (no row matches) or —
+   * when the same printing sits in the same category of both lists — **swaps the live row while
+   * the reader is looking at the theory one**.
+   *
+   * The fix is a `variant: DeckVariant` field on this interface, set by `openCardFromDeck`'s
+   * two writers, and passed on at `CardDetailPane.tsx`'s `useSwapFromPane` call. Adding it here
+   * is what closes it; the hook already takes the argument.
+   */
 }
 
 /** How the search results are laid out. */

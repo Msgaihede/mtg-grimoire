@@ -150,6 +150,9 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
    */
   const deckRow = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  // No variant passed, so this swaps the **live** list. {@link PaneDeckContext} carries no
+  // variant to pass — see its own doc — so a pane opened from a Theory row addresses the wrong
+  // one. Add the field there and hand it over here; the hook's second argument is waiting.
   const { swap, deckGone } = useSwapFromPane(deckRow);
 
   // A different card is a different card, and the back of the last one is not where a

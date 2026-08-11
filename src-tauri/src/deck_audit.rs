@@ -94,9 +94,15 @@ pub struct DeckAuditEntry {
     /// sentence. The shape per kind is documented on [`record`].
     pub payload: String,
     /// Signed copies, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
-    /// remove, the difference on a quantity change, and **0** on everything else. A move, a
-    /// swap, a tag and every deck- or category-level edit change no count, and a roll-up that
-    /// pretended otherwise would double a card that only ever changed pile.
+    /// remove, the difference on a quantity change, and **`+n` on the one [`DECK`] row that
+    /// records a theory copy** ([`crate::deck_theory::copy_from_live`] carries the copies it
+    /// seeded). **0** on everything else: a move, a swap, a tag and every other deck- or
+    /// category-level edit change no count, and a roll-up that pretended otherwise would
+    /// double a card that only ever changed pile.
+    ///
+    /// The theory copy is the exception to the shape of that list — every other nonzero delta
+    /// belongs to a card-shaped kind — and it is named here because this comment previously
+    /// said "0 on everything else" without it, and `ipc.ts` mirrored the mistake cleanly.
     pub delta: i64,
 }
 
