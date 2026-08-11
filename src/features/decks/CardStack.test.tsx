@@ -1,14 +1,17 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import {
   CardStack,
   STACK_ADVANCE,
   STACK_CARD_HEIGHT,
+  STACK_CLOSE_DELAY_MS,
   STACK_COLLAPSED_MARGIN,
   STACK_LIFTED_MARGIN,
+  STACK_OPEN_ATTR,
+  STACK_OPEN_DWELL_MS,
   stackHeight,
 } from "./CardStack";
 import { card } from "./validation/fixtures";
@@ -35,19 +38,46 @@ const HENGE = "The Great Henge, game changer";
 
 const list = () => screen.getByRole("list", { name: "Ramp" });
 const items = () => screen.getAllByRole("listitem");
+/** The open card, as the component itself says which one it is. See `STACK_OPEN_ATTR`. */
+const openCard = () => list().querySelector(`[${STACK_OPEN_ATTR}]`);
+const openCards = () => list().querySelectorAll(`[${STACK_OPEN_ATTR}]`);
+
+/**
+ * The three pointer moves the stack cares about, and they are spelled as `pointerover` /
+ * `pointerout` on purpose.
+ *
+ * **React does not listen for `pointerenter`.** It listens for `over`/`out` and *derives* the
+ * enter and leave pairs from the two targets, which is what gives them their non-bubbling
+ * boundary semantics — so `fireEvent.pointerEnter` dispatches an event the component never
+ * hears, and a test built on it passes by never having fired the handler at all.
+ * `userEvent.hover` sends the right pair and the geometry suite uses it; these three exist
+ * because `userEvent` cannot be driven under a fake clock (Testing Library's async wrapper
+ * waits on a real `setTimeout` it only knows how to advance through Jest).
+ */
+/** The pointer arrives on a card from outside the stack. */
+const arriveOn = (li: Element) => fireEvent.pointerOver(li);
+/** The pointer crosses to another card without leaving the stack — no `pointerleave` on the
+ *  list, which is exactly the case the close delay is not for. */
+const crossTo = (from: Element, to: Element) => fireEvent.pointerOut(from, { relatedTarget: to });
+/** The pointer leaves the whole stack, which is what schedules the collapse. */
+const leaveStack = (from: Element) =>
+  fireEvent.pointerOut(from, { relatedTarget: document.body });
 
 describe("CardStack geometry", () => {
   /**
    * The four numbers have to agree or the trick does not work: a card advances the stack by
    * exactly its title bar, and the list is the collapsed stack plus one lift's worth of
-   * slack. Written out here because the component spells two of them as Tailwind literals,
-   * which no arithmetic can reach.
+   * slack. Written out here because they decide the whole interaction as well as the look —
+   * with card *N* open, card *k*'s top is `k·34` for `k ≤ N`, so stepping to card *N+1* moves
+   * exactly one card by 286px and leaves every other top alone.
    */
   it("advances by one title bar per card and leaves one lift of slack", () => {
     expect(STACK_CARD_HEIGHT + STACK_COLLAPSED_MARGIN).toBe(STACK_ADVANCE);
     expect(STACK_ADVANCE).toBe(34);
     expect(STACK_COLLAPSED_MARGIN).toBe(-278);
     expect(STACK_LIFTED_MARGIN).toBe(8);
+    // What one step down the stack costs the one card that moves.
+    expect(STACK_LIFTED_MARGIN - STACK_COLLAPSED_MARGIN).toBe(286);
 
     // The canvas's own formula, `34 * cards.length + 286`.
     for (const n of [1, 2, 5, 17]) expect(stackHeight(n)).toBe(34 * n + 286);
@@ -62,56 +92,248 @@ describe("CardStack geometry", () => {
   });
 
   /**
-   * The two spellings of one number. The component writes the collapsed margin as
-   * `mb-[-278px]` and the lift as `mb-2`, because Tailwind scans source text for whole class
-   * names and a class assembled from a constant emits no rule at all — so this is what keeps
-   * the literals and the arithmetic from drifting apart.
+   * **The margin is the animation, and it is written as an inline style now.**
+   *
+   * It used to be two Tailwind literals — the collapsed margin and a `hover:` lift — and the
+   * test in this slot pinned those strings, because nothing else about the lift was reachable
+   * from jsdom. `motion` writes `margin-bottom` onto the element instead (which the shipped
+   * CSP allows: `style-src-attr`), driven by the open card's index, so the two ends of the
+   * geometry are readable rather than merely spelled. That is what this asserts.
+   *
+   * **The card carries no CSS transition of its own any more**, which is the second half and
+   * the reason `lib/tokens.test.ts`'s opt-out sweep no longer has anything here to find. The
+   * opt-out that replaces it is `useReducedMotion()` inside the component: the app-wide
+   * `MotionConfig reducedMotion="user"` makes transforms and `width`/`height`/`top`/`left`
+   * instant and **`margin-bottom` is not in that set**, so a 286px reflow would otherwise run
+   * at full travel for a reader who asked their OS for less. That branch is a source fact — it
+   * produces no DOM difference under the suite's `skipAnimations` — and the live CDP pass owns
+   * proving it, exactly as it owns the paint.
+   *
+   * Real timers, deliberately: `motion` commits the style on an animation frame, and the fake
+   * clock the flip-through tests run on does not drive one.
    */
-  it("a stacked card is pulled up by exactly one card's advance", () => {
+  it("writes the margin as an inline style, from −278px collapsed to 8px open", async () => {
+    const user = userEvent.setup();
     render(<CardStack cards={CARDS} label="Ramp" />);
 
     for (const item of items()) {
-      expect(item.className).toContain(`mb-[${STACK_COLLAPSED_MARGIN}px]`);
-      // `mb-2` is 0.5rem, and the app's root font size is the browser's 16px.
-      expect(item.className).toContain("hover:mb-2");
-      expect(STACK_LIFTED_MARGIN).toBe(8);
+      expect(item.style.marginBottom).toBe(`${STACK_COLLAPSED_MARGIN}px`);
+      expect(item.className).not.toContain("transition-");
     }
+
+    await user.hover(items()[0]);
+    await waitFor(() => expect(items()[0]).toHaveAttribute(STACK_OPEN_ATTR));
+    await waitFor(() => expect(items()[0].style.marginBottom).toBe(`${STACK_LIFTED_MARGIN}px`));
+    // And nothing else moved: one step, one card.
+    expect(items()[1].style.marginBottom).toBe(`${STACK_COLLAPSED_MARGIN}px`);
+    expect(items()[2].style.marginBottom).toBe(`${STACK_COLLAPSED_MARGIN}px`);
+  });
+});
+
+/**
+ * **The defect this component was rebuilt for, and the two delays that close it.**
+ *
+ * A closed card is overlapped by 278px by its successor, so the only hittable part of one is
+ * its 34px strip — which means a continuous downward sweep crosses four or five of them in
+ * ~60ms. Under the CSS `:hover` this replaced, every one of those armed instantly and the
+ * reader landed several cards below the one they aimed at. What was missing was hover intent:
+ * an open dwell, so a sweep commits to nothing until it settles, and a close delay that
+ * *arming another card cancels*, so crossing between two cards never shows a closed stack.
+ *
+ * The clock is fake and only `setTimeout` is faked — `requestAnimationFrame` is left real so
+ * `motion` is never mid-anything these assertions can trip over. What is read is the component's
+ * own answer to "which card is open" (`STACK_OPEN_ATTR`), which React commits synchronously.
+ */
+describe("CardStack flip-through", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const mount = () => render(<CardStack cards={CARDS} label="Ramp" onSelect={vi.fn()} />);
+
+  /** Advance the fake clock and let React commit whatever that woke. */
+  const tick = async (ms: number) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
+  /**
+   * **The sweep.** Three strips crossed, none of them dwelt on, and nothing opens — then the
+   * one the pointer settles on does. This is the whole bug: before the dwell, this sequence
+   * opened and closed three cards and left the third one up.
+   */
+  it("opens nothing while the pointer is still crossing strips", async () => {
+    mount();
+
+    arriveOn(items()[0]);
+    await tick(STACK_OPEN_DWELL_MS - 1);
+    expect(openCard()).toBeNull();
+
+    for (const index of [1, 2]) {
+      crossTo(items()[index - 1], items()[index]);
+      await tick(STACK_OPEN_DWELL_MS - 1);
+      expect(openCard()).toBeNull();
+    }
+
+    // Standing still on the last of them is what commits, and it commits to that one only.
+    await tick(1);
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[2]);
+  });
+
+  it("opens exactly one card once the pointer settles", async () => {
+    mount();
+
+    arriveOn(items()[1]);
+    expect(openCard()).toBeNull();
+    await tick(STACK_OPEN_DWELL_MS);
+
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[1]);
+  });
+
+  /**
+   * **Arming a card cancels a pending close, and this is the frame it exists for.**
+   *
+   * The close is scheduled 180ms out; the second card's dwell commits at 189ms. Without the
+   * cancel the stack would be fully closed for those nine milliseconds — and in the real
+   * gesture, for however long the reader takes between two cards. The assertion at 189ms is
+   * the one that fails if the cancel is dropped.
+   */
+  it("never shows a closed stack while the reader crosses to the next card", async () => {
+    mount();
+
+    arriveOn(items()[0]);
+    await tick(STACK_OPEN_DWELL_MS);
+    expect(openCard()).toBe(items()[0]);
+
+    // The pointer leaves the stack, which schedules the collapse rather than performing it.
+    leaveStack(items()[0]);
+    await tick(STACK_CLOSE_DELAY_MS - 60);
+    expect(openCard()).toBe(items()[0]);
+
+    // …and arriving on another card cancels it. 120 + 69 = 189ms in, nine past the moment the
+    // collapse was due, and card 0 is still the one standing.
+    arriveOn(items()[1]);
+    await tick(STACK_OPEN_DWELL_MS - 1);
+    expect(openCard()).toBe(items()[0]);
+
+    await tick(1);
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[1]);
+  });
+
+  it("closes after the delay when the pointer leaves the stack, and not before", async () => {
+    mount();
+
+    arriveOn(items()[0]);
+    await tick(STACK_OPEN_DWELL_MS);
+    leaveStack(items()[0]);
+
+    await tick(STACK_CLOSE_DELAY_MS - 1);
+    expect(openCard()).toBe(items()[0]);
+    await tick(1);
+    expect(openCard()).toBeNull();
+  });
+
+  /**
+   * **The caret does not dwell.** A pointer crossing a strip may not have meant it; a reader
+   * who moved the caret did, so a delay there is lag and nothing else. The close delay is
+   * kept, because stepping between two cards would otherwise collapse the stack between them.
+   *
+   * Focus is put on the button by hand rather than by `userEvent.tab()`, for the fake clock's
+   * sake — the tab *order* is a different claim and `reaches every card with the keyboard`
+   * makes it on a real one.
+   */
+  it("opens at once for the caret, and closes on the same delay as the pointer", async () => {
+    mount();
+    const buttons = screen.getAllByRole("button");
+
+    act(() => buttons[0].focus());
+    expect(buttons[0]).toHaveFocus();
+    // No tick at all: the caret does not wait out the dwell.
+    expect(openCard()).toBe(items()[0]);
+
+    act(() => buttons[1].focus());
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[1]);
+
+    // Off the stack entirely: still up, and down after the delay.
+    act(() => buttons[1].blur());
+    expect(openCard()).toBe(items()[1]);
+    await tick(STACK_CLOSE_DELAY_MS);
+    expect(openCard()).toBeNull();
+  });
+
+  /** A dwell that outlives its stack would call `setState` on a component that is gone — and
+   *  a group unmounts whenever the deck regroups, which is every card write. */
+  it("takes its timers with it when the group unmounts", () => {
+    const { unmount } = render(<CardStack cards={CARDS} label="Ramp" />);
+
+    arriveOn(items()[0]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
 describe("CardStack does not reflow", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const tick = async (ms: number) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
   /**
    * **The rule the whole component exists for.** The list's height is a function of the card
-   * count and nothing else, so lifting a card cannot resize the group — the header above it
+   * count and nothing else, so opening a card cannot resize the group — the header above it
    * does not move, and neither does any group under it in the column.
    *
-   * The mechanism is that there is *no hover state in JavaScript to depend on*: the lift is
-   * `hover:`/`focus-within:` in CSS, which jsdom does not apply. So this test drives the two
-   * gestures that would set such a state if one existed and reads the height back. It fails
-   * the day someone reaches for `useState` here, which is the only way this can regress.
+   * It was `hovering_a_card_does_not_change_the_group_height`, and the rename is the point:
+   * the old version could only *drive the gestures that would set a hover state if one
+   * existed*, because the lift was CSS and jsdom applies none. There is a state now, this test
+   * really opens a card — the assertion on `STACK_OPEN_ATTR` is what says so — and the height
+   * is read back across an open, a close and a focus. It fails the day `stackHeight`'s answer
+   * learns which card is up.
    *
    * What it cannot see is the paint. That is the live pass's, and the numbers it would
    * measure are pinned by the geometry suite above.
    */
-  it("hovering_a_card_does_not_change_the_group_height", async () => {
-    const user = userEvent.setup();
+  it("opening_a_card_does_not_change_the_group_height", async () => {
     render(<CardStack cards={CARDS} label="Ramp" onSelect={vi.fn()} />);
 
     const before = list().style.height;
     expect(before).toBe(`${stackHeight(CARDS.length)}px`);
 
-    // The first card, which every card after it would be pushed down by; then the last,
-    // which nothing follows.
-    for (const name of [SOL_RING, HENGE]) {
-      await user.hover(screen.getByRole("button", { name }));
+    // The first card, which every card after it is pushed down by; then the last, which
+    // nothing follows.
+    for (const index of [0, CARDS.length - 1]) {
+      arriveOn(items()[index]);
+      await tick(STACK_OPEN_DWELL_MS);
+      expect(items()[index]).toHaveAttribute(STACK_OPEN_ATTR);
       expect(list().style.height).toBe(before);
-      await user.unhover(screen.getByRole("button", { name }));
+
+      leaveStack(items()[index]);
+      await tick(STACK_CLOSE_DELAY_MS);
+      expect(openCard()).toBeNull();
       expect(list().style.height).toBe(before);
     }
 
     // And the caret, which does the same thing the pointer does.
-    await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: SOL_RING }));
+    act(() => screen.getByRole("button", { name: SOL_RING }).focus());
+    expect(items()[0]).toHaveAttribute(STACK_OPEN_ATTR);
     expect(list().style.height).toBe(before);
   });
 
@@ -145,33 +367,38 @@ describe("CardStack does not reflow", () => {
 
   /**
    * The other half of the same idea, and neither works alone: the height is what stops the
-   * group resizing, and `overflow: visible` is what lets the lifted card — and the cards it
+   * group resizing, and `overflow: visible` is what lets the open card — and the cards it
    * pushes down — leave the box instead of being clipped inside it.
    */
-  it("lets a lifted card leave the box rather than clipping it", () => {
+  it("lets an open card leave the box rather than clipping it", () => {
     render(<CardStack cards={CARDS} label="Ramp" />);
     expect(list().className).toContain("overflow-visible");
   });
 
-  /** The lift travels up as well as out: the card comes forward over the cards before it,
-   *  and the stack comes forward over the groups below it in the column. */
-  it("lifts the card and its stack out of the paint order, for the pointer and the caret", () => {
+  /**
+   * The lift travels up as well as out: the open card comes forward over the cards before it,
+   * and the stack comes forward over the groups below it in the column.
+   *
+   * It used to be a pair of `LAYER` entries spelling `hover:` and `focus-within:` variants,
+   * which meant every card in every stack in the app carried both rules whether or not
+   * anything was open. It is the plain class applied from state now, so this asserts the part
+   * a variant could never say: that at rest **nothing** in the group is raised, and that
+   * opening one card raises that card and the list and nothing else.
+   */
+  it("raises the open card and its stack, and nothing at rest", async () => {
     render(<CardStack cards={CARDS} label="Ramp" />);
 
     for (const element of [list(), ...items()]) {
-      expect(element.className).toContain(LAYER.raisedOnHover);
-      expect(element.className).toContain(LAYER.raisedOnFocus);
+      expect(element.className).not.toContain(LAYER.raised);
     }
-  });
 
-  /** WCAG 2.3.3, and the app's own rule: every transition has an opt-out. Probed as the
-   *  *property*, never the duration — `transition-none` leaves the duration alone. */
-  it("stands still for a reader who asked for less motion", () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
-    for (const item of items()) {
-      expect(item.className).toContain("transition-[margin-bottom]");
-      expect(item.className).toContain("motion-reduce:transition-none");
-    }
+    arriveOn(items()[1]);
+    await tick(STACK_OPEN_DWELL_MS);
+
+    expect(list().className).toContain(LAYER.raised);
+    expect(items()[1].className).toContain(LAYER.raised);
+    expect(items()[0].className).not.toContain(LAYER.raised);
+    expect(items()[2].className).not.toContain(LAYER.raised);
   });
 });
 
@@ -189,6 +416,19 @@ describe("CardStack cards", () => {
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect.mock.calls[0][0].name).toBe("Arcane Signet");
+  });
+
+  /** A press on a card opens it in the pane, once — and the flip-through, which now hears the
+   *  focus that press causes, must not have turned one press into two. */
+  it("opens a card once when it is clicked", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<CardStack cards={CARDS} label="Ramp" onSelect={onSelect} />);
+
+    await user.click(screen.getByRole("button", { name: HENGE }));
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0][0].name).toBe("The Great Henge");
   });
 
   /**
