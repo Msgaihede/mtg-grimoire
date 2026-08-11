@@ -858,7 +858,7 @@ fn invalid_utf8_becomes_a_replacement_character_and_not_a_failure() {
 }
 ```
 
-Test the inner `read_import_file(path: &Path) -> Result<String, String>`; the command is a thin async wrapper. Use `tempfile`'s equivalent already used elsewhere in the crate — check `maintenance.rs`'s tests for the pattern in use.
+Test the inner `read_import_file(path: &Path) -> Result<String, String>`; the command is a thin async wrapper. **There is no `tempfile` dev-dependency and you may not add one** — build the temp path with `std::env::temp_dir()` and a unique name, and clean up after. Read `maintenance.rs`'s tests for the pattern already in use, and note that one of them has a known temp-dir race: give your files names that cannot collide with a parallel test.
 
 - [ ] **Step 2: Run them and watch them fail**
 
