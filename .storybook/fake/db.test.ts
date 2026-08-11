@@ -20,6 +20,7 @@ import type {
   DeckDetail,
   EntryChange,
   EntryInput,
+  SearchRequest,
   SearchSortKey,
   WishlistPage,
   WishlistSortKey,
@@ -284,6 +285,155 @@ describe("the paper filter", () => {
     const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: vma.id })] });
     const page = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } });
     expect(page.items).toHaveLength(1);
+  });
+});
+
+/**
+ * `index::facets::compute`, mirrored.
+ *
+ * **Every dimension is counted over a base carrying every filter EXCEPT its own** — Solr's
+ * `excludeTags` rule — so none of the numbers below is "how many cards are red". A test that
+ * read them that way would pass against a facet that greys the whole picker on the first
+ * press, which is the bug this rule exists to not have.
+ *
+ * The counts are measured over `CARDS` (43 rows, 41 of them paper) rather than derived from
+ * the handler, for the reason every other block here is: a fixture that agreed with the code
+ * would agree with a broken one.
+ */
+describe("facet counts", () => {
+  /** One request's facets. `limit`/`offset` are filled in because `SearchRequest` requires
+   *  them and facets depend on neither — that is why they are a separate command. */
+  const facets = (db: FakeDb, req: Omit<SearchRequest, "limit" | "offset">) =>
+    readHandlers(db).facet_cards({ req: { ...req, limit: 0, offset: 0 } });
+
+  it("counts a dimension with its own filter removed, while every other one narrows", () => {
+    const f = facets(makeDb(), { sets: ["lea"] });
+    expect(f.total).toBe(4);
+    expect(f.sets.lea).toBe(4);
+    // Still offered, still counted: `2x2` reports what picking it *would* give.
+    expect(f.sets["2x2"]).toBe(1);
+    // …while the format select does narrow by it — 2 of the 4 `lea` printings are
+    // modern-legal, against 27 over the whole paper corpus.
+    expect(f.formats.modern).toBe(2);
+  });
+
+  it("sends every set code in the corpus, zeros included", () => {
+    const f = facets(makeDb(), { text: "bolt" });
+    // 33 distinct codes over the 43 fixture rows; the four Bolt printings are in four of
+    // them, so 29 arrive as an explicit 0. `FacetResponse.sets` promises a key is never
+    // absent, which is what lets the picker grey a row instead of dropping it.
+    expect(Object.keys(f.sets)).toHaveLength(33);
+    expect(f.sets.lea).toBe(1);
+    expect(f.sets["2ed"]).toBe(0);
+  });
+
+  it("treats setCode and sets as one dimension, intersecting rather than unioning", () => {
+    // `facets::union_sets`: the SQL pushes the two as separate `WHERE` terms, so a request
+    // carrying both means "in this set AND in one of these".
+    expect(facets(makeDb(), { setCode: "lea", sets: ["2x2"] }).total).toBe(0);
+    // And the picker's own counts ignore **both**, or opening it on a request that already
+    // names a set would offer nothing but that set.
+    expect(facets(makeDb(), { setCode: "lea" }).sets["2x2"]).toBe(1);
+  });
+
+  it("reports a colour as the result after toggling it, because colours broaden", () => {
+    const none = facets(makeDb(), {});
+    expect(none.total).toBe(41);
+    // Subset semantics, so this is mono-R plus the colourless cards — a narrowing count.
+    expect(none.colors.R).toBe(15);
+
+    const red = facets(makeDb(), { colors: "R" });
+    expect(red.total).toBe(15);
+    // Pressing W with R on asks for "castable in RW", a superset — never a shrink.
+    expect(red.colors.W).toBe(22);
+    // Pressing R again clears the filter.
+    expect(red.colors.R).toBe(41);
+  });
+
+  it("makes the colourless chip exclusive both ways, as `toggleColor` does", () => {
+    expect(facets(makeDb(), { colors: "R" }).colors.C).toBe(9);
+    const c = facets(makeDb(), { colors: "C" });
+    expect(c.total).toBe(9);
+    expect(c.colors.C).toBe(41);
+    // W/R replaces it rather than joining it: `"RC"` would silently mean plain `"R"`.
+    expect(c.colors.R).toBe(15);
+  });
+
+  it("counts a colour over the paper decision the request made, not over the default", () => {
+    // The colour dimension is the one that re-runs a filter over its own base, so it is the
+    // one that can put the paper default back on a base that asked for digital printings.
+    expect(facets(makeDb(), { paperOnly: false }).colors.R).toBe(16);
+  });
+
+  it("matches a mana chip exactly below 8 and as a range at 8", () => {
+    const f = facets(makeDb(), {});
+    // `Little Girl` (`unh`, cmc 0.5) is the corpus' one fractional cost and it belongs to
+    // **no** chip — `Math.trunc` would file it under 0 and promise a card the search will
+    // not return.
+    expect(CARDS.some((c) => c.isPaper && c.cmc === 0.5)).toBe(true);
+    expect(f.manaValues["0"]).toBe(CARDS.filter((c) => c.isPaper && c.cmc === 0).length);
+    // 8 is open-ended: Avacyn (8), Kozilek (10), Emrakul (15).
+    expect(f.manaValues["8"]).toBe(3);
+  });
+
+  it("counts the chips and the format select with their own filter removed", () => {
+    const mana = facets(makeDb(), { manaValues: [1] });
+    expect(mana.total).toBe(12);
+    expect(mana.manaValues["2"]).toBe(5);
+
+    const standard = facets(makeDb(), { format: "standard" });
+    expect(standard.total).toBe(4);
+    expect(standard.formats.modern).toBe(27);
+  });
+
+  it("empties the result on a format it has never heard of, but not the format select", () => {
+    const f = facets(makeDb(), { format: "nonesuch" });
+    expect(f.total).toBe(0);
+    expect(f.sets.lea).toBe(0);
+    // The way out stays open: greying every format at the one moment the reader needs to
+    // pick a different one would strand them there.
+    expect(f.formats.modern).toBe(27);
+  });
+
+  it("counts both sides of the owned cycle as if `owned` were not set", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
+    const f = facets(db, { owned: true });
+    expect(f.total).toBe(1);
+    expect(f.owned).toEqual({ owned: 1, missing: 40 });
+  });
+
+  it("answers the number the search does, because both derive from one filter mirror", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
+    // **`rarity` is deliberately not among these**: the index has no rarity dimension, so
+    // `facets::base` drops it and a rarity-filtered request is faceted as though it were
+    // unfiltered. The fake mirrors that gap, so the two really do disagree there — a case
+    // added here for it would be right about the code and wrong about the backend.
+    const cases: Omit<SearchRequest, "limit" | "offset">[] = [
+      {},
+      { colors: "R" },
+      { text: "bolt", manaValues: [1] },
+      { owned: false },
+      { sets: ["lea"], format: "vintage" },
+    ];
+    for (const req of cases) {
+      const page = readHandlers(db).search_cards({ req: { ...req, limit: 200, offset: 0 } });
+      expect(facets(db, req).total).toBe(page.total);
+    }
+  });
+
+  it("is ready by default, and answers the indexCold fault with every map empty", () => {
+    expect(facets(makeDb(), {}).ready).toBe(true);
+
+    const cold = facets(makeDb({ fault: "indexCold" }), {});
+    expect(cold.ready).toBe(false);
+    expect(cold.total).toBe(0);
+    // Empty, not zeros. `ready: false` means "we did not count", and the UI leaves every
+    // control live on it; a map of zeros would say "this is empty" and grey the lot.
+    expect(cold.sets).toEqual({});
+    expect(cold.colors).toEqual({});
+    expect(cold.manaValues).toEqual({});
+    expect(cold.formats).toEqual({});
+    expect(cold.owned).toEqual({ owned: 0, missing: 0 });
   });
 });
 
