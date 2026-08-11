@@ -13,7 +13,7 @@ import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { readDragData } from "@/features/decks/dnd";
-import { manaLineSync } from "@/lib/mana";
+import { syncActivity } from "@/lib/activity";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
@@ -119,7 +119,7 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
           upToDate={upToDate}
           hasError={error !== null}
           onRefresh={refresh}
-          sync={manaLineSync(progress, busy)}
+          sync={syncActivity(progress, busy)}
           updateVersion={update.status?.available?.version ?? null}
           updateInstallable={update.action !== "unavailable"}
           onOpenUpdate={() => setActiveView("settings")}

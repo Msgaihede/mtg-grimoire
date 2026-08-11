@@ -6,8 +6,6 @@
  * `mana-font` class names that draw them, and the gradient behind the app's one signature
  * element. Nothing else in the app invents a colour.
  */
-import type { SyncPhase, SyncProgressEvent } from "@/lib/ipc";
-import { PHASE_LABEL } from "@/lib/useSyncProgress";
 
 /** The filter chips: WUBRG plus colourless. */
 export const MANA_KEYS = ["W", "U", "B", "R", "G", "C"] as const;
@@ -137,32 +135,15 @@ function manaGlyphClass(token: string): string | null {
  */
 export const MANA_LINE_GRADIENT = `linear-gradient(90deg, var(--color-mana-w) 0%, var(--color-mana-u) 25%, var(--color-mana-b) 50%, var(--color-mana-r) 75%, var(--color-mana-g) 100%)`;
 
-/** What the mana line is showing, or `null` when it is just a line. */
+/**
+ * What the mana line draws — the subset of an `Activity` the line itself needs.
+ *
+ * `Activity` extends this, so the ribbon hands the top job straight to `ManaLine`. It stays
+ * here rather than moving to `activity.ts` because it is a property of the *line*: a
+ * fraction and a name for it are all a 2px rule can carry.
+ */
 export interface ManaLineSync {
   /** 0–1, or `null` for a phase with no denominator. */
   value: number | null;
   label: string;
-}
-
-/**
- * Fold a sync into what the line should draw.
- *
- * `busy` decides, not the event: a run inside the 24 h check window emits nothing at all,
- * and Tauri drops the events emitted before the webview started listening — so an event
- * is evidence of progress, never of running. `done` and `error` are terminal phases whose
- * event can outlive the run by a poll interval, so they read as indeterminate rather than
- * as a full or empty bar.
- */
-export function manaLineSync(
-  progress: SyncProgressEvent | null,
-  busy: boolean,
-): ManaLineSync | null {
-  if (!busy) return null;
-  const phase: SyncPhase | null =
-    progress && progress.phase !== "done" && progress.phase !== "error" ? progress.phase : null;
-  if (!phase || !progress) return { value: null, label: "Syncing card data" };
-  return {
-    value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
-    label: PHASE_LABEL[phase],
-  };
 }
