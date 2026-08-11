@@ -1662,8 +1662,17 @@ export const ipc = {
    *
    * Normally implicit — `deckUpdate(id, { theoryEnabled: true })` does this in the same
    * transaction when the theory list is empty — and offered separately for the reader who
-   * wants to start again from what is sleeved up. It folds rather than duplicating, so a
-   * theory list that already holds a card is not doubled.
+   * wants to start again from what is sleeved up.
+   *
+   * **It skips rather than folding, and the difference is the whole point of the command.**
+   * `deck_theory::seed_from_live` is `ON CONFLICT(deck, variant, category, card) DO NOTHING`:
+   * a theory row the reader already made is *their plan for that card*, and topping it up with
+   * the live count would silently overwrite the very edit the theory list exists to hold. So a
+   * card the plan already holds one of stays at **one** however many are sleeved up — this is
+   * the one place in this file where a repeated card is not summed, and "fold" (which means
+   * *sum the quantities* in {@link SwapResult.folded}, {@link ipc.deckAddCard} and
+   * {@link ipc.deckCategoryDelete}'s move arm) is the wrong word for it. Idempotent, never
+   * destructive, and the number it answers is **rows written** — the ones that were missing.
    */
   deckTheoryCopyFromLive: (deckId: number) =>
     invoke<number>("deck_theory_copy_from_live", { deckId }),
