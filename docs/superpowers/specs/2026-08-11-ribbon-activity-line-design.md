@@ -51,12 +51,12 @@ Gaps of ten, so a job that belongs between two existing ones does not renumber t
 
 A **vanilla zustand store created inside an `ActivityProvider`**, not a module global.
 
-Two reasons, both load-bearing. Selector subscriptions mean an ingest's progress events
-re-render the status line and the mana line and nothing else — a `useState` in a common
-parent would re-render every view under it fifty-odd times per sync. And a store owned by a
-provider is the one shape Storybook's per-story world can isolate: CLAUDE.md already records
-`useAppStore` as *the* global that cannot be made per-story from `.storybook/`, and this
-should not become the second.
+Two reasons. A store owned by a provider is the one shape Storybook's per-story world can
+isolate — CLAUDE.md already records `useAppStore` as *the* global that cannot be made
+per-story from `.storybook/`, and this should not become the second. And a subscriber picks
+up the top job wherever it is mounted, without the state having to live in a component above
+it: a Settings panel or a future status bar reading the same job costs one subscription
+rather than a hoist that re-renders everything in between.
 
 The provider sits at the top of `AppShell`, which is above both of today's writers **and**
 above `children` — so a future import started from Settings registers a job with no
