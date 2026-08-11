@@ -5,7 +5,7 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { ipc } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
+import { DECK_CARD_ATTR } from "./dnd";
 import { DeckEditor } from "./DeckEditor";
 
 /** Sol Ring's two printings, by id — the fold's two halves, and the only two rows in the corpus
@@ -64,7 +64,7 @@ const meta = {
   // same key, for the same reason.
   render: (args) => <Editor key={`${args.deckId}:${args.pane}`} {...args} />,
   decorators: [
-    // The editor is `h-full`, so it needs a parent with a height or its zone columns have none.
+    // The editor is `h-full`, so it needs a parent with a height or its columns have none.
     // 1032px is exactly the content column at the 1280×800 window `tauri.conf.json:16-17` opens:
     // 1280 less the sidebar's `w-52` (208px) and less `main`'s `p-5` on both sides (40px), from
     // `AppShell.tsx:92` and `AppShell.tsx:144`. 720px of height is chosen rather than derived —
@@ -83,20 +83,31 @@ const meta = {
           "of its own. **There is no Save**: every control writes through one of Task 4's " +
           "commands and the list redraws from what the database answered, which is what " +
           "“autosave drafts” honestly means for a deck — the row *is* the draft.\n\n" +
+          "**The columns are the deck's own categories** (schema v7), in `sortOrder`, empty and " +
+          "switched-off ones included — never a fixed set of zones, and never filtered by the " +
+          "format. A category is a row the user names, orders and switches on or off, so hiding " +
+          "one would hide a pile they built; the format still *judges* the deck through the " +
+          "check chip and no longer decides what is drawn.\n\n" +
           "Driven end to end by `.storybook/fake/`. The three seeded decks, measured 2026-08-10 " +
           'over `readHandlers(seed("starter")).deck_get`: **deck 1 `Modern Goodstuff`** is 18 ' +
-          "rows — 60 main, 15 sideboard, 2 in the scratchpad — and validates **clean**; " +
+          "rows — 60 main, 15 sideboard, 2 on the Maybeboard — and validates **clean**; " +
           "**deck 2 `Kenrith Two-Drops`** is 99 main + 1 commander + 1 companion and produces " +
-          "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards.\n\n" +
-          "**Zero removes a deck row.** A zone slot holds an intention and nothing else, so it " +
-          "sides with the wishlist rather than with the collection — and there is **no remove " +
-          "mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)` " +
-          "(`useDeck.ts:158-182`). {@link ZeroRemovesTheRow} is that, pressed.\n\n" +
-          "**`maybe` counts toward nothing at all** — not size, not copies, not legality — and " +
-          "the allocator never claims a copy for it, so every scratchpad row reads `0` owned " +
-          "**by design** rather than for want of copies. {@link MaybePile} is the proof, on a " +
-          "row that is `modern: not_legal` while the chip beside it still reads no issues.\n\n" +
-          "**Owned is an allocation, never a decrement.** It is rebuilt on a zone write, the " +
+          "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards. All " +
+          "three came through the v7 migration, so their five columns read Commander, Main " +
+          "deck, Sideboard, Companion, Maybeboard — a deck made *today* has only the four " +
+          "predefined ones ({@link EmptyDeck}).\n\n" +
+          "**Zero removes a deck row.** A category slot holds an intention and nothing else, so " +
+          "it sides with the wishlist rather than with the collection — and there is **no " +
+          "remove mutation**: the tray's drop and the stepper's zero are both " +
+          "`setQuantity(…, 0)`. {@link ZeroRemovesTheRow} is that, pressed.\n\n" +
+          "**An inactive category counts toward nothing at all** — not size, not copies, not " +
+          "legality — and the allocator never claims a copy for one, so every row in it reads " +
+          "`0` owned **by design** rather than for want of copies. That is `isActive` and never " +
+          "the word `maybe`: the Maybeboard is one seeded row that starts switched off, and a " +
+          "pile of the user's own that they switch off behaves identically. {@link MaybePile} " +
+          "is the proof, on a row that is `modern: not_legal` while the chip beside it still " +
+          "reads no issues.\n\n" +
+          "**Owned is an allocation, never a decrement.** It is rebuilt on a card write, the " +
           "Built toggle, or “Send missing to wishlist” — those three and nothing else — and a " +
           "**built** deck's claims come off what every other deck can see. Measured 2026-08-10 " +
           "by flipping deck 2's `isBuilt` off and re-reading deck 1: Counterspell 1→2, Ragavan " +
@@ -109,7 +120,7 @@ const meta = {
           "under `App`, and `DeckEditor.tsx:330-337` says in as many words that its entry in the " +
           "refused-write family can never fire from here. {@link SwapFolds} therefore renders " +
           "the pair, as `App` does.\n\n" +
-          "**Drag-and-drop has no story on this page, and that is deliberate.** The zones are " +
+          "**Drag-and-drop has no story on this page, and that is deliberate.** The columns are " +
           "drop targets and four surfaces are drag sources, but Storybook runs in an ordinary " +
           "browser with no WRY OLE drop target — while the shipped window depends on " +
           '`"dragDropEnabled": false` in `tauri.conf.json`, which is embedded at compile time. ' +
@@ -126,13 +137,19 @@ type Story = StoryObj<typeof meta>;
 /**
  * Sixty Modern-legal cards, a full sideboard, and nothing wrong with any of it.
  *
- * Three columns rather than four: `main` is unconditional, `side` is drawn because Modern's
- * `sideboardMax` is 15, `companion` because its `allowsCompanion` is true — and `commander` is
- * absent because Modern requires none *and* the zone is empty. A zone holding cards is drawn
- * whatever the format says, so a re-format can never leave copies invisible and still counted.
+ * **Five columns, because the deck has five categories** — and Modern's rules have nothing to say
+ * about which of them are drawn. The editor used to filter the four fixed zones by the format's
+ * seeded spec (no commander column unless `requiresCommander`, no sideboard unless
+ * `sideboardMax`); schema v7 makes a category a row the *user* named, ordered and switched on or
+ * off, so hiding one would hide a pile they built. This deck is Modern and its Commander column
+ * is drawn, empty.
+ *
+ * The order is the v7 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
+ * — because a *seeded* deck comes out of that migration rather than out of `deck_create`
+ * (`fixtures.ts`' `DECK_CATEGORIES`).
  *
  * The headline figure is 60 with "+ 15 sideboard" under it, and that split is the whole reason
- * `DeckStats` imports `SIZE_ZONES` from the validation engine: the chip beside it says "Modern
+ * `DeckStats` imports `SIZE_KINDS` from the validation engine: the chip beside it says "Modern
  * decks need at least 60 cards", and a "Cards 75" next to that sentence would be two numbers for
  * one question.
  *
@@ -146,12 +163,13 @@ export const Modern60: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // The count rides in the region's accessible name, because a reader arriving here — from a
-    // move's focus hand-off, or from a screen reader's region list — is asking "which zone, and
+    // move's focus hand-off, or from a screen reader's region list — is asking "which pile, and
     // how big".
     await expect(await canvas.findByRole("region", { name: "Main deck, 60 cards" })).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Sideboard, 15 cards" })).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Companion, 0 cards" })).toBeVisible();
-    await expect(canvas.queryByRole("region", { name: /^Commander,/ })).toBeNull();
+    // Modern requires no commander and this pile is empty, and the column is here all the same.
+    await expect(canvas.getByRole("region", { name: "Commander, 0 cards" })).toBeVisible();
 
     await expect(canvas.getByRole("button", { name: "No issues · Modern" })).toBeInTheDocument();
     // Not the 75 copies the price and the shortfall are counted over.
@@ -167,9 +185,13 @@ export const Modern60: Story = {
 /**
  * The command zone, the companion, and the one issue this deck exists to produce.
  *
- * No sideboard column: every singleton commander format has `sideboardMax: 0`, and the zone is
- * empty, so it is not drawn — which is the seeded rules driving the chrome rather than a format
- * key compared anywhere in the view.
+ * (The command *zone* is the rules' word; the column drawing it is a category named
+ * "Commander", of kind `commander`.)
+ *
+ * The Sideboard column is drawn even though every singleton commander format has
+ * `sideboardMax: 0`, and that is the point of the v7 model: the format judges the deck (the chip
+ * below still counts its one issue) and no longer decides which piles exist. A category is data
+ * the user made.
  *
  * **A clean Commander companion is not buildable from this corpus, and the fixture stages that
  * dead end deliberately.** Lurrus of the Dream-Den asks that every permanent card in the starting
@@ -189,7 +211,7 @@ export const CommanderDeck: Story = {
     ).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Companion, 1 card" })).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Main deck, 99 cards" })).toBeInTheDocument();
-    await expect(canvas.queryByRole("region", { name: /^Sideboard,/ })).toBeNull();
+    await expect(canvas.getByRole("region", { name: "Sideboard, 0 cards" })).toBeInTheDocument();
 
     // One issue, and the chip counts rather than names: the sentence is behind it.
     const chip = canvas.getByRole("button", { name: "1 issue" });
@@ -202,35 +224,38 @@ export const CommanderDeck: Story = {
 };
 
 /**
- * The scratchpad, and the rule that makes it one.
+ * The switched-off pile, and the rule that makes it one.
  *
- * `maybe` is not a column — it sits under the deck, shut by default, because cards go here to be
- * *thought about*. It counts toward nothing at all: not the size figure, not the copy limits, not
- * the legality check, and the allocator does not claim copies for it. The seeded row is Ancient
- * Tomb, which is `modern: not_legal` **on purpose** (`seeds.ts:359-362`), so a chip still reading
- * "No issues · Modern" over an illegal card in the pile is the demonstration.
+ * **`isActive` is the whole of "counts toward nothing", and it is not the Maybeboard's alone.**
+ * The old editor drew `maybe` as a collapsed drawer under the deck because it was the one zone
+ * the arithmetic skipped; schema v7 moves that fact onto `deck_categories.is_active`, which any
+ * category can carry — so the Maybeboard is one seeded row that happens to start switched off,
+ * it is a column in the same row as the rest, and the drawer is gone. A pile the reader switches
+ * off behaves identically; a Maybeboard they switch on counts like anything else.
+ *
+ * The seeded row is Ancient Tomb, which is `modern: not_legal` **on purpose**, so a chip still
+ * reading "No issues · Modern" over an illegal card in the pile is the demonstration: an
+ * inactive category reaches neither the size figure, nor the copy limits, nor the legality
+ * check, and the allocator claims no copies for it.
  *
  * Its `0` owned is by design and not a shortage, which is why the row draws no shortage mark at
- * all: `ZoneColumn.tsx:437` excludes `maybe` from that comparison rather than letting the
- * allocator's silence read as a card the reader needs to buy.
+ * all — `ZoneColumn` reads the category's `isActive` rather than the word `maybe`, so a `main`
+ * category the reader switched off is treated exactly the same way.
  */
 export const MaybePile: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const disclosure = await canvas.findByRole("button", { name: "Maybe 1" });
-    // One row, two copies — the disclosure counts rows and the column counts cards.
-    await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(disclosure);
-
-    const pile = canvas.getByRole("region", { name: "Maybe, 2 cards" });
+    // No disclosure to press: the pile is a column, drawn from the first paint in its own
+    // `sortOrder` position (last, for a deck that came through the v7 migration).
+    const pile = await canvas.findByRole("region", { name: "Maybeboard, 2 cards" });
     await expect(within(pile).getByRole("button", { name: "Ancient Tomb" })).toBeInTheDocument();
     // No shortage mark, on a row the collection covers none of — the one place in the editor
     // where owning nothing is not worth saying.
     await expect(within(pile).queryByText(/You own /)).toBeNull();
 
-    // And nothing it holds reaches the size figure or the rules: two more copies are on screen
-    // and the deck is still sixty cards, still legal, still short of the same 65.
+    // And nothing it holds reaches the size figure or the rules: two copies are on screen and
+    // the deck is still sixty cards, still legal, still short of the same 65.
     await expect(canvas.getByRole("button", { name: "No issues · Modern" })).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Main deck, 60 cards" })).toBeInTheDocument();
     await expect(canvas.getByText("65 of 75 missing")).toBeInTheDocument();
@@ -242,8 +267,8 @@ export const MaybePile: Story = {
  *
  * The exact opposite of the collection's asymmetry, and the pair is easy to get backwards.
  * `collection_set_quantity(0)` keeps the row with its condition, its purchase price, its tags and
- * its acquisition story; `deck_set_card_quantity(0)` **deletes** (`db.ts:2118-2122`, mirroring the
- * table's `CHECK (quantity > 0)`), because a zone slot holds an intention and nothing else.
+ * its acquisition story; `deck_set_card_quantity(0)` **deletes** (mirroring the table's
+ * `CHECK (quantity > 0)`), because a category slot holds an intention and nothing else.
  *
  * **There is no remove control here to look for.** The collection grows one on a row it has
  * emptied; a deck row simply leaves, and the two ways to make it leave — the stepper's zero and a
@@ -270,7 +295,7 @@ export const ZeroRemovesTheRow: Story = {
     // Gone, not emptied: no row, and nothing offering to remove one.
     await expect(canvas.queryByText("Black Lotus")).toBeNull();
     await expect(canvas.queryByRole("button", { name: /Remove/ })).toBeNull();
-    // The zone's own count moved with it — 22 cards less the one copy.
+    // The column's own count moved with it — 22 cards less the one copy.
     await expect(canvas.getByRole("region", { name: "Main deck, 21 cards" })).toBeInTheDocument();
     await expect(canvas.queryByRole("alert")).toBeNull();
   },
@@ -312,19 +337,27 @@ export const BuiltToggle: Story = {
 };
 
 /**
- * A deck a reader has just made: every zone empty, and the rules already talking.
+ * A deck a reader has just made: every pile empty, and the rules already talking.
  *
  * The only editor state no seed can hold, staged through the same `deck_create` the gallery's
  * form sends. Every column says "Nothing here yet." rather than showing an empty box, the charts
  * are not drawn at all (`DeckStats` gates them on `copies > 0` — four empty axes say nothing), and
  * the format check is a full sentence from the first card onwards: advisory, never blocking,
  * because an illegal deck is a deck somebody is still building.
+ *
+ * **Four columns, not five, and no "Main deck" among them.** `deck_create` seeds
+ * `schema::PREDEFINED_CATEGORIES` — Commander, Sideboard, Companion, Maybeboard — and there is
+ * deliberately no `main` row in that list: a deck may own any number of `main` categories and
+ * the seed names none, so the pile a plain add goes to is *found or created by name* on the
+ * first add rather than born with the deck. That is the difference between a deck made today and
+ * one the v7 migration converted, which is why the seeded decks above have five.
  */
 export const EmptyDeck: Story = {
   args: { deckId: null },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("region", { name: "Main deck, 0 cards" })).toBeVisible();
+    await expect(await canvas.findByRole("region", { name: "Commander, 0 cards" })).toBeVisible();
+    await expect(canvas.queryByRole("region", { name: /^Main deck,/ })).toBeNull();
     await expect(canvas.getAllByText("Nothing here yet.").length).toBeGreaterThan(0);
 
     const chip = canvas.getByRole("button", { name: "1 issue" });
@@ -443,12 +476,13 @@ export const Gone: Story = {
 };
 
 /**
- * Two printings of one card in one zone, folded into one row — and the sentence that says so.
+ * Two printings of one card in one category, folded into one row — and the sentence that says so.
  *
- * **`deck_swap_printing` folds on `(deck, card, zone)`.** A zone holds a printing at most once, so
- * swapping onto one the zone already has is not an error and not two rows: the quantities sum,
- * the answer carries `folded: true` with the landed total, and the pane announces it. Without the
- * sentence a line would simply disappear out of the deck list, which reads like a bug.
+ * **`deck_swap_printing` folds on `(deck, variant, category, card)`.** A category holds a
+ * printing at most once, so swapping onto one it already has is not an error and not two rows:
+ * the quantities sum, the answer carries `folded: true` with the landed total, and the pane
+ * announces it. Without the sentence a line would simply disappear out of the deck list, which
+ * reads like a bug.
  *
  * **This is the one editor story that renders the card pane, because the swap has no control in
  * the editor at all.** "Use this printing" is drawn on the pane's printings rows and only for a
@@ -457,10 +491,10 @@ export const Gone: Story = {
  * here as `App.tsx:75-88` docks it.
  *
  * Sol Ring is the only fold the corpus can produce: it is the one card with two printings in the
- * fixture that a seeded deck already plays (deck 2's main holds `c21 263`; `sld 913` is the
- * other, and the wall offers newest-printing-first, so it is the first of the two tiles). The
+ * fixture that a seeded deck already plays (deck 2's main category holds `c21 263`; `sld 913` is
+ * the other, and the wall offers newest-printing-first, so it is the first of the two tiles). The
  * play adds `sld 913` from the docked panel — a Commander deck's singleton rule now broken, which
- * is beside the point — clicks that row, and swaps it onto the printing already in the zone.
+ * is beside the point — clicks that row, and swaps it onto the printing already in the category.
  */
 export const SwapFolds: Story = {
   args: { deckId: 2, pane: true },
@@ -473,6 +507,17 @@ export const SwapFolds: Story = {
     await userEvent.type(
       await canvas.findByRole("searchbox", { name: "Search cards" }),
       "Sol Ring",
+    );
+
+    // **The add target is chosen, not assumed.** The picker opens on the deck's *first* category
+    // — which for a deck the v7 migration converted is its Commander column, `sortOrder` 0 — and
+    // this fold is about the printing sitting in the main deck. Picked by the option's own text,
+    // because a category's id is the fake's own row numbering and not something a story writes
+    // down.
+    const target = await canvas.findByLabelText("Add to");
+    await userEvent.selectOptions(
+      target,
+      within(target).getByRole("option", { name: "Main deck" }),
     );
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),
@@ -494,8 +539,13 @@ export const SwapFolds: Story = {
 
     // The added row, addressed by the slot it draws rather than by its name: both rows are called
     // Sol Ring, and the slot attribute is the only thing that tells them apart.
+    //
+    // Matched on the **suffix** of the slot, because a slot is `"<category id>:<card id>"` since
+    // schema v7 and the category's id is minted by the fake's own row numbering — not something a
+    // story may write down. Both rows are in one category, so the printing alone identifies this
+    // one.
     const row = canvasElement.querySelector<HTMLButtonElement>(
-      `[${DECK_CARD_ATTR}="${deckCardSlot("main", SOL_RING_SLD)}"]`,
+      `[${DECK_CARD_ATTR}$=":${SOL_RING_SLD}"]`,
     );
     await expect(row).not.toBeNull();
     await userEvent.click(row!);

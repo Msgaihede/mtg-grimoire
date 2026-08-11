@@ -6,7 +6,8 @@
  * DTOs in `src/lib/ipc.ts` and answers three different questions: on `CardSummary` it is
  * every copy of one *printing* and finish-blind; on `WishRow` it is the copies filling one
  * *wish* and finish-aware; on `DeckCard` it is one deck's *allocation* — oracle-grained,
- * finish-blind, condition-blind, and never claimed for the `maybe` zone. A fixture that
+ * finish-blind, condition-blind, and claimed neither for a category the user has switched
+ * off nor for the `theory` list, whatever the category is called. A fixture that
  * stored DTOs would hard-code all three, they would agree, and every story built on it would
  * teach a reader a model the app does not have. Derived from rows they come out right
  * without anyone deciding that they should.
@@ -27,12 +28,19 @@
  *    keeps `list_entries`' real property that an orphan matches no text at all; the
  *    wishlist's is over the wish's own stored `name`, as its `LIKE` is.
  * 2. **The allocator runs on read**, inside {@link readHandlers}'s `deck_get`. In the app
- *    `deck::allocate_deck` writes `deck_allocations` rows on a zone write, the Built toggle
+ *    `deck::allocate_deck` writes `deck_allocations` rows on a card write, the Built toggle
  *    or `missing_to_wishlist`, and the read only *attributes* what was stored. There is no
  *    allocations table here, so both halves happen at read time; see `allocate` below for
  *    what that changes — the split between built decks follows deck id here and write order
  *    in the app. **No write calls an allocator**, and there is only one allocator in this
  *    file; {@link writeHandlers} lists the three consequences.
+ *    One more falls out of the same choice: a **`theory`** read attributes nothing at all
+ *    here, because there is nothing stored to attribute and the allocator reads `live` only.
+ *    `deck_allocations` carries no variant, so the app's theory read walks the *live* deck's
+ *    claims along the theory rows and can hand one a number where this answers 0 — which is
+ *    only reachable with the same oracle card in both lists at once. What both agree on is
+ *    the rule `deck::tests::the_allocator_claims_nothing_for_the_theory_variant` pins: a plan
+ *    reserves nothing.
  * 3. **`list_sets` is derived from the cards**, because there is no `sets` table in the
  *    fixture. The real one reads every set Scryfall knows, so it can answer a set with no
  *    printings at all; this one cannot produce a set with no rows, only one whose rows are
@@ -86,15 +94,18 @@ import type {
   CardFace,
   CardFilters,
   CardSummary,
+  CategoryKind,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
   CollectionSummary,
   DeckCard,
+  DeckCategory,
   DeckInput,
   DeckPatch,
   DeckRow,
-  DeckZone,
+  DeckTag,
+  DeckVariant,
   EntryChange,
   EntryInput,
   EntryPatch,
@@ -194,12 +205,53 @@ export interface FakeDeck {
   updatedAt: number;
 }
 
-/** One row of `deck_cards`. Grain `(deckId, cardId, zone)`; `quantity > 0` by CHECK. */
+/**
+ * One row of `deck_categories`: a named pile the user owns, and what schema v7 replaced the
+ * fixed five-word zone with.
+ *
+ * Four of them are seeded with every deck ({@link PREDEFINED_CATEGORIES}) and the rest are the
+ * user's, always of kind `main`. **`isActive` is the whole of "counts toward nothing"** — the
+ * deck's card count, the allocator and `missing_to_wishlist` all read it, and none of them
+ * reads {@link kind} for that question. Nothing in this file may branch on a category being
+ * the Maybeboard.
+ */
+export interface FakeDeckCategory {
+  id: number;
+  deckId: number;
+  /** As the user wrote it. Every refusal about a card in this pile names it. */
+  name: string;
+  kind: CategoryKind;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+/** One row of `deck_tags`: a per-deck label, at most one per card row. `color` names a token
+ *  from the app's palette, never a CSS colour — the backend stores what it is handed. */
+export interface FakeDeckTag {
+  id: number;
+  deckId: number;
+  name: string;
+  color: string;
+}
+
+/**
+ * One row of `deck_cards`. Grain `(deckId, variant, categoryId, cardId)`
+ * (`schema::DECK_CARD_GRAIN`); `quantity > 0` by CHECK.
+ *
+ * `variant` is in the grain because the same printing may sit in the `live` deck and in the
+ * `theory` one at once, and an edit tried out in a plan must never fold into the row the deck
+ * is actually sleeved as.
+ */
 export interface FakeDeckCard {
   id: number;
   deckId: number;
+  /** A {@link FakeDeckCategory} of the **same** deck — nothing in the DDL enforces that half,
+   *  which is why every card write runs {@link categoryOfDeck} first. */
+  categoryId: number;
+  variant: DeckVariant;
   cardId: string;
-  zone: DeckZone;
+  /** `ON DELETE SET NULL`: deleting a tag untags its cards rather than deleting them. */
+  tagId: number | null;
   quantity: number;
   /** Denormalised, like the collection's — the one name an orphaned row still has. */
   name: string;
@@ -258,18 +310,15 @@ export interface FakeUpdate {
  *   whichever it got.
  */
 export type Fault =
-  | "busy"
-  | "syncError"
-  | "imageFailures"
-  | "gone"
-  | "updateAvailable"
-  | "updateError";
+  "busy" | "syncError" | "imageFailures" | "gone" | "updateAvailable" | "updateError";
 
 export interface FakeDb {
   cards: FakeCard[];
   collectionEntries: FakeEntry[];
   wishlistEntries: FakeWish[];
   decks: FakeDeck[];
+  deckCategories: FakeDeckCategory[];
+  deckTags: FakeDeckTag[];
   deckCards: FakeDeckCard[];
   update: FakeUpdate;
   fault: Fault | null;
@@ -289,6 +338,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     collectionEntries: [],
     wishlistEntries: [],
     decks: [],
+    deckCategories: [],
+    deckTags: [],
     deckCards: [],
     update: defaultUpdate(),
     fault: null,
@@ -883,16 +934,60 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
 
 /* ------------------------------------------------------------------ decks ------------- */
 
-/** `deck::ZONE_PRIORITY` — a permutation of the schema's five zones, with the scratchpad
- *  last because it is the pile the allocator never claims for. */
-const ZONE_PRIORITY: DeckZone[] = ["commander", "main", "side", "companion", "maybe"];
-const MAYBE: DeckZone = "maybe";
-/** `DeckRow.cardCount`'s definition, and the engine's `SIZE_ZONES` verbatim. */
-const SIZE_ZONES: DeckZone[] = ["main", "commander"];
+/**
+ * `schema::DECK_VARIANTS` — the two decks every deck secretly is.
+ *
+ * `live` is what is sleeved up: the gallery's count, the allocator and `missing_to_wishlist`
+ * read it and nothing else. `theory` is what the deck is being built toward, and a plan
+ * reserves no copy of anything. {@link LIVE} is index 0 rather than a second spelling of the
+ * word, exactly as `deck::LIVE` is.
+ */
+const VARIANTS: DeckVariant[] = ["live", "theory"];
+const LIVE = VARIANTS[0];
 
-function zoneRank(zone: DeckZone): number {
-  const i = ZONE_PRIORITY.indexOf(zone);
-  return i < 0 ? ZONE_PRIORITY.length : i;
+/**
+ * `deck::KIND_PRIORITY` — a permutation of `schema::CATEGORY_KINDS`, and the order the
+ * allocator spends scarce copies in: the commander first, then the deck, then the cards
+ * played beside it.
+ *
+ * **Only the order.** What is allocated for *at all* is `isActive`, which belongs to the
+ * category and not to its kind — so a Maybeboard the user switched on is allocated for like
+ * anything else, and a `main` category they switched off is not. `maybe` sitting last here is
+ * a preference and nothing more. Two categories of one kind (a deck may own any number of
+ * `main` ones) tie and are separated by row id, which is what makes the walk deterministic.
+ */
+const KIND_PRIORITY: CategoryKind[] = ["commander", "main", "side", "companion", "maybe"];
+
+/** `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim. It is a *kind*
+ *  filter and therefore only half of the count — see {@link toDeckRow}. */
+const SIZE_KINDS: CategoryKind[] = ["main", "commander"];
+
+/**
+ * `schema::PREDEFINED_CATEGORIES` as `(kind, name, isActive)` — the categories every deck is
+ * born with, seeded by {@link ensurePredefinedCategories}.
+ *
+ * **There is deliberately no `main` row.** A category the user makes is always `main` and a
+ * deck may own any number of them, so there is nothing singular about `main` to predefine; it
+ * is the four *fixed* rules roles that get one guaranteed category each. The Maybeboard's
+ * `false` is where "counts toward nothing" is decided, and it is the only thing that makes it
+ * special: it is one seeded row like the other three.
+ */
+const PREDEFINED_CATEGORIES: [CategoryKind, string, boolean][] = [
+  ["commander", "Commander", true],
+  ["side", "Sideboard", true],
+  ["companion", "Companion", true],
+  ["maybe", "Maybeboard", false],
+];
+
+/** `deck::kind_rank`. An unknown kind — impossible past `deck_categories`' own CHECK — sorts
+ *  last rather than throwing. */
+function kindRank(kind: CategoryKind): number {
+  const i = KIND_PRIORITY.indexOf(kind);
+  return i < 0 ? KIND_PRIORITY.length : i;
+}
+
+function categoryById(db: FakeDb, id: number): FakeDeckCategory | undefined {
+  return db.deckCategories.find((c) => c.id === id);
 }
 
 function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
@@ -908,10 +1003,65 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     coverArtist: cardById(db, d.coverCardId)?.artist ?? null,
     isBuilt: d.isBuilt,
     archived: d.archived,
+    // `DECK_SELECT`'s subquery, and three exclusions rather than one. The sideboard and the
+    // companion are not the deck; a **theory** row is a plan and belongs on no tile; and an
+    // **inactive** category counts toward nothing whatever its kind, which is how the
+    // Maybeboard stays out of this without being named here. Its `JOIN deck_categories` is an
+    // *inner* join — `category_id` is NOT NULL with an enforced foreign key — which is what
+    // the `undefined` check is.
     cardCount: db.deckCards
-      .filter((dc) => dc.deckId === d.id && SIZE_ZONES.includes(dc.zone))
+      .filter((dc) => {
+        if (dc.deckId !== d.id || dc.variant !== LIVE) return false;
+        const category = categoryById(db, dc.categoryId);
+        return category !== undefined && category.isActive && SIZE_KINDS.includes(category.kind);
+      })
       .reduce((n, dc) => n + dc.quantity, 0),
     updatedAt: d.updatedAt,
+  };
+}
+
+/**
+ * `deck_meta::list_categories`' row: the category, and the two numbers a column heading wants
+ * at the moment it is drawn.
+ *
+ * Both are scoped to the **variant that was asked for** and neither is a row count:
+ * `card_count` is `sum(quantity)` over the copies filed here, and `total_price_usd` is the
+ * nonfoil `usd` key of each printing's blob times its copies. A category holding nothing (or
+ * nothing priced) reads `null` rather than `0`, because SQL's `sum()` of no non-NULL terms is
+ * NULL — and "nothing here has a price" is a different statement from "this is free".
+ */
+function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): DeckCategory {
+  const rows = db.deckCards.filter((dc) => dc.categoryId === c.id && dc.variant === variant);
+  const priced = rows
+    .map((dc) => {
+      const unit = priceKey(cardById(db, dc.cardId), "usd");
+      return unit === null ? null : unit * dc.quantity;
+    })
+    .filter((n): n is number => n !== null);
+  return {
+    id: c.id,
+    deckId: c.deckId,
+    name: c.name,
+    kind: c.kind,
+    isActive: c.isActive,
+    sortOrder: c.sortOrder,
+    cardCount: rows.reduce((n, dc) => n + dc.quantity, 0),
+    totalPriceUsd: priced.length === 0 ? null : priced.reduce((n, p) => n + p, 0),
+  };
+}
+
+/** `deck_meta::list_tags`' row. Its `cardCount` reads `READBACK_VARIANT` — the **live** list,
+ *  always: that command takes no variant of its own to scope by, the way the category list's
+ *  does. */
+function toDeckTag(db: FakeDb, t: FakeDeckTag): DeckTag {
+  return {
+    id: t.id,
+    deckId: t.deckId,
+    name: t.name,
+    color: t.color,
+    cardCount: db.deckCards
+      .filter((dc) => dc.tagId === t.id && dc.variant === LIVE)
+      .reduce((n, dc) => n + dc.quantity, 0),
   };
 }
 
@@ -919,11 +1069,17 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
  * `deck::allocate_deck`, run at read time: copies of each oracle card this deck secures,
  * keyed by collection entry id.
  *
- * Greedy in `ZONE_PRIORITY` order over the deck's cards, **never `maybe`**: for each one, the
- * entries of the same *oracle* card — a Bolt is a Bolt — taking the exact printing first,
- * real copies before proxies, then the oldest entry, and never more than the entry still has
- * free. One candidate pool per oracle card, drawn down as the walk spends it, so two zones
- * wanting the same card cannot both be told the same copies are free.
+ * Greedy in {@link KIND_PRIORITY} order over the deck's cards: for each one, the entries of
+ * the same *oracle* card — a Bolt is a Bolt — taking the exact printing first, real copies
+ * before proxies, then the oldest entry, and never more than the entry still has free. One
+ * candidate pool per oracle card, drawn down as the walk spends it, so two categories wanting
+ * the same card cannot both be told the same copies are free.
+ *
+ * **Two filters decide what is allocated for at all, and neither is a kind check**: the row's
+ * `variant` must be `live`, because a plan reserves nothing; and its category must be active,
+ * because copies held for a card the user has not decided to play are copies another deck
+ * cannot have. A Maybeboard switched on allocates like anything else; a `main` category
+ * switched off does not.
  *
  * Availability is `entry.quantity` minus the claims of **other built** decks — the whole of
  * what `is_built` means. A deck is never blocked by its own claims, which is why the real one
@@ -966,13 +1122,22 @@ function allocateAgainst(
   claimed: Map<number, number>,
 ): Map<number, number> {
   const taken = new Map<number, number>();
-  // An INNER JOIN on `cards`: an orphaned row names no oracle card, so it is listed and
-  // flagged and reads owned 0 until a sync gives it its identity back.
+  // Two INNER JOINs. On `cards`, because an orphaned row names no oracle card — it is listed
+  // and flagged and reads owned 0 until a sync gives it its identity back. And on
+  // `deck_categories`, which is where `is_active` is read: the filter that decides whether a
+  // row is allocated for at all.
   const wants = db.deckCards
-    .filter((dc) => dc.deckId === deckId && dc.zone !== MAYBE)
-    .map((dc) => ({ row: dc, card: cardById(db, dc.cardId) }))
-    .filter((w): w is { row: FakeDeckCard; card: FakeCard } => w.card !== null)
-    .sort((a, b) => zoneRank(a.row.zone) - zoneRank(b.row.zone) || a.row.id - b.row.id);
+    .filter((dc) => dc.deckId === deckId && dc.variant === LIVE)
+    .map((dc) => ({
+      row: dc,
+      card: cardById(db, dc.cardId),
+      category: categoryById(db, dc.categoryId),
+    }))
+    .filter(
+      (w): w is { row: FakeDeckCard; card: FakeCard; category: FakeDeckCategory } =>
+        w.card !== null && w.category !== undefined && w.category.isActive,
+    )
+    .sort((a, b) => kindRank(a.category.kind) - kindRank(b.category.kind) || a.row.id - b.row.id);
 
   interface Candidate {
     entryId: number;
@@ -1019,6 +1184,24 @@ function allocateAgainst(
 }
 
 /**
+ * `DECK_CARD_SELECT`'s `ORDER BY cat.sort_order, cat.id, dc.name, dc.id` — the order the
+ * editor reads a deck in.
+ *
+ * The first key belongs to the **category** and not to the row, which is why the app sorts in
+ * SQL rather than in Rust; `cat.id` breaks a tie between two categories the user gave the same
+ * order, so the walk is total. The name is the *row's*, which an orphan has and its `cards`
+ * row does not.
+ */
+function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
+  const sortOrder = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.sortOrder ?? 0;
+  return (a, b) =>
+    sortOrder(a) - sortOrder(b) ||
+    a.categoryId - b.categoryId ||
+    cmp(a.name, b.name) ||
+    a.id - b.id;
+}
+
+/**
  * `deck::owned_by_oracle` then `deck::attribute_owned`: total the claims per oracle card,
  * then hand them to the rows that wanted them.
  *
@@ -1027,12 +1210,24 @@ function allocateAgainst(
  * even though it can never bind here: nothing is stored between the allocation and the read,
  * so a claim cannot be stale. It is the app's answer to a collection that shrank under it.
  *
- * Attribution walks `ZONE_PRIORITY` then row id, which is the read's own order and not the
- * caller's: the number a row shows must not depend on how the list was displayed.
+ * Attribution walks **the slice's own order**, which {@link deckReadOrder} has already put the
+ * rows in — the read's order and never a caller's, so the number a row shows does not depend
+ * on how the list was displayed. That is `attribute_owned`'s contract verbatim, which is why
+ * this takes the ordered rows rather than sorting them again.
+ *
+ * **A row in an inactive category is passed over, not served last.** The allocator claimed
+ * nothing for it, so there is nothing of its to hand out — and letting it draw on the pool
+ * would move copies off the rows that *are* the deck onto a pile that reserves none of them.
+ *
+ * This walk and {@link allocate}'s are deliberately not the same order — the allocator spends
+ * in {@link KIND_PRIORITY}, this hands out in the user's own category order — and the
+ * difference shows in exactly one case: one oracle card filed in two categories with fewer
+ * copies owned than the two rows want between them. The *total* is the same either way; only
+ * which row wears the badge can differ.
  */
 function attributeOwned(
   db: FakeDb,
-  rows: FakeDeckCard[],
+  rows: readonly FakeDeckCard[],
   taken: Map<number, number>,
 ): Map<number, number> {
   const left = new Map<string, number>();
@@ -1043,10 +1238,9 @@ function attributeOwned(
     left.set(oracleId, (left.get(oracleId) ?? 0) + Math.min(quantity, entry.quantity));
   }
   const owned = new Map<number, number>();
-  const order = [...rows].sort((a, b) => zoneRank(a.zone) - zoneRank(b.zone) || a.id - b.id);
-  for (const row of order) {
+  for (const row of rows) {
     const oracleId = cardById(db, row.cardId)?.oracleId;
-    if (!oracleId) {
+    if (!oracleId || categoryById(db, row.categoryId)?.isActive !== true) {
       owned.set(row.id, 0);
       continue;
     }
@@ -1058,12 +1252,36 @@ function attributeOwned(
   return owned;
 }
 
-function toDeckCard(db: FakeDb, dc: FakeDeckCard, ownedQuantity: number): DeckCard {
+/**
+ * `deck::read_deck_cards`' row: the deck card, its category, its tag and every fact about the
+ * printing.
+ *
+ * The category arrives as an argument rather than being looked up here, because
+ * `DECK_CARD_SELECT` reaches it through an **inner** join — `category_id` is NOT NULL with an
+ * enforced foreign key, so a card with no category is a row the schema cannot hold, unlike
+ * `card_id`, which is soft by design and reads as a LEFT JOIN's worth of nulls. The tag is the
+ * opposite again: `LEFT JOIN deck_tags`, all three fields null together, because
+ * `deck_cards.tag_id` is `ON DELETE SET NULL` and an untagged row is the ordinary case.
+ */
+function toDeckCard(
+  db: FakeDb,
+  dc: FakeDeckCard,
+  category: FakeDeckCategory,
+  ownedQuantity: number,
+): DeckCard {
   const card = cardById(db, dc.cardId);
+  const tag = dc.tagId === null ? undefined : db.deckTags.find((t) => t.id === dc.tagId);
   return {
     id: dc.id,
     cardId: dc.cardId,
-    zone: dc.zone,
+    categoryId: category.id,
+    categoryName: category.name,
+    categoryKind: category.kind,
+    categoryActive: category.isActive,
+    variant: dc.variant,
+    tagId: tag?.id ?? null,
+    tagName: tag?.name ?? null,
+    tagColor: tag?.color ?? null,
     quantity: dc.quantity,
     name: dc.name,
     setCode: dc.setCode,
@@ -1614,22 +1832,46 @@ export function readHandlers(db: FakeDb) {
     /**
      * `deck::get_deck` — the deck and everything in it, in one answer.
      *
-     * One command rather than three, because the editor and the validation engine ask the
-     * same question and a screen whose curve, legality panel and owned badges come from
-     * three queries is a screen whose three answers can disagree.
+     * One command rather than five, because the editor and the validation engine ask the
+     * same question and a screen whose curve, legality panel, owned badges and column
+     * headings come from four queries is a screen whose four answers can disagree.
+     *
+     * **`variant` scopes the cards and nothing else.** Every category and every tag comes
+     * back whole — an empty category still draws a column, because that is where the next
+     * card goes, and an inactive one always draws, because that is the affordance for
+     * switching it back on. Only their two numbers follow the variant that was asked for.
      */
-    deck_get: (args: { id: number }) => {
+    deck_get: (args: { id: number; variant: DeckVariant }) => {
+      const variant = validVariant(args.variant);
       if (db.fault === "gone") return null;
       const deck = db.decks.find((d) => d.id === args.id);
       if (!deck) return null;
-      const rows = db.deckCards.filter((dc) => dc.deckId === deck.id);
-      const owned = attributeOwned(db, rows, allocate(db, deck.id));
-      const cards = [...rows]
-        // Zone order, then the name the *row* carries — which an orphan has and its card
-        // does not — then row id.
-        .sort((a, b) => zoneRank(a.zone) - zoneRank(b.zone) || cmp(a.name, b.name) || a.id - b.id)
-        .map((dc) => toDeckCard(db, dc, owned.get(dc.id) ?? 0));
-      return { deck: toDeckRow(db, deck), cards };
+      const rows = db.deckCards
+        .filter((dc) => dc.deckId === deck.id && dc.variant === variant)
+        .sort(deckReadOrder(db));
+      // The allocator reads `live` and nothing else, so a theory read has no claim to hand
+      // out — see simplification 2 in this file's header for the one case where the app can
+      // answer otherwise.
+      const owned =
+        variant === LIVE
+          ? attributeOwned(db, rows, allocate(db, deck.id))
+          : new Map<number, number>();
+      const cards = rows
+        // The join on `deck_categories` is inner, so a row whose category is gone is not a
+        // row: `flatMap` is what drops one, and nothing in this fake can produce it.
+        .flatMap((dc) => {
+          const category = categoryById(db, dc.categoryId);
+          return category ? [toDeckCard(db, dc, category, owned.get(dc.id) ?? 0)] : [];
+        });
+      const categories: DeckCategory[] = db.deckCategories
+        .filter((c) => c.deckId === deck.id)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map((c) => toDeckCategory(db, c, variant));
+      const tags: DeckTag[] = db.deckTags
+        .filter((t) => t.deckId === deck.id)
+        .sort((a, b) => cmp(a.name, b.name) || a.id - b.id)
+        .map((t) => toDeckTag(db, t));
+      return { deck: toDeckRow(db, deck), cards, categories, tags };
     },
 
     /**
@@ -1710,9 +1952,16 @@ const PRINTING_GONE =
 const GRAIN_TAKEN =
   "You already have an entry for that printing at that finish and condition — change its " +
   "quantity instead, or give this one a different condition.";
-/** `schema::DECK_ZONES`, in the order `deck::valid_zone` lists them in its refusal — which
- *  is **not** {@link ZONE_PRIORITY}, the allocator's permutation of the same five. */
-const ZONES: DeckZone[] = ["main", "side", "commander", "companion", "maybe"];
+/** `deck::NO_CATEGORY`. The id and the name are alternatives — an id is a drop onto a column
+ *  the user pointed at, a name is the add path's "file it where this card belongs" — but a
+ *  card has to land *somewhere*, and `deck_cards.category_id` is NOT NULL. */
+const NO_CATEGORY = "A card needs a category to go in.";
+/** `deck_meta::CATEGORY_GONE` and `CATEGORY_WRONG_DECK`. Two sentences rather than one,
+ *  because "gone" and "not yours" are different things to tell a stale editor — and nothing
+ *  in the DDL stops a `category_id` naming another deck's category, so the second is a real
+ *  fence rather than a formality. */
+const CATEGORY_GONE = "That category is not there any more.";
+const CATEGORY_WRONG_DECK = "That category belongs to a different deck.";
 /** `deck::DEFAULT_FORMAT` — `decks.format_key`'s own DDL default, so a blank key means here
  *  exactly what it means in SQL. */
 const DEFAULT_FORMAT = "casual";
@@ -1776,10 +2025,12 @@ function validCondition(condition: string | undefined): FakeEntry["condition"] {
   throw refuse(`\`${c}\` is not a condition. Use one of: ${CONDITIONS.join(", ")}.`);
 }
 
-function validZone(zone: string): DeckZone {
-  const found = ZONES.find((z) => z === zone);
+/** `deck_meta::valid_variant` — the variant enum refused in words rather than as a CHECK
+ *  failure, the same discipline {@link validFinish} applies to the finish. */
+function validVariant(variant: string): DeckVariant {
+  const found = VARIANTS.find((v) => v === variant);
   if (found) return found;
-  throw refuse(`\`${zone}\` is not a deck zone. Use one of: ${ZONES.join(", ")}.`);
+  throw refuse(`\`${variant}\` is not a deck variant. Use one of: ${VARIANTS.join(", ")}.`);
 }
 
 function validName(name: string): string {
@@ -1884,13 +2135,101 @@ function wishGrain(w: FakeWish): string {
   return JSON.stringify([w.oracleId ?? "", w.cardId ?? "", w.preferredFinish ?? ""]);
 }
 
-/** `schema::DECK_CARD_GRAIN`. All three columns are NOT NULL, so there is nothing to
- *  coalesce — and `zone` is *in* it because the same printing in `main` and in `maybe` is
- *  two intentions rather than one row that moved. */
-function deckCardAt(db: FakeDb, deckId: number, cardId: string, zone: DeckZone) {
+/**
+ * `schema::DECK_CARD_GRAIN` — `(deck_id, variant, category_id, card_id)`. Every column is NOT
+ * NULL, so there is nothing to coalesce.
+ *
+ * `categoryId` is in it for the zone's old reason: the same printing filed under the main deck
+ * and under the Maybeboard is two intentions, not one row that moved — only now that is read
+ * off a category the user can rename. `variant` widens it again: the same printing can sit in
+ * the live deck and the theory one at once.
+ */
+function deckCardAt(
+  db: FakeDb,
+  deckId: number,
+  cardId: string,
+  categoryId: number,
+  variant: DeckVariant,
+) {
   return db.deckCards.find(
-    (dc) => dc.deckId === deckId && dc.cardId === cardId && dc.zone === zone,
+    (dc) =>
+      dc.deckId === deckId &&
+      dc.variant === variant &&
+      dc.categoryId === categoryId &&
+      dc.cardId === cardId,
   );
+}
+
+/**
+ * `deck::category_of_deck` — the fence every card write opens with, answering the category so
+ * a refusal below can name it.
+ *
+ * It is not decoration: nothing in the DDL stops `deck_cards.category_id` pointing at a
+ * category of a *different* deck (the foreign key only requires the row to exist), so this is
+ * where "a card of deck A cannot be filed under a category of deck B" actually lives.
+ */
+function categoryOfDeck(db: FakeDb, deckId: number, categoryId: number): FakeDeckCategory {
+  const category = categoryById(db, categoryId);
+  if (!category) throw refuse(CATEGORY_GONE);
+  if (category.deckId !== deckId) throw refuse(CATEGORY_WRONG_DECK);
+  return category;
+}
+
+/**
+ * `deck_meta::category_for_name` — find a category of this deck by name, or make a `main` one.
+ *
+ * The add path's "file it where this card belongs", and unlike a create it is *meant* to be
+ * handed the same name over and over and answer the same id every time. The word itself is
+ * computed in TypeScript (`autoCategoryFor`), because which pile a Sol Ring belongs in is
+ * domain logic and this is plumbing. Matched on the name alone, `DECK_CATEGORY_GRAIN`'s shape:
+ * a deck's own "Sideboard" category and the predefined one are the same row by that grain.
+ */
+function categoryForName(db: FakeDb, deckId: number, name: string): FakeDeckCategory {
+  const trimmed = name.trim();
+  if (trimmed === "") throw refuse("A category needs a name.");
+  const found = db.deckCategories.find((c) => c.deckId === deckId && c.name === trimmed);
+  if (found) return found;
+  const row: FakeDeckCategory = {
+    id: nextId(db.deckCategories),
+    deckId,
+    name: trimmed,
+    // Always `main`: every category a user makes is one, which is why `PREDEFINED_CATEGORIES`
+    // has no `main` row to collide with.
+    kind: "main",
+    isActive: true,
+    sortOrder: nextSortOrder(db, deckId),
+  };
+  db.deckCategories.push(row);
+  return row;
+}
+
+/** `coalesce(max(sort_order), -1) + 1` over one deck's categories — where the next one goes. */
+function nextSortOrder(db: FakeDb, deckId: number): number {
+  return db.deckCategories
+    .filter((c) => c.deckId === deckId)
+    .reduce((n, c) => Math.max(n, c.sortOrder + 1), 0);
+}
+
+/**
+ * `deck_meta::ensure_predefined_categories` — create the four a deck is missing, leave the ones
+ * it has.
+ *
+ * Idempotent by construction: each kind is checked before it is inserted, so a second call
+ * writes nothing. `deck_create` is the one caller here, as it is the one caller there; a deck
+ * that exists but can be filed into nothing is a state nothing downstream expects.
+ */
+function ensurePredefinedCategories(db: FakeDb, deckId: number): void {
+  for (const [kind, name, isActive] of PREDEFINED_CATEGORIES) {
+    if (db.deckCategories.some((c) => c.deckId === deckId && c.kind === kind)) continue;
+    db.deckCategories.push({
+      id: nextId(db.deckCategories),
+      deckId,
+      name,
+      kind,
+      isActive,
+      sortOrder: nextSortOrder(db, deckId),
+    });
+  }
 }
 
 /** `collection::printing_of` — the printing as the entry will remember it. */
@@ -1917,9 +2256,11 @@ function requireDeck(db: FakeDb, deckId: number): FakeDeck {
   return deck;
 }
 
-/** `deck::card_gone`. */
-function cardGone(zone: DeckZone): string {
-  return `That card is not in this deck's ${zone} zone any more.`;
+/** `deck::card_gone`. It names the category's **name**, never its id: a number the user never
+ *  chose says nothing, and every caller has the name already — {@link categoryOfDeck} hands it
+ *  back as the by-product of the fence they all run first. */
+function cardGone(category: string): string {
+  return `That card is not in this deck's ${category} category any more.`;
 }
 
 /**
@@ -2007,14 +2348,15 @@ function removeWish(db: FakeDb, id: number): EntryChange {
  * Three things the app does that are absent here, all for one reason — **there is no
  * `deck_allocations` table**, because this fake allocates at read time (simplification 2):
  *
- * 1. `deck::allocate_deck` is not called by any write. Every zone write, the Built toggle and
+ * 1. `deck::allocate_deck` is not called by any write. Every card write, the Built toggle and
  *    `missing_to_wishlist` run it in the app; here the numbers are recomputed by `deck_get`,
  *    so a write that would have reallocated simply leaves the next read to. There is exactly
  *    one allocator in this file and it is `allocate`.
  * 2. `deck_update`'s `isBuilt` still changes what every *other* deck can see, but it does so
  *    by changing what the next read's one pass computes rather than by rewriting rows.
- * 3. `deck_delete`'s cascade reaches `deck_cards` and nothing else. The v5 DDL cascades to
- *    `deck_allocations` too; there is nothing here to cascade to.
+ * 3. `deck_delete`'s cascade reaches `deck_cards`, `deck_categories` and `deck_tags` — the
+ *    three the v7 DDL cascades from `decks`. It also cascades to `deck_allocations`, and
+ *    there is nothing here to cascade to.
  */
 export function writeHandlers(db: FakeDb) {
   return {
@@ -2195,7 +2537,9 @@ export function writeHandlers(db: FakeDb) {
       return removeWish(db, args.id);
     },
 
-    /** `deck::create_deck`. */
+    /** `deck::create_deck`, which gives the deck its four predefined categories in the same
+     *  transaction — a deck that exists but cannot be filed into anything is a state nothing
+     *  downstream expects. */
     deck_create: (args: { deck: DeckInput }): DeckRow => {
       refuseIfBusy(db);
       const row: FakeDeck = {
@@ -2209,6 +2553,7 @@ export function writeHandlers(db: FakeDb) {
         updatedAt: stamp(db),
       };
       db.decks.push(row);
+      ensurePredefinedCategories(db, row.id);
       return toDeckRow(db, row);
     },
 
@@ -2236,17 +2581,32 @@ export function writeHandlers(db: FakeDb) {
       return toDeckRow(db, deck);
     },
 
-    /** `deck::delete_deck`. **This one really deletes** — the deck and its cards, by cascade.
-     *  Archiving is the soft path, and it is what a gallery's "remove" should reach for. */
+    /** `deck::delete_deck`. **This one really deletes** — the deck, its cards, its categories
+     *  and its tags, by cascade. Archiving is the soft path, and it is what a gallery's
+     *  "remove" should reach for. */
     deck_delete: (args: { id: number }): void => {
       refuseIfBusy(db);
       db.decks = db.decks.filter((d) => d.id !== args.id);
       db.deckCards = db.deckCards.filter((dc) => dc.deckId !== args.id);
+      db.deckCategories = db.deckCategories.filter((c) => c.deckId !== args.id);
+      db.deckTags = db.deckTags.filter((t) => t.deckId !== args.id);
     },
 
-    /** `deck::duplicate_deck` — the cards come across, never `isBuilt` and never `archived`.
-     *  A copy is a **draft**: it has reserved nothing, it is not sleeved up on a table, and it
-     *  is not something the user filed away. */
+    /**
+     * `deck::duplicate_deck` — the cards come across in **both variants**, never `isBuilt` and
+     * never `archived`. A copy is a **draft**: it has reserved nothing, it is not sleeved up
+     * on a table, and it is not something the user filed away. The theory list comes too,
+     * because a copy made to try something out is exactly the copy that wants the plan.
+     *
+     * **Categories and tags are new rows with new ids, and the cards are remapped onto them.**
+     * This is the part a "copy the cards" implementation gets wrong invisibly: a card row
+     * stores a `category_id`, so copying it verbatim would file the copy's cards under the
+     * *original's* categories — and then deleting the original would take the copy's cards
+     * with it through `ON DELETE CASCADE`. Two id maps are what keep a copy a copy.
+     *
+     * It is not handed {@link ensurePredefinedCategories}: it inherits the source's four,
+     * because every deck has them.
+     */
     deck_duplicate: (args: { id: number }): DeckRow => {
       refuseIfBusy(db);
       const source = requireDeck(db, args.id);
@@ -2259,10 +2619,30 @@ export function writeHandlers(db: FakeDb) {
         updatedAt: stamp(db),
       };
       db.decks.push(copy);
+      const categoryMap = new Map<number, number>();
+      for (const c of db.deckCategories.filter((row) => row.deckId === source.id)) {
+        const made: FakeDeckCategory = { ...c, id: nextId(db.deckCategories), deckId: copy.id };
+        db.deckCategories.push(made);
+        categoryMap.set(c.id, made.id);
+      }
+      const tagMap = new Map<number, number>();
+      for (const t of db.deckTags.filter((row) => row.deckId === source.id)) {
+        const made: FakeDeckTag = { ...t, id: nextId(db.deckTags), deckId: copy.id };
+        db.deckTags.push(made);
+        tagMap.set(t.id, made.id);
+      }
       // `needsReview` travels with the row: the sentence says this printing left the card
       // database, which is just as true of the copy.
       for (const dc of db.deckCards.filter((row) => row.deckId === source.id)) {
-        db.deckCards.push({ ...dc, id: nextId(db.deckCards), deckId: copy.id });
+        db.deckCards.push({
+          ...dc,
+          id: nextId(db.deckCards),
+          deckId: copy.id,
+          // `?? dc.categoryId` cannot happen — a card's category is a category of its own
+          // deck — and is the honest answer if it ever does, as the Rust's `NULL` fallback is.
+          categoryId: categoryMap.get(dc.categoryId) ?? dc.categoryId,
+          tagId: dc.tagId === null ? null : (tagMap.get(dc.tagId) ?? null),
+        });
       }
       return toDeckRow(db, copy);
     },
@@ -2274,29 +2654,52 @@ export function writeHandlers(db: FakeDb) {
      * refuses a card the database does not have: an orphaned deck row can be stepped and
      * moved but never re-added. The name is here for the wishlist's reason — a deck list that
      * cannot say what an orphaned row *is* is not a list.
+     *
+     * **Either `categoryId` or `categoryName`, and at least one** ({@link NO_CATEGORY}). An id
+     * is a drop onto a column the user pointed at; a name is found-or-created through
+     * {@link categoryForName}. When both arrive the id wins: it is the more specific
+     * instruction, and it is the one a drag carries.
      */
     deck_add_card: (args: {
       deckId: number;
       cardId: string;
-      zone: DeckZone;
+      categoryId: number | null;
+      categoryName: string | null;
+      variant: DeckVariant;
       quantity: number;
     }): EntryChange => {
       refuseIfBusy(db);
-      const zone = validZone(args.zone);
+      const variant = validVariant(args.variant);
       if (args.quantity <= 0) throw refuse(ZERO_ADD);
+      if (args.categoryId === null && args.categoryName === null) throw refuse(NO_CATEGORY);
       const card = requireCard(db, args.cardId);
       const deck = requireDeck(db, args.deckId);
-      const existing = deckCardAt(db, args.deckId, args.cardId, zone);
+      let category: FakeDeckCategory;
+      if (args.categoryId !== null) {
+        category = categoryOfDeck(db, args.deckId, args.categoryId);
+      } else if (args.categoryName !== null) {
+        category = categoryForName(db, args.deckId, args.categoryName);
+      } else {
+        // Unreachable past the guard above, and written as a second refusal rather than an
+        // assertion so that an edit which ever drops that guard answers the sentence instead
+        // of throwing something nobody can read.
+        throw refuse(NO_CATEGORY);
+      }
+      const existing = deckCardAt(db, args.deckId, args.cardId, category.id, variant);
       deck.updatedAt = stamp(db);
       if (existing) {
+        // The quantities add; `tagId` and `needsReview` are left alone, because the row that
+        // is already there is the one the user labelled.
         existing.quantity += args.quantity;
         return { id: existing.id, quantity: existing.quantity, removed: false };
       }
       const row: FakeDeckCard = {
         id: nextId(db.deckCards),
         deckId: args.deckId,
+        categoryId: category.id,
+        variant,
         cardId: args.cardId,
-        zone,
+        tagId: null,
         quantity: args.quantity,
         name: card.name,
         setCode: card.setCode,
@@ -2312,70 +2715,76 @@ export function writeHandlers(db: FakeDb) {
      * `deck::set_card_quantity` — the stepper, and the write that works on a row whose
      * printing has left the card database. **Zero removes the row.**
      *
-     * The wishlist's asymmetry rather than the collection's: a zone slot holds an intention
-     * and nothing else, and an intention stepped down to none of is withdrawn. A slot the
-     * caller wanted empty and that is already empty answers `removed: true` with `id: 0` —
-     * and still moves the deck's `updatedAt`, because that path commits.
+     * The wishlist's asymmetry rather than the collection's: a category slot holds an
+     * intention and nothing else, and an intention stepped down to none of is withdrawn. A
+     * slot the caller wanted empty and that is already empty answers `removed: true` with
+     * `id: 0` — and still moves the deck's `updatedAt`, because that path commits.
      */
     deck_set_card_quantity: (args: {
       deckId: number;
       cardId: string;
-      zone: DeckZone;
+      categoryId: number;
+      variant: DeckVariant;
       quantity: number;
     }): EntryChange => {
       refuseIfBusy(db);
-      const zone = validZone(args.zone);
+      const variant = validVariant(args.variant);
       validQuantity(args.quantity, "deck quantity");
       const deck = requireDeck(db, args.deckId);
-      const row = deckCardAt(db, args.deckId, args.cardId, zone);
+      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const row = deckCardAt(db, args.deckId, args.cardId, category.id, variant);
       if (args.quantity === 0) {
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
         deck.updatedAt = stamp(db);
         return { id: row?.id ?? 0, quantity: 0, removed: true };
       }
       // The `GONE` asymmetry: an *adjustment* to a row that is not there could not do what it
-      // was asked. Putting a card into a zone is `deck_add_card`.
-      if (!row) throw refuse(cardGone(zone));
+      // was asked. Putting a card into a category is `deck_add_card`.
+      if (!row) throw refuse(cardGone(category.name));
       row.quantity = args.quantity;
       deck.updatedAt = stamp(db);
       return { id: row.id, quantity: row.quantity, removed: false };
     },
 
     /**
-     * `deck::move_card` — every copy from one zone to another, folding into what the target
-     * already holds.
+     * `deck::move_card` — every copy from one category to another, folding into what the
+     * target already holds. **Within one variant**: a move is a re-filing, never a promotion
+     * of a theory row into the live deck.
      *
      * The identity travels **from the moved row**, never from a fresh `cards` lookup: a deck
-     * whose printing left the card database is exactly the deck whose maybe pile someone is
+     * whose printing left the card database is exactly the deck whose scratchpad someone is
      * tidying, and a move that needed the id to resolve would refuse the one row that most
-     * needs moving.
+     * needs moving. `tagId` travels with it for the same reason — a label is the user's word
+     * about this card in this deck, and re-filing it is not a reason to lose it.
      */
     deck_move_card: (args: {
       deckId: number;
       cardId: string;
-      from: DeckZone;
-      to: DeckZone;
+      fromCategoryId: number;
+      toCategoryId: number;
+      variant: DeckVariant;
     }): void => {
       refuseIfBusy(db);
-      const from = validZone(args.from);
-      const to = validZone(args.to);
+      const variant = validVariant(args.variant);
       // Before the deck is even looked up, exactly as the Rust returns before its transaction.
-      if (from === to) return;
+      if (args.fromCategoryId === args.toCategoryId) return;
       const deck = requireDeck(db, args.deckId);
-      const row = deckCardAt(db, args.deckId, args.cardId, from);
-      if (!row) throw refuse(cardGone(from));
-      const target = deckCardAt(db, args.deckId, args.cardId, to);
+      const from = categoryOfDeck(db, args.deckId, args.fromCategoryId);
+      const to = categoryOfDeck(db, args.deckId, args.toCategoryId);
+      const row = deckCardAt(db, args.deckId, args.cardId, from.id, variant);
+      if (!row) throw refuse(cardGone(from.name));
+      const target = deckCardAt(db, args.deckId, args.cardId, to.id, variant);
       if (target) {
         // `needs_review` is left alone where the target row already exists, and comes across
-        // with a row that lands in an empty zone — the fold's rule, and the reconciler's.
+        // with a row that lands in an empty category — the fold's rule, and the reconciler's.
         target.quantity += row.quantity;
       } else {
-        // A **new row**, not the old one re-zoned: the statement is `INSERT … SELECT` followed
+        // A **new row**, not the old one re-filed: the statement is `INSERT … SELECT` followed
         // by a `DELETE`, so the copies land on a fresh rowid. Worth reproducing rather than
-        // mutating `zone` in place, because row id is the allocator's tie-break within a zone
-        // (`zoneRank`, then `id`) — a moved row sorts *after* the rows already there, and
+        // mutating `categoryId` in place, because row id is the allocator's tie-break within a
+        // kind (`kindRank`, then `id`) — a moved row sorts *after* the rows already there, and
         // mutating would have left it sorting where it used to be.
-        db.deckCards.push({ ...row, id: nextId(db.deckCards), zone: to });
+        db.deckCards.push({ ...row, id: nextId(db.deckCards), categoryId: to.id });
       }
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
@@ -2384,7 +2793,7 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `deck::swap_printing` — the card pane's "Use this printing".
      *
-     * The one zone write whose identity comes from a **fresh `cards` lookup** rather than
+     * The one card write whose identity comes from a **fresh `cards` lookup** rather than
      * from the row being changed: a move keeps a printing the reader already chose, a swap
      * *is* the reader choosing a new one, off a list read out of `cards` a moment ago. So a
      * `toCardId` that does not resolve is a sync that raced the click, not an orphan to
@@ -2406,15 +2815,17 @@ export function writeHandlers(db: FakeDb) {
       deckId: number;
       fromCardId: string;
       toCardId: string;
-      zone: DeckZone;
+      categoryId: number;
+      variant: DeckVariant;
     }): SwapResult => {
       refuseIfBusy(db);
-      const zone = validZone(args.zone);
+      const variant = validVariant(args.variant);
       // Before anything else, so a no-op does not move `updatedAt` and resort the gallery.
       if (args.fromCardId === args.toCardId) throw refuse(SAME_PRINTING);
       const deck = requireDeck(db, args.deckId);
-      const row = deckCardAt(db, args.deckId, args.fromCardId, zone);
-      if (!row) throw refuse(cardGone(zone));
+      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const row = deckCardAt(db, args.deckId, args.fromCardId, category.id, variant);
+      if (!row) throw refuse(cardGone(category.name));
       const to = cardById(db, args.toCardId);
       if (!to) throw refuse(PRINTING_GONE);
       const fromOracle = cardById(db, args.fromCardId)?.oracleId ?? null;
@@ -2427,7 +2838,7 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       const quantity = row.quantity;
-      const target = deckCardAt(db, args.deckId, args.toCardId, zone);
+      const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant);
       let landed: number;
       if (target) {
         target.quantity += quantity;
@@ -2439,8 +2850,11 @@ export function writeHandlers(db: FakeDb) {
         db.deckCards.push({
           id: nextId(db.deckCards),
           deckId: args.deckId,
+          categoryId: category.id,
+          variant,
           cardId: args.toCardId,
-          zone,
+          // `add_card`'s insert names no `tag_id`, so the copies land unlabelled.
+          tagId: null,
           quantity,
           name: to.name,
           setCode: to.setCode,
@@ -2461,23 +2875,24 @@ export function writeHandlers(db: FakeDb) {
      * `deck::missing_to_wishlist` — everything this deck is short of, onto the wishlist.
      *
      * Answers how many **wishes were touched**, one per oracle card: the same card short in
-     * two zones is one wish for the sum, and pressing twice raises a line rather than making a
-     * second one. Always an **any-printing** wish — a shopping list is not a printing
+     * two categories is one wish for the sum, and pressing twice raises a line rather than
+     * making a second one. Always an **any-printing** wish — a shopping list is not a printing
      * preference, and the copy that fills the hole is whichever one turns up.
      *
      * It reallocates before counting, and here that is `deck_get`: the read is where this
      * fake allocates, so asking it *is* the reallocate-then-read the Rust spells out in two
-     * calls. `maybe` is skipped (a card the user has not decided to play is not one they need
-     * to buy) and so is an orphan, which has neither an oracle card nor a printing to wish
-     * for and is already carrying a sentence that says so.
+     * calls. It reads the **live** list and skips an **inactive** category — a card the user
+     * has not decided to play is not a card they need to buy, whether the undecidedness is a
+     * switched-off category or a whole plan — and so is an orphan, which has neither an oracle
+     * card nor a printing to wish for and is already carrying a sentence that says so.
      */
     deck_missing_to_wishlist: (args: { deckId: number }): number => {
       refuseIfBusy(db);
-      const detail = readHandlers(db).deck_get({ id: args.deckId });
+      const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
       if (!detail) throw refuse(DECK_GONE);
       const missing = new Map<string, { name: string; quantity: number }>();
       for (const row of detail.cards) {
-        if (row.zone === MAYBE || row.oracleId === null) continue;
+        if (!row.categoryActive || row.oracleId === null) continue;
         const short = row.quantity - row.ownedQuantity;
         if (short <= 0) continue;
         const found = missing.get(row.oracleId) ?? { name: row.name, quantity: 0 };

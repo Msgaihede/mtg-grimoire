@@ -60,8 +60,8 @@ const PREVIEW_GAP = 4;
  *
  * `aria-expanded` alone is not it, and getting that wrong would be a silent kill switch for
  * this whole feature: the app uses the bare attribute for plain disclosures that are open for
- * minutes at a time (`DeckSearchPanel`'s rail, `DeckEditor`'s Maybe pile, `DecksPage`'s
- * archived list, `ValidationPanel`'s "why"), and a pane that ever grows one — an expanded
+ * minutes at a time (`DeckSearchPanel`'s rail, `DecksPage`'s archived list,
+ * `ValidationPanel`'s "why"), and a pane that ever grows one — an expanded
  * Rulings section — would stop previewing anything, everywhere, with nothing to say why.
  * Every layer this has to be exclusive with is a *popup*, and every popup trigger in this app
  * pairs the two attributes (`AddToCollection`, `SetCombobox`, both row menus, both panels).

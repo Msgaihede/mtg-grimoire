@@ -8,10 +8,10 @@ import { DeckStats } from "./DeckStats";
  * Every copy of these rows claimed from the collection — what the allocator answers for a deck
  * whose owner has all of it.
  *
- * Applied to lists of real printings only, and never to a `maybe` row or an orphan: the allocator
- * skips the scratchpad outright, so a maybe row reads `ownedQuantity: 0` by design and not for
- * want of copies. Without this every story would read "N of N missing", which is one state of the
- * shortfall line out of two.
+ * Applied to lists of real printings only, and never to a row in a switched-off category or to an
+ * orphan: the allocator claims nothing for an inactive category, so a Maybeboard row reads
+ * `ownedQuantity: 0` by design and not for want of copies. Without this every story would read
+ * "N of N missing", which is one state of the shortfall line out of two.
  */
 function allOwned(cards: DeckCard[]): DeckCard[] {
   return cards.map((card) => ({ ...card, ownedQuantity: card.quantity }));
@@ -59,7 +59,7 @@ const meta = {
       description: {
         component:
           "What the deck adds up to, live. Every number comes from the same `DeckCard[]` the " +
-          "zone columns are drawn from — one query, so a curve and a legality panel can never " +
+          "category columns are drawn from — one query, so a curve and a legality panel can never " +
           "disagree — and `deckStats` is recomputed on every edit, because the arithmetic is a " +
           "single pass over a few hundred rows and a stats block that lags the stepper beside " +
           "it is worse than one that costs a microsecond.\n\n" +
@@ -181,7 +181,7 @@ export const ColourBreakdown: Story = {
  * The type bars, and **the one place they deliberately disagree with the Lands figure**.
  *
  * The bars are the deck list's own headings, read from the deck list's own `groupCards`, so a bar
- * here and a heading over the rows in a zone column are the same number by construction. That
+ * here and a heading over the rows in a category column are the same number by construction. That
  * helper files a card under the **first** type printed on it, which is right for a heading: an
  * Artifact Creature is a creature to everyone who has ever built a deck.
  *
@@ -306,23 +306,24 @@ export const EmptyDeck: Story = {
  * A commander deck with a companion, where the headline figure counts **neither the way the
  * others do**.
  *
- * "Cards" is `engine.SIZE_ZONES` — main plus commander — imported from the validation engine
- * rather than restated, because the chip beside this strip would say "Commander decks are exactly
- * 100 cards including the commander; you have 39" and a figure counting something else next to
- * that sentence would be two numbers for one question. It reads 39 while the deck is 40 copies:
- * the companion is the difference, and the note under the figure says where it went.
+ * "Cards" is `engine.SIZE_KINDS` — the `main` and `commander` kinds, in categories that are
+ * switched on — imported from the validation engine rather than restated, because the chip beside
+ * this strip would say "Commander decks are exactly 100 cards including the commander; you have
+ * 39" and a figure counting something else next to that sentence would be two numbers for one
+ * question. It reads 39 while the deck is 40 copies: the companion is the difference, and the note
+ * under the figure says where it went.
  *
  * Everything else counts the companion, and the sideboard when there is one: the price, the
- * shortfall and all four charts are over every zone but the scratchpad, because a sideboard is
- * cards you own, sleeve and pay for. A companion is named as a companion in that note rather than
- * folded into the sideboard — in the singleton commander formats there is no sideboard for it to
- * be part of, which is the same `sideboardMax` cell the engine reads.
+ * shortfall and all four charts are over every **active** category, because a sideboard is cards
+ * you own, sleeve and pay for. A companion is named as a companion in that note rather than folded
+ * into the sideboard — in the singleton commander formats there is no sideboard for it to be part
+ * of, which is the same `sideboardMax` cell the engine reads.
  */
 export const CommanderDeck: Story = {
   args: {
     cards: allOwned([
-      deckCard(printing("eld", "303"), { zone: "commander" }),
-      deckCard(printing("iko", "226"), { zone: "companion" }),
+      deckCard(printing("eld", "303"), { categoryKind: "commander" }),
+      deckCard(printing("iko", "226"), { categoryKind: "companion" }),
       deckCard(printing("mh2", "267")),
       deckCard(printing("ema", "32")),
       deckCard(printing("dom", "168")),
@@ -342,9 +343,11 @@ export const CommanderDeck: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // 39 sized against 40 copies. The note is what makes the smaller number honest rather than
-    // wrong, and it names the zone in the editor's own words.
+    // wrong, and it names the category in the reader's own words.
     const cards = canvas.getByText("Cards", { selector: "dt" }).closest("div");
     await expect(cards).toHaveTextContent("39");
+    // The pile's own name, lower-cased — "Companion" here, and whatever the reader called it
+    // in a deck of their own.
     await expect(cards).toHaveTextContent("+ 1 companion");
     // The sentence a figure has no room for, as its `title` — the same place the price figure
     // keeps its as-of line.
@@ -358,14 +361,16 @@ export const CommanderDeck: Story = {
 };
 
 /**
- * A 60-card deck with a 15-card sideboard and an 8-card maybe pile, and **the maybe pile changes
+ * A 60-card deck with a 15-card sideboard and an 8-card Maybeboard, and **the Maybeboard changes
  * no number on this strip**.
  *
- * The scratchpad counts toward nothing at all — not size, not price, not the curve, not the
- * colours, not the shortfall — which is the same rule `validateDeck` applies before it judges
- * anything and the reason the allocator never claims a copy for it. `deckStats` still *reports*
- * `byZone.maybe`, and nothing here draws it: the headline note lists the sideboard and the
- * companion, and the maybe pile is not a place a deck's cards are.
+ * A category that is switched off counts toward nothing at all — not size, not price, not the
+ * curve, not the colours, not the shortfall — which is the same line `validateDeck` opens with and
+ * the reason the allocator never claims a copy for it. **It is the switch that does that and never
+ * the word `maybe`**: the Maybeboard is simply the one category a deck is born with switched off,
+ * and a `main` pile of the reader's own that they switched off leaves every number here by exactly
+ * the same route. `deckStats` still *reports* the pile in `byCategory`, and nothing here draws it:
+ * the headline note lists the piles that are counted somewhere, and this one is counted nowhere.
  *
  * The eight cards in it are chosen so their absence is measurable rather than assumed: 4 Emrakul
  * (mana value 15) and 4 Avacyn (8) would put 8 copies in the curve's open-ended last bucket, and
@@ -384,20 +389,20 @@ export const WithMaybePile: Story = {
         deckCard(printing("nph", "57"), { quantity: 4 }),
         deckCard(printing("mh2", "259"), { quantity: 4 }),
         deckCard(printing("lea", "288"), { quantity: 32 }),
-        deckCard(printing("gtc", "215"), { zone: "side", quantity: 4 }),
-        deckCard(printing("dom", "168"), { zone: "side", quantity: 4 }),
-        deckCard(printing("apc", "128"), { zone: "side", quantity: 4 }),
-        deckCard(printing("gtc", "148"), { zone: "side", quantity: 3 }),
+        deckCard(printing("gtc", "215"), { categoryKind: "side", quantity: 4 }),
+        deckCard(printing("dom", "168"), { categoryKind: "side", quantity: 4 }),
+        deckCard(printing("apc", "128"), { categoryKind: "side", quantity: 4 }),
+        deckCard(printing("gtc", "148"), { categoryKind: "side", quantity: 3 }),
       ]),
-      deckCard(printing("roe", "4"), { zone: "maybe", quantity: 4 }),
-      deckCard(printing("avr", "6"), { zone: "maybe", quantity: 4 }),
+      deckCard(printing("roe", "4"), { categoryKind: "maybe", quantity: 4 }),
+      deckCard(printing("avr", "6"), { categoryKind: "maybe", quantity: 4 }),
     ],
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const cards = canvas.getByText("Cards", { selector: "dt" }).closest("div");
-    // 60, not 68: the maybe pile is not in `SIZE_ZONES`, and the note beside the figure accounts
-    // for the sideboard and says nothing about the scratchpad.
+    // 60, not 68: the Maybeboard is switched off, and the note beside the figure accounts for
+    // the sideboard and says nothing about a pile that counts toward nothing.
     await expect(cards).toHaveTextContent("60");
     await expect(cards).toHaveTextContent("+ 15 sideboard");
     // The load-bearing absence, and the reason those two cards were chosen: 4 Emrakul at 15 and 4
@@ -405,7 +410,7 @@ export const WithMaybePile: Story = {
     // reads zero. A curve missing eight cards looks exactly like a curve that never had them.
     await expect(canvas.getByText("0 cards at mana value 8 or more")).toBeInTheDocument();
     // Counted over the sideboard as well as the main deck — 75 copies, and the eight in the
-    // scratchpad are not among them.
+    // switched-off pile are not among them.
     await expect(canvas.getByText("All 75 owned.")).toBeInTheDocument();
   },
 };

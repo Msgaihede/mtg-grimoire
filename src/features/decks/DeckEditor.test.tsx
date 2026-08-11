@@ -3,7 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { CardSummary, DeckCard, DeckDetail, DeckRow, FormatSpec } from "@/lib/ipc";
+import type {
+  CardSummary,
+  CategoryKind,
+  DeckCard,
+  DeckCategory,
+  DeckDetail,
+  DeckRow,
+  FormatSpec,
+} from "@/lib/ipc";
 import { dragOnto, startDrag } from "@/test-drag";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
@@ -54,8 +62,63 @@ const DECK: DeckRow = {
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */
 const PICKER: FormatSpec[] = [spec("modern"), spec("commander"), spec("gladiator"), spec("casual")];
 
-function detail(deck: Partial<DeckRow>, cards: DeckCard[]): DeckDetail {
-  return { deck: { ...DECK, ...deck }, cards };
+/**
+ * One `deck_categories` row.
+ *
+ * **`isActive` is derived from the kind by default**, mirroring `schema::PREDEFINED_CATEGORIES`:
+ * the Maybeboard is the one predefined pile seeded switched off, and every other category a
+ * deck is born with is on. That is what keeps a fixture that used to say `zone: "maybe"` — and
+ * now says `categoryKind: "maybe"` — meaning exactly what it meant, with no second edit. A test
+ * about the switch itself passes `isActive` and says so.
+ */
+function category(
+  id: number,
+  name: string,
+  kind: CategoryKind,
+  over: Partial<DeckCategory> = {},
+): DeckCategory {
+  return {
+    id,
+    deckId: DECK.id,
+    name,
+    kind,
+    isActive: kind !== "maybe",
+    sortOrder: id - 1,
+    // The column heading counts the rows it was handed, so these two are read by nothing here.
+    cardCount: 0,
+    totalPriceUsd: null,
+    ...over,
+  };
+}
+
+/**
+ * The categories every deck in this file has, in `sortOrder` — and therefore the columns the
+ * editor draws, since schema v7 made the two the same list.
+ *
+ * `schema::PREDEFINED_CATEGORIES`' four, plus the `Main deck` the v7 migration files every
+ * legacy main-deck row into. The **ids are `validation/fixtures`' own**: `card()` files a row
+ * under one category per kind, and a detail whose categories did not include the one its cards
+ * name would draw a column with nothing in it beside a pile of rows with no column.
+ */
+const CATEGORIES: DeckCategory[] = [
+  category(1, "Main deck", "main"),
+  category(2, "Sideboard", "side"),
+  category(3, "Commander", "commander"),
+  category(4, "Companion", "companion"),
+  category(5, "Maybeboard", "maybe"),
+];
+
+/** The two ids every write below is addressed by — every deck command takes a category id now,
+ *  where it used to take one of five words. */
+const MAIN = CATEGORIES[0].id;
+const SIDE = CATEGORIES[1].id;
+
+function detail(
+  deck: Partial<DeckRow>,
+  cards: DeckCard[],
+  categories: DeckCategory[] = CATEGORIES,
+): DeckDetail {
+  return { deck: { ...DECK, ...deck }, cards, categories, tags: [] };
 }
 
 function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
@@ -269,40 +332,59 @@ describe("DeckEditor", () => {
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { isBuilt: true }));
   });
 
-  /** The seeded rules drive the chrome: Modern has a sideboard and no commander. */
-  it("draws the zones the format has, and not the ones it does not", async () => {
+  /**
+   * **The columns are the deck's categories, and the format has nothing to say about them.**
+   *
+   * There used to be a filter here: Modern got a sideboard and no commander column, because
+   * `sideboard_max` and `requires_commander` decided which of the five fixed zones were slots
+   * this format had. Schema v7 makes a category a row the *user* named, ordered and switched on
+   * or off, so hiding one would hide a pile they built. This deck is Modern and its Commander
+   * column is drawn — which is the whole of what changed.
+   */
+  it("draws one column per category, whatever the format says about them", async () => {
     await open();
 
-    expect(screen.getByRole("region", { name: /^Main deck/ })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: /^Sideboard/ })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: /^Commander/ })).not.toBeInTheDocument();
+    // Matched on the count a column carries in its own name, so the docked panel's "Add cards"
+    // section — a `region` too — is not one of these.
+    expect(
+      screen
+        .getAllByRole("region", { name: /, \d+ cards?$/ })
+        .map((r) => r.getAttribute("aria-label")),
+    ).toEqual([
+      "Main deck, 6 cards",
+      "Sideboard, 0 cards",
+      // Modern requires no commander and this deck has none, and the column is here all the
+      // same.
+      "Commander, 0 cards",
+      "Companion, 0 cards",
+      "Maybeboard, 0 cards",
+    ]);
   });
 
-  /** Commander has a commander zone and no sideboard at all — the same data, read the other
-   *  way. */
-  it("draws a commander zone and no sideboard for a commander deck", async () => {
+  /** And the same five for a Commander deck, whose `sideboard_max` is 0: a category is data the
+   *  user made, so re-formatting a deck never takes a pile away from it. */
+  it("draws the same columns for a commander deck", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, []));
 
     await open();
 
     expect(await screen.findByRole("region", { name: /^Commander/ })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: /^Sideboard/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /^Sideboard/ })).toBeInTheDocument();
   });
 
-  /**
-   * The rule that keeps a re-format from hiding cards: a zone the format does not have is
-   * still drawn while something is in it, or the copies would be invisible *and* unreachable
-   * — they would still count, and nothing on screen would say why.
-   */
-  it("keeps drawing a zone the format has no use for while cards are still in it", async () => {
+  /** A row is drawn in the column its `categoryId` names, which is the whole of the filing:
+   *  the read answers cards and categories, and the editor joins them on that id. */
+  it("draws a card in the column its category names", async () => {
     deckGet.mockResolvedValue(
-      detail({}, [card({ name: "Kenrith", zone: "commander", typeLine: "Legendary Creature" })]),
+      detail({}, [
+        card({ name: "Kenrith", categoryKind: "commander", typeLine: "Legendary Creature" }),
+      ]),
     );
 
     await open();
 
-    const zone = await screen.findByRole("region", { name: /^Commander/ });
-    expect(within(zone).getByRole("button", { name: "Kenrith" })).toBeInTheDocument();
+    const column = await screen.findByRole("region", { name: /^Commander/ });
+    expect(within(column).getByRole("button", { name: "Kenrith" })).toBeInTheDocument();
   });
 
   /**
@@ -347,7 +429,7 @@ describe("DeckEditor", () => {
       screen.getByRole("button", { name: /decrease copies of lightning bolt/i }),
     );
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", "main", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Lightning Bolt" })).not.toBeInTheDocument(),
     );
@@ -370,7 +452,7 @@ describe("DeckEditor", () => {
     await userEvent.click(up);
     await userEvent.click(up);
 
-    expect(deckSetCardQuantity.mock.calls.map((c) => c[3])).toEqual([5, 6, 7]);
+    expect(deckSetCardQuantity.mock.calls.map((c) => c[4])).toEqual([5, 6, 7]);
   });
 
   /**
@@ -396,9 +478,9 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
   });
 
-  /** The row the caret was on leaves with the last copy. The zone it left is where the reader
+  /** The row the caret was on leaves with the last copy. The column it left is where the reader
    *  is looking, and it announces its own new count — the hand-off a move makes. */
-  it("hands the caret to the zone when a row is stepped away", async () => {
+  it("hands the caret to the column when a row is stepped away", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt({ quantity: 1 })]));
 
     await open();
@@ -413,8 +495,10 @@ describe("DeckEditor", () => {
    * A row opens the card in the pane the app already docks; the stepper on it does not.
    *
    * **And it says which slot the card came out of.** The pane offers to swap that slot's
-   * printing, which is a write addressed by deck, zone and card — so a click here is the one
-   * place in the app that writes a `paneDeckContext`, and the zone is half of what it carries.
+   * printing, which is a write addressed by deck, category and card — so a click here is the
+   * one place in the app that writes a `paneDeckContext`, and the category is half of what it
+   * carries. Its **name** travels with its id because the pane has no category list to look one
+   * up in (see `PaneDeckContext`), and this is the surface that has both.
    */
   it("opens the card from a row, as a row of this deck", async () => {
     await open();
@@ -423,7 +507,8 @@ describe("DeckEditor", () => {
     expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
     expect(useAppStore.getState().paneDeckContext).toEqual({
       deckId: 4,
-      zone: "main",
+      categoryId: MAIN,
+      categoryName: "Main deck",
       cardId: "c-Lightning Bolt",
     });
 
@@ -459,13 +544,13 @@ describe("DeckEditor", () => {
   });
 
   /** The click path a move needs before drag exists — and the one it keeps afterwards. */
-  it("moves a card between zones from the row's menu", async () => {
+  it("moves a card between categories from the row's menu", async () => {
     await open();
 
     await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
     await userEvent.click(screen.getByRole("button", { name: "Move to Sideboard" }));
 
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", "main", "side");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live");
   });
 
   it("picks the deck's cover from a row", async () => {
@@ -643,32 +728,35 @@ describe("DeckEditor", () => {
       await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
     );
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", "main", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", 1);
   });
 
-  /** The same seeded rules that decide which columns are drawn decide where a card may land:
-   *  a Modern deck is never offered a commander zone to add to. */
-  it("offers only the zones this format has as add targets", async () => {
+  /** Every category the deck has, in the order the columns are drawn — the same list the row
+   *  menus offer as move targets, from the same one source. */
+  it("offers every category as an add target", async () => {
     await open();
 
     const select = (await screen.findByLabelText("Add to")) as HTMLSelectElement;
-    // Modern's seeded row has a sideboard and allows a companion, and has no commander zone —
-    // the same four the row menus offer as move targets, from the same derivation.
     expect([...select.options].map((o) => o.textContent)).toEqual([
       "Main deck",
       "Sideboard",
+      // Modern requires no commander, and the column and the option are here anyway: a
+      // category is data the user made, not a slot the format implies.
+      "Commander",
       "Companion",
-      "Maybe",
+      "Maybeboard",
     ]);
-    expect([...select.options].map((o) => o.textContent)).not.toContain("Commander");
   });
 
   /**
-   * A re-format can take the add target away — Commander has no sideboard at all — and a
-   * select left holding a zone that is not among its own options shows nothing selected while
-   * every press files a card somewhere the editor is not drawing.
+   * A category can leave the deck under an open editor — deleted from another window, or
+   * renamed away — and a select left holding an id that is not among its own options shows
+   * nothing selected while every press files a card into a column nothing is drawing.
+   *
+   * The fallback is the **first** category rather than a hard-coded word: there is no `main` to
+   * fall back to any more, and a deck always has at least the four predefined piles.
    */
-  it("falls back to the main deck when a re-format takes the add target away", async () => {
+  it("falls back to the first category when the one it was holding leaves the deck", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],
       total: 1,
@@ -676,37 +764,33 @@ describe("DeckEditor", () => {
     });
 
     await open();
-    await userEvent.selectOptions(await screen.findByLabelText("Add to"), "side");
+    await userEvent.selectOptions(await screen.findByLabelText("Add to"), String(SIDE));
     await screen.findByRole("button", { name: "Add Goblin Guide to Sideboard" });
 
-    deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, []));
-    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "commander");
+    // The same deck, one category short — and it is the one the picker is pointed at.
+    deckGet.mockResolvedValue(
+      detail(
+        {},
+        [],
+        CATEGORIES.filter((c) => c.id !== SIDE),
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
 
     // Read off the Add button rather than off the select, because the select cannot see this
     // bug: HTML selects the first option when the selected one is removed, so the control
     // *shows* "Main deck" whatever the state behind it says. Without the reset, every press
-    // would still file its card into a sideboard this format does not have and the editor is
-    // no longer drawing.
+    // would still file its card into a category the editor is no longer drawing.
     expect(
       await screen.findByRole("button", { name: "Add Goblin Guide to Main deck" }),
     ).toBeInTheDocument();
-  });
-
-  /** The scratchpad is shut by default, and a card added into a closed drawer is a card that
-   *  has vanished — the same hand-off a move into it makes. */
-  it("opens the maybe pile when it becomes the add target", async () => {
-    await open();
-
-    await userEvent.selectOptions(await screen.findByLabelText("Add to"), "maybe");
-
-    expect(screen.getByRole("region", { name: /^Maybe/ })).toBeInTheDocument();
   });
 
   /**
    * Three docked columns do not fit in a 1024px window — sidebar, page padding, the card pane
    * and the panel come to 1044 before the deck gets a pixel — and the deck was measured at
    * **2px** before this existed, which reads as a rendering fault rather than as a squeeze.
-   * The narrowest thing gives way first, which is the rule the zone columns already follow.
+   * The narrowest thing gives way first, which is the rule the category columns already follow.
    *
    * 376 is what a 1024px window leaves this row with the card pane docked beside the view
    * (measured at 361 once the page's own scrollbar is out); 604 is `DECK_FLOOR` plus the panel
@@ -780,16 +864,72 @@ describe("DeckEditor", () => {
     expect(heard).toEqual([false]);
   });
 
-  /** The scratchpad: kept, counted by nothing, and out of the way until it is wanted. */
-  it("keeps the maybe pile collapsed under the columns", async () => {
-    deckGet.mockResolvedValue(detail({}, [bolt({ zone: "maybe", quantity: 3 })]));
+  /**
+   * The Maybeboard is a column like the rest — **no drawer, and nothing to open.**
+   *
+   * It used to be a disclosure under the deck, shut by default, because `maybe` was the one
+   * zone that counted toward nothing. Schema v7 moves that fact onto `is_active`, which any
+   * category can carry, so the Maybeboard is one seeded row that starts switched off and there
+   * is no word left for a drawer to be attached to. Its rows are on screen from the first
+   * paint.
+   *
+   * Its `0` owned is by design and not a shortage — the allocator claims nothing for an
+   * inactive category — which is why the row draws no shortage mark.
+   */
+  it("draws the maybe pile as a column of its own, with no disclosure to open", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ categoryKind: "maybe", quantity: 3, ownedQuantity: 0 })]),
+    );
 
     await open();
 
-    expect(screen.queryByRole("button", { name: "Lightning Bolt" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: /^Maybe/ }));
+    const pile = await screen.findByRole("region", { name: "Maybeboard, 3 cards" });
+    expect(within(pile).getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Maybeboard/ })).not.toBeInTheDocument();
+    expect(within(pile).queryByText(/You own /)).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+  /**
+   * **`categoryActive === false` is the whole of what `maybe` used to mean, and it is not the
+   * Maybeboard's alone.**
+   *
+   * A pile of the user's own — kind `main`, their own name — that they switched off counts
+   * toward nothing exactly as the seeded Maybeboard does: the allocator claims no copy for it,
+   * so every row in it reads `ownedQuantity` 0 **by design** rather than for want of copies, and
+   * a shortage mark there would tell the reader to go and buy four Bolts they already have.
+   *
+   * This is the case that fails against any implementation still branching on the *word*
+   * `maybe`: the column is `main`, so a kind check draws the mark and a `categoryActive` check
+   * does not. It is drawn like any other column for the same reason — hiding a switched-off pile
+   * would hide the affordance for switching it back on.
+   */
+  it("draws a switched-off category like any other, and its rows own nothing", async () => {
+    const off = category(6, "Sunday brew", "main", { isActive: false, sortOrder: 5 });
+    deckGet.mockResolvedValue(
+      detail(
+        {},
+        [
+          bolt({
+            categoryId: off.id,
+            categoryName: off.name,
+            categoryKind: "main",
+            categoryActive: false,
+            quantity: 4,
+            ownedQuantity: 0,
+          }),
+        ],
+        [...CATEGORIES, off],
+      ),
+    );
+
+    await open();
+
+    const column = await screen.findByRole("region", { name: "Sunday brew, 4 cards" });
+    expect(within(column).getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+    // No "0/4", and no sentence saying so either: the mark is drawn only where it says
+    // something, and here it would say something untrue.
+    expect(within(column).queryByText("0/4")).not.toBeInTheDocument();
+    expect(within(column).queryByText(/You own /)).not.toBeInTheDocument();
   });
 
   /**
@@ -932,7 +1072,7 @@ describe("DeckEditor", () => {
    * The panel's add is in that family too, and it is the one that could have been left out of
    * it: `add_card` goes through `touch_deck` like every other write, so a press on a deck that
    * has been deleted answers the same sentence. Without the re-read the panel would say the
-   * deck is gone while the zone columns beside it went on painting it, and every further press
+   * deck is gone while the category columns beside it went on painting it, and every further press
    * would fail the same way with nothing on screen explaining it.
    */
   it("re-reads the deck when an add from the panel is refused", async () => {
@@ -996,8 +1136,8 @@ describe("DeckEditor", () => {
 });
 
 /**
- * The three drags, end to end: a tile out of the panel into a zone, a row from one zone into
- * another, and a row onto the tray that takes it out of the deck.
+ * The three drags, end to end: a tile out of the panel into a category column, a row from one
+ * column into another, and a row onto the tray that takes it out of the deck.
  *
  * Real drag events at the real registrations — `src/test-drag.ts` explains why jsdom can carry
  * them and lists what it cannot (the platform's drag preview, pointer hit-testing, auto-scroll
@@ -1006,9 +1146,9 @@ describe("DeckEditor", () => {
  * *same* write, not a second one.
  */
 describe("DeckEditor drag and drop", () => {
-  const zone = (title: string) => screen.getByRole("region", { name: new RegExp(`^${title}`) });
+  const column = (name: string) => screen.getByRole("region", { name: new RegExp(`^${name}`) });
   /** The scroller is the drop target, and the attribute is how `ZoneColumn` marks it. */
-  const scroller = (title: string) => zone(title).querySelector("[data-zone-scroller]")!;
+  const scroller = (name: string) => column(name).querySelector("[data-zone-scroller]")!;
   /** A row, from the name it shows. The `<li>` is the drag handle — the whole row is. */
   const row = (name: string) => screen.getByRole("button", { name }).closest("li")!;
 
@@ -1022,34 +1162,34 @@ describe("DeckEditor drag and drop", () => {
   }
 
   /**
-   * The zone that took the card decides, not the panel's target-zone select — which is still
+   * The column that took the card decides, not the panel's add-target select — which is still
    * saying Main deck while the card lands in the sideboard. That is the whole difference
-   * between the drag and the button beside it, and the reason a drop carries its own zone.
+   * between the drag and the button beside it, and the reason a drop carries its own category.
    */
-  it("adds a card dragged out of the panel to the zone it was dropped on", async () => {
+  it("adds a card dragged out of the panel to the column it was dropped on", async () => {
     const tile = panelHolds("Goblin Guide");
     await open();
 
     await dragOnto(await tile(), scroller("Sideboard"));
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", "side", 1);
-    expect(screen.getByLabelText("Add to")).toHaveValue("main");
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", SIDE, null, "live", 1);
+    expect(screen.getByLabelText("Add to")).toHaveValue(String(MAIN));
   });
 
   /**
    * A row dropped on another column is the row menu's "Move to" by another route — the same
    * command, and the same hand-off afterwards: the row the reader was holding has left, so the
-   * caret goes to the zone that now has the card and announces it.
+   * caret goes to the column that now has the card and announces it.
    */
-  it("moves a row into the zone it was dropped on, and hands the caret to it", async () => {
+  it("moves a row into the column it was dropped on, and hands the caret to it", async () => {
     await open();
 
     await dragOnto(row("Lightning Bolt"), scroller("Sideboard"));
 
     await waitFor(() =>
-      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", "main", "side"),
+      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
     );
-    await waitFor(() => expect(zone("Sideboard")).toHaveFocus());
+    await waitFor(() => expect(column("Sideboard")).toHaveFocus());
   });
 
   /**
@@ -1067,7 +1207,7 @@ describe("DeckEditor drag and drop", () => {
     expect(screen.getByText("Remove Lightning Bolt from deck")).toBeInTheDocument();
     await held.drop();
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", "main", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
     await waitFor(() => expect(screen.queryByText(/remove/i)).not.toBeInTheDocument());
   });
 

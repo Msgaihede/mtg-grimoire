@@ -248,7 +248,7 @@ export const Selected: Story = { args: { selectedId: BOLT_ALPHA.id } };
 /**
  * A wall whose tiles can be carried to a deck — spec §1's first drag source.
  *
- * The payload is `{ kind: "card" }`, which a zone treats exactly as the deck panel's
+ * The payload is `{ kind: "card" }`, which a category treats exactly as the deck panel's
  * `"search-card"`: add one copy. The remove tray narrows to `"deck-card"`, so a card from this
  * wall can never draw it.
  *

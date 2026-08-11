@@ -31,9 +31,9 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { CLOCK_BASE, makeDb, neverCheckedUpdate } from "./db";
-import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry, FakeWish } from "./db";
-import { printing } from "./fixtures";
-import type { DeckZone } from "@/lib/ipc";
+import type { FakeDb, FakeDeck, FakeDeckCard, FakeDeckCategory, FakeEntry, FakeWish } from "./db";
+import { DECK_CATEGORIES, printing } from "./fixtures";
+import type { CategoryKind } from "@/lib/ipc";
 
 export type SeedName = "empty" | "starter" | "needsReview" | "large";
 
@@ -154,21 +154,68 @@ function anyPrintingWish(
   };
 }
 
-/** A deck row. `name` is denormalised alongside the printing — it is the one thing an orphaned
- *  deck card still has to show. */
+/**
+ * Five `deck_categories` rows per deck, which is what schema v7's migration leaves every deck
+ * that predates it: one built out of each zone that held cards, plus whichever of the four
+ * predefined ones that first pass missed.
+ *
+ * All three seeded decks hold `main` cards, so all three come out of that migration with the
+ * same five — `DECK_CATEGORIES`, sort orders and all. **A deck the app makes today is in the
+ * other shape**: `create_deck` seeds the four predefined at 0–3 and every `main` category
+ * arrives later, by name, from the first add. Both are real; a *seeded* world is the first,
+ * which is why the Commander column sorts ahead of the main deck here.
+ *
+ * Ids are handed out deck by deck, so category 1 is deck 1's Commander and category 6 is deck
+ * 2's. Nothing outside this file may assume that arithmetic — {@link categoryOf} is how a row
+ * finds its category.
+ */
+function starterCategories(deckIds: number[]): FakeDeckCategory[] {
+  const next = ids();
+  return deckIds.flatMap((deckId) =>
+    DECK_CATEGORIES.map((c) => ({
+      id: next(),
+      deckId,
+      name: c.name,
+      kind: c.kind,
+      isActive: c.isActive,
+      sortOrder: c.sortOrder,
+    })),
+  );
+}
+
+/** One deck's category of a given kind. Every seeded deck has exactly one of each of the five
+ *  — a *user's* deck may own any number of `main` ones, which is why this throws rather than
+ *  taking the first match of many. */
+function categoryOf(
+  categories: FakeDeckCategory[],
+  deckId: number,
+  kind: CategoryKind,
+): FakeDeckCategory {
+  const found = categories.filter((c) => c.deckId === deckId && c.kind === kind);
+  if (found.length !== 1) throw new Error(`Deck ${deckId} has ${found.length} ${kind} categories`);
+  return found[0];
+}
+
+/** A deck row, filed under one of its own deck's categories — which is what schema v7 replaced
+ *  the zone with. `name` is denormalised alongside the printing: it is the one thing an
+ *  orphaned deck card still has to show. */
 function deckCard(
   id: number,
   deckId: number,
   card: FakeCard,
-  zone: DeckZone,
+  category: FakeDeckCategory,
   quantity: number,
   over: Partial<FakeDeckCard> = {},
 ): FakeDeckCard {
   return {
     id,
     deckId,
+    categoryId: category.id,
+    // The deck as it is sleeved. No seed carries a `theory` row: a plan counts on no tile and
+    // reserves no copy, so seeding one would make every count in this file need a caveat.
+    variant: "live",
     cardId: card.id,
-    zone,
+    tagId: null,
     quantity,
     name: card.name,
     setCode: card.setCode,
@@ -356,15 +403,17 @@ function starterDecks(): FakeDeck[] {
  * All three are run through the real `validateDeck` by `world.test.ts`, which pins the exact
  * issue list each one produces (none, one, one). What follows is why those are the right three.
  *
- * **Deck 1, `modern` — 60 main, 15 side, 2 in the scratchpad.** Every row of `main` and `side`
- * is `modern: "legal"` (measured over `CARDS` 2026-08-09), no card appears in two zones, and
- * the twenty lands are basics plus `Urza's Saga` — so it validates clean, with an issue list
- * of exactly zero. The corpus has no Plains and no Mountain, which is why a deck whose spells
- * are mostly red runs Forests and Islands; it is a fixture with a real curve and a real land
- * count, not a list anyone would sleeve. The `maybe` row is `Ancient Tomb`, which
- * is `modern: "not_legal"` **on purpose**: `maybe` counts toward nothing at all — not size,
- * not copies, not legality, and the allocator does not claim copies for it — and a scratchpad
- * holding an illegal card is the only way a story can show that.
+ * **Deck 1, `modern` — 60 in the main deck, 15 in the sideboard, 2 on the Maybeboard.** Every
+ * row of those first two categories is `modern: "legal"` (measured over `CARDS` 2026-08-09),
+ * no card appears in two of them, and the twenty lands are basics plus `Urza's Saga` — so it
+ * validates clean, with an issue list of exactly zero. The corpus has no Plains and no
+ * Mountain, which is why a deck whose spells are mostly red runs Forests and Islands; it is a
+ * fixture with a real curve and a real land count, not a list anyone would sleeve. The
+ * Maybeboard row is `Ancient Tomb`, which is `modern: "not_legal"` **on purpose**: an
+ * **inactive** category counts toward nothing at all — not size, not copies, not legality, and
+ * the allocator claims no copies for it — and a pile holding an illegal card is the only way a
+ * story can show that. It is inactive because it was seeded that way, not because of its kind:
+ * switch it on and the deck reports an illegal card.
  *
  * **Deck 2, `commander` — 99 main + 1 commander + 1 companion.** Kenrith commands, so colour
  * identity constrains nothing and every card in the fixture is available. The 15 nonbasics are
@@ -387,10 +436,13 @@ function starterDecks(): FakeDeck[] {
  * Black Lotus and Ancestral Recall are `oldschool: "restricted"`, at one copy each, which is
  * `restricted_semantic: "max_one"` satisfied rather than asserted.
  */
-function starterDeckCards(): FakeDeckCard[] {
+function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
   const next = ids();
+  /** A row, filed under this deck's category of that kind. */
+  const filed = (deckId: number, card: FakeCard, kind: CategoryKind, quantity: number) =>
+    deckCard(next(), deckId, card, categoryOf(categories, deckId, kind), quantity);
   const main = (deckId: number, card: FakeCard, quantity: number) =>
-    deckCard(next(), deckId, card, "main", quantity);
+    filed(deckId, card, "main", quantity);
   return [
     // --- deck 1: 20 lands + 40 spells --------------------------------------------------
     main(1, printing("unf", "239"), 10),
@@ -407,12 +459,12 @@ function starterDeckCards(): FakeDeckCard[] {
     main(1, printing("wwk", "31"), 4),
     main(1, printing("kld", "235"), 4),
     // 15 exactly, which is `sideboardMax` for Modern. Four cards, none of them in the main
-    // deck, because `COPY_ZONES` counts main and side together.
-    deckCard(next(), 1, printing("gtc", "215"), "side", 4),
-    deckCard(next(), 1, printing("apc", "128"), "side", 4),
-    deckCard(next(), 1, printing("acr", "211"), "side", 4),
-    deckCard(next(), 1, printing("nph", "9"), "side", 3),
-    deckCard(next(), 1, printing("tmp", "315"), "maybe", 2),
+    // deck, because the copy limit counts main and side together.
+    filed(1, printing("gtc", "215"), "side", 4),
+    filed(1, printing("apc", "128"), "side", 4),
+    filed(1, printing("acr", "211"), "side", 4),
+    filed(1, printing("nph", "9"), "side", 3),
+    filed(1, printing("tmp", "315"), "maybe", 2),
 
     // --- deck 2: the 99, then the two cards outside it ---------------------------------
     main(2, printing("c21", "263"), 1),
@@ -432,8 +484,8 @@ function starterDeckCards(): FakeDeckCard[] {
     main(2, printing("acr", "211"), 1),
     main(2, printing("unf", "239"), 42),
     main(2, printing("lea", "288"), 42),
-    deckCard(next(), 2, printing("eld", "303"), "commander", 1),
-    deckCard(next(), 2, printing("iko", "226"), "companion", 1),
+    filed(2, printing("eld", "303"), "commander", 1),
+    filed(2, printing("iko", "226"), "companion", 1),
 
     // --- deck 3 -------------------------------------------------------------------------
     main(3, printing("lea", "232"), 1),
@@ -444,11 +496,16 @@ function starterDeckCards(): FakeDeckCard[] {
 }
 
 function starterSeed(): FakeDb {
+  const decks = starterDecks();
+  const deckCategories = starterCategories(decks.map((d) => d.id));
   return makeDb({
     collectionEntries: starterEntries(),
     wishlistEntries: starterWishes(),
-    decks: starterDecks(),
-    deckCards: starterDeckCards(),
+    decks,
+    deckCategories,
+    // No tags: a tag is a label the user puts on, and no seed has anything to say by putting
+    // one on. `deck_tags` is empty in every world, and `DeckDetail.tags` with it.
+    deckCards: starterDeckCards(deckCategories),
   });
 }
 
@@ -524,7 +581,13 @@ function needsReviewSeed(): FakeDb {
     needsReview: DELETED_NOTE,
   });
   db.deckCards.push({
-    ...deckCard(db.deckCards.length + 1, 1, printing("2x2", "117"), "main", 1),
+    ...deckCard(
+      db.deckCards.length + 1,
+      1,
+      printing("2x2", "117"),
+      categoryOf(db.deckCategories, 1, "main"),
+      1,
+    ),
     cardId: ORPHAN_DECK_CARD_ID,
     name: "Psychic Frog",
     setCode: "mh3",

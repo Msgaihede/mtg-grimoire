@@ -15,7 +15,7 @@
  * Not a `.test.ts` file on purpose: Vitest would collect it and report "no test suite".
  */
 import type { CardFacts } from "./types";
-import type { DeckZone, FormatSpec } from "@/lib/ipc";
+import type { CategoryKind, FormatSpec } from "@/lib/ipc";
 
 /** The seeded rows these tests judge against, hand-copied from `schema.rs`. */
 export const SPECS: Record<string, FormatSpec> = {
@@ -266,18 +266,58 @@ export function resetRowIds(): void {
 }
 
 /**
+ * The category each kind is filed under, so a fixture that names only a kind still lands in a
+ * coherent category: two cards of one kind share a category and two kinds never do.
+ *
+ * The four fixed names are `schema::PREDEFINED_CATEGORIES` verbatim. `main` has no predefined
+ * row — a deck may own any number of `main` categories and the seed names none — so the name
+ * here is `"Main deck"`, which is what the v7 migration calls the category it files every
+ * legacy `main` row into. The ids are this file's own and mean nothing beyond "two kinds are
+ * two categories"; no rule in this folder reads {@link CardFacts.categoryId}, and a test that
+ * cares about a *particular* category passes one.
+ */
+const CATEGORIES: Record<CategoryKind, { id: number; name: string }> = {
+  main: { id: 1, name: "Main deck" },
+  side: { id: 2, name: "Sideboard" },
+  commander: { id: 3, name: "Commander" },
+  companion: { id: 4, name: "Companion" },
+  maybe: { id: 5, name: "Maybeboard" },
+};
+
+/**
  * One `deck_cards` row as Task 5's read answers it.
  *
  * `cardId` and `oracleId` default from the name, which is what makes two rows of the same
- * card in two zones group together the way they do in the database — a printing can sit in
- * `main` and `side` at once (the unique index is on `(deck, card, zone)`).
+ * card in two categories group together the way they do in the database — a printing can sit
+ * in the main deck and the sideboard at once (the unique index is on
+ * `(deck, card, category, variant)`).
+ *
+ * **`categoryActive` defaults to `categoryKind !== "maybe"`**, mirroring
+ * `schema::PREDEFINED_CATEGORIES`: the Maybeboard is the one predefined category seeded off,
+ * and every other pile a deck is born with is on. That default is what keeps this the *only*
+ * place schema v7 is visible to a test that was written against the old zones — a fixture
+ * saying `categoryKind: "maybe"` still means what `zone: "maybe"` meant, with no second edit.
+ *
+ * A test about the switch itself says so: `categoryActive: true` on a `maybe` kind is a
+ * Maybeboard the user turned on, `categoryActive: false` on a `main` kind is a category of
+ * their own they turned off, and the engine treats those two exactly as it treats the seeded
+ * defaults — which is the whole point of the category model and is pinned in `engine.test.ts`.
  */
 export function card(overrides: Partial<CardFacts> = {}): CardFacts {
   const name = overrides.name ?? "Lightning Bolt";
+  const kind = overrides.categoryKind ?? "main";
+  const category = CATEGORIES[kind];
   return {
     id: nextRow++,
     cardId: `c-${name}`,
-    zone: "main",
+    categoryId: category.id,
+    categoryName: category.name,
+    categoryKind: kind,
+    categoryActive: kind !== "maybe",
+    variant: "live",
+    tagId: null,
+    tagName: null,
+    tagColor: null,
     quantity: 1,
     name,
     setCode: "lea",
@@ -314,7 +354,7 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
  * permanent card has an activated ability") is decided by exactly that string. A blank
  * fixture there would have made the most common card in Magic fail the rule.
  */
-export function islands(quantity: number, zone: DeckZone = "main"): CardFacts {
+export function islands(quantity: number, kind: CategoryKind = "main"): CardFacts {
   return card({
     name: "Island",
     typeLine: "Basic Land — Island",
@@ -324,7 +364,7 @@ export function islands(quantity: number, zone: DeckZone = "main"): CardFacts {
     colors: null,
     colorIdentity: "U",
     quantity,
-    zone,
+    categoryKind: kind,
   });
 }
 
@@ -416,8 +456,11 @@ export const GAME_CHANGERS: Record<string, Partial<CardFacts>> = {
 };
 
 /** One of {@link GAME_CHANGERS} as a deck row, flag set. */
-export function gameChanger(name: keyof typeof GAME_CHANGERS, zone: DeckZone = "main"): CardFacts {
-  return card({ ...GAME_CHANGERS[name], name, gameChanger: true, zone });
+export function gameChanger(
+  name: keyof typeof GAME_CHANGERS,
+  kind: CategoryKind = "main",
+): CardFacts {
+  return card({ ...GAME_CHANGERS[name], name, gameChanger: true, categoryKind: kind });
 }
 
 /**
@@ -432,7 +475,7 @@ export function gameChanger(name: keyof typeof GAME_CHANGERS, zone: DeckZone = "
 export function commander(): CardFacts {
   return card({
     name: "Kenrith, the Returned King",
-    zone: "commander",
+    categoryKind: "commander",
     typeLine: "Legendary Creature — Human Noble",
     manaCost: "{4}{W}",
     cmc: 5,
@@ -454,7 +497,7 @@ export function commander(): CardFacts {
 export function tinyCommander(): CardFacts {
   return card({
     name: "Najeela, the Blade-Blossom",
-    zone: "commander",
+    categoryKind: "commander",
     typeLine: "Legendary Creature — Human Warrior",
     manaCost: "{2}{R}",
     cmc: 3,
@@ -465,11 +508,20 @@ export function tinyCommander(): CardFacts {
   });
 }
 
-/** Pad the size-counting zones (`main` + `commander`) out to a legal deck with basics, so
- *  a test about copies or legality does not also trip the deck-size rule. */
+/**
+ * Pad the size-counting kinds (`main` + `commander`) out to a legal deck with basics, so a
+ * test about copies or legality does not also trip the deck-size rule.
+ *
+ * It reads `categoryActive` as well as the kind, because the engine's size rule does: a
+ * switched-off pile of fifty cards counts toward nothing there, and a helper that counted it
+ * here would pad fifty cards short and hand the test the deck-size error it was written to
+ * avoid.
+ */
 export function padTo(size: number, cards: CardFacts[]): CardFacts[] {
   const counted = cards
-    .filter((c) => c.zone === "main" || c.zone === "commander")
+    .filter(
+      (c) => c.categoryActive && (c.categoryKind === "main" || c.categoryKind === "commander"),
+    )
     .reduce((n, c) => n + c.quantity, 0);
   return counted < size ? [...cards, islands(size - counted)] : cards;
 }

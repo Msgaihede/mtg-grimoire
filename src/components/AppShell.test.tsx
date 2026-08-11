@@ -351,6 +351,18 @@ describe("the sidebar's drop targets", () => {
     return startDrag(screen.getByText("a card"));
   }
 
+  /**
+   * What a drop on the Decks entry sends, spelled out once.
+   *
+   * A sidebar entry has no column to point at, so it names **no category id** and lets the
+   * command find or create one by name — `useDeck`'s `DEFAULT_CATEGORY_NAME`, which is the v7
+   * migration's own word for the pile it filed every legacy main-deck row into. The name is
+   * written out here rather than imported because the hook keeps it private, and a test that
+   * spells it is a test that notices the day it changes (which is the day `autoCategoryFor`
+   * lands and this stops being one word at all).
+   */
+  const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Main deck", "live", 1];
+
   const entry = (label: string) => screen.getByRole("button", { name: label });
   /** The entry's own live region — the line under its button, where a drop reports. */
   const report = (label: string) =>
@@ -412,7 +424,7 @@ describe("the sidebar's drop targets", () => {
     await held.over(entry("Decks"));
     await held.drop();
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", "main", 1));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7)));
   });
 
   it("leaves Decks inert while no deck is open, and says why", async () => {
@@ -457,7 +469,9 @@ describe("the sidebar's drop targets", () => {
       kind: "deck-card",
       cardId: "c-bolt",
       name: "Lightning Bolt",
-      fromZone: "main",
+      // A `deck_categories.id`, which is what a deck row carries since schema v7 — and it has
+      // to be a positive safe integer or `readDragData` refuses the payload outright.
+      fromCategoryId: 1,
     });
 
     await held.over(entry("Wishlist"));
@@ -468,7 +482,7 @@ describe("the sidebar's drop targets", () => {
     );
   });
 
-  it("adds one copy to the open deck's main zone and names the deck", async () => {
+  it("adds one copy to the open deck and names the deck", async () => {
     openDeck(7, "Burn");
     const held = await pickUp();
 
@@ -476,7 +490,7 @@ describe("the sidebar's drop targets", () => {
     await held.drop();
 
     await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
-    expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", "main", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 

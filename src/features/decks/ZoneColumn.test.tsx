@@ -2,12 +2,44 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import type { DeckCard } from "@/lib/ipc";
+import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { DROP_LINE_ATTR } from "./DropIndicator";
 import { card, resetRowIds } from "./validation/fixtures";
-import { groupCards, shouldFlipUp, ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
+import { groupCards, shouldFlipUp, ZoneColumn } from "./ZoneColumn";
+
+/**
+ * One of the deck's categories, as `deck_get` answers it.
+ *
+ * Local rather than borrowed: `validation/fixtures` builds deck *rows* and knows nothing about
+ * the piles they sit in, and `.storybook/fake/fixtures.ts` is the Storybook fake's. Three
+ * fields decide everything this column does with a category — the `id` every write is
+ * addressed by, the `name` it is announced by, and `isActive`, which decides whether a
+ * shortage is a shortage — and the rest are what a freshly seeded row carries.
+ */
+function category(over: Partial<DeckCategory> = {}): DeckCategory {
+  return {
+    id: 1,
+    deckId: 4,
+    name: "Main deck",
+    kind: "main",
+    isActive: true,
+    sortOrder: 0,
+    cardCount: 0,
+    totalPriceUsd: null,
+    ...over,
+  };
+}
+
+/**
+ * The three piles these tests move cards between, named as `schema::PREDEFINED_CATEGORIES`
+ * names them — the Maybeboard included, which is seeded **off** and is the one category whose
+ * default says something.
+ */
+const MAIN = category();
+const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 1 });
+const MAYBE = category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 });
 
 /** Every callback the column reports through, so a test only names the one it is about. */
 function handlers() {
@@ -25,11 +57,10 @@ function handlers() {
 function draw(cards: DeckCard[], overrides: Partial<Parameters<typeof ZoneColumn>[0]> = {}) {
   const spies = handlers();
   const props = {
-    zone: "main" as const,
-    title: ZONE_LABEL.main,
+    category: MAIN,
     cards,
     groupBy: null,
-    moveTargets: ["side", "maybe"] as const,
+    moveTargets: [SIDE, MAYBE],
     openMenuCardId: null,
     busy: false,
     ...spies,
@@ -193,7 +224,7 @@ describe("ZoneColumn", () => {
     expect(screen.getByText("$4.50")).toBeInTheDocument();
   });
 
-  /** The zone's own caption: what it is, and how many cards are in it. */
+  /** The category's own caption: what it is called, and how many cards are in it. */
   it("names itself and counts its copies", () => {
     draw([card({ quantity: 4 }), card({ name: "Bear", quantity: 2 })]);
 
@@ -216,17 +247,31 @@ describe("ZoneColumn", () => {
   });
 
   /**
-   * The scratchpad's exception, and it is in the data rather than in the design: the
-   * allocator never claims a copy for `maybe`, so every row there reads 0 owned — a mark
-   * would report a shortage the reader does not have.
+   * The switched-off exception, and it is in the data rather than in the design: the allocator
+   * claims no copy for an inactive category, so every row in one reads 0 owned — a mark would
+   * report a shortage the reader does not have.
    */
-  it("never marks a maybe row as short, because nothing is ever claimed for it", () => {
-    draw([card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 0, zone: "maybe" })], {
-      zone: "maybe",
-      title: ZONE_LABEL.maybe,
+  it("never marks a row in a switched-off category as short, because nothing is claimed for one", () => {
+    draw([card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 0, categoryKind: "maybe" })], {
+      category: MAYBE,
     });
 
     expect(screen.queryByText("0/4")).not.toBeInTheDocument();
+  });
+
+  /**
+   * And the other half of what schema v7 changed: the **switch** decides this, never the kind.
+   *
+   * A Maybeboard the reader turned on counts like any other pile — the allocator claims copies
+   * for it and a shortage in it is a real shortage — so a column that read
+   * `categoryKind === "maybe"` would answer this row backwards while passing the test above.
+   */
+  it("marks a row in a switched-on Maybeboard exactly like any other", () => {
+    draw([card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 1, categoryKind: "maybe" })], {
+      category: category({ ...MAYBE, isActive: true }),
+    });
+
+    expect(screen.getByText("1/4")).toBeInTheDocument();
   });
 
   /** Grouping is what turns a list of sixty into a deck you can read. */
@@ -290,15 +335,15 @@ describe("ZoneColumn", () => {
 
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAttribute(
       DECK_CARD_ATTR,
-      deckCardSlot("main", row.cardId),
+      deckCardSlot(MAIN.id, row.cardId),
     );
   });
 
   /**
    * The row opens the card; the controls on it do their own job and nothing else.
    *
-   * **With the zone it was opened from**, which is not decoration: the pane the click opens
-   * offers to swap this row's printing, and a swap is addressed by the slot — deck, zone,
+   * **With the category it was opened from**, which is not decoration: the pane the click opens
+   * offers to swap this row's printing, and a swap is addressed by the slot — deck, category,
    * printing. The same card sits in the main deck and the sideboard often enough that the
    * column has to say which one the reader pressed.
    */
@@ -306,7 +351,7 @@ describe("ZoneColumn", () => {
     const { onSelect } = draw([card({ name: "Lightning Bolt" })]);
 
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
-    expect(onSelect).toHaveBeenCalledWith("c-Lightning Bolt", "main");
+    expect(onSelect).toHaveBeenCalledWith("c-Lightning Bolt", MAIN.id);
 
     onSelect.mockClear();
     await userEvent.click(screen.getByRole("button", { name: /increase copies/i }));
@@ -351,8 +396,9 @@ describe("ZoneColumn", () => {
     expect(img?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 
-  /** The click path `deck_move_card` needs, and the one drag is built on top of in Task 14. */
-  it("moves a card to another zone from the row's own menu", async () => {
+  /** The click path `deck_move_card` needs, and the one drag is built on top of in Task 14 —
+   *  which is why the menu reports the target's **id** and draws its name. */
+  it("moves a card to another category from the row's own menu", async () => {
     const { onMove, rerender, props } = draw([card({ name: "Lightning Bolt" })]);
 
     await userEvent.click(screen.getByRole("button", { name: "More actions for Lightning Bolt" }));
@@ -363,8 +409,21 @@ describe("ZoneColumn", () => {
 
     expect(onMove).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Lightning Bolt" }),
-      "side",
+      SIDE.id,
     );
+  });
+
+  /** A column never offers itself: "Move to Main deck" from the main deck is a no-op wearing a
+   *  verb, and the editor hands down every category rather than remembering to leave one out. */
+  it("leaves its own category out of the move targets", () => {
+    const { rerender, props } = draw([card({ name: "Lightning Bolt" })]);
+
+    rerender(
+      <ZoneColumn {...props} moveTargets={[MAIN, SIDE]} openMenuCardId="c-Lightning Bolt" />,
+    );
+
+    expect(screen.getByRole("button", { name: "Move to Sideboard" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move to Main deck" })).not.toBeInTheDocument();
   });
 
   /** The menu is anchored inside the row, and a press in it is a press on the row unless it is
@@ -435,8 +494,9 @@ describe("ZoneColumn", () => {
     expect(props.onCloseMenu).toHaveBeenCalled();
   });
 
-  /** An empty zone says it is empty rather than leaving a blank panel that reads as a fault. */
-  it("says when a zone has nothing in it", () => {
+  /** An empty category says it is empty rather than leaving a blank panel that reads as a
+   *  fault. */
+  it("says when a category has nothing in it", () => {
     draw([]);
 
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
@@ -459,7 +519,7 @@ describe("ZoneColumn drops", () => {
   const SCROLLER = "[data-zone-scroller]";
 
   /**
-   * Two columns, because a move needs both ends: a row is dragged out of one zone and into
+   * Two columns, because a move needs both ends: a row is dragged out of one category and into
    * another, and the column that takes it is not the column that had it.
    */
   function drawPair(cards: DeckCard[]) {
@@ -467,23 +527,23 @@ describe("ZoneColumn drops", () => {
     const side = handlers();
     const common = {
       groupBy: null,
-      moveTargets: ["main", "side"] as const,
+      moveTargets: [MAIN, SIDE],
       openMenuCardId: null,
       busy: false,
     };
     render(
       <>
-        <ZoneColumn zone="main" title={ZONE_LABEL.main} cards={cards} {...common} {...main} />
-        <ZoneColumn zone="side" title={ZONE_LABEL.side} cards={[]} {...common} {...side} />
+        <ZoneColumn category={MAIN} cards={cards} {...common} {...main} />
+        <ZoneColumn category={SIDE} cards={[]} {...common} {...side} />
       </>,
     );
-    const column = (title: string) => screen.getByRole("region", { name: new RegExp(`^${title}`) });
+    const column = (name: string) => screen.getByRole("region", { name: new RegExp(`^${name}`) });
     return {
       main,
       side,
       column,
-      scroller: (title: string) => column(title).querySelector(SCROLLER)!,
-      line: (title: string) => column(title).querySelector(`[${DROP_LINE_ATTR}]`),
+      scroller: (name: string) => column(name).querySelector(SCROLLER)!,
+      line: (name: string) => column(name).querySelector(`[${DROP_LINE_ATTR}]`),
     };
   }
 
@@ -512,9 +572,9 @@ describe("ZoneColumn drops", () => {
     return element;
   }
 
-  /** A row dropped on another zone is a move, and the column names the write itself: it is
-   *  what knows which zone it is. */
-  it("takes a row dragged out of another zone", async () => {
+  /** A row dropped on another column is a move, and the column names the write itself: it is
+   *  what knows which category it is. */
+  it("takes a row dragged out of another category", async () => {
     const { main, side, scroller } = drawPair([card({ name: "Lightning Bolt" })]);
 
     const held = await startDrag(screen.getByRole("listitem"));
@@ -524,10 +584,10 @@ describe("ZoneColumn drops", () => {
     expect(side.onDropCard).toHaveBeenCalledWith({
       write: "move",
       cardId: "c-Lightning Bolt",
-      from: "main",
-      to: "side",
+      from: MAIN.id,
+      to: SIDE.id,
     });
-    // The zone the card left hears nothing: a drop happens in one place.
+    // The category the card left hears nothing: a drop happens in one place.
     expect(main.onDropCard).not.toHaveBeenCalled();
   });
 
@@ -552,7 +612,7 @@ describe("ZoneColumn drops", () => {
    * A row dropped back where it came from is not a write, and the column says so before the
    * reader lets go: no line, and nothing to undo.
    *
-   * `deck_move_card` from a zone to itself would touch the deck, reallocate and bump
+   * `deck_move_card` from a category to itself would touch the deck, reallocate and bump
    * `updated_at` to leave the list exactly as it was.
    */
   it("does not offer itself to a row it already holds", async () => {
@@ -585,7 +645,7 @@ describe("ZoneColumn drops", () => {
       kind: "deck-card",
       cardId: "c-Lightning Bolt",
       name: "Lightning Bolt",
-      fromZone: "main",
+      fromCategoryId: MAIN.id,
     });
 
     const held = await startDrag(other);
@@ -640,7 +700,7 @@ describe("ZoneColumn drops", () => {
     await held.drop();
 
     expect(side.onDropCard).toHaveBeenCalledWith(
-      expect.objectContaining({ write: "move", to: "side" }),
+      expect.objectContaining({ write: "move", to: SIDE.id }),
     );
   });
 

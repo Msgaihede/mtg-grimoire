@@ -324,9 +324,14 @@ describe("the seeds", () => {
 
   it("starter's decks are the three sizes the plan asked for", () => {
     const db = seed("starter");
-    const quantityIn = (deckId: number, zones: string[]) =>
+    /** Copies filed under one deck's categories of these kinds — the kind, because that is
+     *  what the sizes are about; the category ids are per deck. */
+    const quantityIn = (deckId: number, kinds: string[]) =>
       db.deckCards
-        .filter((dc) => dc.deckId === deckId && zones.includes(dc.zone))
+        .filter((dc) => {
+          const category = db.deckCategories.find((c) => c.id === dc.categoryId);
+          return dc.deckId === deckId && category !== undefined && kinds.includes(category.kind);
+        })
         .reduce((n, dc) => n + dc.quantity, 0);
 
     expect(quantityIn(1, ["main"])).toBe(60);
@@ -511,16 +516,40 @@ describe("the seeded rows agree with the cards they name", () => {
     }
   });
 
-  it("no deck row is at quantity zero, and no zone repeats a printing", () => {
+  it("no deck row is at quantity zero, and the grain never repeats", () => {
     const db = seed("needsReview");
     const grain = new Set<string>();
+    const categories = new Map(db.deckCategories.map((c) => [c.id, c]));
     for (const row of db.deckCards as FakeDeckCard[]) {
-      // `deck_cards` sides with the wishlist: `CHECK (quantity > 0)`, because a zone slot at
-      // zero holds no condition, no price and no story.
+      // `deck_cards` sides with the wishlist: `CHECK (quantity > 0)`, because a category slot
+      // at zero holds no condition, no price and no story.
       expect(row.quantity).toBeGreaterThan(0);
-      const key = `${row.deckId}|${row.cardId}|${row.zone}`;
+      // `schema::DECK_CARD_GRAIN`, and the category has to be one of this deck's — nothing in
+      // the DDL enforces that half, so a seed is exactly where it could go wrong unnoticed.
+      expect(categories.get(row.categoryId)?.deckId).toBe(row.deckId);
+      const key = `${row.deckId}|${row.variant}|${row.categoryId}|${row.cardId}`;
       expect(grain.has(key)).toBe(false);
       grain.add(key);
+    }
+  });
+
+  it("every deck owns the five categories the v7 migration leaves it, and no more", () => {
+    for (const name of names) {
+      const db = seed(name);
+      for (const deck of db.decks) {
+        const mine = db.deckCategories.filter((c) => c.deckId === deck.id);
+        expect(mine.map((c) => [c.kind, c.name, c.isActive, c.sortOrder])).toEqual([
+          ["commander", "Commander", true, 0],
+          ["main", "Main deck", true, 1],
+          ["side", "Sideboard", true, 2],
+          ["companion", "Companion", true, 3],
+          // Seeded off, which is the whole of what makes a Maybeboard special.
+          ["maybe", "Maybeboard", false, 4],
+        ]);
+      }
+      // Ids are unique across the store, not per deck: `categoryById` searches one table.
+      const ids = db.deckCategories.map((c) => c.id);
+      expect(new Set(ids).size).toBe(ids.length);
     }
   });
 
@@ -545,7 +574,7 @@ describe("the seeded rows agree with the cards they name", () => {
 describe("a story can read the world it was given", () => {
   it("reads a built deck's claims out of the collection it was seeded beside", async () => {
     installWorld({ seed: "starter" });
-    const commander = await invoke<DeckDetail>("deck_get", { id: 2 });
+    const commander = await invoke<DeckDetail>("deck_get", { id: 2, variant: "live" });
     const sol = commander!.cards.find((c) => c.name === "Sol Ring");
     // One copy wanted, one owned, and the exact printing preferred over the foil `sld` one.
     expect(sol?.ownedQuantity).toBe(1);
@@ -556,8 +585,8 @@ describe("a story can read the world it was given", () => {
 
     // The built deck above took one of the four Bolts, so the draft can only plan with three
     // of that printing — it fills the fourth from another printing of the same oracle card.
-    const draft = await invoke<DeckDetail>("deck_get", { id: 1 });
-    const bolt = draft!.cards.find((c) => c.name === "Lightning Bolt" && c.zone === "main");
+    const draft = await invoke<DeckDetail>("deck_get", { id: 1, variant: "live" });
+    const bolt = draft!.cards.find((c) => c.name === "Lightning Bolt" && c.categoryKind === "main");
     expect(bolt?.quantity).toBe(4);
     expect(bolt?.ownedQuantity).toBe(4);
   });
@@ -579,7 +608,7 @@ describe("a story can read the world it was given", () => {
     [3, ["Old School decks need at least 60 cards; you have 22."]],
   ])("deck %i validates to exactly the issues it was built to have", async (id, messages) => {
     installWorld({ seed: "starter" });
-    const detail = await invoke<DeckDetail>("deck_get", { id });
+    const detail = await invoke<DeckDetail>("deck_get", { id, variant: "live" });
     const issues = validateDeck(detail!.cards, SPECS[detail!.deck.formatKey]);
     expect(issues.map((i) => i.message)).toEqual(messages);
   });
@@ -592,7 +621,7 @@ describe("a story can read the world it was given", () => {
     expect(page.items).toHaveLength(0);
     expect(page.total).toBe(0);
     expect(page.totalIsCapped).toBe(false);
-    await expect(invoke("deck_get", { id: 1 })).resolves.toBeNull();
+    await expect(invoke("deck_get", { id: 1, variant: "live" })).resolves.toBeNull();
     await expect(invoke("sync_status", {})).resolves.toMatchObject({ cardCount: 0 });
   });
 });

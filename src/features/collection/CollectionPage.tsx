@@ -96,7 +96,7 @@ export function CollectionPage() {
     // copy stepped away from under a built deck changes what that deck says it owns — and
     // what its "missing to wishlist" button would buy — without the deck being touched at
     // all. The claims themselves are left stale on purpose: they are recomputed by the next
-    // zone write, and a read is not the place to discover that the world moved.
+    // deck card write, and a read is not the place to discover that the world moved.
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 

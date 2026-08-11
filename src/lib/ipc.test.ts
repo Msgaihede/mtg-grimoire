@@ -184,8 +184,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("deck_list");
 
     invoke.mockResolvedValue(null);
-    await ipc.deckGet(3);
-    expect(invoke).toHaveBeenCalledWith("deck_get", { id: 3 });
+    // The variant is a parameter of the command and not a filter this side applies: it scopes
+    // the **cards** and nothing else, so a mirror that dropped it would not read the live deck
+    // by luck — Tauri refuses a call whose parameters it cannot fill.
+    await ipc.deckGet(3, "live");
+    expect(invoke).toHaveBeenCalledWith("deck_get", { id: 3, variant: "live" });
 
     invoke.mockResolvedValue([]);
     await ipc.formatSpecs();
@@ -218,53 +221,79 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The zone writes, and the one command in this module that does not take `id`.
+   * The card writes, and the one command in this module that does not take `id`.
    *
-   * Every zone write addresses a slot by **deck and card**, never by the `deck_cards.id` it
-   * answers with: a stale row id is the difference between emptying the slot the reader
-   * pressed and emptying somebody else's. And `deck_missing_to_wishlist` takes `deckId`
-   * where its four siblings take `id` — the one break in the pattern is the one a
-   * copy-paste gets wrong, and it is a runtime rejection with no type error anywhere.
+   * Every card write addresses a slot by **deck, card and category**, never by the
+   * `deck_cards.id` it answers with: a stale row id is the difference between emptying the
+   * slot the reader pressed and emptying somebody else's. Since schema v7 the slot carries a
+   * `variant` too, and it is a *fourth* part of the grain rather than a mode — the same
+   * printing in the same category is two rows, one `live` and one `theory`, so a write that
+   * dropped it would edit whichever the backend defaulted to. And `deck_missing_to_wishlist`
+   * takes `deckId` where its four siblings take `id` — the one break in the pattern is the one
+   * a copy-paste gets wrong, and it is a runtime rejection with no type error anywhere.
    */
-  it("addresses every zone write by deck and card, and the wishlist push by `deckId`", async () => {
+  it("addresses every card write by deck, card and category, and the wishlist push by `deckId`", async () => {
     invoke.mockResolvedValue({ id: 9, quantity: 4, removed: false });
 
-    await ipc.deckAddCard(4, "p1", "main", 4);
+    await ipc.deckAddCard(4, "p1", 7, null, "live", 4);
     expect(invoke).toHaveBeenCalledWith("deck_add_card", {
       deckId: 4,
       cardId: "p1",
-      zone: "main",
+      categoryId: 7,
+      categoryName: null,
+      variant: "live",
       quantity: 4,
     });
 
-    await ipc.deckSetCardQuantity(4, "p1", "main", 0);
+    // The other half of the one command that takes two ways of naming a pile: an id is a drop
+    // onto a column the reader pointed at, a name is "file it where this card belongs",
+    // found-or-created. **Both keys travel either way** — the unused one as an explicit
+    // `null`, because Tauri fills parameters by name and an absent key is a refusal rather
+    // than a default.
+    await ipc.deckAddCard(4, "p1", null, "Main deck", "live", 1);
+    expect(invoke).toHaveBeenCalledWith("deck_add_card", {
+      deckId: 4,
+      cardId: "p1",
+      categoryId: null,
+      categoryName: "Main deck",
+      variant: "live",
+      quantity: 1,
+    });
+
+    await ipc.deckSetCardQuantity(4, "p1", 7, "live", 0);
     expect(invoke).toHaveBeenCalledWith("deck_set_card_quantity", {
       deckId: 4,
       cardId: "p1",
-      zone: "main",
+      categoryId: 7,
+      variant: "live",
       quantity: 0,
     });
 
+    // The one write that names **two** categories, so it spells neither of them `categoryId`
+    // the way its siblings do — and `from`/`to` alone, which is what the zones took, would
+    // deserialize into neither parameter.
     invoke.mockResolvedValue(undefined);
-    await ipc.deckMoveCard(4, "p1", "maybe", "side");
+    await ipc.deckMoveCard(4, "p1", 9, 2, "live");
     expect(invoke).toHaveBeenCalledWith("deck_move_card", {
       deckId: 4,
       cardId: "p1",
-      from: "maybe",
-      to: "side",
+      fromCategoryId: 9,
+      toCategoryId: 2,
+      variant: "live",
     });
 
-    // The one zone write that names **two** cards, so it spells neither of them `cardId` the
-    // way its five siblings do — a payload that did would deserialize into neither parameter.
+    // The one card write that names **two** cards, so it spells neither of them `cardId` the
+    // way its siblings do — a payload that did would deserialize into neither parameter.
     // The answer is read back too: `folded` is the server's arithmetic, and a mirror typed
     // `void` would throw away the one thing the UI has to say about a swap.
     invoke.mockResolvedValue({ folded: true, quantity: 5 });
-    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", "main");
+    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", 7, "live");
     expect(invoke).toHaveBeenCalledWith("deck_swap_printing", {
       deckId: 4,
       fromCardId: "p1",
       toCardId: "p2",
-      zone: "main",
+      categoryId: 7,
+      variant: "live",
     });
     expect(swapped).toEqual({ folded: true, quantity: 5 });
 

@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { DeckCard, DeckDetail, DeckRow, SwapResult } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckDetail, DeckRow, SwapResult } from "@/lib/ipc";
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
@@ -38,10 +38,61 @@ const DECK: DeckRow = {
   updatedAt: 1_800_000_000,
 };
 
+/**
+ * The deck's categories, as `deck_get` answers them: **every** one, in `sortOrder`, whether or
+ * not it holds a card — the editor's columns are this list rather than the piles that happen to
+ * be full.
+ *
+ * Two of the categories a deck is born with (`schema::PREDEFINED_CATEGORIES`) plus the pile the
+ * v7 migration files every legacy main-deck row into. The Maybeboard is the one of the four
+ * seeded switched off, and that flag is the whole of "counts toward nothing" — nothing in the
+ * app reads its *kind* for that question, which is why a test that wants a pile counted in
+ * nothing can equally switch off a `main` one.
+ */
+const MAIN: DeckCategory = {
+  id: 1,
+  deckId: 4,
+  name: "Main deck",
+  kind: "main",
+  isActive: true,
+  sortOrder: 0,
+  cardCount: 4,
+  totalPriceUsd: 18,
+};
+const SIDE: DeckCategory = {
+  id: 2,
+  deckId: 4,
+  name: "Sideboard",
+  kind: "side",
+  isActive: true,
+  sortOrder: 1,
+  cardCount: 0,
+  totalPriceUsd: null,
+};
+const MAYBE: DeckCategory = {
+  id: 5,
+  deckId: 4,
+  name: "Maybeboard",
+  kind: "maybe",
+  isActive: false,
+  sortOrder: 2,
+  cardCount: 0,
+  totalPriceUsd: null,
+};
+
 const BOLT: DeckCard = {
   id: 9,
   cardId: "p1",
-  zone: "main",
+  // The category is denormalized onto the row so a card can be drawn without a second lookup;
+  // it is taken from {@link MAIN} here so the fixture cannot say two things about one pile.
+  categoryId: MAIN.id,
+  categoryName: MAIN.name,
+  categoryKind: MAIN.kind,
+  categoryActive: MAIN.isActive,
+  variant: "live",
+  tagId: null,
+  tagName: null,
+  tagColor: null,
   quantity: 4,
   name: "Lightning Bolt",
   setCode: "lea",
@@ -67,7 +118,7 @@ const BOLT: DeckCard = {
   ownedQuantity: 2,
 };
 
-const DETAIL: DeckDetail = { deck: DECK, cards: [BOLT] };
+const DETAIL: DeckDetail = { deck: DECK, cards: [BOLT], categories: [MAIN, SIDE, MAYBE], tags: [] };
 
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
@@ -101,8 +152,15 @@ describe("useDeck", () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
 
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
-    expect(deckGet).toHaveBeenCalledWith(4);
+    // `live` and never a choice the caller makes: nothing in the app switches between the two
+    // lists yet, and the hook names the one the app meant by "the deck" before the column
+    // existed. The variant scopes the **cards** — the categories and tags come back either way.
+    expect(deckGet).toHaveBeenCalledWith(4, "live");
     expect(result.current.cards).toEqual([BOLT]);
+    // Every category, including the two holding nothing: the editor's columns are this list
+    // rather than the piles that happen to be full.
+    expect(result.current.categories).toEqual([MAIN, SIDE, MAYBE]);
+    expect(result.current.tags).toEqual([]);
     expect(client.getQueryData(["decks", "detail", 4])).toEqual(DETAIL);
   });
 
@@ -115,6 +173,8 @@ describe("useDeck", () => {
     await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
     expect(result.current.deck).toBeNull();
     expect(result.current.cards).toEqual([]);
+    expect(result.current.categories).toEqual([]);
+    expect(result.current.tags).toEqual([]);
   });
 
   /**
@@ -130,13 +190,17 @@ describe("useDeck", () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
-    await result.current.setQuantity.mutateAsync({ cardId: "p1", zone: "main", quantity: 3 });
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      quantity: 3,
+    });
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", "main", 3);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", 3);
     expect(deckAddCard).not.toHaveBeenCalled();
   });
 
-  /** Zero is a removal here, unlike the collection's: a zone slot at zero holds no
+  /** Zero is a removal here, unlike the collection's: a category slot at zero holds no
    *  condition, no purchase price and no acquisition story, just a withdrawn intention. */
   it("empties a slot through the same write, and reads back that the row is gone", async () => {
     deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
@@ -145,11 +209,11 @@ describe("useDeck", () => {
 
     const change = await result.current.setQuantity.mutateAsync({
       cardId: "p1",
-      zone: "main",
+      categoryId: MAIN.id,
       quantity: 0,
     });
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", "main", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", 0);
     expect(change.removed).toBe(true);
   });
 
@@ -157,21 +221,43 @@ describe("useDeck", () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
-    await result.current.addCard.mutateAsync({ cardId: "p2", zone: "maybe", quantity: 1 });
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", "maybe", 1);
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: MAYBE.id,
+      quantity: 1,
+    });
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, null, "live", 1);
 
-    await result.current.moveCard.mutateAsync({ cardId: "p2", from: "maybe", to: "side" });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", "maybe", "side");
+    await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, "live");
   });
 
   /**
-   * The pane's "Use this printing", addressed like every other zone write — by deck, card and
-   * zone — and the only one that names two cards: the printing being left and the one being
+   * The add with no column to point at — the docked panel's button and the sidebar's Decks
+   * drop target, neither of which has a category under the cursor.
+   *
+   * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is the v7
+   * migration's own word for the pile it filed every legacy main-deck row into: a deck that
+   * predates categories and one made since agree about where a plain add goes. A placeholder
+   * until `autoCategoryFor` exists, and one pile rather than a guess this hook invents.
+   */
+  it("files an add that names no category under the default pile, by name", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", quantity: 1 });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Main deck", "live", 1);
+  });
+
+  /**
+   * The pane's "Use this printing", addressed like every other card write — by deck, card and
+   * category — and the only one that names two cards: the printing being left and the one being
    * taken up.
    *
    * **No optimistic patch, deliberately**, where the stepper beside it has one: what the row
-   * ends up holding is the *server's* arithmetic. A swap onto a printing the zone already has
-   * folds two rows into one, so a guess would have to delete a line and grow another — and a
+   * ends up holding is the *server's* arithmetic. A swap onto a printing the category already
+   * has folds two rows into one, so a guess would have to delete a line and grow another — and a
    * guess that got it wrong would be a deck list that lost a card until the read landed. The
    * fold is only knowable after the write, and the answer carries it.
    */
@@ -189,10 +275,12 @@ describe("useDeck", () => {
     const swap = result.current.swapPrinting.mutateAsync({
       fromCardId: "p1",
       toCardId: "p2",
-      zone: "main",
+      categoryId: MAIN.id,
     });
 
-    await waitFor(() => expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", "main"));
+    await waitFor(() =>
+      expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.id, "live"),
+    );
     // Mid-flight, and the deck on screen is still the deck that was read: no guess was
     // written. This is what "no optimism" costs and buys — a beat of the old printing rather
     // than a line that disappears and comes back.
@@ -205,21 +293,25 @@ describe("useDeck", () => {
   });
 
   /**
-   * Every zone write reallocates (`allocate_deck` runs inside the same transaction), so
+   * Every card write reallocates (`allocate_deck` runs inside the same transaction), so
    * every `ownedQuantity` in this deck may have moved and the gallery's `cardCount` with it
    * — the `["decks"]` root, not this one detail.
    *
    * The **wishlist** is not touched, and that is the decision rather than an omission: a
-   * zone write moves `deck_allocations` and nothing else, and a wish's `ownedQuantity` is
+   * card write moves `deck_allocations` and nothing else, and a wish's `ownedQuantity` is
    * summed from `collection_entries`. Only the one command that actually writes wishes takes
    * `["wishlist"]` with it.
    */
-  it("refreshes every deck query after a zone write, and the wishlist only when it wrote one", async () => {
+  it("refreshes every deck query after a card write, and the wishlist only when it wrote one", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    await result.current.setQuantity.mutateAsync({ cardId: "p1", zone: "main", quantity: 3 });
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      quantity: 3,
+    });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
@@ -262,21 +354,27 @@ describe("useSwapFromPane", () => {
     expect(result.current.deckGone).toBe(false);
   });
 
-  /** The context's deck, all the way to the command — `decks.id` is an INTEGER key and the
-   *  mirror takes a number. */
+  /** The context's deck, all the way to the command — `decks.id` and `deck_categories.id` are
+   *  both INTEGER keys and the mirror takes numbers. */
   it("swaps the context's deck row for the printing that was pressed", async () => {
     const { result } = renderHook(
-      () => useSwapFromPane({ deckId: 4, zone: "side", cardId: "p1" }),
+      () =>
+        useSwapFromPane({
+          deckId: 4,
+          categoryId: SIDE.id,
+          categoryName: SIDE.name,
+          cardId: "p1",
+        }),
       { wrapper },
     );
 
     const answer = await result.current.swap.mutateAsync({
       fromCardId: "p1",
       toCardId: "p2",
-      zone: "side",
+      categoryId: SIDE.id,
     });
 
-    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", "side");
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", SIDE.id, "live");
     expect(answer).toEqual({ folded: false, quantity: 4 });
   });
 
@@ -288,13 +386,20 @@ describe("useSwapFromPane", () => {
    * nobody: the editor's `useDeck(4).swapPrinting` and this one are two `useMutation` calls, so
    * the editor's copy stays idle however this one ends. Its refused-write family — six writes,
    * one effect, one re-read — therefore cannot see this failure, and a deck deleted under the
-   * reader would leave the zone columns painting a deck that is gone while the pane says why.
-   * The invalidation is that family's rule, moved onto the definition every observer shares.
+   * reader would leave the category columns painting a deck that is gone while the pane says
+   * why. The invalidation is that family's rule, moved onto the definition every observer
+   * shares.
    */
   it("re-reads the deck when a swap is refused, whichever observer pressed it", async () => {
     deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
     const { result } = renderHook(
-      () => useSwapFromPane({ deckId: 4, zone: "main", cardId: "p1" }),
+      () =>
+        useSwapFromPane({
+          deckId: 4,
+          categoryId: MAIN.id,
+          categoryName: MAIN.name,
+          cardId: "p1",
+        }),
       {
         wrapper,
       },
@@ -302,7 +407,7 @@ describe("useSwapFromPane", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await expect(
-      result.current.swap.mutateAsync({ fromCardId: "p1", toCardId: "p2", zone: "main" }),
+      result.current.swap.mutateAsync({ fromCardId: "p1", toCardId: "p2", categoryId: MAIN.id }),
     ).rejects.toBe("That deck is not there any more.");
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
@@ -319,7 +424,13 @@ describe("useSwapFromPane", () => {
   it("reports a deck the read cannot find, and calls nothing gone while it is loading", async () => {
     deckGet.mockResolvedValue(null);
     const { result } = renderHook(
-      () => useSwapFromPane({ deckId: 4, zone: "main", cardId: "p1" }),
+      () =>
+        useSwapFromPane({
+          deckId: 4,
+          categoryId: MAIN.id,
+          categoryName: MAIN.name,
+          cardId: "p1",
+        }),
       {
         wrapper,
       },

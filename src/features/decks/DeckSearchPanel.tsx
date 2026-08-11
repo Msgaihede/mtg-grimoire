@@ -6,12 +6,11 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import { useCardSearch } from "@/features/search/useCardSearch";
-import { ipcError, type CardSummary, type DeckZone } from "@/lib/ipc";
+import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
-import { ZONE_LABEL } from "./ZoneColumn";
 
 /** The shared focus recipe: a gold outline standing off the control, never a ring. */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
@@ -65,19 +64,18 @@ export interface DeckSearchPanelProps {
    */
   add: Deck["addCard"];
   /**
-   * Where a card may be put, in the order the select offers them — the editor's own
-   * `moveTargets`, derived from the seeded format spec, so a Modern deck is never offered a
-   * commander zone and a Commander deck is never offered a sideboard.
+   * Where a card may be put, in the order the select offers them — the editor's own list of
+   * the open deck's categories, so this panel offers exactly the columns beside it.
    *
    * Not in the plan's sketch of this interface, and it has to be: the alternative is a second
-   * component deriving the zone list from `format_specs` beside the one that already has it,
-   * which is how a panel starts offering a zone the editor is not drawing.
+   * component reading the deck's categories beside the one that already has them, which is how
+   * a panel starts offering a pile the editor is not drawing.
    */
-  zones: readonly DeckZone[];
-  /** The zone every add lands in. Owned by the editor, which clamps it when a re-format takes
-   *  the picked zone away. */
-  targetZone: DeckZone;
-  onTargetZoneChange: (zone: DeckZone) => void;
+  categories: readonly DeckCategory[];
+  /** The category every add lands in, by id. Owned by the editor, which clamps it when the
+   *  picked category is renamed away, switched off or deleted under it. */
+  targetCategoryId: number;
+  onTargetCategoryChange: (categoryId: number) => void;
   /**
    * Whether the editor has room to draw this open — measured, not guessed (see
    * `DeckEditor`'s `DECK_FLOOR`).
@@ -94,7 +92,7 @@ export interface DeckSearchPanelProps {
  * The path by which cards enter a deck.
  *
  * Not a second search: this is `useCardSearch` + `FilterBar` + `CardGrid` — the search view's
- * own parts — in a column beside the zones, with the wall's two slots pointed at this job. The
+ * own parts — in a column beside the deck, with the wall's two slots pointed at this job. The
  * `badge` slot keeps telling the collection story (a card in the binder is one the deck can be
  * built out of today) and the `action` slot becomes **Add to deck**.
  *
@@ -109,16 +107,29 @@ export interface DeckSearchPanelProps {
  */
 export function DeckSearchPanel({
   add,
-  zones,
-  targetZone,
-  onTargetZoneChange,
+  categories,
+  targetCategoryId,
+  onTargetCategoryChange,
   roomy = true,
 }: DeckSearchPanelProps) {
   /** What the *reader* last chose. What is drawn is this and `roomy` together. */
   const [open, setOpen] = useState(true);
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const zoneFieldId = useId();
+  const categoryFieldId = useId();
+
+  /**
+   * What the picked id is *called*, for the two names every Add button carries.
+   *
+   * The editor clamps `targetCategoryId` to a category it is drawing, so the miss below is not
+   * a state this panel expects — but it is one a single render can be caught in, because a
+   * category that has just been deleted or renamed reaches the clamp and this select on the
+   * same commit and nothing orders those two. "this deck" is the honest thing to say about an
+   * id whose name is not in hand: the deck is what the press writes to, and if the id really is
+   * stale `deck_add_card` refuses it in words (`category_of_deck`) into the alert above the
+   * wall. Reading `.name` off `undefined` would instead take the whole panel down over a label.
+   */
+  const targetName = categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck";
 
   const search = useCardSearch();
   const { query, rows, searchKey } = search;
@@ -142,7 +153,7 @@ export function DeckSearchPanel({
    * so the panel is already reopening on the same commit. What matters is that this panel shut
    * while the card was open, which is the thing that unmounted the opener.
    *
-   * And only when nothing else took the caret: an opener still on screen (a zone row, say) has
+   * And only when nothing else took the caret: an opener still on screen (a deck row, say) has
    * already been handed it, and stealing it from there would be worse than the bug.
    */
   const hadCard = useRef(selectedCardId !== null);
@@ -203,11 +214,11 @@ export function DeckSearchPanel({
   );
 
   /**
-   * Every drawn tile, as a card that can be dragged into a zone.
+   * Every drawn tile, as a card that can be dragged into a category.
    *
    * The wall builds its own tiles, so this is the only way to hand a library an element: one
    * `draggable()` per tile, torn down by the cleanup React 19 takes from a ref callback. The
-   * *drop* is the zone's business — this end only says what is being carried.
+   * *drop* is the category column's business — this end only says what is being carried.
    *
    * A stable identity, so the registration is not torn down and rebuilt on every render of a
    * panel that re-renders on every keystroke. The tile's element is passed fresh each time,
@@ -249,8 +260,8 @@ export function DeckSearchPanel({
     // reads as if it works with either shape and only works with this one.
     <section
       aria-label="Add cards"
-      // One hairline down the left edge, and it is the only chrome the panel adds: the zone
-      // columns beside it are bordered boxes and these controls sit on the page, so without it
+      // One hairline down the left edge, and it is the only chrome the panel adds: the
+      // category columns beside it are bordered boxes and these controls sit on the page, so without it
       // the "Add to" select reads as part of the deck's own header row. Everything right of
       // the line is not your deck. The rail carries its own border instead — at 36px a hairline
       // beside a bordered button would be two lines saying one thing.
@@ -268,23 +279,27 @@ export function DeckSearchPanel({
         )}
       >
         {toggle}
-        {/* The zone choice sits above the results rather than on each of them: it is the click
-            path's answer to "where does this go", and therefore the keyboard's — which is what
-            makes drag a shortcut in Task 14 rather than the only way in. */}
+        {/* The category choice sits above the results rather than on each of them: it is the
+            click path's answer to "where does this go", and therefore the keyboard's — which is
+            what makes drag a shortcut in Task 14 rather than the only way in. */}
         {shown && (
           <>
-            <label htmlFor={zoneFieldId} className="ml-auto shrink-0 text-xs text-dim">
+            <label htmlFor={categoryFieldId} className="ml-auto shrink-0 text-xs text-dim">
               Add to
             </label>
+            {/* A `<select>` speaks strings and a category is addressed by number, so the id
+                makes the round trip through `String`/`Number` here rather than anywhere the
+                write can see it: every value in this list is one this component wrote out of a
+                `DeckCategory.id`, so the parse cannot meet anything else. */}
             <select
-              id={zoneFieldId}
-              value={targetZone}
-              onChange={(e) => onTargetZoneChange(e.target.value as DeckZone)}
+              id={categoryFieldId}
+              value={String(targetCategoryId)}
+              onChange={(e) => onTargetCategoryChange(Number(e.target.value))}
               className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
             >
-              {zones.map((zone) => (
-                <option key={zone} value={zone}>
-                  {ZONE_LABEL[zone]}
+              {categories.map((category) => (
+                <option key={category.id} value={String(category.id)}>
+                  {category.name}
                 </option>
               ))}
             </select>
@@ -361,15 +376,17 @@ export function DeckSearchPanel({
               // pixels is a press, not a drag (`cardDraggable`).
               data-no-drag=""
               // Named for the card *and* where it is going: two tiles' buttons both called
-              // "Add" are two controls a screen reader cannot tell apart, and the zone is the
-              // one thing about this press that is not visible on the tile.
-              aria-label={`Add ${card.name} to ${ZONE_LABEL[targetZone]}`}
-              title={`Add to ${ZONE_LABEL[targetZone]}`}
+              // "Add" are two controls a screen reader cannot tell apart, and the category is
+              // the one thing about this press that is not visible on the tile.
+              aria-label={`Add ${card.name} to ${targetName}`}
+              title={`Add to ${targetName}`}
               // Never disabled while a write is in flight, and that is the behaviour rather
               // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
               // three times is three copies. Disabling would drop presses two and three, and
               // "press it again for another one" is how a deck gets built.
-              onClick={() => add.mutate({ cardId: card.id, zone: targetZone, quantity: 1 })}
+              onClick={() =>
+                add.mutate({ cardId: card.id, categoryId: targetCategoryId, quantity: 1 })
+              }
               className={cn(
                 "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
                 "transition-colors duration-150 motion-reduce:transition-none",

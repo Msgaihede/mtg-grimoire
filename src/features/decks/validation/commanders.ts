@@ -631,9 +631,9 @@ function pairingFailure(a: CardFacts, fa: PartnerFacts, b: CardFacts, fb: Partne
  * there, whether two of them may be there together, and — under Duel Commander and Tiny
  * Leaders — whether one of them is banned from it specifically.
  *
- * Called for **every** format, including the ones with no commander: a card parked in the
- * commander zone of a Modern deck still counts toward the deck's size (`SIZE_ZONES`), so it
- * is a card in the wrong pile rather than a card nobody mentions.
+ * Called for **every** format, including the ones with no commander: a card parked in a
+ * `commander` category of a Modern deck still counts toward the deck's size (`SIZE_KINDS`), so
+ * it is a card in the wrong pile rather than a card nobody mentions.
  */
 export function validateCommanderZone(zone: CardFacts[], spec: FormatSpec): ValidationIssue[] {
   const rule = spec.commanderRule;

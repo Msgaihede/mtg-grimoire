@@ -76,6 +76,8 @@ import type {
   CardSummary,
   CollectionRow,
   DeckCard,
+  DeckCategory,
+  DeckDetail,
   DeckRow,
   Printing,
   WishRow,
@@ -118,6 +120,36 @@ const BOLT: CardSummary = {
 };
 
 /**
+ * The one category this deck has, and therefore the one column the editor draws.
+ *
+ * `1` / `"Main deck"` is what `validation/fixtures`' `card()` files a `main` row under, and the
+ * editor's columns **are** `deck_get`'s `categories` list — a detail that answered cards under a
+ * category it did not list would draw a deck with no columns at all. Its name is also the word
+ * the card pane's swap offers read back ("… in Main deck"), because a `PaneDeckContext` carries
+ * the category's name alongside its id.
+ */
+const MAIN: DeckCategory = {
+  id: 1,
+  deckId: 4,
+  name: "Main deck",
+  kind: "main",
+  isActive: true,
+  sortOrder: 0,
+  cardCount: 0,
+  totalPriceUsd: null,
+};
+
+/** One `deck_get` answer: this deck, the rows asked for, and the categories the editor draws
+ *  them in. The counts on the category are not read by anything here — the column heading
+ *  totals the rows it was handed. */
+const detail = (cards: DeckCard[]): DeckDetail => ({
+  deck: BURN,
+  cards,
+  categories: [MAIN],
+  tags: [],
+});
+
+/**
  * The same card as a row of the deck, and as the two printings the pane lists for it — the
  * fixtures the printing swap needs, which is the one flow that spans both views.
  *
@@ -133,7 +165,8 @@ const SWAPPED_BOLT: DeckCard = card({
   collectorNumber: "146",
   quantity: 1,
 });
-/** The second printing already in the zone, so a swap onto it **folds** two rows into one. */
+/** The second printing already in the category, so a swap onto it **folds** two rows into
+ *  one. */
 const OTHER_BOLT: DeckCard = card({
   name: "Lightning Bolt",
   cardId: "c2",
@@ -276,7 +309,7 @@ beforeEach(() => {
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
   deckList.mockReset().mockResolvedValue([]);
-  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [] });
+  deckGet.mockReset().mockResolvedValue(detail([]));
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 1 });
   collectionSummary.mockReset().mockResolvedValue({
     totalCards: 3,
@@ -343,7 +376,7 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
   await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
 
   expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
-  expect(deckGet).toHaveBeenCalledWith(4);
+  expect(deckGet).toHaveBeenCalledWith(4, "live");
 
   await userEvent.click(screen.getByRole("button", { name: /back to decks/i }));
 
@@ -525,9 +558,7 @@ it("closes the card on Escape from inside a wishlist row's controls", async () =
  */
 it("swaps a deck row's printing from the card pane, and follows the deck onto it", async () => {
   deckList.mockResolvedValue([BURN]);
-  deckGet
-    .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] })
-    .mockResolvedValue({ deck: BURN, cards: [SWAPPED_BOLT] });
+  deckGet.mockResolvedValueOnce(detail([DECK_BOLT])).mockResolvedValue(detail([SWAPPED_BOLT]));
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
   // The editor's docked search panel finds nothing: a result named after the card already in
   // the deck would be a second button by that name, and the deck's card is addressed by it.
@@ -542,7 +573,7 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
   const pane = await screen.findByRole("complementary", { name: /card details/i });
   await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
 
-  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", "main");
+  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live");
 
   // The deck redraws on the printing it now holds — the row's thumbnail is the M10 art.
   await waitFor(() =>
@@ -562,12 +593,12 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
 /**
  * The refused half of the same wire, which is two sentences in two components at once.
  *
- * `swap_printing` opens with `touch_deck` like every other zone write, so a deck deleted from
+ * `swap_printing` opens with `touch_deck` like every other card write, so a deck deleted from
  * another window answers GONE — and the pane says so beside the row that was pressed while the
  * editor behind it stops painting a deck that is not there. The two are joined by the
  * mutation's own `onError` invalidation (`useDeck`), because TanStack shares a mutation's state
  * with no other observer: the editor's copy of this write never hears about the failure, and
- * without that invalidation the zone columns would go on drawing a deleted deck under a pane
+ * without that invalidation the category columns would go on drawing a deleted deck under a pane
  * explaining that it is gone.
  *
  * The two sentences are deliberately worded apart — "That deck" is the backend's refusal,
@@ -575,7 +606,7 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
  */
 it("says a refused swap in the pane, and the deck behind it goes with it", async () => {
   deckList.mockResolvedValue([BURN]);
-  deckGet.mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] }).mockResolvedValue(null);
+  deckGet.mockResolvedValueOnce(detail([DECK_BOLT])).mockResolvedValue(null);
   deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
   // The editor's docked search panel finds nothing: a result named after the card already in
@@ -618,7 +649,7 @@ it("says a refused swap in the pane, and the deck behind it goes with it", async
  */
 it("stops offering swaps into a deck the read says is gone", async () => {
   deckList.mockResolvedValue([BURN]);
-  deckGet.mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] }).mockResolvedValue(null);
+  deckGet.mockResolvedValueOnce(detail([DECK_BOLT])).mockResolvedValue(null);
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
   searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
   render(<App />);
@@ -647,7 +678,7 @@ it("stops offering swaps into a deck the read says is gone", async () => {
  * The two things a successful swap owes the reader afterwards, both of which have to survive
  * the pane being **re-keyed** by the write itself (`App` keys the pane on `selectedCardId`).
  *
- * 1. **The fold.** A zone holds a printing at most once, so a swap onto one the zone already had
+ * 1. **The fold.** A category holds a printing at most once, so a swap onto one it already had
  *    merges two rows into one and a line disappears from the deck list — `ipc.ts`'s `SwapResult`
  *    exists to say so, and nothing said it.
  * 2. **The caret.** The pressed button disabled itself for the write, so the browser left the
@@ -658,8 +689,8 @@ it("stops offering swaps into a deck the read says is gone", async () => {
 it("announces a fold and hands the caret to the deck's card when the pane closes", async () => {
   deckList.mockResolvedValue([BURN]);
   deckGet
-    .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT, OTHER_BOLT] })
-    .mockResolvedValue({ deck: BURN, cards: [SWAPPED_BOLT] });
+    .mockResolvedValueOnce(detail([DECK_BOLT, OTHER_BOLT]))
+    .mockResolvedValue(detail([SWAPPED_BOLT]));
   deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 3 });
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
   searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
@@ -729,9 +760,7 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
  */
 it("hands the caret back to the deck's row after a swap", async () => {
   deckList.mockResolvedValue([BURN]);
-  deckGet
-    .mockResolvedValueOnce({ deck: BURN, cards: [DECK_BOLT] })
-    .mockResolvedValue({ deck: BURN, cards: [SWAPPED_BOLT] });
+  deckGet.mockResolvedValueOnce(detail([DECK_BOLT])).mockResolvedValue(detail([SWAPPED_BOLT]));
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
   // The editor's docked search panel finds nothing: a result named after the card already in
   // the deck would be a second button by that name, and the deck's row is addressed by it.
@@ -745,7 +774,7 @@ it("hands the caret back to the deck's row after a swap", async () => {
   const pane = await screen.findByRole("complementary", { name: /card details/i });
   await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
 
-  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", "main");
+  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live");
   // The row the swap rebuilt, on the printing the deck now holds — a *row*, so it is read by
   // its set and number rather than by the art the other view draws.
   await waitFor(() => expect(screen.getByText("M10 · 146")).toBeInTheDocument());

@@ -20,7 +20,7 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
  *
  * **Staged through the command rather than through the UI, because there is no UI path to it** —
  * and that is a fact about the app rather than a shortcut. "Set as cover" is the only control
- * that writes one and it is withheld from an orphaned row (`ZoneColumn.tsx:793`), so a cover only
+ * that writes one and it is withheld from an orphaned row (`ZoneColumn.tsx:801`), so a cover only
  * *becomes* orphaned later, when a sync takes its printing away. `deck_update` validates no cover
  * (`db.ts:2019` is a bare `coalesce`, matching `deck::update_deck`), and `coverArtist` is a
  * lookup on the way out (`db.ts:855`, mirroring the real `LEFT JOIN cards c ON c.id =
@@ -71,11 +71,13 @@ const meta = {
           "**archived**. `deck::list_decks` sorts archived last, then most recently touched " +
           "first, so that order is the wall's.\n\n" +
           "**A tile's count is not the deck's row count.** `cardCount` is summed over " +
-          "`SIZE_ZONES` — main plus commander (`db.ts:837-838`, mirroring `DeckRow.cardCount`) " +
-          "— so the Modern deck's 15 sideboard cards and its 2-card scratchpad are in the " +
-          "editor and not in the caption. The number under a tile is the number the format's " +
-          "size rule is about, which is the same definition the editor's headline figure and " +
-          "the validation chip share.\n\n" +
+          "`SIZE_KINDS` — the `main` and `commander` kinds, in categories that are switched " +
+          "on (`db.ts:1017-1023`, mirroring `DeckRow.cardCount`) — so the Modern deck's 15 " +
+          "sideboard cards and the 2 in its Maybeboard are in the editor and not in the " +
+          "caption. A switched-off pile is left out whatever it is called, which is how the " +
+          "Maybeboard stays out without being named. The number under a tile is the number " +
+          "the format's size rule is about, which is the same definition the editor's " +
+          "headline figure and the validation chip share.\n\n" +
           "**Archiving is the reversible thing and deleting is not.** The trash control asks " +
           "first, names what would go with the deck, and offers archiving in the same breath " +
           "({@link DeleteAsksFirst}); the archive control is a toggle whose other face is " +
@@ -87,7 +89,7 @@ const meta = {
           "`coverCardId` names a printing `cards` does not hold. Measured 2026-08-10: **0 of " +
           "the 43** rows of `.storybook/fake/cards.ts` has a null `artist`, no seed points a " +
           "cover at a missing id, and the one control that *sets* a cover is withheld from an " +
-          "orphaned row (`ZoneColumn.tsx:793` gates “Set as cover” on `needsReview === null`). " +
+          "orphaned row (`ZoneColumn.tsx:801` gates “Set as cover” on `needsReview === null`). " +
           "So a cover is never orphaned at the moment it is chosen; it becomes orphaned when a " +
           "sync takes its printing away, and it heals on the next one that brings it back. " +
           "A deck with **no cover at all** is the other, separate state, and it is every new " +

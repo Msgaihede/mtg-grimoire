@@ -7,7 +7,6 @@ import { RarityGem } from "@/components/RarityGem";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { useSwapFromPane } from "@/features/decks/useDeck";
-import { ZONE_LABEL } from "@/features/decks/ZoneColumn";
 import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
@@ -70,15 +69,16 @@ let handover: { cardId: string; report: string | null } | null = null;
  * The deck's own control for a slot, or `null` — where the caret belongs when a pane opened
  * from a deck row closes and the control it was opened from has been replaced.
  *
- * The card ids this interpolates are Scryfall UUIDs and the zones are a five-value enum, so
- * there is nothing here a quoted attribute selector can be broken by. The search is
- * document-wide and does not name a deck, which is safe for as long as one editor is mounted at
- * a time — see {@link deckCardSlot}, which is where that assumption is written down.
+ * The card ids this interpolates are Scryfall UUIDs and the category ids are `INTEGER PRIMARY
+ * KEY` rowids, so there is nothing here a quoted attribute selector can be broken by — the
+ * category's *name* is the user's and would be, which is why the slot is keyed by the id. The
+ * search is document-wide and does not name a deck, which is safe for as long as one editor is
+ * mounted at a time — see {@link deckCardSlot}, which is where that assumption is written down.
  */
 function deckControlFor(row: PaneDeckContext | null): HTMLElement | null {
   if (!row) return null;
   return document.querySelector<HTMLElement>(
-    `[${DECK_CARD_ATTR}="${deckCardSlot(row.zone, row.cardId)}"]`,
+    `[${DECK_CARD_ATTR}="${deckCardSlot(row.categoryId, row.cardId)}"]`,
   );
 }
 
@@ -92,7 +92,7 @@ function deckControlFor(row: PaneDeckContext | null): HTMLElement | null {
  * would invent facts the same way a drop onto it would.
  */
 interface SwapOffer {
-  /** The deck slot the pane was opened from — the swap's `deck`, `zone` and `from`. */
+  /** The deck slot the pane was opened from — the swap's `deck`, `category` and `from`. */
   row: PaneDeckContext;
   /** The printing whose swap is in flight, or `null`. Every row is inert while one is: they
    *  would all be sent the same `from` printing, which that write is in the middle of moving. */
@@ -141,7 +141,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
    * it: a pane opened out of a deck owes the caret to that deck's control (see `close`).
    *
    * The pane is a sibling of the deck editor rather than part of it, so what joins them is the
-   * store on one side (`openCardFromDeck`, written by a zone column's click) and a shared query
+   * store on one side (`openCardFromDeck`, written by a category column's click) and a shared query
    * cache on the other ({@link useSwapFromPane} mounts the editor's own `["decks", "detail"]`
    * read, so this costs no `deck_get` while an editor is up). With no context it is an idle
    * mutation over a query that asks for nothing.
@@ -257,7 +257,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       // moving it, so a second press would be refused for a row that no longer exists.
       if (!deckRow || swapping) return;
       startSwap(
-        { fromCardId: deckRow.cardId, toCardId, zone: deckRow.zone },
+        { fromCardId: deckRow.cardId, toCardId, categoryId: deckRow.categoryId },
         {
           onSuccess: (result) => {
             // What this pane knows and the one replacing it cannot: where the caret came from,
@@ -265,13 +265,17 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
             // unmounts this component.
             handover = {
               cardId: toCardId,
-              // **A zone holds a printing at most once**, so a swap onto one the zone already
+              // **A category holds a printing at most once**, so a swap onto one it already
               // had turns two rows into one — a line disappears out of the deck list, and a
               // list that silently loses a line reads like a bug (`ipc.ts`'s `SwapResult`).
               // The server's arithmetic, never a guess: `quantity` is what the surviving row
               // holds. Nothing is said when nothing merged.
+              //
+              // The name is the context's own, not a lookup: a category is a row the user named,
+              // so there is no table to translate an id through and the pane has no category
+              // list of its own (see `PaneDeckContext`, where the pairing is written down).
               report: result.folded
-                ? `Folded into one row of ${result.quantity} in ${ZONE_LABEL[deckRow.zone]}.`
+                ? `Folded into one row of ${result.quantity} in ${deckRow.categoryName}.`
                 : null,
             };
             // The pane follows the deck. The reader asked for this printing to be the one in
@@ -938,18 +942,20 @@ function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
           disabled={swap.pendingId !== null}
           onClick={() => swap.onUse(printing.id)}
           // Forty rows, forty buttons, one visible label: the set and the collector number are
-          // what tell them apart, and the zone is what says which slot is being rewritten — the
-          // same printing can sit in the main deck and the sideboard. The visible words lead
+          // what tell them apart, and the category is what says which slot is being rewritten —
+          // the same printing can sit in the main deck and the sideboard. The visible words lead
           // and change with the button, because an accessible name that no longer contains the
           // visible label is a control voice control can no longer press (WCAG 2.5.3, and
           // `DeckStats`' send button is the precedent this borrows).
           //
-          // The zone is the context's, which is the slot the pane was opened on. A row moved
-          // to another zone under an open pane makes that word stale — and only the word: the
-          // write is addressed by the same slot, finds no row in the zone it names, and is
-          // refused in the pane beside the button. The label lies for one press; the deck does
-          // not change.
-          aria-label={`${pending ? "Swapping…" : "Use this printing"} (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${ZONE_LABEL[swap.row.zone]}`}
+          // The category is the context's, which is the slot the pane was opened on — its name
+          // as well as its id, because the pane is a sibling of the deck editor and has no
+          // category list to translate one through (see `PaneDeckContext`). A row moved to
+          // another category under an open pane makes that word stale — as does a rename of the
+          // category itself — and only the word: the write is addressed by the same slot, finds
+          // no row in the category it names, and is refused in the pane beside the button. The
+          // label lies for one press; the deck does not change.
+          aria-label={`${pending ? "Swapping…" : "Use this printing"} (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${swap.row.categoryName}`}
           className={cn(
             "shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-dim",
             "transition-colors duration-150 hover:text-text disabled:opacity-50",

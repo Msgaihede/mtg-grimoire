@@ -18,15 +18,25 @@ import { dragData, dropWrite, readDragData, type DragPayload } from "./dnd";
  * the browser handles without telling the page — and those are the live CDP pass's to prove.
  */
 
+/**
+ * Two of the deck's categories, as ids.
+ *
+ * Any two positive integers would do — schema v7 made a category a row the user owns, so there
+ * is no fixed vocabulary left to name one by — but these are `schema::PREDEFINED_CATEGORIES`'
+ * own order applied to a deck's seeded rows, which is what a reader will picture.
+ */
+const MAIN = 1;
+const SIDE = 2;
+
 const SEARCH: DragPayload = { kind: "search-card", cardId: "c-bolt", name: "Lightning Bolt" };
 const ROW: DragPayload = {
   kind: "deck-card",
   cardId: "c-bolt",
   name: "Lightning Bolt",
-  fromZone: "main",
+  fromCategoryId: MAIN,
 };
 /** The printing every other surface in the app carries: a search tile, a collection row, a
- *  wish, a printings row. No zone, because none of them is inside a deck. */
+ *  wish, a printings row. No category, because none of them is inside a deck. */
 const CARD: DragPayload = { kind: "card", cardId: "c-bolt", name: "Lightning Bolt" };
 
 describe("dragData / readDragData", () => {
@@ -49,7 +59,7 @@ describe("dragData / readDragData", () => {
     // built by something else looks like.
     expect(readDragData({ kind: "search-card", cardId: "c-bolt", name: "Bolt" })).toBeNull();
     expect(
-      readDragData({ kind: "deck-card", cardId: "c-bolt", name: "Bolt", fromZone: "main" }),
+      readDragData({ kind: "deck-card", cardId: "c-bolt", name: "Bolt", fromCategoryId: MAIN }),
     ).toBeNull();
     // The plainest of the three, and therefore the likeliest thing another feature's drag
     // would happen to carry: a card id and a name.
@@ -68,50 +78,56 @@ describe("dragData / readDragData", () => {
   });
 
   /**
-   * The zone is the half of a deck-card payload that decides a write: `deck_move_card` takes
-   * a `from` and a `to`, and a `from` that is not a zone is a move the backend refuses in
-   * words after the row has already left the screen.
+   * The category is the half of a deck-card payload that decides a write: `deck_move_card`
+   * takes a `from` and a `to`, and a `from` that is not a usable category id is a move the
+   * backend refuses in words after the row has already left the screen.
+   *
+   * **This is the fence that replaced an exhaustive check.** Before schema v7 the field was
+   * one of five words and `readDragData` could hold the whole vocabulary; a category id has no
+   * closed list to check against, so what is left is `isCategoryId`'s shape check — and every
+   * case below is a value that would address *every* row or *no* row rather than one. `"1"` is
+   * the one worth naming twice: it is what a `<select>` or a `dataset` round trip produces, it
+   * reads as the right id, and `deck_move_card` would be handed a `from` it cannot mean.
    */
-  it("refuses a deck-card payload whose zone is not a zone", () => {
-    expect(readDragData({ ...dragData(ROW), fromZone: "graveyard" })).toBeNull();
-    expect(readDragData({ ...dragData(ROW), fromZone: undefined })).toBeNull();
-    // Not a zone, and not a way to smuggle one in either: `"toString" in ZONES` is true, so
-    // the *value* is what is asked for and nothing on `Object.prototype` answers `true`.
-    expect(readDragData({ ...dragData(ROW), fromZone: "toString" })).toBeNull();
+  it("refuses a deck-card payload whose category id is not one", () => {
+    for (const fromCategoryId of ["1", 1.5, 0, -1, NaN, undefined, null, "main"]) {
+      expect(readDragData({ ...dragData(ROW), fromCategoryId })).toBeNull();
+    }
   });
 
-  /** A search payload carries no zone, and one that arrives with a `fromZone` is still a
-   *  search payload — the kind decides what is read, so a stray field cannot change a write. */
+  /** A search payload carries no category, and one that arrives with a `fromCategoryId` is
+   *  still a search payload — the kind decides what is read, so a stray field cannot change a
+   *  write. */
   it("reads a search payload by its kind rather than by its fields", () => {
-    expect(readDragData({ ...dragData(SEARCH), fromZone: "side" })).toEqual(SEARCH);
+    expect(readDragData({ ...dragData(SEARCH), fromCategoryId: SIDE })).toEqual(SEARCH);
   });
 });
 
 describe("dropWrite", () => {
-  /** The panel's drag: a printing the deck does not have yet, into the zone it was dropped
+  /** The panel's drag: a printing the deck does not have yet, into the category it was dropped
    *  on. One copy, exactly as the panel's Add button sends. */
-  it("adds one copy when a search result lands in a zone", () => {
-    expect(dropWrite(SEARCH, { kind: "zone", zone: "side" })).toEqual({
+  it("adds one copy when a search result lands in a category", () => {
+    expect(dropWrite(SEARCH, { kind: "category", categoryId: SIDE })).toEqual({
       write: "add",
       cardId: "c-bolt",
-      zone: "side",
+      categoryId: SIDE,
     });
   });
 
   /**
    * A card from anywhere else in the app lands exactly as a panel tile does.
    *
-   * The zone columns are the editor's, and the four surfaces that carry a `"card"` — the
+   * The category columns are the editor's, and the four surfaces that carry a `"card"` — the
    * search wall, the collection table, the wishlist, the pane's printings list — are not; but
-   * a printing is a printing, and "one copy into the zone it was dropped on" is the same
+   * a printing is a printing, and "one copy into the category it was dropped on" is the same
    * write whichever wall it was picked up from. Two kinds and one rule, because the *source*
    * is what differs and the meaning is not.
    */
-  it("adds one copy when a card from any other surface lands in a zone", () => {
-    expect(dropWrite(CARD, { kind: "zone", zone: "main" })).toEqual({
+  it("adds one copy when a card from any other surface lands in a category", () => {
+    expect(dropWrite(CARD, { kind: "category", categoryId: MAIN })).toEqual({
       write: "add",
       cardId: "c-bolt",
-      zone: "main",
+      categoryId: MAIN,
     });
   });
 
@@ -123,34 +139,34 @@ describe("dropWrite", () => {
 
   /** The row's drag: every copy moves, which is what `deck_move_card` does and what the row
    *  menu's "Move to" already means. */
-  it("moves a deck row into the zone it was dropped on", () => {
-    expect(dropWrite(ROW, { kind: "zone", zone: "maybe" })).toEqual({
+  it("moves a deck row into the category it was dropped on", () => {
+    expect(dropWrite(ROW, { kind: "category", categoryId: SIDE })).toEqual({
       write: "move",
       cardId: "c-bolt",
-      from: "main",
-      to: "maybe",
+      from: MAIN,
+      to: SIDE,
     });
   });
 
   /**
    * A row dropped back where it came from is not a write.
    *
-   * `deck_move_card` from a zone to itself would touch the deck, bump `updated_at` and
+   * `deck_move_card` from a category to itself would touch the deck, bump `updated_at` and
    * reallocate for nothing — and, more to the point, the column has to be able to say so
-   * *before* the drop: this is the same rule `canDrop` asks, so the source zone never lights
+   * *before* the drop: this is the same rule `canDrop` asks, so the source column never lights
    * up and the reader is told the drop means nothing while they can still change their mind.
    */
-  it("refuses a row dropped on the zone it is already in", () => {
-    expect(dropWrite(ROW, { kind: "zone", zone: "main" })).toBeNull();
+  it("refuses a row dropped on the category it is already in", () => {
+    expect(dropWrite(ROW, { kind: "category", categoryId: MAIN })).toBeNull();
   });
 
   /** The tray takes a card out of the deck, and zero is how a deck card leaves — the
    *  wishlist's asymmetry, for the wishlist's reason. */
-  it("removes a deck row dropped on the tray, from the zone it was in", () => {
-    expect(dropWrite({ ...ROW, fromZone: "side" }, { kind: "remove" })).toEqual({
+  it("removes a deck row dropped on the tray, from the category it was in", () => {
+    expect(dropWrite({ ...ROW, fromCategoryId: SIDE }, { kind: "remove" })).toEqual({
       write: "remove",
       cardId: "c-bolt",
-      zone: "side",
+      categoryId: SIDE,
     });
   });
 

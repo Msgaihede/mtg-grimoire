@@ -4,10 +4,10 @@ import { expect } from "storybook/test";
 import { DROP_LINE_ATTR, DropIndicator } from "./DropIndicator";
 
 /**
- * A zone column, reduced to the two things this line needs from one: a `relative` box with a
+ * A category column, reduced to the two things this line needs from one: a `relative` box with a
  * border, and something inside it to have an edge above.
  *
- * A **stand-in**, not `ZoneColumn` — that component takes a deck, a zone and the whole
+ * A **stand-in**, not `ZoneColumn` — that component takes a deck, a category and the whole
  * pragmatic-drag-and-drop wiring, and it is Task 10's to story. The one class copied verbatim
  * is `relative`, and it is copied because it is load-bearing: `ZoneColumn` puts it on the
  * column and says so in its own comment ("`relative` is what the drop line hangs from"), and
@@ -36,9 +36,9 @@ const meta = {
       description: {
         component:
           "The line that says where a dragged card is about to land: 2px of the app's gold " +
-          "across the top edge of the zone that will take it. **An edge of the column, not a " +
-          "gap between two rows** — `deck_cards` has no order column, the backend answers a " +
-          "deck in zone priority then by name, and `deck_add_card` folds a repeat into the " +
+          "across the top edge of the category that will take it. **An edge of the column, not " +
+          "a gap between two rows** — `deck_cards` has no order column, the backend answers a " +
+          "deck in category sort order then by name, and `deck_add_card` folds a repeat into the " +
           "row already there, so a line drawn between two rows would promise a position the " +
           "data model cannot keep. Hand-rolled rather than Atlaskit's drop indicator, which " +
           "wants a portal and a runtime `<style>` the shipped CSP (`style-src 'self'`) would " +
@@ -92,7 +92,7 @@ export const OnAZoneEdge: Story = {
 /**
  * Two columns, one lit — which is the whole of what a drop here decides.
  *
- * The indicator marks the **target**, so the question it answers is "which zone", never "where
+ * The indicator marks the **target**, so the question it answers is "which category", never "where
  * in the list". Side by side is the only arrangement that shows that, because a single lit
  * column looks equally like an insertion point at the top of it.
  */

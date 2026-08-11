@@ -11,12 +11,16 @@
  * A new format is a seeded row; a rules change is an UPDATE. That is the whole design, and
  * a single format key compared here would quietly end it.
  *
- * Two zones behave unlike the rest, both by design and both handled once, at the top:
+ * Two things behave unlike the rest, both by design and both handled once, at the top:
  *
- * * **`maybe` counts toward nothing at all** — not size, not copies, not legality. It is a
- *   scratchpad, and the allocator does not even claim copies for it.
- * * **`companion` counts toward no deck size** (EDH's is "effectively a 101st card") but
- *   toward every copy limit. Where the format has a real sideboard it occupies one of its
+ * * **A card in an inactive category counts toward nothing at all** — not size, not copies,
+ *   not legality. Schema v7 made that a switch on the *category* rather than a fixed word on
+ *   the card: the Maybeboard is simply the predefined category seeded off, a category of the
+ *   user's own that they switch off behaves identically, and a Maybeboard they switch on
+ *   counts like anything else. The Rust allocator makes the same read (`cat.is_active = 1`),
+ *   so "counts toward nothing" and "reserves no copy of anything" cannot come apart.
+ * * **The `companion` kind counts toward no deck size** (EDH's is "effectively a 101st card")
+ *   but toward every copy limit. Where the format has a real sideboard it occupies one of its
  *   slots; where `sideboardMax` is 0 it is simply an extra card — which is read from that
  *   cell rather than from a key, so Commander, the three Brawls, Oathbreaker, PDH, Duel,
  *   PreDH and Gladiator all come out right together. (Gladiator is the one of those that also
@@ -28,48 +32,28 @@
  * The bracket advisory is in `bracket.ts` and is not called from here at all — it is an
  * estimate rather than a finding, and nothing about it belongs in a list of what is wrong.
  */
-import type { DeckZone, FormatSpec } from "@/lib/ipc";
+import type { CategoryKind, FormatSpec } from "@/lib/ipc";
 import type { CardFacts, ValidationIssue } from "./types";
 import { copyException, isBasicLand, unreadableCopyCount } from "./singleton";
 import { colorIdentityIssues, commanderIdentity, validateCommanderZone } from "./commanders";
 import { companionIssues } from "./companions";
 
 /**
- * The zones `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**", "exactly 60 incl
- * Oathbreaker + signature spell" (both of those live in the `commander` zone).
+ * The category kinds `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**",
+ * "exactly 60 incl Oathbreaker + signature spell" (both of those live in a `commander`
+ * category).
+ *
+ * Kinds and not categories, because a deck may own any number of `main` categories — the user
+ * names and orders them — and a size rule that had to be told about each one would be a rule
+ * the user could break by making a pile. What a card is *for* is the kind; what it is *called*
+ * is theirs.
  *
  * Exported because the deck editor's stats strip prints the same total beside this file's
  * sentence about it: "Modern decks need at least 60 cards; you have 59" under a headline
  * figure counting the sideboard too is two numbers for one question. Reading one query is not
  * enough to make two surfaces agree — they have to read one definition.
  */
-export const SIZE_ZONES: readonly DeckZone[] = ["main", "commander"];
-
-/**
- * The zones a copy limit counts together — **every zone but the scratchpad**.
- *
- * `main` + `side` is CR 100.4a: a sideboard's copies count toward the same four. The
- * commander zone is in because CR 903.5b's rule ("with the exception of basic lands, each
- * card in a Commander deck must have a different English name") is about the *deck*, and
- * the commander is one of its cards — 903.5a is what puts it there ("exactly 100 cards,
- * including its commander"). So a card in the commander zone *and* in the main deck is two
- * copies of it, which a singleton format has to hear about.
- *
- * The companion is in for the same reason under either shape the formats give it. Where the
- * format has a real sideboard the companion occupies one of its slots, and 100.4a counts
- * those; where it has none, the research doc calls the companion "effectively a 101st card"
- * and 903.5b counts that. So a deck holding Lurrus as its companion **and** in the 99 is
- * holding two Lurruses, and the one place in this file that counts cards is the place that
- * says so. It is deliberately *not* in {@link SIZE_ZONES}: a companion is not a card of the
- * starting deck, and counting it there would make every companion deck one card too big.
- *
- * **Hand-off to Plan 5's importer:** because the companion counts here, an import must write a
- * companion as **either** a `side` row **or** a `companion` row and never both. Arena's own
- * export lists the card twice — its `Companion` section repeats it in `Sideboard` (research
- * doc, deck-text formats) — and a parser that copies both sections literally would hand this
- * function two rows for one card and manufacture a copy-limit error out of one Lurrus.
- */
-const COPY_ZONES: readonly DeckZone[] = ["main", "side", "commander", "companion"];
+export const SIZE_KINDS: readonly CategoryKind[] = ["main", "commander"];
 
 /**
  * Everything wrong with this deck under this format, worst-first by rule rather than by
@@ -81,8 +65,11 @@ const COPY_ZONES: readonly DeckZone[] = ["main", "side", "commander", "companion
  * is a validator that hides the deck it was asked about.
  */
 export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
-  // The scratchpad is dropped once, here, so no rule below has to remember it exists.
-  const deck = cards.filter((card) => card.zone !== "maybe");
+  // Everything that counts toward nothing is dropped once, here, so no rule below has to
+  // remember it exists. One flag rather than the old `zone !== "maybe"`, and that is the whole
+  // of schema v7 in this file: the Maybeboard is the predefined category seeded off, and a
+  // pile of the user's own that they switched off leaves by the same line.
+  const deck = cards.filter((card) => card.categoryActive);
   const legalities = readLegalities(deck);
   return collapse([
     ...deckSizeIssues(deck, spec),
@@ -91,7 +78,7 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
     ...cardIssues(deck, spec, legalities),
     ...commanderIssues(deck, spec),
     ...companionIssues(
-      deck.filter((card) => card.zone === "companion"),
+      deck.filter((card) => card.categoryKind === "companion"),
       deck,
       spec,
     ),
@@ -101,9 +88,9 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
 /**
  * One sentence, one finding.
  *
- * The per-card pass runs over **rows**, and one card is usually several: the same printing
- * in `main` and in `side`, or two printings of one card that is banned either way. Saying
- * "Lightning Bolt is banned in Modern." twice reads as two problems, so identical
+ * The per-card pass runs over **rows**, and one card is usually several: the same printing in
+ * the main deck and in the sideboard, or two printings of one card that is banned either way.
+ * Saying "Lightning Bolt is banned in Modern." twice reads as two problems, so identical
  * `(code, message)` pairs collapse into the first of them and it takes every row's
  * `cardId` with it — the panel highlights all of them from one line.
  *
@@ -187,8 +174,8 @@ type LegalityRead =
  * `colors`/`colorIdentity`, which are concatenated letters (`"WU"`) and would throw.
  *
  * Keyed by the row object: a deck read hands out one object per row, and two rows of the
- * same printing in two zones are two objects with two blobs (which is what makes Old School
- * work per printing).
+ * same printing in two categories are two objects with two blobs (which is what makes Old
+ * School work per printing).
  */
 function readLegalities(deck: CardFacts[]): Map<CardFacts, Record<string, string> | null> {
   const parsed = new Map<CardFacts, Record<string, string> | null>();
@@ -225,12 +212,12 @@ function legalityOf(
 // The rules.
 // ---------------------------------------------------------------------------------------
 
-function quantityIn(deck: CardFacts[], zones: readonly DeckZone[]): number {
-  return deck.reduce((n, card) => (zones.includes(card.zone) ? n + card.quantity : n), 0);
+function quantityIn(deck: CardFacts[], kinds: readonly CategoryKind[]): number {
+  return deck.reduce((n, card) => (kinds.includes(card.categoryKind) ? n + card.quantity : n), 0);
 }
 
 function deckSizeIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
-  const size = quantityIn(deck, SIZE_ZONES);
+  const size = quantityIn(deck, SIZE_KINDS);
   const { deckMin: min, deckMax: max, displayName } = spec;
 
   // An exactly-sized format is wrong in both directions, and says so in one sentence.
@@ -285,11 +272,40 @@ interface CopyGroup {
 /**
  * Grouped by `oracleId`, falling back to the row's denormalized `name` — which is what an
  * orphaned row still has, and the only way two orphans of the same card are one card.
+ *
+ * **It counts every row it is handed, and there is no list here on purpose.** Until schema v7
+ * this filtered a `COPY_ZONES` constant whose entire content was "every zone but the
+ * scratchpad", and that exclusion is now {@link validateDeck}'s first line — one step earlier
+ * and asked of the *category*. Writing the four kinds out again here would put the special
+ * case back as something no user could switch off: a `main` category they had turned off would
+ * have its copies counted, which is exactly the bug the category model exists to remove.
+ *
+ * The reasoning that constant carried is still true, and is why nothing narrower belongs here
+ * either:
+ *
+ * * `main` + `side` is CR 100.4a — a sideboard's copies count toward the same four.
+ * * The commander is in because CR 903.5b's rule ("with the exception of basic lands, each
+ *   card in a Commander deck must have a different English name") is about the *deck*, and the
+ *   commander is one of its cards — 903.5a is what puts it there ("exactly 100 cards, including
+ *   its commander"). So a card in the command zone *and* in the main deck is two copies of it,
+ *   which a singleton format has to hear about.
+ * * The companion is in for the same reason under either shape the formats give it. Where the
+ *   format has a real sideboard the companion occupies one of its slots, and 100.4a counts
+ *   those; where it has none, the research doc calls the companion "effectively a 101st card"
+ *   and 903.5b counts that. So a deck holding Lurrus as its companion **and** in the 99 is
+ *   holding two Lurruses, and the one place in this file that counts cards is the place that
+ *   says so. It is deliberately *not* in {@link SIZE_KINDS}: a companion is not a card of the
+ *   starting deck, and counting it there would make every companion deck one card too big.
+ *
+ * **Hand-off to Plan 5's importer:** because the companion counts here, an import must file a
+ * companion into **either** a `side` category **or** a `companion` one and never both. Arena's
+ * own export lists the card twice — its `Companion` section repeats it in `Sideboard` (research
+ * doc, deck-text formats) — and a parser that copies both sections literally would hand this
+ * function two rows for one card and manufacture a copy-limit error out of one Lurrus.
  */
 function groupCopies(deck: CardFacts[]): CopyGroup[] {
   const groups = new Map<string, CopyGroup>();
   for (const card of deck) {
-    if (!COPY_ZONES.includes(card.zone)) continue;
     const key = card.oracleId ?? card.name;
     const group = groups.get(key) ?? { name: card.name, quantity: 0, cardIds: [], rows: [] };
     group.quantity += card.quantity;
@@ -515,7 +531,7 @@ function legalityIssues(
  * than the format comparison this file refuses to grow.
  */
 function outsidePoolIssues(card: CardFacts, spec: FormatSpec): ValidationIssue[] {
-  if (spec.commanderRule === "pdh" && card.zone === "commander") return [];
+  if (spec.commanderRule === "pdh" && card.categoryKind === "commander") return [];
   return [error("not-legal", `${card.name} is not legal in ${spec.displayName}.`, [card.cardId])];
 }
 
@@ -528,18 +544,20 @@ function outsidePoolIssues(card: CardFacts, spec: FormatSpec): ValidationIssue[]
  * answer (a colourless commander admits only colourless cards), so the two cannot be
  * conflated.
  *
- * Two zones are deliberately left out of the identity pass. The commander zone judges itself
+ * Two kinds are deliberately left out of the identity pass. The command zone judges itself
  * (Oathbreaker's signature spell is measured against its oathbreaker, and partners are inside
- * their own union by construction), and the `companion` zone is `companions.ts`'s — it holds
+ * their own union by construction), and the `companion` kind is `companions.ts`'s — it holds
  * the companion to the same identity there, and checking it here would report the same card
  * twice.
  */
 function commanderIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
-  const zone = deck.filter((card) => card.zone === "commander");
+  const zone = deck.filter((card) => card.categoryKind === "commander");
   const issues = validateCommanderZone(zone, spec);
   const identity = spec.commanderRule === null ? null : commanderIdentity(zone, spec);
   if (identity === null) return issues;
-  const judged = deck.filter((card) => card.zone === "main" || card.zone === "side");
+  const judged = deck.filter(
+    (card) => card.categoryKind === "main" || card.categoryKind === "side",
+  );
   return [...issues, ...colorIdentityIssues(judged, identity)];
 }
 

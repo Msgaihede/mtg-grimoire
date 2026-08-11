@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { readDragData } from "@/features/decks/dnd";
-import type { CardDetail, CardFace, Printing, PrintingsResponse } from "@/lib/ipc";
+import type { CardDetail, CardFace, DeckVariant, Printing, PrintingsResponse } from "@/lib/ipc";
+// Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
+// under the mock with `CardDetailPane`'s, where the hoisting order needs it.
+import type { PaneDeckContext } from "@/lib/store";
 import { startDrag } from "@/test-drag";
 
 const detail: CardDetail = {
@@ -80,6 +83,23 @@ const DECK_DETAIL = { deck: { id: 4, name: "Burn" }, cards: [] };
 
 const printings = [printing()];
 
+/**
+ * The deck slot the pane is opened from in the swap tests — one deck, one category, one
+ * printing.
+ *
+ * Schema v7 made a category a `deck_categories` row the user names, so a context carries the
+ * **id** the write is addressed by *and* the **name** the pane spells out (the fold sentence,
+ * and every "Use this printing" label). The pane is a sibling of the deck editor and has no
+ * category list to translate one through, which is why both travel — `PaneDeckContext` is where
+ * that is argued. `1` and `"Main deck"` mirror the v7 migration's own pile.
+ */
+const MAIN: PaneDeckContext = {
+  deckId: 4,
+  categoryId: 1,
+  categoryName: "Main deck",
+  cardId: "p1",
+};
+
 const cardDetail = vi.fn();
 const cardPrintings = vi.fn();
 /**
@@ -95,9 +115,14 @@ vi.mock("@/lib/ipc", async (original) => ({
   ipc: {
     cardDetail: (id: string) => cardDetail(id),
     cardPrintings: (o: string) => cardPrintings(o),
-    deckGet: (id: number) => deckGet(id),
-    deckSwapPrinting: (deckId: number, from: string, to: string, zone: string) =>
-      deckSwapPrinting(deckId, from, to, zone),
+    deckGet: (id: number, variant: DeckVariant) => deckGet(id, variant),
+    deckSwapPrinting: (
+      deckId: number,
+      from: string,
+      to: string,
+      categoryId: number,
+      variant: DeckVariant,
+    ) => deckSwapPrinting(deckId, from, to, categoryId, variant),
   },
 }));
 import { CardDetailPane } from "./CardDetailPane";
@@ -608,17 +633,13 @@ describe("browsing the printings list", () => {
   it("keeps the deck row while the reader browses", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(PRINTINGS));
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId: "p1" });
+    useAppStore.getState().openCardFromDeck(MAIN);
 
     wrap("p1");
     await userEvent.click(await screen.findByRole("button", { name: "Show M10 · 146" }));
 
     expect(useAppStore.getState().selectedCardId).toBe("p2");
-    expect(useAppStore.getState().paneDeckContext).toEqual({
-      deckId: 4,
-      zone: "main",
-      cardId: "p1",
-    });
+    expect(useAppStore.getState().paneDeckContext).toEqual(MAIN);
   });
 
   /** The row's own controls keep their clicks to themselves: a press on the quick-add is not
@@ -648,9 +669,9 @@ describe("browsing the printings list", () => {
 describe("the printings list, opened from a deck row", () => {
   const SWAPPABLE = [printing(), printing({ id: "p2", setCode: "m10", collectorNumber: "146" })];
 
-  /** The store's one context write, as the deck editor's zone columns make it. */
+  /** The store's one context write, as the deck editor's category columns make it. */
   function fromDeckRow(cardId = "p1") {
-    useAppStore.getState().openCardFromDeck({ deckId: 4, zone: "main", cardId });
+    useAppStore.getState().openCardFromDeck({ ...MAIN, cardId });
   }
 
   /** The row a printing is drawn in — where its own action and its own refusal belong. */
@@ -714,13 +735,9 @@ describe("the printings list, opened from a deck row", () => {
     wrap("p1");
     await userEvent.click(await screen.findByRole("button", { name: /^Use this printing/ }));
 
-    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", "main");
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live");
     await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("p2"));
-    expect(useAppStore.getState().paneDeckContext).toEqual({
-      deckId: 4,
-      zone: "main",
-      cardId: "p2",
-    });
+    expect(useAppStore.getState().paneDeckContext).toEqual({ ...MAIN, cardId: "p2" });
   });
 
   /**
@@ -776,11 +793,7 @@ describe("the printings list, opened from a deck row", () => {
     );
     expect(rowOf(refusal)).toHaveTextContent("M10 · 146");
     expect(useAppStore.getState().selectedCardId).toBe("p1");
-    expect(useAppStore.getState().paneDeckContext).toEqual({
-      deckId: 4,
-      zone: "main",
-      cardId: "p1",
-    });
+    expect(useAppStore.getState().paneDeckContext).toEqual(MAIN);
     // The mark has not moved either: the deck holds what it held.
     expect(rowOf(screen.getByText("This deck uses this printing"))).toHaveTextContent("ISD · 51");
   });

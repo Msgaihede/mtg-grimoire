@@ -1,17 +1,57 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, type DeckCard, type DeckDetail, type DeckPatch, type DeckZone } from "@/lib/ipc";
+import {
+  ipc,
+  type DeckCard,
+  type DeckCategory,
+  type DeckDetail,
+  type DeckPatch,
+  type DeckTag,
+  type DeckVariant,
+} from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
  *  and the editor's `useMemo`s key off it. */
 const NONE: readonly DeckCard[] = [];
 
-/** One zone slot, as every write here addresses it: by what it *is*, never by the
+/** The same, for the two lists a deck read now also answers with. */
+const NO_CATEGORIES: readonly DeckCategory[] = [];
+const NO_TAGS: readonly DeckTag[] = [];
+
+/**
+ * The variant this hook reads and writes.
+ *
+ * Schema v7 gave every deck two lists — `live`, what is sleeved up, and `theory`, what it is
+ * being built toward — but **nothing in the app switches between them yet**: there is no
+ * control for it, and adding one is a design decision this re-point deliberately does not
+ * make. Every read and every write here therefore names `live`, which is what the app meant by
+ * "the deck" before the column existed. When a switcher lands, this constant becomes the
+ * hook's argument and nothing else about these mutations changes.
+ */
+const VARIANT: DeckVariant = "live";
+
+/**
+ * What an add is filed under when the caller names no category.
+ *
+ * `deck_add_card` takes either an explicit `categoryId` — a drop onto a column the reader
+ * pointed at — or a **name** to find-or-create. The surfaces that have no column to point at
+ * (the docked panel's Add button, the sidebar's Decks drop target) send a name, and this is
+ * that name: the v7 migration's own word for the pile it put every legacy main-deck row in, so
+ * a deck that predates categories and one made since agree about where a plain add goes.
+ *
+ * **A placeholder, and named as one.** The spec's answer is `autoCategoryFor` — one rule, in
+ * TypeScript, that reads a card's type line and answers the pile it belongs in ("Creatures",
+ * "Lands", …). That rule is a later task's; until it exists, every add that names no column
+ * goes to one pile rather than to a guess this file invents.
+ */
+const DEFAULT_CATEGORY_NAME = "Main deck";
+
+/** One category slot, as every write here addresses it: by what it *is*, never by the
  *  `deck_cards.id` the answer carries. A stale row id is the difference between emptying the
  *  slot the reader pressed and emptying one somebody else already refilled. */
 interface Slot {
   cardId: string;
-  zone: DeckZone;
+  categoryId: number;
 }
 
 /**
@@ -47,12 +87,12 @@ export function useDeck(id: number | null) {
 
   const query = useQuery({
     queryKey: detailKey,
-    queryFn: () => ipc.deckGet(opened(id)),
+    queryFn: () => ipc.deckGet(opened(id), VARIANT),
     enabled: id !== null,
   });
 
   /**
-   * Rewrite one zone slot in the cached answer, or drop it — addressed by the slot rather
+   * Rewrite one category slot in the cached answer, or drop it — addressed by the slot rather
    * than by `deck_cards.id`, like every write here.
    *
    * A slot the cache does not hold is left alone rather than added: this patches what is on
@@ -62,7 +102,7 @@ export function useDeck(id: number | null) {
   const patchSlot = (slot: Slot, next: ((card: DeckCard) => DeckCard) | null) => {
     queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
       if (!data) return data;
-      const at = (c: DeckCard) => c.cardId === slot.cardId && c.zone === slot.zone;
+      const at = (c: DeckCard) => c.cardId === slot.cardId && c.categoryId === slot.categoryId;
       if (!data.cards.some(at)) return data;
       return {
         ...data,
@@ -75,12 +115,12 @@ export function useDeck(id: number | null) {
   };
 
   /**
-   * Every zone write reallocates — `allocate_deck` runs inside the same transaction — so the
+   * Every card write reallocates — `allocate_deck` runs inside the same transaction — so the
    * whole `["decks"]` root, not this one detail: every `ownedQuantity` in the deck may have
    * moved, and the gallery tile's `cardCount` and `updatedAt` with them.
    *
    * The wishlist is **not** invalidated here, and that is a decision rather than an
-   * omission: a zone write moves `deck_allocations` and nothing else, while a wish's
+   * omission: a card write moves `deck_allocations` and nothing else, while a wish's
    * `ownedQuantity` is summed from `collection_entries`. Only `missingToWishlist` — the one
    * command that actually writes wishes — takes `["wishlist"]` with it.
    */
@@ -105,11 +145,14 @@ export function useDeck(id: number | null) {
   });
 
   /**
-   * Put copies into a zone: the drag-in and the click-to-add write.
+   * Put copies into a category: the drag-in and the click-to-add write.
    *
    * **Not the stepper's** — see {@link useDeck}'s `setQuantity`. This one reads `cards` to
    * denormalize the printing onto the row it inserts, so it refuses a card the database does
    * not have.
+   *
+   * `categoryId` is what a drop onto a column sends. A caller with no column to name omits it
+   * and the add is filed under {@link DEFAULT_CATEGORY_NAME}, found or created.
    *
    * **`["decks"]` again when it is refused**, which it shares with `swapPrinting` below and for
    * that rule's reason: this definition has a second call site outside the editor. The sidebar's
@@ -126,8 +169,23 @@ export function useDeck(id: number | null) {
    * left painted is not a cost that trades against it.
    */
   const addCard = useMutation({
-    mutationFn: ({ cardId, zone, quantity }: Slot & { quantity: number }) =>
-      ipc.deckAddCard(opened(id), cardId, zone, quantity),
+    mutationFn: ({
+      cardId,
+      categoryId = null,
+      quantity,
+    }: {
+      cardId: string;
+      categoryId?: number | null;
+      quantity: number;
+    }) =>
+      ipc.deckAddCard(
+        opened(id),
+        cardId,
+        categoryId,
+        categoryId === null ? DEFAULT_CATEGORY_NAME : null,
+        VARIANT,
+        quantity,
+      ),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -143,7 +201,7 @@ export function useDeck(id: number | null) {
    * a stepper built on `+1`/`−1` deltas through `deckAddCard` would be broken on precisely
    * the rows that most need fixing.
    *
-   * `0` removes the row (the wishlist's asymmetry, for the wishlist's reason: a zone slot
+   * `0` removes the row (the wishlist's asymmetry, for the wishlist's reason: a category slot
    * holds an intention and nothing else). A negative number is refused by the backend rather
    * than clamped, which matters more here rather than less — in a module where zero deletes,
    * treating `-1` as close enough would let arithmetic that went wrong upstream destroy a row.
@@ -156,36 +214,37 @@ export function useDeck(id: number | null) {
    * *removes* here and a refused removal that stayed removed would be a card silently gone.
    */
   const setQuantity = useMutation({
-    mutationFn: ({ cardId, zone, quantity }: Slot & { quantity: number }) =>
-      ipc.deckSetCardQuantity(opened(id), cardId, zone, quantity),
-    onMutate: async ({ cardId, zone, quantity }) => {
+    mutationFn: ({ cardId, categoryId, quantity }: Slot & { quantity: number }) =>
+      ipc.deckSetCardQuantity(opened(id), cardId, categoryId, VARIANT, quantity),
+    onMutate: async ({ cardId, categoryId, quantity }) => {
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
       // Zero takes the row out at the press rather than at the answer: it is what the write
       // means, and a row sitting at `0` for a round trip is a state this table never has.
-      patchSlot({ cardId, zone }, quantity === 0 ? null : (card) => ({ ...card, quantity }));
+      patchSlot({ cardId, categoryId }, quantity === 0 ? null : (card) => ({ ...card, quantity }));
       return saved;
     },
     onError: (_error, _slot, saved) => {
       if (saved !== undefined) queryClient.setQueryData(detailKey, saved);
       invalidate();
     },
-    onSuccess: (change, { cardId, zone }) => {
+    onSuccess: (change, { cardId, categoryId }) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored.
       patchSlot(
-        { cardId, zone },
+        { cardId, categoryId },
         change.removed ? null : (card) => ({ ...card, quantity: change.quantity }),
       );
       invalidate();
     },
   });
 
-  /** Move every copy from one zone to another. A claim released or made even though nothing
-   *  was added or removed — `maybe` reserves nothing — so it invalidates like the rest. */
+  /** Move every copy from one category to another. A claim released or made even though
+   *  nothing was added or removed — an inactive category reserves nothing — so it invalidates
+   *  like the rest. */
   const moveCard = useMutation({
-    mutationFn: ({ cardId, from, to }: { cardId: string; from: DeckZone; to: DeckZone }) =>
-      ipc.deckMoveCard(opened(id), cardId, from, to),
+    mutationFn: ({ cardId, from, to }: { cardId: string; from: number; to: number }) =>
+      ipc.deckMoveCard(opened(id), cardId, from, to, VARIANT),
     onSuccess: invalidate,
   });
 
@@ -194,13 +253,14 @@ export function useDeck(id: number | null) {
    * printing", pressed from outside this editor.
    *
    * **No optimistic patch**, where the stepper above has one, and it is the fold that decides
-   * it: a zone holds a printing at most once, so a swap onto a printing the zone already has
-   * turns two rows into one. Guessing that would mean deleting a line and growing another
-   * before knowing whether the write went through — and the one number a reader would check
-   * afterwards is precisely the one only the server can compute. So the guess is not worth the
-   * beat it saves: the row keeps saying what the last read said until the next one lands.
+   * it: a category holds a printing at most once per variant, so a swap onto a printing it
+   * already has turns two rows into one. Guessing that would mean deleting a line and growing
+   * another before knowing whether the write went through — and the one number a reader would
+   * check afterwards is precisely the one only the server can compute. So the guess is not
+   * worth the beat it saves: the row keeps saying what the last read said until the next one
+   * lands.
    *
-   * `["decks"]` like every zone write, for the same reason: `allocate_deck` runs inside the
+   * `["decks"]` like every card write, for the same reason: `allocate_deck` runs inside the
    * swap's transaction, and the allocator takes the exact printing first — so the copies this
    * deck reserves can change even though its counts did not.
    *
@@ -212,20 +272,20 @@ export function useDeck(id: number | null) {
    * the editor's copy stays idle however the pane's ends, and the editor's refused-write family
    * (`DeckEditor`'s `lastOfAny`) cannot see the failure at all. Every refusal here is either a
    * busy database or a deck that has been deleted (`touch_deck` answers GONE), and the second
-   * one must not leave the zone columns painting a deck that is not there. Invalidating on the
-   * way out is that family's rule, moved onto the one definition every observer shares: the
-   * refetch reaches the editor whoever pressed the button.
+   * one must not leave the category columns painting a deck that is not there. Invalidating on
+   * the way out is that family's rule, moved onto the one definition every observer shares:
+   * the refetch reaches the editor whoever pressed the button.
    */
   const swapPrinting = useMutation({
     mutationFn: ({
       fromCardId,
       toCardId,
-      zone,
+      categoryId,
     }: {
       fromCardId: string;
       toCardId: string;
-      zone: DeckZone;
-    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, zone),
+      categoryId: number;
+    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, categoryId, VARIANT),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -259,9 +319,14 @@ export function useDeck(id: number | null) {
     /** The gallery's row for this deck, or `null` — both while it is loading and when the id
      *  names a deck another view has since deleted. */
     deck: query.data?.deck ?? null,
-    /** Every card, in zone-priority order (`commander`, `main`, `side`, `companion`,
-     *  `maybe`), then by the name the row carries, then by row id. */
+    /** Every card of the `live` list, in category `sortOrder`, then by the name the row
+     *  carries, then by row id. */
     cards: query.data?.cards ?? NONE,
+    /** **Every** category of the deck in `sortOrder`, empty and inactive ones included — the
+     *  editor's columns are this list, not the categories that happen to hold a card. */
+    categories: query.data?.categories ?? NO_CATEGORIES,
+    /** Every tag of the deck, alphabetically — the palette a row's label is drawn from. */
+    tags: query.data?.tags ?? NO_TAGS,
     update,
     addCard,
     setQuantity,

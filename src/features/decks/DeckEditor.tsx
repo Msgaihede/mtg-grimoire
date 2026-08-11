@@ -4,14 +4,14 @@ import {
   dropTargetForElements,
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronLeft, Trash2 } from "lucide-react";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
   filterChipState,
   ToggleChip,
 } from "@/components/FilterChips";
-import { ipcError, type DeckCard, type DeckZone } from "@/lib/ipc";
+import { ipcError, type DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -23,37 +23,39 @@ import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd
 import { useDeck } from "./useDeck";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { ValidationPanel } from "./ValidationPanel";
-import { ZONE_LABEL, ZoneColumn, type GroupBy } from "./ZoneColumn";
+import { ZoneColumn, type GroupBy } from "./ZoneColumn";
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
-/** The four zones that are columns. `maybe` is not one of them — it is the scratchpad, and it
- *  sits collapsed underneath. */
-const COLUMNS: DeckZone[] = ["main", "side", "commander", "companion"];
-
 /**
- * How wide each column wants to be, and how it gives way.
+ * How wide a column wants to be, and how it gives way.
  *
- * The main deck takes two shares of whatever is spare because it holds sixty rows to the
- * others' fifteen, one and one. The bases are what the columns wrap at rather than what they
- * are: below about 40rem of content the row breaks and each column gets the width to itself,
- * which is how the editor stays readable at 1024px with the card pane docked beside it — and
- * why nothing here ever scrolls sideways.
+ * **One width for every column, where there used to be a map keyed by zone.** That map gave the
+ * main deck two shares of the spare width against one each for the sideboard, the commander and
+ * the companion, and it cannot survive schema v7: a column is now a `deck_categories` row the
+ * user named, so there is no closed set of keys to write widths against and no way to know from
+ * a category which of them it is. The main deck's own `flex-[2_1_24rem]` is what every column
+ * gets — the widest of the five, chosen because a user's category is as likely to be a
+ * sixty-card pile as a two-card one, and a column that is too wide wraps while a column that is
+ * too narrow truncates the card names it exists to show.
+ *
+ * The basis is what the columns wrap at rather than what they are: below about 24rem of content
+ * the row breaks and each column gets the width to itself, which is how the editor stays
+ * readable at 1024px with the card pane docked beside it — and why nothing here ever scrolls
+ * sideways.
  */
-const ZONE_WIDTH: Record<DeckZone, string> = {
-  main: "flex-[2_1_24rem]",
-  side: "flex-[1_1_16rem]",
-  commander: "flex-[1_1_16rem]",
-  companion: "flex-[1_1_16rem]",
-  maybe: "w-full",
-};
+const COLUMN_WIDTH = "flex-[2_1_24rem]";
+
+/** Stable identity for "this category holds nothing", so an empty column is not handed a fresh
+ *  array on every render (`useDeck`'s `NONE`, for its reason). */
+const EMPTY: readonly DeckCard[] = [];
 
 /**
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
  * way to its rail.
  *
- * The same rule the zone columns already follow — the narrowest thing yields first — one level
- * up. Three docked columns do not fit in a 1024px window: sidebar, padding, the card pane and
+ * The same rule the category columns already follow — the narrowest thing yields first — one
+ * level up. Three docked columns do not fit in a 1024px window: sidebar, padding, the card pane and
  * the panel come to 1044 before the deck gets a pixel, and the deck was measured at **2px**
  * before this existed, which reads as a rendering fault rather than as a squeeze.
  *
@@ -71,7 +73,7 @@ const ZONE_WIDTH: Record<DeckZone, string> = {
  * | 1440 | open | 777 | 381 | open |
  *
  * 208 is also the sidebar's width, which is the app's own evidence that a column this wide is
- * still a column: a zone row at 208 keeps its stepper and truncates the card's name.
+ * still a column: a category row at 208 keeps its stepper and truncates the card's name.
  */
 const DECK_FLOOR = 208;
 
@@ -124,7 +126,7 @@ const GROUPINGS: { id: GroupBy; label: string }[] = [
  * taking the pointer off this view, and bringing it back takes the preview down with the
  * row's own mouse-leave.
  */
-type Layer = { kind: "menu"; zone: DeckZone; cardId: string } | { kind: "check" } | null;
+type Layer = { kind: "menu"; categoryId: number; cardId: string } | { kind: "check" } | null;
 
 /**
  * One deck, open for editing.
@@ -148,10 +150,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
   const [layer, setLayer] = useState<Layer>(null);
-  const [showMaybe, setShowMaybe] = useState(false);
-  /** Where the docked panel's adds land. Here rather than in the panel because it is a fact
-   *  about the deck being edited, and the zones it may take are this editor's own. */
-  const [targetZone, setTargetZone] = useState<DeckZone>("main");
+  /**
+   * Where the docked panel's adds land. Here rather than in the panel because it is a fact
+   * about the deck being edited, and the categories it may take are this editor's own.
+   *
+   * `0` is the one value that is not a category: `deck_categories.id` is an `INTEGER PRIMARY
+   * KEY` and `dnd.ts`'s `isCategoryId` refuses anything but a positive safe integer, so zero
+   * is a sentinel meaning "nothing picked yet" that no real category can collide with. The
+   * clamp below replaces it on the first render that has a deck.
+   */
+  const [targetCategoryId, setTargetCategoryId] = useState(0);
   /** What is in the name field while it is being typed in, or `null` when the field is simply
    *  the deck's name (`QuantityStepper`'s draft, for its reason). */
   const [nameDraft, setNameDraft] = useState<string | null>(null);
@@ -189,8 +197,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   const editorRef = useRef<HTMLElement>(null);
   const trayRef = useRef<HTMLDivElement>(null);
-  /** The wrapping row of zone columns — the one scroller a drag may have to move to reach
-   *  its target, since four columns wrap onto a second line well before 1024px. */
+  /** The wrapping row of category columns — the one scroller a drag may have to move to reach
+   *  its target, since the four a deck is born with wrap onto a second line well before
+   *  1024px, and a deck may own any number of them. */
   const zonesRef = useRef<HTMLDivElement>(null);
   /** The row the deck and the panel share, and the only width either of them can be judged
    *  against — the window's own is three layouts away from it. */
@@ -200,8 +209,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /** The format check's chip, which is what opens the one layer that is not a row's. */
   const chipRef = useRef<HTMLButtonElement>(null);
-  /** One per drawn column, so a card that moves takes the caret to where it landed. */
-  const zoneRefs = useRef<Partial<Record<DeckZone, HTMLElement | null>>>({});
+  /**
+   * One per drawn column, so a card that moves takes the caret to where it landed.
+   *
+   * A `Map` keyed by `deck_categories.id` rather than the `Record` keyed by the five-word zone
+   * it replaces: the keys are the user's rows now, so there is no closed set to type a record
+   * against, and a deleted category has to be able to leave the map (a `Record` would keep the
+   * dead key and a stale element with it).
+   */
+  const categoryRefs = useRef(new Map<number, HTMLElement | null>());
   const tookFocus = useRef(false);
 
   const row = deck.deck;
@@ -241,43 +257,62 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     ((deck.moveCard.isPending && deck.moveCard.variables?.cardId === menu.cardId) ||
       (deck.update.isPending && deck.update.variables?.coverCardId === menu.cardId));
 
-  const byZone = useMemo(() => {
-    const map: Record<DeckZone, DeckCard[]> = {
-      main: [],
-      side: [],
-      commander: [],
-      companion: [],
-      maybe: [],
-    };
-    for (const card of deck.cards) map[card.zone].push(card);
+  /**
+   * The deck's rows, filed under the category each is in — a `Map` keyed by
+   * `deck_categories.id`, where this used to be a `Record` over the five zone words.
+   *
+   * Every category the deck has gets an entry, including the ones holding nothing: a column is
+   * drawn for a category whether or not anything is in it (that is where the next card goes),
+   * and a lookup that answered `undefined` there would make every call site write the same
+   * fallback.
+   *
+   * **Input order is preserved inside each group.** `deck_get` answers in category `sortOrder`,
+   * then name, then row id, and `ownedQuantity` is attributed along exactly that order — so a
+   * re-sort here would leave the badges attached to the wrong rows and the shortfall marks
+   * would lie.
+   */
+  const byCategory = useMemo(() => {
+    const map = new Map<number, DeckCard[]>();
+    for (const category of deck.categories) map.set(category.id, []);
+    for (const card of deck.cards) {
+      const group = map.get(card.categoryId);
+      if (group) group.push(card);
+      else map.set(card.categoryId, [card]);
+    }
     return map;
-  }, [deck.cards]);
+  }, [deck.cards, deck.categories]);
 
   /**
-   * The seeded rules drive the chrome: a Modern deck has no commander zone and a Commander
-   * deck has no sideboard (`sideboard_max` is 0 for every singleton format).
+   * The columns: **every category the deck has, in `sortOrder`, and nothing else.**
    *
-   * A zone that still holds cards is drawn whatever the format says. A re-format that hid the
-   * commander zone would otherwise leave the copies in it invisible *and* unreachable — still
-   * counted, with nothing on screen to say why. And with no spec at all — a format the seed no
-   * longer carries, or the table still loading — everything is drawn: never hide a zone whose
-   * rules are not in hand.
+   * There used to be a filter here, driven by the seeded format spec — the sideboard was hidden
+   * when `sideboard_max` was 0, the commander column unless `requires_commander`, the companion
+   * unless `allows_companion`, each with an exception for a zone that still held cards. That
+   * rule made sense while a zone was a slot the *format* implied: hiding one hid nothing the
+   * reader had made, and the exception kept a re-format from leaving copies invisible.
+   *
+   * Schema v7 makes it wrong. A category is a row the user named, ordered and switched on or
+   * off, so hiding one would hide a pile they built — and a deck may own any number of `main`
+   * ones, which no spec cell has anything to say about. The format still judges the deck (see
+   * the check chip in the header); it no longer decides what is drawn.
    */
-  const columns = COLUMNS.filter((zone) => {
-    if (zone === "main" || byZone[zone].length > 0 || spec === null) return true;
-    if (zone === "side") return spec.sideboardMax !== 0;
-    if (zone === "commander") return spec.requiresCommander;
-    return spec.allowsCompanion;
-  });
-  /** Where a row can go, and where the search panel can put one. The scratchpad is always one
-   *  of them — it is what it is for. */
-  const moveTargets: DeckZone[] = [...columns, "maybe"];
+  const columns = deck.categories;
+  /** Where a row can go, and where the search panel can put one: the same list. A column drops
+   *  itself from its own menu (`ZoneColumn`), so this needs no per-column narrowing. */
+  const moveTargets = deck.categories;
 
-  // A re-format can take the add target away — pick Sideboard on a Modern deck, switch it to
-  // Commander, and the select is left holding a zone that is not on screen and not in its own
-  // options. Reset during render, which is React's own answer to state that has to follow a
-  // prop; `main` is in `columns` unconditionally, so it is always a zone this deck has.
-  if (!moveTargets.includes(targetZone)) setTargetZone("main");
+  // The add target has to be a category this deck still has — a category deleted or renamed
+  // away under an open editor would otherwise leave the select holding an id that is not in its
+  // own options, with every press filing a card somewhere nothing is drawing. Reset during
+  // render, which is React's own answer to state that has to follow a prop.
+  //
+  // The **first** category, not a hard-coded word: there is no `main` to fall back to any more.
+  // A deck always has at least the four `PREDEFINED_CATEGORIES` the migration seeds, so the
+  // list is only empty while the read is still in flight — and then there is nothing to fall
+  // back *to*, so the sentinel stands and the panel below is not drawn at all.
+  if (columns.length > 0 && !columns.some((c) => c.id === targetCategoryId)) {
+    setTargetCategoryId(columns[0].id);
+  }
 
   // The caret comes here on the way in, once the deck's name is known so the region announces
   // which deck it is. The gallery's New deck button had the caret and unmounts the moment this
@@ -320,7 +355,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **All six writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
   // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
   // panel or on the stats strip reaches the same sentence — and without them here that surface
-  // would report a deck that is gone while the zone columns beside it went on painting it, with
+  // would report a deck that is gone while the category columns beside it went on painting it, with
   // every further press failing the same way and nothing on screen explaining why. The family
   // is the point: no refused deck write may leave a dead deck painted.
   //
@@ -363,9 +398,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const openMenu = useCallback((card: DeckCard, trigger: HTMLButtonElement) => {
     openerRef.current = trigger;
     setLayer((open) =>
-      open?.kind === "menu" && open.cardId === card.cardId && open.zone === card.zone
+      open?.kind === "menu" && open.cardId === card.cardId && open.categoryId === card.categoryId
         ? null
-        : { kind: "menu", zone: card.zone, cardId: card.cardId },
+        : { kind: "menu", categoryId: card.categoryId, cardId: card.cardId },
     );
   }, []);
 
@@ -374,47 +409,45 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     setLayer({ kind: "check" });
   }, []);
 
-  // The three zone writes, each addressed by the slot rather than by a `DeckCard` — because
+  // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
   // that is all a *drop* carries, and a drag and a menu press must not be two ways of writing
   // the same thing. The row controls below hand their own card to the same three.
   //
   // Each takes the mutation's `mutate` rather than the mutation: TanStack hands back a fresh
   // result object on every render, so a callback that depends on the whole thing has a new
   // identity every render — and these three are what the drop targets are registered with, so
-  // that would be every zone column unregistering and re-registering itself in the middle of a
-  // drag. `mutate` is stable for the life of the component, which makes the stability
+  // that would be every category column unregistering and re-registering itself in the middle
+  // of a drag. `mutate` is stable for the life of the component, which makes the stability
   // `ZoneColumn.onDropCard` asks for true rather than merely intended.
   const writeQuantity = deck.setQuantity.mutate;
   const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
 
   const setQuantityAt = useCallback(
-    (cardId: string, zone: DeckZone, quantity: number) => {
+    (cardId: string, categoryId: number, quantity: number) => {
       // Zero takes the row out from under the caret — optimistically, so it happens on the
-      // press — and the control the caret was on goes with it. The zone it left is where the
+      // press — and the control the caret was on goes with it. The column it left is where the
       // reader is looking and it announces its new count, which is the same hand-off a move
       // makes. Before the write, because the row is gone by the time an answer arrives.
-      if (quantity === 0) (zoneRefs.current[zone] ?? editorRef.current)?.focus();
-      writeQuantity({ cardId, zone, quantity });
+      if (quantity === 0) (categoryRefs.current.get(categoryId) ?? editorRef.current)?.focus();
+      writeQuantity({ cardId, categoryId, quantity });
     },
     [writeQuantity],
   );
 
   const moveTo = useCallback(
-    (cardId: string, from: DeckZone, to: DeckZone) => {
-      // Somewhere to look: the scratchpad is shut by default, and a card moved into a closed
-      // drawer is a card that has vanished.
-      if (to === "maybe") setShowMaybe(true);
+    (cardId: string, from: number, to: number) => {
       writeMove(
         { cardId, from, to },
         {
           onSuccess: () => {
             // The row this menu belongs to is about to leave the column, so the caret goes to
-            // where the card landed — which announces the zone and its new count. The editor
-            // itself is the fallback for a zone that is not on screen (the scratchpad, on the
-            // render before it opens). A dropped card is handed on the same way: it is the
-            // row that unmounts either way, and focus follows the card.
-            (zoneRefs.current[to] ?? editorRef.current)?.focus();
+            // where the card landed — which announces the category and its new count. The
+            // editor itself is the fallback for a column that is not on screen, which since
+            // schema v7 means one the deck no longer has rather than a drawer that is shut. A
+            // dropped card is handed on the same way: it is the row that unmounts either way,
+            // and focus follows the card.
+            (categoryRefs.current.get(to) ?? editorRef.current)?.focus();
             setLayer(null);
           },
         },
@@ -423,37 +456,45 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [writeMove],
   );
 
-  /** One copy into a zone — the panel's Add button's write, and a search tile's drop. */
+  /** One copy into a category — the panel's Add button's write, and a search tile's drop. */
   const addTo = useCallback(
-    (cardId: string, zone: DeckZone) => {
-      if (zone === "maybe") setShowMaybe(true);
-      writeAdd({ cardId, zone, quantity: 1 });
-    },
+    (cardId: string, categoryId: number) => writeAdd({ cardId, categoryId, quantity: 1 }),
     [writeAdd],
   );
 
   const setQuantity = useCallback(
-    (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.zone, quantity),
+    (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.categoryId, quantity),
     [setQuantityAt],
   );
 
   /**
    * Open a card in the pane **as a deck row** — the only write of `paneDeckContext` in the app,
-   * and the reason a zone column reports the zone alongside the card.
+   * and the reason a category column reports its own id alongside the card.
    *
    * What it buys is on the other side of the app: the pane's printings list gains "Use this
    * printing", which rewrites *this* slot. Everything else that opens a card — the docked
    * panel's tiles, the validation panel's names, the three other views — goes through
    * `setSelectedCardId`, which clears the context in the same write (see the store), so a card
    * that is not a row of this deck can never be shown as one.
+   *
+   * The context carries the category's **name** as well as its id, because the pane is a
+   * sibling of this editor and has no category list to translate one with (see
+   * `PaneDeckContext`). This is where both are in hand, so this is where they are read: a
+   * column is only ever drawn from `columns`, so the lookup below hits for every click a reader
+   * can make, and a miss means the column has left the deck under them — nothing to open.
    */
+  const categories = deck.categories;
   const openCard = useCallback(
-    (cardId: string, zone: DeckZone) => openCardFromDeck({ deckId, zone, cardId }),
-    [deckId, openCardFromDeck],
+    (cardId: string, categoryId: number) => {
+      const category = categories.find((c) => c.id === categoryId);
+      if (!category) return;
+      openCardFromDeck({ deckId, categoryId, categoryName: category.name, cardId });
+    },
+    [categories, deckId, openCardFromDeck],
   );
 
   const move = useCallback(
-    (card: DeckCard, to: DeckZone) => moveTo(card.cardId, card.zone, to),
+    (card: DeckCard, to: number) => moveTo(card.cardId, card.categoryId, to),
     [moveTo],
   );
 
@@ -467,9 +508,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const applyDrop = useCallback(
     (write: DeckWrite) => {
-      if (write.write === "add") addTo(write.cardId, write.zone);
+      if (write.write === "add") addTo(write.cardId, write.categoryId);
       else if (write.write === "move") moveTo(write.cardId, write.from, write.to);
-      else setQuantityAt(write.cardId, write.zone, 0);
+      else setQuantityAt(write.cardId, write.categoryId, 0);
     },
     [addTo, moveTo, setQuantityAt],
   );
@@ -517,22 +558,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     });
   }, [trayShown, applyDrop]);
 
-  // Four columns wrap onto a second line long before the 1024px floor, so a zone can be off
-  // the bottom of its own scroller while a card is in the air over it. This scrolls it into
-  // reach when the drag nears the edge — the one motion in this task, and the platform's own
-  // idea of a drag rather than the app's.
+  // The four columns a deck is born with wrap onto a second line long before the 1024px floor,
+  // and a deck may own any number of categories — so a column can be off the bottom of its own
+  // scroller while a card is in the air over it. This scrolls it into reach when the drag nears
+  // the edge — the one motion in this view, and the platform's own idea of a drag rather than
+  // the app's.
   useEffect(() => {
     const element = zonesRef.current;
     if (!element) return;
     return autoScrollForElements({ element });
   }, [hasRow]);
-
-  /** Somewhere to look, exactly as a move into the scratchpad arranges: the pile is shut by
-   *  default, and a card added into a closed drawer is a card that has vanished. */
-  const pickTargetZone = useCallback((zone: DeckZone) => {
-    if (zone === "maybe") setShowMaybe(true);
-    setTargetZone(zone);
-  }, []);
 
   const setCover = useCallback(
     (card: DeckCard) => {
@@ -747,7 +782,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
       {row && (
         // The deck on the left, the way cards get into it on the right (spec §7). One flex
-        // row, so the panel is the full height of the editor and the zones keep whatever is
+        // row, so the panel is the full height of the editor and the columns keep whatever is
         // left — and `min-w-0` on the deck side, because a wrapping row of columns that
         // cannot shrink is the horizontal scrollbar the 1024px floor forbids.
         //
@@ -755,22 +790,40 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // of them actually have, after the sidebar, the page padding and the card pane have
         // taken theirs.
         <div ref={deskRef} className="flex min-h-0 flex-1 gap-3">
+          {/* One row of columns, and nothing under it.
+              **The scratchpad drawer is gone**, with its `showMaybe` toggle and the two
+              hand-offs that opened it (a move into the pile, and picking it as the add target).
+              It was a disclosure under the deck because `maybe` was the one zone that counted
+              toward nothing — so it was kept out of the way and out of the arithmetic. Schema
+              v7 moves that fact onto `deck_categories.is_active`, where any category can carry
+              it: the Maybeboard is one seeded row that happens to start switched off, a pile
+              the user switches off behaves identically, and a Maybeboard they switch on counts
+              like anything else. A drawer for one of them would be chrome attached to a word
+              rather than to what the word used to mean. It is drawn in this row, in its own
+              `sortOrder` position, like every other category. */}
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div ref={zonesRef} className="flex min-h-0 flex-1 flex-wrap gap-3 overflow-y-auto">
-              {columns.map((zone) => (
+              {columns.map((category) => (
                 <ZoneColumn
-                  key={zone}
+                  key={category.id}
+                  // Deleted rather than set to `null` on the way out, so a category that has
+                  // left the deck leaves the map with it — a `Record` keyed by five fixed words
+                  // never had to.
                   ref={(el) => {
-                    zoneRefs.current[zone] = el;
+                    if (el) categoryRefs.current.set(category.id, el);
+                    else categoryRefs.current.delete(category.id);
                   }}
-                  zone={zone}
-                  title={ZONE_LABEL[zone]}
-                  cards={byZone[zone]}
-                  // The compact zones hold one card or two, and a "Creature 1" heading over a
-                  // single commander is a heading that says nothing.
-                  groupBy={zone === "main" || zone === "side" ? groupBy : null}
+                  category={category}
+                  cards={byCategory.get(category.id) ?? EMPTY}
+                  // The compact roles hold one card or two, and a "Creature 1" heading over a
+                  // single commander is a heading that says nothing. Read off the category's
+                  // **kind**, which is the fixed word those two roles are still named by — not
+                  // off its name, which is the user's and can be anything.
+                  groupBy={
+                    category.kind === "commander" || category.kind === "companion" ? null : groupBy
+                  }
                   moveTargets={moveTargets}
-                  openMenuCardId={menu?.zone === zone ? menu.cardId : null}
+                  openMenuCardId={menu?.categoryId === category.id ? menu.cardId : null}
                   busy={menuBusy}
                   onOpenMenu={openMenu}
                   onCloseMenu={close}
@@ -782,67 +835,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   // `max-h-full` is what makes a column scroll rather than the editor: in a
                   // *wrapping* flex row, `align-items: stretch` stretches an item to its line's
                   // cross size — which is the tallest item's content — and never to the
-                  // container. Without the cap, a 60-card main deck makes the whole zone row as
-                  // tall as itself and takes the sideboard off the bottom of the window with it.
-                  className={cn("min-h-48 max-h-full", ZONE_WIDTH[zone])}
+                  // container. Without the cap, a 60-card main deck makes the whole row of
+                  // columns as tall as itself and takes the sideboard off the bottom of the
+                  // window with it.
+                  className={cn("min-h-48 max-h-full", COLUMN_WIDTH)}
                 />
               ))}
-            </div>
-
-            {/* The scratchpad, under the deck rather than beside it: cards go here to be
-                thought about, they count toward nothing, and Task 15's stats and validation
-                never read them. Shut by default for the same reason. */}
-            <div className="shrink-0">
-              <button
-                type="button"
-                aria-expanded={showMaybe}
-                onClick={() => setShowMaybe((v) => !v)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md text-xs text-dim",
-                  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                  FOCUS,
-                )}
-              >
-                <ChevronRight
-                  className={cn(
-                    "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
-                    showMaybe && "rotate-90",
-                  )}
-                  aria-hidden="true"
-                />
-                {ZONE_LABEL.maybe}{" "}
-                <span className="font-mono tabular-nums">{byZone.maybe.length}</span>
-              </button>
-              {showMaybe && (
-                <ZoneColumn
-                  ref={(el) => {
-                    zoneRefs.current.maybe = el;
-                  }}
-                  zone="maybe"
-                  title={ZONE_LABEL.maybe}
-                  cards={byZone.maybe}
-                  groupBy={groupBy}
-                  moveTargets={moveTargets}
-                  openMenuCardId={menu?.zone === "maybe" ? menu.cardId : null}
-                  busy={menuBusy}
-                  onOpenMenu={openMenu}
-                  onCloseMenu={close}
-                  onSetQuantity={setQuantity}
-                  onMove={move}
-                  onSetCover={setCover}
-                  onSelect={openCard}
-                  onDropCard={applyDrop}
-                  className={cn("mt-2 max-h-64", ZONE_WIDTH.maybe)}
-                />
-              )}
             </div>
           </div>
 
           <DeckSearchPanel
             add={deck.addCard}
-            zones={moveTargets}
-            targetZone={targetZone}
-            onTargetZoneChange={pickTargetZone}
+            categories={moveTargets}
+            targetCategoryId={targetCategoryId}
+            onTargetCategoryChange={setTargetCategoryId}
             roomy={roomForPanel}
           />
         </div>
@@ -884,7 +890,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             className={cn(
               "absolute inset-x-0 bottom-0 -top-3 flex items-center justify-center gap-1.5",
               "rounded-md border border-dashed text-xs",
-              // Above the popups rather than among them: a drag can start while a zone
+              // Above the popups rather than among them: a drag can start while a column's
               // menu is open, and this is the target the pointer is being carried to.
               LAYER.dragTray,
               overTray

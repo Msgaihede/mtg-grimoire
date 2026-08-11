@@ -132,9 +132,9 @@ const COMPANION_FIXTURES: Record<string, Partial<CardFacts>> = {
   },
 };
 
-/** One of the ten in the companion zone. */
+/** One of the ten in the companion category. */
 function companionCard(name: keyof typeof COMPANION_FIXTURES): CardFacts {
-  return card({ ...COMPANION_FIXTURES[name], name, zone: "companion" });
+  return card({ ...COMPANION_FIXTURES[name], name, categoryKind: "companion" });
 }
 
 // ------------------------------------------------------------------------------------------
@@ -358,7 +358,7 @@ describe("the companion zone", () => {
 
   it("refuses a card that is not a companion", () => {
     const issues = companionIssues(
-      [card({ name: "Lightning Bolt", zone: "companion" })],
+      [card({ name: "Lightning Bolt", categoryKind: "companion" })],
       [islands(60)],
       spec("modern"),
     );
@@ -384,7 +384,7 @@ describe("the companion zone", () => {
       [
         card({
           name: "Treizeci, Sun of Serra",
-          zone: "companion",
+          categoryKind: "companion",
           typeLine: "Legendary Creature — Human Knight",
           oracleText:
             "Companion — Your starting deck contains only nostalgic cards. (Retro frames, " +
@@ -418,7 +418,7 @@ describe("the companion zone", () => {
       [
         card({
           name: "The Companion of the Wilds",
-          zone: "companion",
+          categoryKind: "companion",
           typeLine: "Legendary Creature — Beast Noble",
           oracleText:
             "Old Companion — Your starting deck contains only cards from WOE, WOC, and " +
@@ -451,7 +451,7 @@ describe("the companion zone", () => {
   it("leaves an orphaned row to the reconciler", () => {
     const orphan = card({
       name: "Gone Card",
-      zone: "companion",
+      categoryKind: "companion",
       oracleId: null,
       layout: null,
       rarity: null,
@@ -603,10 +603,10 @@ describe("Lutri, the Spellchaser — different names", () => {
     );
   });
 
-  /** Two rows of one card in two zones are two copies of it, the same way the copy limit
+  /** Two rows of one card in two categories are two copies of it, the same way the copy limit
    *  counts them. */
-  it("adds up rows in different zones", () => {
-    const deck = [deckCard("solRing"), deckCard("solRing", { zone: "commander" })];
+  it("adds up rows in different categories", () => {
+    const deck = [deckCard("solRing"), deckCard("solRing", { categoryKind: "commander" })];
 
     expect(messages("Lutri, the Spellchaser", deck)[0]).toContain(
       "Sol Ring appears more than once",
@@ -775,7 +775,7 @@ describe("a companion in a Commander deck", () => {
     const zone = [companionCard("Jegantha, the Wellspring")];
     const mono = card({
       name: "Talrand, Sky Summoner",
-      zone: "commander",
+      categoryKind: "commander",
       typeLine: "Legendary Creature — Merfolk Wizard",
       manaCost: "{2}{U}",
       cmc: 3,
@@ -802,7 +802,7 @@ describe("a companion in a Commander deck", () => {
   });
 
   /**
-   * The hole Task 8 left open on purpose: the `companion` zone is out of the deck's *size*,
+   * The hole Task 8 left open on purpose: the `companion` kind is out of the deck's *size*,
    * so a companion that is also in the 99 has to be caught somewhere, and copy counting is
    * where. Umori's own condition passes here (every nonland in the deck is a creature), so
    * the only thing left to say is that there are two of it.

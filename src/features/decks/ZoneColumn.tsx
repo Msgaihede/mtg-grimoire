@@ -15,7 +15,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { cardImageUrl } from "@/lib/images";
-import type { DeckCard, DeckZone } from "@/lib/ipc";
+import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { usdPrice } from "@/lib/prices";
 import { shouldFlipUp } from "@/lib/shouldFlipUp";
@@ -36,21 +36,6 @@ import { DropIndicator } from "./DropIndicator";
  * control's edge, never a ring (a ring means "state" everywhere else).
  */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
-/**
- * What each zone is called on screen.
- *
- * The database's five values are terse enough to be ambiguous — `side` is a sideboard and
- * `maybe` is a scratchpad — so the words live in one place and every surface that names a
- * zone (the column heading, the move menu, a stepper's accessible name) reads them from it.
- */
-export const ZONE_LABEL: Record<DeckZone, string> = {
-  main: "Main deck",
-  side: "Sideboard",
-  commander: "Commander",
-  companion: "Companion",
-  maybe: "Maybe",
-};
 
 /** The two questions a deck list is read for: what does it *do*, and what does it *cost*. */
 export type GroupBy = "type" | "manaValue";
@@ -142,12 +127,13 @@ function manaValueBucket(cmc: number | null): { key: string; label: string; orde
 }
 
 /**
- * A zone's rows under headings — the pure half of this file, and the one Task 15's type
+ * A category's rows under headings — the pure half of this file, and the one Task 15's type
  * counts read rather than re-deriving.
  *
- * Input order is preserved inside every group: the backend answers a deck in zone priority,
- * then by name, and a heading is not a reason to re-sort what is under it. Empty buckets are
- * dropped rather than drawn — a deck with no planeswalkers has no planeswalker heading.
+ * Input order is preserved inside every group: the backend answers a deck in category
+ * `sortOrder`, then by name, and a heading is not a reason to re-sort what is under it. Empty
+ * buckets are dropped rather than drawn — a deck with no planeswalkers has no planeswalker
+ * heading.
  */
 export function groupCards(cards: readonly DeckCard[], groupBy: GroupBy): CardGroup[] {
   const order = new Map<string, number>();
@@ -182,18 +168,32 @@ export function groupCards(cards: readonly DeckCard[], groupBy: GroupBy): CardGr
 }
 
 export interface ZoneColumnProps {
-  zone: DeckZone;
-  /** What the heading reads — {@link ZONE_LABEL}, passed in so the editor owns the wording. */
-  title: string;
-  cards: readonly DeckCard[];
-  /** `null` draws a flat list: the commander and companion zones hold one or two cards, and a
-   *  heading over a single row is a heading that says nothing. */
-  groupBy: GroupBy | null;
-  /** The zones a row here can be moved to, in the order the menu offers them. The editor
-   *  derives it from the format's spec, so a Modern deck is never offered a commander zone. */
-  moveTargets: readonly DeckZone[];
   /**
-   * The card whose actions menu is open **in this zone**, or `null`.
+   * The category this column *is*: its `id` addresses every write made here, its `name` is the
+   * heading, and its `isActive` decides whether a row can be short of copies at all.
+   *
+   * One prop rather than the zone-plus-title pair it replaces, because after schema v7 the
+   * heading is not a word the editor looks up — it is the row's own `name`, and the id beside
+   * it is what `deck_add_card`, `deck_move_card` and `deck_set_card_quantity` are addressed by.
+   * Splitting them would be two props that must never disagree.
+   */
+  category: DeckCategory;
+  cards: readonly DeckCard[];
+  /** `null` draws a flat list: the commander and companion categories hold one or two cards,
+   *  and a heading over a single row is a heading that says nothing. */
+  groupBy: GroupBy | null;
+  /**
+   * The categories a row here can be moved to, in the order the menu offers them — whole rows
+   * rather than ids, because the menu writes one name per item and a name is not derivable
+   * from a number.
+   *
+   * The editor owns the list, so a category the format has no use for is never offered; this
+   * column filters *itself* out of it by id, which is the one exclusion no caller can get
+   * right for it.
+   */
+  moveTargets: readonly DeckCategory[];
+  /**
+   * The card whose actions menu is open **in this column**, or `null`.
    *
    * Owned by the editor rather than by the row, because `useDismissOnEscape` orders exactly
    * two rungs: two `"inner"` layers open at once are not ordered at all and would both close
@@ -211,21 +211,22 @@ export interface ZoneColumnProps {
   /** Focus left the menu on its own: it closes, and the caret stays where the reader put it. */
   onCloseMenu: () => void;
   onSetQuantity: (card: DeckCard, quantity: number) => void;
-  onMove: (card: DeckCard, to: DeckZone) => void;
+  /** The category to move every copy into, by id — `deck_move_card`'s own `to`. */
+  onMove: (card: DeckCard, to: number) => void;
   onSetCover: (card: DeckCard) => void;
   /**
    * Open this card in the pane, from **this slot**.
    *
-   * The zone travels with the id because the pane the click opens offers to swap the row's
+   * The category travels with the id because the pane the click opens offers to swap the row's
    * printing, and every deck write is addressed by the slot rather than by a row id — the same
    * card sits in the main deck and the sideboard often enough that "which one was pressed" is
    * not derivable from the card.
    */
-  onSelect: (cardId: string, zone: DeckZone) => void;
+  onSelect: (cardId: string, categoryId: number) => void;
   /**
    * A card was dropped on this column, and this is the write it means — computed here rather
-   * than reported raw, because the column is what knows its own zone and `dropWrite` is the
-   * same rule the drop target already asked in `canDrop`.
+   * than reported raw, because the column is what knows its own category and `dropWrite` is
+   * the same rule the drop target already asked in `canDrop`.
    *
    * Stable, please (`useCallback`): it is a dependency of the effect that registers the drop
    * target, and a new identity every render is a target that unregisters and re-registers
@@ -233,22 +234,21 @@ export interface ZoneColumnProps {
    */
   onDropCard: (write: DeckWrite) => void;
   className?: string;
-  /** The editor hands the caret to a zone after a card lands in it — the row the menu was on
-   *  has left, and an element that unmounts with focus on it drops it to `<body>`. */
+  /** The editor hands the caret to a category after a card lands in it — the row the menu was
+   *  on has left, and an element that unmounts with focus on it drops it to `<body>`. */
   ref?: Ref<HTMLElement>;
 }
 
 /**
- * One zone of a deck: what is in it, how many that is, and every edit that can be made to a
- * row without leaving the page.
+ * One category of a deck: what is in it, how many that is, and every edit that can be made to
+ * a row without leaving the page.
  *
  * There is no Save. Every control here writes through an IPC command and the list redraws
  * from what the database answered — which is what "autosave" honestly means for a deck: the
  * row *is* the draft.
  */
 export function ZoneColumn({
-  zone,
-  title,
+  category,
   cards,
   groupBy,
   moveTargets,
@@ -291,7 +291,7 @@ export function ZoneColumn({
     openMenuCardId === card.cardId ? (
       <RowMenu
         card={card}
-        zone={zone}
+        category={category}
         moveTargets={moveTargets}
         busy={busy}
         anchor="row"
@@ -306,17 +306,18 @@ export function ZoneColumn({
   // of the column that reads as the list. `canDrop` and the drop itself ask the same
   // question, a second apart, because only the second one writes — and a payload that is not
   // this app's own never reaches either.
+  const categoryId = category.id;
   useEffect(() => {
     const element = scrollerRef.current;
     if (!element) return;
     const writeFor = (data: Record<string, unknown>) => {
       const payload = readDragData(data);
-      return payload && dropWrite(payload, { kind: "zone", zone });
+      return payload && dropWrite(payload, { kind: "category", categoryId });
     };
     return dropTargetForElements({
       element,
-      // No `getData`: the write is derived from what the *drag* is carrying and this
-      // column's own `zone`, both of which are already in hand here. Data hung on the target
+      // No `getData`: the write is derived from what the *drag* is carrying and this column's
+      // own category id, both of which are already in hand here. Data hung on the target
       // would be data nothing reads.
       canDrop: ({ source }) => writeFor(source.data) !== null,
       onDragEnter: () => setOver(true),
@@ -329,7 +330,7 @@ export function ZoneColumn({
         if (write) onDropCard(write);
       },
     });
-  }, [zone, onDropCard]);
+  }, [categoryId, onDropCard]);
 
   return (
     <section
@@ -337,8 +338,8 @@ export function ZoneColumn({
       tabIndex={-1}
       // The count is in the name rather than only on screen: a reader arriving in this column
       // — from the caret being handed here after a move, or from a screen reader's region
-      // list — is asking "which zone, and how big".
-      aria-label={`${title}, ${copies} ${copies === 1 ? "card" : "cards"}`}
+      // list — is asking "which category, and how big".
+      aria-label={`${category.name}, ${copies} ${copies === 1 ? "card" : "cards"}`}
       // `relative` is what the drop line hangs from: it is drawn on the column's own top
       // edge, not inside the scroller, so a column scrolled halfway down still says it is the
       // one taking the card.
@@ -350,12 +351,12 @@ export function ZoneColumn({
     >
       {over && <DropIndicator />}
       <h3 className="flex shrink-0 items-baseline justify-between gap-2 border-b border-border bg-surface px-3 py-2 text-sm">
-        <span className="min-w-0 truncate">{title}</span>
+        <span className="min-w-0 truncate">{category.name}</span>
         <span className="font-mono text-xs tabular-nums text-dim">{copies}</span>
       </h3>
 
-      {/* The zone's own scroller. Every column scrolls on its own so a 60-card main deck does
-          not push the sideboard off the bottom of the window — and it is what a row menu
+      {/* The category's own scroller. Every column scrolls on its own so a 60-card main deck
+          does not push the sideboard off the bottom of the window — and it is what a row menu
           measures itself against, since it is what would clip one. */}
       <div
         ref={scrollerRef}
@@ -380,8 +381,7 @@ export function ZoneColumn({
                   <CardRow
                     key={card.id}
                     card={card}
-                    zone={zone}
-                    zoneTitle={title}
+                    category={category}
                     menuOpen={openMenuCardId === card.cardId}
                     menu={menuFor(card)}
                     onOpenMenu={takeTrigger}
@@ -399,7 +399,7 @@ export function ZoneColumn({
 }
 
 /**
- * One card in one zone.
+ * One card in one category.
  *
  * Two lines rather than a table row: the name in the reading face on top, and the printing's
  * own data — rarity, set, number, price, what the collection can cover — in the data face
@@ -409,8 +409,7 @@ export function ZoneColumn({
  */
 function CardRow({
   card,
-  zone,
-  zoneTitle,
+  category,
   menuOpen,
   menu,
   onOpenMenu,
@@ -418,8 +417,10 @@ function CardRow({
   onSelect,
 }: {
   card: DeckCard;
-  zone: DeckZone;
-  zoneTitle: string;
+  /** The column's own category — the whole row, because this one reads three different things
+   *  off it: the id every write is addressed by, the name a control is announced with, and the
+   *  switch that decides whether a shortage is a shortage. */
+  category: DeckCategory;
   menuOpen: boolean;
   /** The row's menu, built by the column — one construction site for both views. A direct
    *  child of the `<li>`, which is what it is positioned and measured against. */
@@ -427,40 +428,44 @@ function CardRow({
   onOpenMenu: (card: DeckCard, trigger: HTMLButtonElement) => void;
   onSetQuantity: (card: DeckCard, quantity: number) => void;
   /** The slot, not just the card — see {@link ZoneColumnProps.onSelect}. */
-  onSelect: (cardId: string, zone: DeckZone) => void;
+  onSelect: (cardId: string, categoryId: number) => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLLIElement>(null);
-  // The allocator never claims a copy for the scratchpad, so every `maybe` row reads 0 owned
-  // by construction. A mark there would report a shortage the reader does not have.
-  const short = zone !== "maybe" && card.ownedQuantity < card.quantity;
+  // The allocator claims no copy for an **inactive** category, so every row in one reads 0
+  // owned by construction. A mark there would report a shortage the reader does not have.
+  //
+  // The switch, never the kind: schema v7 made "counts toward nothing" a property the user
+  // sets on any category, so a Maybeboard they turned *on* is short of copies like any other
+  // pile and a category of their own they turned off is not. Reading `categoryKind === "maybe"`
+  // here would answer both of those backwards.
+  const short = category.isActive && card.ownedQuantity < card.quantity;
   // The `art` crop (626×457 in `images.rs`), not the whole card: a full face at row height is
   // an unreadable speck, while the crop is the piece of the card a player recognizes it by.
   // The one retry story, like every card frame in the app — fed `null` for an orphan, whose
   // printing has left the card database: nothing tries to draw a picture of a card that is
   // not there, and the hook's null story is exactly "no state machine at all".
-  const art = useImageRetry(
-    card.needsReview === null ? cardImageUrl(card.cardId, 0, "art") : null,
-  );
+  const art = useImageRetry(card.needsReview === null ? cardImageUrl(card.cardId, 0, "art") : null);
 
   // The row is the drag handle for the whole card — every part of it that is not one of its
   // own controls, which is what `cardDraggable` is for and why a press on the stepper is
   // still a press on the stepper. The registration also sets `draggable="true"` on this
   // element, which is how the suite can see it landed on the right row.
   //
-  // Re-registered only when the payload would change — the id, the name and the zone are the
-  // whole of it — rather than on every render, because the editor re-renders on every drag
+  // Re-registered only when the payload would change — the id, the name and the category are
+  // the whole of it — rather than on every render, because the editor re-renders on every drag
   // and a target that unregisters mid-drag is a drop that never arrives.
   const { cardId, name } = card;
+  const categoryId = category.id;
   useEffect(() => {
     const element = rowRef.current;
     if (!element) return;
     return cardDraggable({
       element,
-      payload: () => ({ kind: "deck-card", cardId, name, fromZone: zone }),
+      payload: () => ({ kind: "deck-card", cardId, name, fromCategoryId: categoryId }),
     });
-  }, [cardId, name, zone]);
+  }, [cardId, name, categoryId]);
 
   return (
     <li
@@ -481,7 +486,7 @@ function CardRow({
       // and whose next Tab restarts from the top of the app. Measured in the running window.
       onClick={() => {
         nameRef.current?.focus();
-        onSelect(card.cardId, zone);
+        onSelect(card.cardId, categoryId);
       }}
     >
       {/* The stepper writes straight through: a deck editor is where quantities are
@@ -505,10 +510,10 @@ function CardRow({
             size="sm"
             value={card.quantity}
             min={0}
-            // Named for the card *and* the zone: the same printing can sit in the main deck
-            // and the sideboard, and two steppers called "Copies of Lightning Bolt" would be
-            // two controls a screen reader cannot tell apart.
-            label={`Copies of ${card.name} in ${zoneTitle}`}
+            // Named for the card *and* the category: the same printing can sit in the main
+            // deck and the sideboard, and two steppers called "Copies of Lightning Bolt" would
+            // be two controls a screen reader cannot tell apart.
+            label={`Copies of ${card.name} in ${category.name}`}
             onChange={(next) => onSetQuantity(card, next)}
           />
         </span>
@@ -533,7 +538,7 @@ function CardRow({
               src={art.src}
               alt=""
               draggable={false}
-              // Lazy: a deck's zone columns are plain scrollers, not virtualised walls, so a
+              // Lazy: a deck's category columns are plain scrollers, not virtualised walls, so a
               // 100-card list really is 100 mounted rows and the browser's gate is the only
               // thing bounding what they ask for. (The search wall is the opposite case — see
               // `CardGrid`.)
@@ -553,7 +558,7 @@ function CardRow({
           // Opening the card is the row's job and this is the row's keyboard handle. The click
           // bubbles to the row, which does the same thing — one destination, two ways in.
           // The slot it draws, so the card pane can hand the caret back here (see the attribute).
-          {...{ [DECK_CARD_ATTR]: deckCardSlot(zone, card.cardId) }}
+          {...{ [DECK_CARD_ATTR]: deckCardSlot(categoryId, card.cardId) }}
           className={cn("min-w-0 truncate text-left text-sm", FOCUS)}
         >
           {card.name}
@@ -643,7 +648,7 @@ function CardRow({
  */
 function RowMenu({
   card,
-  zone,
+  category,
   moveTargets,
   busy,
   anchor,
@@ -653,15 +658,15 @@ function RowMenu({
   onSetCover,
 }: {
   card: DeckCard;
-  zone: DeckZone;
-  moveTargets: readonly DeckZone[];
+  category: DeckCategory;
+  moveTargets: readonly DeckCategory[];
   busy: boolean;
   /** What this menu is hanging off — see {@link MENU_ANCHOR}. */
   anchor: MenuAnchor;
   /** The control that opened this. Pressing it again is a *toggle*, not a click away. */
   triggerRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
-  onMove: (card: DeckCard, to: DeckZone) => void;
+  onMove: (card: DeckCard, to: number) => void;
   onSetCover: (card: DeckCard) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -770,13 +775,16 @@ function RowMenu({
     >
       <p className="px-2 py-1 text-dim">Move to</p>
       {moveTargets
-        .filter((to) => to !== zone)
+        // By id, never by object identity: the editor's list and this column's own prop come
+        // from the same read, but a filter that compared references would start silently
+        // offering "move here" the day either side is rebuilt or cloned.
+        .filter((to) => to.id !== category.id)
         .map((to) => (
           <button
-            key={to}
+            key={to.id}
             type="button"
             disabled={busy}
-            onClick={() => onMove(card, to)}
+            onClick={() => onMove(card, to.id)}
             className={cn(
               "block w-full rounded-md px-2 py-1 text-left",
               "transition-colors duration-150 hover:bg-surface disabled:opacity-50",
@@ -784,7 +792,7 @@ function RowMenu({
               FOCUS,
             )}
           >
-            Move to {ZONE_LABEL[to]}
+            Move to {to.name}
           </button>
         ))}
       {/* A cover is art, and an orphan has none — `cards` has no row for this printing, so the

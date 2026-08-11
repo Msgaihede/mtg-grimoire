@@ -3,7 +3,7 @@
  *
  * Pure, because the thing it decides cannot be seen in jsdom: every rectangle there is zero,
  * so a component test of the flip would pass over any arithmetic at all. What clips is a
- * scroller with nothing below it to scroll to — a deck's zone column, the card pane — so a
+ * scroller with nothing below it to scroll to — a deck's category column, the card pane — so a
  * layer opened near the foot of one is simply cut in half.
  *
  * `rowTop` is where a downward layer **starts** and `rowBottom` where an upward one **ends**.

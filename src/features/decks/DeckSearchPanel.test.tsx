@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import type { CardSummary, DeckZone, SearchResponse } from "@/lib/ipc";
+import type { CardSummary, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { readDragData } from "./dnd";
 
@@ -82,8 +82,34 @@ beforeEach(() => {
   prefetchImages.mockReset().mockResolvedValue(undefined);
 });
 
-/** The zones a Modern deck offers, as the editor derives them from the seeded spec. */
-const MODERN: DeckZone[] = ["main", "side", "maybe"];
+/**
+ * One of the deck's categories, as `deck_get` answers it.
+ *
+ * Local rather than borrowed — `.storybook/fake/fixtures.ts` is the Storybook fake's — and only
+ * two fields matter to this panel: the `id` an add is addressed by and the `name` the select
+ * and every Add button read.
+ */
+function category(over: Partial<DeckCategory> = {}): DeckCategory {
+  return {
+    id: 1,
+    deckId: 4,
+    name: "Main deck",
+    kind: "main",
+    isActive: true,
+    sortOrder: 0,
+    cardCount: 0,
+    totalPriceUsd: null,
+    ...over,
+  };
+}
+
+const MAIN = category();
+const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 1 });
+const MAYBE = category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 });
+
+/** What the editor hands down for a deck with the seeded piles and nothing of the reader's
+ *  own yet. */
+const SEEDED: DeckCategory[] = [MAIN, SIDE, MAYBE];
 
 /**
  * The panel with the editor's own write behind it.
@@ -92,32 +118,38 @@ const MODERN: DeckZone[] = ["main", "side", "maybe"];
  * open deck is one `deck_get` — and this stands in for the editor holding it.
  */
 interface Props {
-  zones: DeckZone[];
-  targetZone: DeckZone;
+  categories: DeckCategory[];
+  targetCategoryId: number;
   roomy: boolean;
 }
 
 function Harness({
-  onTargetZoneChange,
+  onTargetCategoryChange,
   ...props
-}: Props & { onTargetZoneChange: (zone: DeckZone) => void }) {
+}: Props & { onTargetCategoryChange: (categoryId: number) => void }) {
   const deck = useDeck(4);
-  return <DeckSearchPanel add={deck.addCard} onTargetZoneChange={onTargetZoneChange} {...props} />;
+  return (
+    <DeckSearchPanel
+      add={deck.addCard}
+      onTargetCategoryChange={onTargetCategoryChange}
+      {...props}
+    />
+  );
 }
 
 function panel({
-  zones = MODERN,
-  targetZone = "main" as DeckZone,
+  categories = SEEDED,
+  targetCategoryId = MAIN.id,
   roomy = true,
-  onTargetZoneChange = vi.fn(),
+  onTargetCategoryChange = vi.fn(),
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  let props: Props = { zones, targetZone, roomy };
+  let props: Props = { categories, targetCategoryId, roomy };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
-      <Harness {...p} onTargetZoneChange={onTargetZoneChange} />
+      <Harness {...p} onTargetCategoryChange={onTargetCategoryChange} />
     </QueryClientProvider>
   );
   const view = render(ui(props));
@@ -129,19 +161,19 @@ function panel({
   };
   return {
     ...view,
-    onTargetZoneChange,
+    onTargetCategoryChange,
     update,
-    retarget: (zone: DeckZone) => update({ targetZone: zone }),
+    retarget: (categoryId: number) => update({ targetCategoryId: categoryId }),
   };
 }
 
 /**
- * What the target-zone select offers, by name.
+ * What the target-category select offers, by name.
  *
  * Read off the select rather than by `role: "option"`: the filter bar's format picker sits in
- * the same panel and offers a "Commander" of its own, which is a format and not a zone.
+ * the same panel and offers a "Commander" of its own, which is a format and not a category.
  */
-const zoneOptions = (): string[] => {
+const categoryOptions = (): string[] => {
   const select = screen.getByLabelText("Add to") as HTMLSelectElement;
   return [...select.options].map((o) => o.textContent ?? "");
 };
@@ -170,26 +202,27 @@ describe("DeckSearchPanel", () => {
   });
 
   /**
-   * The select is the click path's zone choice and therefore the keyboard's, which is what
-   * makes drag optional. Its options are the deck's own zones — seeded data drives it, the
-   * same list the row menus move cards along.
+   * The select is the click path's category choice and therefore the keyboard's, which is what
+   * makes drag optional. Its options are the deck's own categories in the order the editor
+   * draws its columns — and its **value is an id**, because that is what an add is addressed
+   * by now that a category's name is the reader's to change.
    */
-  it("offers the deck's own zones as targets, with the main deck first", () => {
+  it("offers the deck's own categories as targets, in the editor's order", () => {
     panel();
 
-    expect(screen.getByLabelText("Add to")).toHaveValue("main");
-    expect(zoneOptions()).toEqual(["Main deck", "Sideboard", "Maybe"]);
+    expect(screen.getByLabelText("Add to")).toHaveValue(String(MAIN.id));
+    expect(categoryOptions()).toEqual(["Main deck", "Sideboard", "Maybeboard"]);
   });
 
-  /** The other half of the same rule, and the reason the list is a prop: a commander deck has
-   *  a commander zone to add to and a Modern deck does not. */
-  it("offers the commander zone only to a format that has one", () => {
-    const modern = panel({ zones: ["main", "side", "maybe"] });
-    expect(zoneOptions()).not.toContain("Commander");
-    modern.unmount();
+  /** The other half of the same rule, and the reason the list is a prop: the categories are
+   *  the deck's own rows, so one deck has a pile another has never made. */
+  it("offers exactly the categories it is handed, and no others", () => {
+    const seeded = panel();
+    expect(categoryOptions()).not.toContain("Ramp");
+    seeded.unmount();
 
-    panel({ zones: ["main", "commander", "maybe"] });
-    expect(zoneOptions()).toContain("Commander");
+    panel({ categories: [MAIN, category({ id: 9, name: "Ramp", sortOrder: 2 })] });
+    expect(categoryOptions()).toEqual(["Main deck", "Ramp"]);
   });
 
   /**
@@ -199,7 +232,7 @@ describe("DeckSearchPanel", () => {
    * the panel reaches them through one callback ref, and a callback that closed over the wrong
    * card would drag a card the reader is not touching. So this asks the drag itself rather
    * than the `draggable="true"` attribute: pick the tile up, and read what the library was
-   * handed. Where the card *lands* is the zone's business (`ZoneColumn.test.tsx`) and the
+   * handed. Where the card *lands* is the column's business (`ZoneColumn.test.tsx`) and the
    * whole gesture is the editor's (`DeckEditor.test.tsx`).
    */
   it("hands each drawn tile to the drag adapter, carrying the card it draws", async () => {
@@ -244,34 +277,59 @@ describe("DeckSearchPanel", () => {
     await again.cancel();
   });
 
-  /** One copy, into the zone the header names. `deck_add_card` folds it into whatever is
-   *  already there, so pressing twice is two copies rather than an error. */
-  it("adds one copy of a card to the target zone", async () => {
+  /**
+   * One copy, into the category the header names. `deck_add_card` folds it into whatever is
+   * already there, so pressing twice is two copies rather than an error.
+   *
+   * The `null` in the middle is the command's other arm going unused: `deck_add_card` takes
+   * either a category **id** or a **name** to find-or-create, and a panel that has a column to
+   * point at always sends the id (`useDeck`'s `DEFAULT_CATEGORY_NAME` is for the surfaces that
+   * do not).
+   */
+  it("adds one copy of a card to the target category", async () => {
     panel();
 
     await userEvent.click(
       await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
     );
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "1", "main", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "1", MAIN.id, null, "live", 1);
   });
 
-  it("adds to whichever zone is picked, and says so on the button", async () => {
+  it("adds to whichever category is picked, and says so on the button", async () => {
     const view = panel();
     await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
 
-    view.retarget("side");
+    view.retarget(SIDE.id);
     await userEvent.click(screen.getByRole("button", { name: "Add Lightning Bolt to Sideboard" }));
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "1", "side", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "1", SIDE.id, null, "live", 1);
   });
 
-  it("hands the zone choice back to the editor", async () => {
+  /** A `<select>` speaks strings and a category is addressed by number, so the parse back is
+   *  the panel's own job and the editor is handed an id it can write with. */
+  it("hands the category choice back to the editor as an id", async () => {
     const view = panel();
 
-    await userEvent.selectOptions(screen.getByLabelText("Add to"), "side");
+    await userEvent.selectOptions(screen.getByLabelText("Add to"), String(SIDE.id));
 
-    expect(view.onTargetZoneChange).toHaveBeenCalledWith("side");
+    expect(view.onTargetCategoryChange).toHaveBeenCalledWith(SIDE.id);
+  });
+
+  /**
+   * A picked id the handed-down list does not hold, which is a single commit's worth of state:
+   * a category deleted elsewhere reaches the editor's clamp and this select together, and
+   * nothing orders those two.
+   *
+   * The button says what it can honestly say rather than reading `.name` off `undefined` and
+   * taking the whole panel down over a label.
+   */
+  it("names the deck rather than crashing when the picked category is not in the list", async () => {
+    panel({ targetCategoryId: 404 });
+
+    expect(
+      await screen.findByRole("button", { name: "Add Lightning Bolt to this deck" }),
+    ).toBeInTheDocument();
   });
 
   /** The result still tells the collection story: a card already in the binder is a card the

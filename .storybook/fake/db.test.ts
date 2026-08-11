@@ -8,11 +8,13 @@
 import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
 import { allHandlers, makeDb, neverCheckedUpdate, readHandlers, writeHandlers } from "./db";
-import type { FakeDeck, FakeDeckCard, FakeEntry, FakeWish } from "./db";
+import type { FakeDb, FakeDeck, FakeDeckCard, FakeDeckCategory, FakeEntry, FakeWish } from "./db";
+import { DECK_CATEGORIES } from "./fixtures";
 import { seed } from "./seeds";
 import { CARDS, type FakeCard } from "./cards";
 import type {
   CardSummary,
+  CategoryKind,
   CollectionPage,
   CollectionSortKey,
   DeckDetail,
@@ -102,21 +104,70 @@ function deck(over: Partial<FakeDeck> = {}): FakeDeck {
   };
 }
 
-function deckCard(over: Partial<FakeDeckCard> = {}): FakeDeckCard {
+/**
+ * A category id from the deck and the kind, so a test can name one inline and the row
+ * {@link deckCard} builds and the row {@link makeDeckDb} seeds agree without a lookup. Ten
+ * apart per deck, which is nothing but room.
+ */
+function categoryId(deckId: number, kind: CategoryKind): number {
+  return deckId * 10 + DECK_CATEGORIES.findIndex((c) => c.kind === kind);
+}
+
+/** Every deck's five categories, named, ordered and flagged as `DECK_CATEGORIES` has them —
+ *  the Maybeboard inactive and the other four on. */
+function categoriesOf(decks: FakeDeck[]): FakeDeckCategory[] {
+  return decks.flatMap((d) =>
+    DECK_CATEGORIES.map((c) => ({ ...c, id: categoryId(d.id, c.kind), deckId: d.id })),
+  );
+}
+
+/**
+ * `makeDb` with those five rows per deck already in it.
+ *
+ * A deck without its categories is a state neither `create_deck` nor the v7 migration can
+ * leave behind — and every card write refuses one, so a fixture missing them would fail with
+ * "That category is not there any more" rather than testing what it meant to.
+ */
+function makeDeckDb(init: Partial<FakeDb> = {}): FakeDb {
+  const db = makeDb(init);
+  db.deckCategories = init.deckCategories ?? categoriesOf(db.decks);
+  return db;
+}
+
+/**
+ * A deck card, filed by the **kind** of the category it is in — `main` unless a test says
+ * otherwise, and `live` unless it says that too.
+ *
+ * `categoryKind` is not a column: it is the shorthand a test wants, resolved through
+ * {@link categoryId} into the one column there is. A test about a category the *user* made
+ * passes `categoryId` outright, which is what the two of them being different things means.
+ */
+function deckCard(
+  over: Partial<FakeDeckCard> & { categoryKind?: CategoryKind } = {},
+): FakeDeckCard {
   const card = CARDS.find((c) => c.id === (over.cardId ?? BOLT.id));
+  const { categoryKind, ...rest } = over;
+  const deckId = over.deckId ?? 1;
   return {
     id: 1,
-    deckId: 1,
+    deckId,
+    categoryId: categoryId(deckId, categoryKind ?? "main"),
+    variant: "live",
     cardId: BOLT.id,
-    zone: "main",
+    tagId: null,
     quantity: 1,
     name: card?.name ?? "Gone",
     setCode: card?.setCode ?? "xxx",
     collectorNumber: card?.collectorNumber ?? "1",
     lang: card?.lang ?? "en",
     needsReview: null,
-    ...over,
+    ...rest,
   };
+}
+
+/** The live deck, which is what every read here is about unless it says otherwise. */
+function liveDeck(db: FakeDb, id = 1): DeckDetail | null {
+  return readHandlers(db).deck_get({ id, variant: "live" });
 }
 
 /** `n` distinct paper printings, for the one thing that needs more cards than the fixture
@@ -156,18 +207,21 @@ describe("the three ownedQuantity derivations", () => {
     expect(page.items[0].ownedQuantity).toBe(0);
   });
 
-  it("is an ALLOCATION on a deck card, and the maybe pile is never allocated", () => {
-    const db = makeDb({
+  it("is an ALLOCATION on a deck card, and an inactive category is never allocated for", () => {
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, finish: "nonfoil", quantity: 3 })],
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 }),
-        deckCard({ id: 2, deckId: 1, cardId: BOLT.id, zone: "maybe", quantity: 4 }),
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT.id, categoryKind: "maybe", quantity: 4 }),
       ],
     });
-    const detail = readHandlers(db).deck_get({ id: 1 }) as DeckDetail;
-    expect(detail.cards.find((c) => c.zone === "main")!.ownedQuantity).toBe(2);
-    expect(detail.cards.find((c) => c.zone === "maybe")!.ownedQuantity).toBe(0);
+    const detail = liveDeck(db)!;
+    const owned = (kind: CategoryKind) =>
+      detail.cards.find((c) => c.categoryKind === kind)!.ownedQuantity;
+    expect(owned("main")).toBe(2);
+    // The Maybeboard is seeded inactive, and that — not its kind — is why it claims nothing.
+    expect(owned("maybe")).toBe(0);
   });
 });
 
@@ -655,39 +709,83 @@ describe("card detail", () => {
 
 describe("the allocator", () => {
   it("prefers the exact printing, then falls back to any printing of the same card", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1 }),
         entry({ id: 2, cardId: BOLT_2X2.id, quantity: 4 }),
       ],
       decks: [deck({ id: 1 })],
-      deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, zone: "main", quantity: 4 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 4 })],
     });
-    const detail = readHandlers(db).deck_get({ id: 1 })!;
     // All four from the exact printing's own entry, leaving the `lea` copy alone.
-    expect(detail.cards[0].ownedQuantity).toBe(4);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(4);
   });
 
   it("hands the commander its copy before the main deck gets one", () => {
     const solRing = CARDS.filter((c) => c.name === "Sol Ring")[0];
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: solRing.id, quantity: 1 })],
       decks: [deck({ id: 1, formatKey: "commander" })],
       deckCards: [
-        // The main-deck row is first by id, so only zone priority can put the commander
+        // The main-deck row is first by id, so only `KIND_PRIORITY` can put the commander
         // ahead of it.
-        deckCard({ id: 1, cardId: solRing.id, zone: "main", quantity: 1 }),
-        deckCard({ id: 2, cardId: solRing.id, zone: "commander", quantity: 1 }),
+        deckCard({ id: 1, cardId: solRing.id, categoryKind: "main", quantity: 1 }),
+        deckCard({ id: 2, cardId: solRing.id, categoryKind: "commander", quantity: 1 }),
       ],
     });
-    const detail = readHandlers(db).deck_get({ id: 1 })!;
-    expect(detail.cards.find((c) => c.zone === "commander")!.ownedQuantity).toBe(1);
-    expect(detail.cards.find((c) => c.zone === "main")!.ownedQuantity).toBe(0);
+    const detail = liveDeck(db)!;
+    const owned = (kind: CategoryKind) =>
+      detail.cards.find((c) => c.categoryKind === kind)!.ownedQuantity;
+    expect(owned("commander")).toBe(1);
+    expect(owned("main")).toBe(0);
+  });
+
+  /**
+   * Rule 2 of the two that decide what is allocated for at all: a plan reserves nothing, so
+   * the copies stay available to every other deck until the change is made for real. The
+   * `deck.rs` test of the same name is the other half of this.
+   */
+  it("claims nothing for the theory variant", () => {
+    const db = makeDeckDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4 })],
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 4 }),
+      ],
+    });
+    const theory = readHandlers(db).deck_get({ id: 1, variant: "theory" })!;
+    expect(theory.cards).toHaveLength(1);
+    expect(theory.cards[0].ownedQuantity).toBe(0);
+    // Same printing, same category, in the live deck: that one claims.
+    db.deckCards.push(deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 4 }));
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(4);
+  });
+
+  /**
+   * Rule 1, and the whole point of it being `isActive` rather than a kind: this category is a
+   * `main` one the user switched **off**. Any implementation still asking "is this the maybe
+   * pile?" answers 4 here.
+   */
+  it("claims nothing for a main category the user switched off", () => {
+    const db = makeDeckDb({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4 })],
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 4 })],
+    });
+    const main = db.deckCategories.find((c) => c.kind === "main")!;
+    main.isActive = false;
+    const detail = liveDeck(db)!;
+    expect(detail.cards[0].categoryKind).toBe("main");
+    expect(detail.cards[0].ownedQuantity).toBe(0);
+    // …and it is out of the deck's count for the same reason, and only that reason.
+    expect(detail.deck.cardCount).toBe(0);
+    main.isActive = true;
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(4);
   });
 
   it("takes a built deck's claims off what another deck can see, and a draft's not", () => {
     const seed = (isBuilt: boolean) =>
-      makeDb({
+      makeDeckDb({
         collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
         decks: [deck({ id: 1, isBuilt }), deck({ id: 2 })],
         deckCards: [
@@ -695,8 +793,8 @@ describe("the allocator", () => {
           deckCard({ id: 2, deckId: 2, cardId: BOLT.id, quantity: 2 }),
         ],
       });
-    expect(readHandlers(seed(true)).deck_get({ id: 2 })!.cards[0].ownedQuantity).toBe(0);
-    expect(readHandlers(seed(false)).deck_get({ id: 2 })!.cards[0].ownedQuantity).toBe(2);
+    expect(liveDeck(seed(true), 2)!.cards[0].ownedQuantity).toBe(0);
+    expect(liveDeck(seed(false), 2)!.cards[0].ownedQuantity).toBe(2);
   });
 
   it("splits one copy between two built decks instead of giving it to neither", () => {
@@ -704,7 +802,7 @@ describe("the allocator", () => {
     // other built deck left, makes each read hand the copy to the other one — so both answer
     // 0 and nobody holds it. One id-ordered pass over every built deck, the read's included,
     // is what makes the two answers add up.
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })],
       decks: [deck({ id: 1, isBuilt: true }), deck({ id: 2, isBuilt: true })],
       deckCards: [
@@ -712,64 +810,96 @@ describe("the allocator", () => {
         deckCard({ id: 2, deckId: 2, cardId: BOLT.id, quantity: 1 }),
       ],
     });
-    const owned = (id: number) => readHandlers(db).deck_get({ id })!.cards[0].ownedQuantity;
+    const owned = (id: number) => liveDeck(db, id)!.cards[0].ownedQuantity;
     expect([owned(1), owned(2)]).toEqual([1, 0]);
   });
 
   it("gives two copies to the first two of three built decks, by deck id", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
       decks: [1, 2, 3].map((id) => deck({ id, isBuilt: true })),
       deckCards: [1, 2, 3].map((id) => deckCard({ id, deckId: id, cardId: BOLT.id, quantity: 1 })),
     });
-    const owned = (id: number) => readHandlers(db).deck_get({ id })!.cards[0].ownedQuantity;
+    const owned = (id: number) => liveDeck(db, id)!.cards[0].ownedQuantity;
     expect([owned(1), owned(2), owned(3)]).toEqual([1, 1, 0]);
   });
 
   it("is never blocked by the built deck's own claims", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
       decks: [deck({ id: 1, isBuilt: true })],
       deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, quantity: 2 })],
     });
-    expect(readHandlers(db).deck_get({ id: 1 })!.cards[0].ownedQuantity).toBe(2);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(2);
   });
 });
 
 describe("the deck read", () => {
-  it("orders by zone priority, then name, then row id", () => {
+  it("orders by category sort order, then the row's name, then row id", () => {
     const counterspell = CARDS.find((c) => c.name === "Counterspell")!;
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, zone: "maybe" }),
-        deckCard({ id: 2, cardId: counterspell.id, zone: "main" }),
-        deckCard({ id: 3, cardId: BOLT.id, zone: "commander" }),
-        deckCard({ id: 4, cardId: BOLT.id, zone: "main" }),
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "maybe" }),
+        deckCard({ id: 2, cardId: counterspell.id, categoryKind: "main" }),
+        deckCard({ id: 3, cardId: BOLT.id, categoryKind: "commander" }),
+        deckCard({ id: 4, cardId: BOLT.id, categoryKind: "main" }),
       ],
     });
-    expect(
-      readHandlers(db)
-        .deck_get({ id: 1 })!
-        .cards.map((c) => [c.zone, c.name]),
-    ).toEqual([
-      ["commander", "Lightning Bolt"],
-      ["main", "Counterspell"],
-      ["main", "Lightning Bolt"],
-      ["maybe", "Lightning Bolt"],
+    expect(liveDeck(db)!.cards.map((c) => [c.categoryName, c.name])).toEqual([
+      ["Commander", "Lightning Bolt"],
+      ["Main deck", "Counterspell"],
+      ["Main deck", "Lightning Bolt"],
+      ["Maybeboard", "Lightning Bolt"],
     ]);
   });
 
-  it("prices a deck card at the printing's nonfoil usd, and counts only main + commander", () => {
-    const db = makeDb({
+  /**
+   * The variant scopes the **cards** and nothing else. An empty category still comes back —
+   * that is where the next card goes — and an inactive one always does, because that is the
+   * affordance for switching it back on. A list narrowed to the categories that happen to
+   * hold something would make an empty deck uneditable.
+   */
+  it("returns every category, including an empty one and an inactive one", () => {
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, zone: "main", quantity: 3 }),
-        deckCard({ id: 2, cardId: BOLT.id, zone: "side", quantity: 2 }),
-        deckCard({ id: 3, cardId: BOLT.id, zone: "commander", quantity: 1 }),
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "maybe", quantity: 1 }),
+        deckCard({ id: 3, cardId: BOLT.id, categoryKind: "side", variant: "theory", quantity: 9 }),
       ],
     });
-    const detail = readHandlers(db).deck_get({ id: 1 })!;
+    const detail = liveDeck(db)!;
+    expect(detail.categories.map((c) => [c.name, c.isActive, c.cardCount])).toEqual([
+      // Empty, and still a column.
+      ["Commander", true, 0],
+      ["Main deck", true, 3],
+      // The nine copies are in the theory list, and this read asked for the live one.
+      ["Sideboard", true, 0],
+      ["Companion", true, 0],
+      // Inactive, and still a column: counting toward nothing is not being hidden.
+      ["Maybeboard", false, 1],
+    ]);
+    // `sum(quantity)` and the nonfoil `usd` × copies over the variant asked for — `lea 161`
+    // is 620.00 — and `null` rather than 0 where there is nothing to price.
+    expect(detail.categories.map((c) => c.totalPriceUsd)).toEqual([null, 1860, null, null, 620]);
+    expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2].cardCount).toBe(
+      9,
+    );
+    // No tag has been made, so the palette is empty — and it is a list, not a null.
+    expect(detail.tags).toEqual([]);
+  });
+
+  it("prices a deck card at the printing's nonfoil usd, and counts only main + commander", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 2 }),
+        deckCard({ id: 3, cardId: BOLT.id, categoryKind: "commander", quantity: 1 }),
+      ],
+    });
+    const detail = liveDeck(db)!;
     // `lea 161`'s blob is `usd` 620.00 with both foil keys null.
     expect(detail.cards[0].unitPriceUsd).toBe(620);
     expect(detail.deck.cardCount).toBe(4);
@@ -781,16 +911,16 @@ describe("the deck read", () => {
     // Pauper Commander would show a legal commander as ineligible.
     const delver = CARDS.find((c) => c.name.startsWith("Delver of Secrets"))!;
     expect(delver.rarity).toBe("common");
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      deckCards: [deckCard({ id: 1, cardId: delver.id, zone: "commander" })],
+      deckCards: [deckCard({ id: 1, cardId: delver.id, categoryKind: "commander" })],
     });
-    expect(readHandlers(db).deck_get({ id: 1 })!.cards[0].everUncommon).toBe(true);
+    expect(liveDeck(db)!.cards[0].everUncommon).toBe(true);
   });
 
   it("answers null under the gone fault, which is what a deleted deck looks like", () => {
-    const db = makeDb({ decks: [deck({ id: 1 })], fault: "gone" });
-    expect(readHandlers(db).deck_get({ id: 1 })).toBeNull();
+    const db = makeDeckDb({ decks: [deck({ id: 1 })], fault: "gone" });
+    expect(liveDeck(db)).toBeNull();
   });
 });
 
@@ -881,21 +1011,24 @@ describe("zero is not one thing", () => {
   });
 
   it("removes the deck row, siding with the wishlist", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+      ],
     });
     writeHandlers(db).deck_set_card_quantity({
       deckId: 1,
       cardId: BOLT.id,
-      zone: "main",
+      categoryId: categoryId(1, "main"),
+      variant: "live",
       quantity: 0,
     });
     expect(db.deckCards).toHaveLength(0);
   });
 
   it("refuses below zero in all three, and a refused write changes nothing", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, quantity: 3 })],
       wishlistEntries: [wish({ id: 1, quantity: 2 })],
       decks: [deck({ id: 1 })],
@@ -905,7 +1038,14 @@ describe("zero is not one thing", () => {
     for (const call of [
       () => w.collection_set_quantity({ id: 1, quantity: -1 }),
       () => w.wishlist_set_quantity({ id: 1, quantity: -1 }),
-      () => w.deck_set_card_quantity({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: -1 }),
+      () =>
+        w.deck_set_card_quantity({
+          deckId: 1,
+          cardId: BOLT.id,
+          categoryId: categoryId(1, "main"),
+          variant: "live",
+          quantity: -1,
+        }),
     ]) {
       expect(call).toThrow(/not a quantity/);
     }
@@ -1056,49 +1196,94 @@ describe("the wishlist write", () => {
   });
 });
 
-describe("the deck grain (deck, card, zone)", () => {
+describe("the deck grain (deck, variant, category, card)", () => {
+  /** The four card commands all address a row this way, which is the grain and nothing else. */
+  const MAIN = { categoryId: categoryId(1, "main"), variant: "live" } as const;
+  const SIDE = { categoryId: categoryId(1, "side"), variant: "live" } as const;
+
   it("sums a repeat add into one row", () => {
-    const db = makeDb({ decks: [deck({ id: 1 })] });
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const w = writeHandlers(db);
-    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 });
-    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 3 });
+    const add = { deckId: 1, cardId: BOLT.id, categoryName: null, variant: "live" } as const;
+    w.deck_add_card({ ...add, categoryId: MAIN.categoryId, quantity: 2 });
+    w.deck_add_card({ ...add, categoryId: MAIN.categoryId, quantity: 3 });
     expect(db.deckCards).toHaveLength(1);
     expect(db.deckCards[0].quantity).toBe(5);
   });
 
-  it("makes the same printing in two zones two rows", () => {
-    const db = makeDb({ decks: [deck({ id: 1 })] });
+  it("makes the same printing in two categories two rows, and in two variants two more", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const w = writeHandlers(db);
-    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 1 });
-    w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "side", quantity: 1 });
+    const add = { deckId: 1, cardId: BOLT.id, categoryName: null, quantity: 1 } as const;
+    w.deck_add_card({ ...add, ...MAIN });
+    w.deck_add_card({ ...add, ...SIDE });
     expect(db.deckCards).toHaveLength(2);
+    // A change tried out in Theory is a row of its own, never a draft that could silently
+    // overwrite the deck as it is sleeved.
+    w.deck_add_card({ ...add, categoryId: MAIN.categoryId, variant: "theory" });
+    expect(db.deckCards).toHaveLength(3);
+    expect(db.deckCards[2].quantity).toBe(1);
   });
 
-  it("refuses to add a card the database does not have, or none of one", () => {
-    const db = makeDb({ decks: [deck({ id: 1 })] });
+  /**
+   * The add path's other arm: a **name** rather than an id, found-or-created. The word is
+   * `autoCategoryFor`'s to compute in TypeScript, because which pile a Sol Ring goes in is
+   * domain logic; this is the plumbing that files it there. A second add of the same name
+   * finds the category rather than making a second one.
+   */
+  it("finds or creates a main category by name, and refuses neither an id nor a name", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const w = writeHandlers(db);
+    const add = { deckId: 1, cardId: BOLT.id, categoryId: null, variant: "live" } as const;
+    w.deck_add_card({ ...add, categoryName: "Removal", quantity: 1 });
+    w.deck_add_card({ ...add, categoryName: "Removal", quantity: 1 });
+    const made = db.deckCategories.filter((c) => c.name === "Removal");
+    expect(made).toHaveLength(1);
+    expect(made[0]).toMatchObject({ deckId: 1, kind: "main", isActive: true });
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(2);
+    expect(() => w.deck_add_card({ ...add, categoryName: null, quantity: 1 })).toThrow(
+      /needs a category to go in/,
+    );
+  });
+
+  it("refuses a category that is gone, and one that belongs to another deck", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 }), deck({ id: 2 })] });
+    const w = writeHandlers(db);
+    const add = { deckId: 1, cardId: BOLT.id, categoryName: null, variant: "live" } as const;
+    expect(() => w.deck_add_card({ ...add, categoryId: 999, quantity: 1 })).toThrow(
+      /category is not there any more/,
+    );
     expect(() =>
-      w.deck_add_card({ deckId: 1, cardId: "no-such-card", zone: "main", quantity: 1 }),
-    ).toThrow(/no card with the id/);
-    expect(() =>
-      w.deck_add_card({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 0 }),
-    ).toThrow(/at least one/);
+      w.deck_add_card({ ...add, categoryId: categoryId(2, "main"), quantity: 1 }),
+    ).toThrow(/belongs to a different deck/);
     expect(db.deckCards).toHaveLength(0);
   });
 
-  it("folds a swap onto a printing the zone already holds, and says so", () => {
-    const db = makeDb({
+  it("refuses to add a card the database does not have, or none of one", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    const add = { deckId: 1, categoryName: null, ...MAIN } as const;
+    expect(() => w.deck_add_card({ ...add, cardId: "no-such-card", quantity: 1 })).toThrow(
+      /no card with the id/,
+    );
+    expect(() => w.deck_add_card({ ...add, cardId: BOLT.id, quantity: 0 })).toThrow(/at least one/);
+    expect(db.deckCards).toHaveLength(0);
+  });
+
+  it("folds a swap onto a printing the category already holds, and says so", () => {
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, zone: "main", quantity: 2 }),
-        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, zone: "main", quantity: 1 }),
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
       ],
     });
     const result = writeHandlers(db).deck_swap_printing({
       deckId: 1,
       fromCardId: BOLT_A.id,
       toCardId: BOLT_B.id,
-      zone: "main",
+      ...MAIN,
     });
     expect(result).toEqual({ folded: true, quantity: 3 });
     expect(db.deckCards).toHaveLength(1);
@@ -1106,30 +1291,32 @@ describe("the deck grain (deck, card, zone)", () => {
 
   it("refuses a swap to a different oracle card", () => {
     const other = CARDS.find((c) => c.oracleId !== BOLT.oracleId)!;
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, zone: "main", quantity: 1 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
+      ],
     });
     expect(() =>
       writeHandlers(db).deck_swap_printing({
         deckId: 1,
         fromCardId: BOLT.id,
         toCardId: other.id,
-        zone: "main",
+        ...MAIN,
       }),
     ).toThrow(/not another printing of/);
     expect(db.deckCards[0].cardId).toBe(BOLT.id);
   });
 
   it("rescues an orphaned row, which is the one pair that cannot be compared", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
         deckCard({
           id: 1,
           deckId: 1,
           cardId: "no-such-card",
-          zone: "main",
+          categoryKind: "main",
           quantity: 3,
           needsReview: "Scryfall removed this printing from its database.",
         }),
@@ -1139,7 +1326,7 @@ describe("the deck grain (deck, card, zone)", () => {
       deckId: 1,
       fromCardId: "no-such-card",
       toCardId: BOLT.id,
-      zone: "main",
+      ...MAIN,
     });
     expect(result).toEqual({ folded: false, quantity: 3 });
     // The swap is the cure, so the new row is written clean.
@@ -1147,85 +1334,135 @@ describe("the deck grain (deck, card, zone)", () => {
   });
 
   it("refuses a swap to the printing the deck already plays", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1, updatedAt: 100 })],
-      deckCards: [deckCard({ id: 1, cardId: BOLT.id, zone: "main" })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main" })],
     });
     expect(() =>
       writeHandlers(db).deck_swap_printing({
         deckId: 1,
         fromCardId: BOLT.id,
         toCardId: BOLT.id,
-        zone: "main",
+        ...MAIN,
       }),
     ).toThrow(/already this printing/);
     // A no-op must not move `updatedAt` and resort the gallery.
     expect(db.decks[0].updatedAt).toBe(100);
   });
 
-  it("moves every copy into the zone the target holds, folding", () => {
-    const db = makeDb({
+  it("moves every copy into the category the target holds, folding", () => {
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, zone: "maybe", quantity: 2 }),
-        deckCard({ id: 2, cardId: BOLT.id, zone: "main", quantity: 1 }),
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "maybe", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
       ],
     });
-    writeHandlers(db).deck_move_card({ deckId: 1, cardId: BOLT.id, from: "maybe", to: "main" });
+    writeHandlers(db).deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: categoryId(1, "maybe"),
+      toCategoryId: MAIN.categoryId,
+      variant: "live",
+    });
     expect(db.deckCards).toHaveLength(1);
-    expect(db.deckCards[0]).toMatchObject({ zone: "main", quantity: 3 });
+    expect(db.deckCards[0]).toMatchObject({ categoryId: MAIN.categoryId, quantity: 3 });
   });
 
-  it("lands a move into an empty zone on a new row id, not the one it came from", () => {
-    // `INSERT … SELECT` then `DELETE`, so the copies land on a fresh rowid — and row id is
-    // what the allocator breaks ties on within a zone, so the moved row queues behind the
-    // rows that were already there rather than where it used to sit.
-    const db = makeDb({
+  it("moves within one variant, leaving the other list where it was", () => {
+    // A move is a re-filing, never a promotion of a theory row into the live deck.
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, zone: "maybe", quantity: 2 }),
-        deckCard({ id: 2, cardId: BOLT_B.id, zone: "main", quantity: 1 }),
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", variant: "theory", quantity: 5 }),
       ],
     });
-    writeHandlers(db).deck_move_card({ deckId: 1, cardId: BOLT.id, from: "maybe", to: "main" });
+    writeHandlers(db).deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: MAIN.categoryId,
+      toCategoryId: SIDE.categoryId,
+      variant: "live",
+    });
+    expect(db.deckCards.map((dc) => [dc.variant, dc.categoryId, dc.quantity]).sort()).toEqual([
+      ["live", SIDE.categoryId, 2],
+      ["theory", MAIN.categoryId, 5],
+    ]);
+  });
+
+  it("lands a move into an empty category on a new row id, not the one it came from", () => {
+    // `INSERT … SELECT` then `DELETE`, so the copies land on a fresh rowid — and row id is
+    // what the allocator breaks ties on within a kind, so the moved row queues behind the
+    // rows that were already there rather than where it used to sit.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "maybe", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+    writeHandlers(db).deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: categoryId(1, "maybe"),
+      toCategoryId: MAIN.categoryId,
+      variant: "live",
+    });
     const moved = db.deckCards.find((dc) => dc.cardId === BOLT.id)!;
-    expect(moved.zone).toBe("main");
+    expect(moved.categoryId).toBe(MAIN.categoryId);
     expect(moved.id).toBeGreaterThan(2);
   });
 });
 
-describe("what a zone write does to the deck row", () => {
+describe("what a card write does to the deck row", () => {
   it("bumps updatedAt even on a removal that found nothing to remove", () => {
-    const db = makeDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
+    const db = makeDeckDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
     const change = writeHandlers(db).deck_set_card_quantity({
       deckId: 1,
       cardId: BOLT.id,
-      zone: "main",
+      categoryId: categoryId(1, "main"),
+      variant: "live",
       quantity: 0,
     });
     expect(change).toMatchObject({ id: 0, quantity: 0, removed: true });
     expect(db.decks[0].updatedAt).toBeGreaterThan(100);
   });
 
-  it("leaves it alone when the write was refused", () => {
-    const db = makeDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
+  it("leaves it alone when the write was refused, naming the category the user sees", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
     const w = writeHandlers(db);
+    // The category's **name**, not its kind and not its id: a number the user never chose
+    // says nothing, and "Main deck" is the column heading they are looking at.
     expect(() =>
-      w.deck_set_card_quantity({ deckId: 1, cardId: BOLT.id, zone: "main", quantity: 2 }),
-    ).toThrow(/not in this deck's main zone/);
+      w.deck_set_card_quantity({
+        deckId: 1,
+        cardId: BOLT.id,
+        categoryId: categoryId(1, "main"),
+        variant: "live",
+        quantity: 2,
+      }),
+    ).toThrow(/not in this deck's Main deck category/);
     expect(() =>
-      w.deck_move_card({ deckId: 1, cardId: BOLT.id, from: "main", to: "side" }),
-    ).toThrow(/not in this deck's main zone/);
+      w.deck_move_card({
+        deckId: 1,
+        cardId: BOLT.id,
+        fromCategoryId: categoryId(1, "main"),
+        toCategoryId: categoryId(1, "side"),
+        variant: "live",
+      }),
+    ).toThrow(/not in this deck's Main deck category/);
     expect(db.decks[0].updatedAt).toBe(100);
   });
 
   it("answers GONE for a deck that is not there", () => {
-    const db = makeDb();
+    const db = makeDeckDb();
     expect(() =>
       writeHandlers(db).deck_set_card_quantity({
         deckId: 9,
         cardId: BOLT.id,
-        zone: "main",
+        categoryId: categoryId(9, "main"),
+        variant: "live",
         quantity: 1,
       }),
     ).toThrow(/not there any more/);
@@ -1244,20 +1481,35 @@ describe("the deck row itself", () => {
       /not a format this app knows/,
     );
     expect(db.decks).toHaveLength(1);
+    // And it is born with its four predefined categories — a deck that cannot be filed into
+    // anything is a state nothing downstream expects. `main` is not among them: a user
+    // category is always `main`, and a deck may own any number.
+    expect(db.deckCategories.map((c) => [c.kind, c.name, c.isActive])).toEqual([
+      ["commander", "Commander", true],
+      ["side", "Sideboard", true],
+      ["companion", "Companion", true],
+      ["maybe", "Maybeboard", false],
+    ]);
   });
 
-  it("deletes the deck's cards with it", () => {
-    const db = makeDb({
+  it("deletes the deck's cards, categories and tags with it", () => {
+    const db = makeDeckDb({
       decks: [deck({ id: 1 }), deck({ id: 2 })],
       deckCards: [deckCard({ id: 1, deckId: 1 }), deckCard({ id: 2, deckId: 2 })],
+      deckTags: [
+        { id: 1, deckId: 1, name: "Removal", color: "red" },
+        { id: 2, deckId: 2, name: "Ramp", color: "green" },
+      ],
     });
     writeHandlers(db).deck_delete({ id: 1 });
     expect(db.decks.map((d) => d.id)).toEqual([2]);
     expect(db.deckCards.map((dc) => dc.deckId)).toEqual([2]);
+    expect(new Set(db.deckCategories.map((c) => c.deckId))).toEqual(new Set([2]));
+    expect(db.deckTags.map((t) => t.deckId)).toEqual([2]);
   });
 
   it("copies the cards but never isBuilt and never archived — a copy is a draft", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       decks: [deck({ id: 1, name: "Burn", isBuilt: true, archived: true })],
       deckCards: [deckCard({ id: 1, deckId: 1, quantity: 4 })],
     });
@@ -1267,22 +1519,61 @@ describe("the deck row itself", () => {
     expect(db.deckCards.find((dc) => dc.deckId === copy.id)!.quantity).toBe(4);
   });
 
+  /**
+   * The half a "copy the cards" implementation gets wrong invisibly: a card row stores a
+   * `category_id`, so copying it verbatim would file the copy's cards under the *original's*
+   * categories — and deleting the original would then take the copy's cards with it through
+   * `ON DELETE CASCADE`. Both variants come across, because a copy made to try something out
+   * is exactly the copy that wants the plan.
+   */
+  it("copies categories and tags as new rows, remaps the cards, and takes both variants", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, name: "Burn" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 4, tagId: 1 }),
+        deckCard({ id: 2, deckId: 1, categoryKind: "side", variant: "theory", quantity: 2 }),
+      ],
+      deckTags: [{ id: 1, deckId: 1, name: "Removal", color: "red" }],
+    });
+    const copy = writeHandlers(db).deck_duplicate({ id: 1 });
+    const theirs = db.deckCategories.filter((c) => c.deckId === copy.id);
+    expect(theirs.map((c) => c.name)).toEqual(DECK_CATEGORIES.map((c) => c.name));
+    // New rows, so no id is shared with the deck they were copied from.
+    const sourceIds = new Set(db.deckCategories.filter((c) => c.deckId === 1).map((c) => c.id));
+    expect(theirs.some((c) => sourceIds.has(c.id))).toBe(false);
+
+    const copied = db.deckCards.filter((dc) => dc.deckId === copy.id);
+    expect(copied.map((dc) => dc.variant)).toEqual(["live", "theory"]);
+    for (const row of copied) {
+      expect(theirs.map((c) => c.id)).toContain(row.categoryId);
+    }
+    const tag = db.deckTags.find((t) => t.deckId === copy.id)!;
+    expect(tag.id).not.toBe(1);
+    expect(copied[0].tagId).toBe(tag.id);
+    // Which is the whole point: deleting the original leaves the copy whole.
+    writeHandlers(db).deck_delete({ id: 1 });
+    expect(db.deckCards.filter((dc) => dc.deckId === copy.id)).toHaveLength(2);
+  });
+
   it("leaves absent patch fields alone", () => {
-    const db = makeDb({ decks: [deck({ id: 1, name: "Burn", description: "fast" })] });
+    const db = makeDeckDb({ decks: [deck({ id: 1, name: "Burn", description: "fast" })] });
     const row = writeHandlers(db).deck_update({ id: 1, patch: { isBuilt: true } });
     expect(row).toMatchObject({ name: "Burn", description: "fast", isBuilt: true });
   });
 });
 
 describe("missing to the wishlist", () => {
-  it("counts wishes, not rows: one card short in two zones is one wish for the sum", () => {
-    const db = makeDb({
+  it("counts wishes, not rows: one card short in two categories is one wish for the sum", () => {
+    const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT_A.id, zone: "main", quantity: 2 }),
-        deckCard({ id: 2, cardId: BOLT_B.id, zone: "side", quantity: 1 }),
-        // The scratchpad is not a shopping list.
-        deckCard({ id: 3, cardId: BOLT_A.id, zone: "maybe", quantity: 9 }),
+        deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_B.id, categoryKind: "side", quantity: 1 }),
+        // An inactive category is not a shopping list: a card the user has not decided to
+        // play is not one they need to buy.
+        deckCard({ id: 3, cardId: BOLT_A.id, categoryKind: "maybe", quantity: 9 }),
+        // Neither is a plan. The theory list is not read at all.
+        deckCard({ id: 4, cardId: BOLT_A.id, variant: "theory", quantity: 40 }),
       ],
     });
     expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
@@ -1291,10 +1582,10 @@ describe("missing to the wishlist", () => {
   });
 
   it("subtracts what the deck already holds, and pressing twice raises the line", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 1 })],
       decks: [deck({ id: 1 })],
-      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, zone: "main", quantity: 4 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 })],
     });
     const w = writeHandlers(db);
     expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
@@ -1305,10 +1596,10 @@ describe("missing to the wishlist", () => {
   });
 
   it("shops for nothing when the deck is covered", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 4 })],
       decks: [deck({ id: 1 })],
-      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, zone: "main", quantity: 4 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 })],
     });
     expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1 })).toBe(0);
     expect(db.wishlistEntries).toHaveLength(0);
@@ -1328,7 +1619,7 @@ describe("the busy fault", () => {
   });
 
   it("refuses every write there is, and no read", () => {
-    const db = makeDb({
+    const db = makeDeckDb({
       collectionEntries: [entry({ id: 1 })],
       wishlistEntries: [wish({ id: 1 })],
       decks: [deck({ id: 1 })],
@@ -1351,9 +1642,11 @@ describe("the busy fault", () => {
       id: 1,
       deckId: 1,
       cardId: BOLT.id,
-      zone: "main",
-      from: "main",
-      to: "side",
+      categoryId: categoryId(1, "main"),
+      categoryName: null,
+      variant: "live",
+      fromCategoryId: categoryId(1, "main"),
+      toCategoryId: categoryId(1, "side"),
       fromCardId: BOLT.id,
       toCardId: BOLT_B.id,
       quantity: 1,
@@ -1378,13 +1671,16 @@ describe("the busy fault", () => {
 describe("the whole command table", () => {
   it("dispatches the writes under the names and argument names ipc.ts sends", async () => {
     resetCommands();
-    const db = makeDb({ decks: [deck({ id: 1 })] });
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     registerCommands(allHandlers(db));
     await expect(
       invoke<EntryChange>("deck_add_card", {
         deckId: 1,
         cardId: BOLT.id,
-        zone: "main",
+        categoryId: null,
+        // The add path's arm the editor uses: `autoCategoryFor`'s word, found or created.
+        categoryName: "Main deck",
+        variant: "live",
         quantity: 2,
       }),
     ).resolves.toMatchObject({ quantity: 2 });
@@ -1394,9 +1690,9 @@ describe("the whole command table", () => {
       }),
     ).resolves.toMatchObject({ quantity: 1, removed: false });
     // A read taken after a write sees it: the two tables close over one store.
-    await expect(invoke<DeckDetail>("deck_get", { id: 1 })).resolves.toMatchObject({
-      cards: [{ cardId: BOLT.id, quantity: 2, ownedQuantity: 1 }],
-    });
+    await expect(invoke<DeckDetail>("deck_get", { id: 1, variant: "live" })).resolves.toMatchObject(
+      { cards: [{ cardId: BOLT.id, quantity: 2, ownedQuantity: 1 }] },
+    );
     // `deck_missing_to_wishlist` takes `deckId` where its four neighbours take `id` — the
     // odd one out, and Tauri matches by name.
     await expect(invoke<number>("deck_missing_to_wishlist", { id: 1 })).rejects.toThrow();

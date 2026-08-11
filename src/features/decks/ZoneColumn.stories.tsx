@@ -1,8 +1,60 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
-import type { DeckCard } from "@/lib/ipc";
+import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { deckCard, MISSING, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
-import { ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
+import { ZoneColumn } from "./ZoneColumn";
+
+/**
+ * One of the deck's categories, as `deck_get` answers it.
+ *
+ * Local rather than in `.storybook/fake/fixtures.ts`, because these stories drive the component
+ * by props alone — nothing here goes through the fake's database, so a category is a literal
+ * and this is the one place it is written out.
+ */
+function category(over: Partial<DeckCategory> = {}): DeckCategory {
+  return {
+    id: 1,
+    deckId: 1,
+    name: "Main deck",
+    kind: "main",
+    isActive: true,
+    sortOrder: 0,
+    cardCount: 0,
+    totalPriceUsd: null,
+    ...over,
+  };
+}
+
+/**
+ * The four piles a deck is born with, named and flagged as `schema::PREDEFINED_CATEGORIES`
+ * names and flags them — plus the `main` one the v7 migration files every legacy main-deck row
+ * into, which the seed does not name because a deck may own any number of `main` categories.
+ *
+ * The Maybeboard is the one whose seeded default says something: `isActive: false`, which after
+ * v7 is the **whole** of what the old `maybe` zone meant.
+ */
+const MAIN = category();
+const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
+const COMMANDER = category({ id: 3, name: "Commander", kind: "commander", sortOrder: 1 });
+const MAYBE = category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 });
+
+/**
+ * A row filed under one of the categories above.
+ *
+ * The column reads its category off its **prop** rather than off the rows in it, so this is for
+ * the reader rather than for the render — but a story whose rows say `Main deck` while the
+ * column over them says `Commander` teaches a model the app does not have, and these files are
+ * read as documentation.
+ */
+function inCategory(pile: DeckCategory, card: DeckCard): DeckCard {
+  return {
+    ...card,
+    categoryId: pile.id,
+    categoryName: pile.name,
+    categoryKind: pile.kind,
+    categoryActive: pile.isActive,
+  };
+}
 
 /**
  * Twelve rows and **40 copies**, spread over enough types that the buckets have something to
@@ -13,7 +65,7 @@ import { ZONE_LABEL, ZoneColumn } from "./ZoneColumn";
  * beside the column's title says 40, and it is copies rather than rows — a deck is counted in
  * cards.
  */
-const MAIN: DeckCard[] = [
+const MAIN_DECK: DeckCard[] = [
   deckCard(printing("mh2", "138"), { quantity: 4, ownedQuantity: 4 }),
   deckCard(printing("fut", "153"), { quantity: 4, ownedQuantity: 1 }),
   deckCard(printing("dom", "168"), { quantity: 2, ownedQuantity: 2 }),
@@ -42,11 +94,10 @@ const meta = {
   component: ZoneColumn,
   tags: ["autodocs"],
   args: {
-    zone: "main",
-    title: ZONE_LABEL.main,
-    cards: MAIN,
+    category: MAIN,
+    cards: MAIN_DECK,
     groupBy: "type",
-    moveTargets: ["side", "maybe"],
+    moveTargets: [SIDE, MAYBE],
     openMenuCardId: null,
     busy: false,
     onOpenMenu: fn(),
@@ -58,9 +109,9 @@ const meta = {
     onDropCard: fn(),
   },
   // A height, because the column is `flex min-h-0 flex-col` and its scroller is `flex-1`: the
-  // editor decides how tall a zone is, and in a canvas with no sized parent the column would
-  // grow to hold every row and scroll nothing. The width is the editor's own — a zone column at
-  // 1280px with the card pane docked — and {@link Narrow} is the story that changes it.
+  // editor decides how tall a category column is, and in a canvas with no sized parent the
+  // column would grow to hold every row and scroll nothing. The width is the editor's own — a
+  // column at 1280px with the card pane docked — and {@link Narrow} is the story that changes it.
   decorators: [
     (Story) => (
       <div className="flex h-[30rem] w-[21rem] flex-col">
@@ -72,14 +123,18 @@ const meta = {
     docs: {
       description: {
         component:
-          "One zone of a deck: what is in it, how many that is, and every edit that can be " +
-          "made to a row without leaving the page. **There is no Save** — every control here " +
-          "writes through an IPC command and the list redraws from what the database " +
-          "answered, which is what autosave honestly means for a deck: the row *is* the " +
-          "draft.\n\n" +
+          "One category of a deck — a pile the user named, ordered and can switch off: what " +
+          "is in it, how many that is, and every edit that can be made to a row without " +
+          "leaving the page. **There is no Save** — every control here writes through an IPC " +
+          "command and the list redraws from what the database answered, which is what " +
+          "autosave honestly means for a deck: the row *is* the draft.\n\n" +
+          "The heading is the category's own `name` and every write here is addressed by its " +
+          "`id`; `isActive` is the third field the column reads, and it is **the whole of what " +
+          "the old `maybe` zone meant** — an inactive category counts toward nothing and the " +
+          "allocator claims no copy for it, whatever its kind ({@link Maybe}).\n\n" +
           "The deck is **rows, one view only**. The stacked-card mode and its toggle were " +
           "removed on 2026-08-06: full card faces at column width were huge, and the width " +
-          "cap they needed was why zone columns would not take the editor's width. Each row " +
+          "cap they needed was why the columns would not take the editor's width. Each row " +
           "instead carries the printing's `art` crop (626×457) as an `aria-hidden`, " +
           '`alt=""`, `draggable={false}` thumbnail **sharing the stepper\'s grid cell** — a ' +
           "fourth grid column's gap made a squeezed column scroll sideways, and a hidden flex " +
@@ -105,8 +160,8 @@ type Story = StoryObj<typeof meta>;
  *
  * A heading's count is **copies, not rows**: four Bolts are four cards, and a deck is counted in
  * cards. So is the number beside the column's title, and it is in the column's accessible name
- * as well — a reader arriving here from a screen reader's region list is asking "which zone, and
- * how big".
+ * as well — a reader arriving here from a screen reader's region list is asking "which category,
+ * and how big".
  *
  * The double-faced row is Delver of Secrets, and it files under Creature because the **front**
  * face decides: `type_line` carries both sides separated by `//`, and the back of a modal DFC is
@@ -125,35 +180,35 @@ export const MainDeck: Story = {};
 export const GroupedByManaValue: Story = { args: { groupBy: "manaValue" } };
 
 /**
- * A zone with nothing in it. The column still draws its heading and its count, because it is
- * still a drop target — this is what the reader drags the first card onto.
+ * A category with nothing in it. The column still draws its heading and its count, because it is
+ * still a drop target — this is what the reader drags the first card onto, and it is why
+ * `deck_get` answers **every** category rather than the ones that happen to hold a card.
  */
 export const Empty: Story = {
-  args: { cards: [], title: ZONE_LABEL.side, zone: "side" },
+  args: { cards: [], category: SIDE },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Nothing here yet.")).toBeInTheDocument();
     // Zero cards, and the plural is right: the count is in the accessible name so a reader who
-    // cannot see the column's corner still gets both halves of "which zone, and how big".
+    // cannot see the column's corner still gets both halves of "which category, and how big".
     await expect(canvas.getByRole("region", { name: "Sideboard, 0 cards" })).toBeInTheDocument();
   },
 };
 
 /**
- * The commander zone: one card, and **no headings**.
+ * The seeded Commander category: one card, and **no headings**.
  *
  * `groupBy` is `null` here because a heading over a single row is a heading that says nothing —
- * the commander and companion zones hold one or two cards. `moveTargets` is what the format
- * decides, and the editor derives it from the format's spec, so a Modern deck is never offered a
- * commander zone at all.
+ * the Commander and Companion piles hold one or two cards. `moveTargets` is the editor's own
+ * list of the deck's categories, and the column filters *itself* out of it by id, which is why
+ * "Move to Commander" is never offered from the Commander column.
  */
 export const Commander: Story = {
   args: {
-    zone: "commander",
-    title: ZONE_LABEL.commander,
+    category: COMMANDER,
     groupBy: null,
-    cards: [deckCard(printing("eld", "303"), { zone: "commander", ownedQuantity: 1 })],
-    moveTargets: ["main", "maybe"],
+    cards: [inCategory(COMMANDER, deckCard(printing("eld", "303"), { ownedQuantity: 1 }))],
+    moveTargets: [MAIN, MAYBE],
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -165,27 +220,30 @@ export const Commander: Story = {
 };
 
 /**
- * The scratchpad, which **counts toward nothing at all** — not size, not copies, not legality —
- * and whose rows therefore always read `ownedQuantity: 0`.
+ * A **switched-off** category, which **counts toward nothing at all** — not size, not copies,
+ * not legality — and whose rows therefore always read `ownedQuantity: 0`.
  *
- * That zero is **by design and not for want of copies**. `deck::allocate_deck` skips the `maybe`
- * zone outright (`ZONE_PRIORITY` puts it last and the walk filters it out), so the allocator
- * never claims a copy for it however many the collection holds. `CardRow` knows this: `short` is
- * `zone !== "maybe" && ownedQuantity < quantity`, so a `maybe` row draws no shortage mark. A mark
- * there would report a shortage the reader does not have.
+ * That zero is **by design and not for want of copies**: `deck::allocate_deck` claims no
+ * collection copy for an inactive category however many the collection holds. So `CardRow` reads
+ * the switch rather than the counts — `short` is `category.isActive && ownedQuantity < quantity`
+ * — and a mark here would report a shortage the reader does not have.
+ *
+ * **The switch, never the kind.** Schema v7 made "counts toward nothing" a property of the
+ * category rather than a fixed word, so this is the seeded Maybeboard only because that is the
+ * one pile a deck is born with switched off. A category of the reader's own that they switch off
+ * draws exactly this, and a Maybeboard they switch *on* is short of copies like any other pile.
  *
  * The rows below want four copies each and read zero owned. That is the exact shape that would
  * print `0/4` in the main deck, and here it prints nothing — which is what the `play` pins.
  */
 export const Maybe: Story = {
   args: {
-    zone: "maybe",
-    title: ZONE_LABEL.maybe,
+    category: MAYBE,
     groupBy: null,
-    moveTargets: ["main", "side"],
+    moveTargets: [MAIN, SIDE],
     cards: [
-      deckCard(printing("nph", "9"), { zone: "maybe", quantity: 4 }),
-      deckCard(printing("roe", "4"), { zone: "maybe", quantity: 4 }),
+      inCategory(MAYBE, deckCard(printing("nph", "9"), { quantity: 4 })),
+      inCategory(MAYBE, deckCard(printing("roe", "4"), { quantity: 4 })),
     ],
   },
   play: async ({ canvasElement }) => {
@@ -200,7 +258,7 @@ export const Maybe: Story = {
 };
 
 /**
- * The same shortage in a zone that counts it: two rows the collection cannot cover.
+ * The same shortage in a category that counts it: two rows the collection cannot cover.
  *
  * Drawn **only where it says something** — a fully covered row prints nothing at all, because
  * sixty green ticks are sixty things to read past on the way to the three that matter.
@@ -236,7 +294,7 @@ export const ShortOfCopies: Story = {
  * never asked for any.
  */
 export const OrphanRow: Story = {
-  args: { cards: [ORPHAN, ...MAIN.slice(0, 3)] },
+  args: { cards: [ORPHAN, ...MAIN_DECK.slice(0, 3)] },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const rows = canvas.getAllByRole("listitem");
@@ -266,18 +324,18 @@ export const OrphanRow: Story = {
  * scroller; that measurement needs a browser, so this story opens the menu on the first row where
  * the answer is the same either way.
  *
- * Only the zones the format allows are offered, and the row's **own** zone is filtered out of
- * them.
+ * Only the categories the editor hands down are offered, each under its own **name**, and the
+ * column's own is filtered out of them by id.
  */
 export const MenuOpen: Story = {
-  args: { openMenuCardId: MAIN[0].cardId },
+  args: { openMenuCardId: MAIN_DECK[0].cardId },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const menu = canvas.getByRole("dialog", { name: "Actions for Ragavan, Nimble Pilferer" });
     await expect(within(menu).getByRole("button", { name: "Move to Sideboard" })).toBeEnabled();
-    await expect(within(menu).getByRole("button", { name: "Move to Maybe" })).toBeEnabled();
-    // The row's own zone is not on the list — "Move to Main deck" from the main deck is a
-    // no-op wearing a verb.
+    await expect(within(menu).getByRole("button", { name: "Move to Maybeboard" })).toBeEnabled();
+    // The column's own category is not on the list — "Move to Main deck" from the main deck is
+    // a no-op wearing a verb.
     await expect(within(menu).queryByRole("button", { name: "Move to Main deck" })).toBeNull();
     await expect(within(menu).getByRole("button", { name: "Set as cover" })).toBeInTheDocument();
     // Not `aria-modal`: the editor behind it stays live, and a menu that trapped the caret
@@ -298,7 +356,7 @@ export const MenuOpen: Story = {
  * {@link MenuOpen} are for, and what the `play` pins without needing eyes.
  */
 export const MenuOpenOnAnOrphan: Story = {
-  args: { cards: [ORPHAN, ...MAIN.slice(0, 3)], openMenuCardId: ORPHAN.cardId },
+  args: { cards: [ORPHAN, ...MAIN_DECK.slice(0, 3)], openMenuCardId: ORPHAN.cardId },
   play: async ({ canvasElement }) => {
     const menu = within(canvasElement).getByRole("dialog", {
       name: "Actions for Sword of the Meek",
@@ -321,7 +379,7 @@ export const MenuOpenOnAnOrphan: Story = {
  * down *as if the write had worked*, before the answer arrived.
  */
 export const MenuBusy: Story = {
-  args: { openMenuCardId: MAIN[0].cardId, busy: true },
+  args: { openMenuCardId: MAIN_DECK[0].cardId, busy: true },
   play: async ({ canvasElement }) => {
     const menu = within(canvasElement).getByRole("dialog");
     for (const button of within(menu).getAllByRole("button")) {
@@ -351,7 +409,7 @@ export const MenuBusy: Story = {
  * than of the layout. Task 17 is where this is looked at.
  */
 export const Narrow: Story = {
-  args: { cards: MAIN.slice(0, 6) },
+  args: { cards: MAIN_DECK.slice(0, 6) },
   decorators: [
     (Story) => (
       <div className="flex min-h-0 w-[16rem] flex-1 flex-col">

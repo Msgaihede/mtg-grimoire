@@ -45,21 +45,34 @@ describe("deck size", () => {
   });
 
   /**
-   * The companion counts toward **no** deck size — EDH's is "effectively a 101st card" —
-   * and the maybe pile counts toward nothing at all: not size, not copies, not legality.
-   * The maybe row here is four copies of a card that is *banned* in the format, and the
-   * deck is clean.
+   * The companion counts toward **no** deck size — EDH's is "effectively a 101st card" — and
+   * the Maybeboard counts toward nothing at all: not size, not copies, not legality. The
+   * Maybeboard row here is four copies of a card that is *banned* in the format, and the deck
+   * is clean.
+   *
+   * The Maybeboard is inactive because `schema::PREDEFINED_CATEGORIES` seeds it that way and
+   * the fixture builder mirrors that, not because the engine knows the word `maybe` — the pair
+   * of tests below is what proves the difference.
    *
    * Umori rather than Lurrus, and the choice is what keeps this test about deck size:
    * `companions.ts` reads each companion's own condition, Umori's is satisfied by a deck
    * whose one nonland card is a creature, and Lurrus's is not (Kenrith is mana value 5).
    */
-  it("ignores the companion for size and the maybe pile for everything", () => {
+  it("ignores the companion for size and the Maybeboard for everything", () => {
     const deck = [
       commander(),
       islands(99),
-      card({ name: "Umori, the Collector", zone: "companion", typeLine: "Legendary Creature" }),
-      card({ name: "Sol Ring", zone: "maybe", quantity: 4, legalities: '{"commander":"banned"}' }),
+      card({
+        name: "Umori, the Collector",
+        categoryKind: "companion",
+        typeLine: "Legendary Creature",
+      }),
+      card({
+        name: "Sol Ring",
+        categoryKind: "maybe",
+        quantity: 4,
+        legalities: '{"commander":"banned"}',
+      }),
     ];
 
     expect(validateDeck(deck, spec("commander"))).toEqual([]);
@@ -97,10 +110,80 @@ describe("deck size", () => {
   });
 });
 
+/**
+ * The two tests below are a pair, and they are the whole of what schema v7 changed in this
+ * engine. "Counts toward nothing" used to be the word `maybe` on a card; it is now a switch on
+ * the *category* the card is filed in, which the user owns. So the rule reaches a pile the old
+ * one could never have reached, and lets go of one it always caught.
+ *
+ * Written as a pair on purpose: either one alone is satisfied by a `maybe` special case wearing
+ * a new name, and only the two together say the special case is gone.
+ */
+describe("what counts is the category's switch, not its kind", () => {
+  /**
+   * The pile the old rule could not see. Every category a user makes is kind `main` — the four
+   * fixed kinds are predefined, one each — so a pile of their own that they have switched off
+   * *is* an inactive `main` category, and the deck must hear nothing about what is in it.
+   *
+   * Five copies of a banned card is a copy limit and a legality at once, and the deck is clean.
+   */
+  it("counts nothing from a category the user switched off, though its kind is main", () => {
+    const deck = [
+      islands(60),
+      card({
+        name: "Sol Ring",
+        categoryKind: "main",
+        categoryActive: false,
+        quantity: 5,
+        legalities: '{"modern":"banned"}',
+      }),
+    ];
+
+    expect(validateDeck(deck, spec("modern"))).toEqual([]);
+  });
+
+  /**
+   * And the converse: a Maybeboard the user switched **on** is an ordinary pile of the deck.
+   * Same card, same five copies, same ban — and every rule that reads the pile at all fires.
+   *
+   * Deck size is not one of them, and that is a different question rather than an exception:
+   * size counts `SIZE_KINDS`, which is `main` + `commander`, and the `maybe` kind was
+   * never in it. What the switch decides is whether the pile is looked at, not which totals it
+   * lands in.
+   */
+  it("counts a category the user switched on, though its kind is maybe", () => {
+    const deck = [
+      islands(60),
+      card({
+        name: "Sol Ring",
+        categoryKind: "maybe",
+        categoryActive: true,
+        quantity: 5,
+        legalities: '{"modern":"banned"}',
+      }),
+    ];
+
+    expect(validateDeck(deck, spec("modern"))).toEqual([
+      {
+        severity: "error",
+        code: "copy-limit",
+        message: "Modern decks allow up to 4 copies of Sol Ring; you have 5.",
+        cardIds: ["c-Sol Ring"],
+      },
+      {
+        severity: "error",
+        code: "banned",
+        message: "Sol Ring is banned in Modern.",
+        cardIds: ["c-Sol Ring"],
+      },
+    ]);
+  });
+});
+
 describe("copy limits", () => {
   /** CR 100.4a: the sideboard's copies count toward the same four. */
   it("counts main and side together", () => {
-    const deck = padTo(60, [card({ quantity: 3 }), card({ quantity: 2, zone: "side" })]);
+    const deck = padTo(60, [card({ quantity: 3 }), card({ quantity: 2, categoryKind: "side" })]);
 
     expect(validateDeck(deck, spec("modern"))).toEqual([
       {
@@ -142,12 +225,12 @@ describe("copy limits", () => {
 
   /**
    * The commander is one of the 100 (CR 903.5a), and CR 903.5b's different-name rule is
-   * about the deck those 100 cards are — so a card in the commander zone and the same card
-   * in the main deck is two copies of it, a state the zone model allows because
-   * `deck_cards` is unique on `(deck, card, zone)`.
+   * about the deck those 100 cards are — so a card in the command zone and the same card
+   * in the main deck is two copies of it, a state the category model allows because
+   * `deck_cards` is unique on `(deck, card, category, variant)`.
    */
-  it("counts the commander zone as part of the deck", () => {
-    const deck = padTo(100, [commander(), card({ ...commander(), zone: "main" })]);
+  it("counts the commander category as part of the deck", () => {
+    const deck = padTo(100, [commander(), card({ ...commander(), categoryKind: "main" })]);
 
     expect(validateDeck(deck, spec("commander"))).toEqual([
       {
@@ -455,17 +538,17 @@ describe("legality (per printing — TRAP B)", () => {
 
 /**
  * The per-card pass runs over rows, and one card is usually several of them — the same
- * printing in `main` and `side`, or two printings of one card. A panel that says "Lightning
- * Bolt is banned in Modern." twice is reporting one problem as two.
+ * printing in the main deck and the sideboard, or two printings of one card. A panel that says
+ * "Lightning Bolt is banned in Modern." twice is reporting one problem as two.
  */
 describe("one sentence, one finding", () => {
   it("collapses identical sentences and keeps every row they are about", () => {
-    // One printing, two zones: one sentence, and the id it already had.
-    const twoZones = padTo(60, [
+    // One printing, two categories: one sentence, and the id it already had.
+    const twoCategories = padTo(60, [
       card({ quantity: 2, legalities: '{"modern":"banned"}' }),
-      card({ quantity: 2, zone: "side", legalities: '{"modern":"banned"}' }),
+      card({ quantity: 2, categoryKind: "side", legalities: '{"modern":"banned"}' }),
     ]);
-    expect(validateDeck(twoZones, spec("modern"))).toEqual([
+    expect(validateDeck(twoCategories, spec("modern"))).toEqual([
       {
         severity: "error",
         code: "banned",
@@ -501,7 +584,7 @@ describe("one sentence, one finding", () => {
       layout: null,
       rarity: null,
     });
-    const orphanTwice = padTo(60, [orphan, { ...orphan, zone: "side" as const }]);
+    const orphanTwice = padTo(60, [orphan, { ...orphan, categoryKind: "side" as const }]);
     expect(validateDeck(orphanTwice, spec("modern"))).toEqual([
       {
         severity: "warning",
@@ -512,7 +595,11 @@ describe("one sentence, one finding", () => {
     ]);
 
     const dreadmaw = card({ name: "Colossal Dreadmaw", manaCost: "{4}{G}{G}", cmc: 6 });
-    const bigTwice = padTo(50, [tinyCommander(), dreadmaw, { ...dreadmaw, zone: "side" as const }]);
+    const bigTwice = padTo(50, [
+      tinyCommander(),
+      dreadmaw,
+      { ...dreadmaw, categoryKind: "side" as const },
+    ]);
     expect(validateDeck(bigTwice, spec("tlr")).filter((i) => i.code === "mana-value")).toHaveLength(
       1,
     );
@@ -580,7 +667,7 @@ describe("sideboard and mana value", () => {
     const withCompanion = [
       commander(),
       islands(99),
-      card({ name: "Umori, the Collector", zone: "companion" }),
+      card({ name: "Umori, the Collector", categoryKind: "companion" }),
     ];
     expect(validateDeck(withCompanion, spec("commander"))).toEqual([]);
   });
@@ -590,7 +677,7 @@ describe("sideboard and mana value", () => {
     const deck = [
       islands(60),
       islands(15, "side"),
-      card({ name: "Lurrus of the Dream-Den", zone: "companion" }),
+      card({ name: "Lurrus of the Dream-Den", categoryKind: "companion" }),
     ];
 
     expect(validateDeck(deck, spec("modern"))[0].message).toBe(
