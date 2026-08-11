@@ -2,9 +2,11 @@
 //!
 //! 23 keys today and the list grows, so the format filter used to cost a `json_extract`
 //! per key per row: 695 ms for one facet pass over the live 107 337-row paper corpus
-//! against 16.8 ms for the mask (measured 2026-08-11). It is also what lets the format
-//! filter into an index at all — a JSON path cannot be indexed, a bitwise test on a column
-//! can.
+//! against 16.8 ms for the mask. **Measured 2026-08-11 through `node:sqlite`, against a
+//! page-for-page online backup of the live database** — the build to name for a figure like
+//! this is SQLite's own, which is optimised C whether the caller is debug or release Rust,
+//! so no cargo profile enters into it. It is also what lets the format filter into an index
+//! at all — a JSON path cannot be indexed, a bitwise test on a column can.
 //!
 //! **The key order is frozen.** Bit positions are stored data: `cards.legal_mask` holds
 //! them, so reordering this list silently reinterprets every row already on disk. Keys may
@@ -13,8 +15,14 @@
 
 use serde_json::Value;
 
-/// Every `legalities` key, in the order Scryfall emits them. **Append only** — see the
-/// module docs. Bit *k* of a mask is `LEGALITY_KEYS[k]`.
+/// Every `legalities` key. **Append only** — see the module docs. Bit *k* of a mask is
+/// `LEGALITY_KEYS[k]`.
+///
+/// The 23 seeded here happen to be Scryfall's own emission order (alphabetical, as of
+/// 2026-08-11), and that is a coincidence of the first fill rather than a rule: the append
+/// rule outranks it, so the first key Scryfall adds that does not sort last will land at the
+/// end regardless. Do not re-sort this list to restore the resemblance — bit positions are
+/// stored data.
 pub const LEGALITY_KEYS: [&str; 23] = [
     "alchemy",
     "brawl",
@@ -168,8 +176,12 @@ mod tests {
         }
     }
 
-    /// 64 bits is the ceiling, and it is not a soft one: a 65th key would silently set no
-    /// bit. Scryfall is at 23.
+    /// 64 bits is the ceiling, and it is not a soft one. A 65th key does **not** quietly set
+    /// no bit: both [`bit`] and [`mask_sql`] build it with `1u64 << i`, which **panics** in a
+    /// debug build and, in release, masks the shift count to `1 << 0` and **collides with the
+    /// first key** — every `alchemy` printing reading as legal in the new format and vice
+    /// versa, in SQL and in Rust alike. That is worse than a lost bit, which is why the
+    /// ceiling is asserted rather than trusted. Scryfall is at 23.
     #[test]
     fn the_key_list_fits_in_a_u64() {
         assert!(LEGALITY_KEYS.len() <= 64);

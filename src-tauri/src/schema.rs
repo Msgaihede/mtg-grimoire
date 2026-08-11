@@ -128,8 +128,11 @@ const CARDS_INDEXES: &[&str] = &[
     // **The trailing three are the filter columns, and they are why a *filtered* browse is
     // cheap.** Without them every filter the search offers — format, colours, mana value —
     // knocks the group scan off this index and into row lookups: 455–505 ms against
-    // 22–47 ms with them, measured 2026-08-11 over the live corpus. They cost +0.89 MB
-    // (13.45 → 14.34 MB) and 4 ms on the *unfiltered* browse, which is the trade.
+    // 22–47 ms with them. They cost +0.89 MB (13.45 → 14.34 MB) and 4 ms on the *unfiltered*
+    // browse, which is the trade. **Measured 2026-08-11 through `node:sqlite`, against a
+    // page-for-page online backup of the live database** — the build behind a figure like
+    // this is SQLite's own C, identical under a debug or a release crate, so the fixture is
+    // what needs naming rather than a cargo profile.
     //
     // `legal_mask` and not `legalities`: a JSON path is not indexable, which is the whole
     // reason [`crate::legalities`] exists.
@@ -1073,8 +1076,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 9 {
         let tx = conn.unchecked_transaction()?;
-        // One nullable column, and the index it goes into. `CARDS_COLUMNS` stays frozen —
-        // a fresh install replays v1 and arrives here to do the same work an upgrade does.
+        // One `NOT NULL DEFAULT 0` column, and the index it goes into — the NOT NULL is the
+        // format filter's requirement and the paragraph below it says why. `CARDS_COLUMNS`
+        // stays frozen — a fresh install replays v1 and arrives here to do the same work an
+        // upgrade does.
         //
         // **The DROP is load-bearing.** Every statement in [`CARDS_INDEXES`] is
         // `IF NOT EXISTS`, so replaying the batch over a database that already carries
@@ -3734,7 +3739,16 @@ pub(crate) mod tests {
              VALUES ('2','Mox Pearl','lea','264','en','normal','{}',NULL)",
             [],
         );
-        assert!(refused.is_err(), "a NULL mask must not be storable");
+        // On the message, not on `is_err`: a typo'd column name or a missing NOT NULL
+        // elsewhere in this INSERT would fail just as loudly and the test would still pass,
+        // pinning nothing about `legal_mask`.
+        let refused = refused.expect_err("a NULL mask must not be storable");
+        assert!(
+            refused
+                .to_string()
+                .contains("NOT NULL constraint failed: cards.legal_mask"),
+            "refused for the constraint, not for a broken statement: {refused}"
+        );
     }
 
     /// The widened index is what makes a *filtered* browse cheap — 505 ms to 41 ms, measured
