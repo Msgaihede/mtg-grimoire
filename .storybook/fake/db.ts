@@ -1083,6 +1083,15 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
       })
       .reduce((n, dc) => n + dc.quantity, 0),
     updatedAt: d.updatedAt,
+    // The four v8 deck columns, answered as their DDL defaults because **no fake deck stores
+    // one yet**: no story mounts a folder tree, a custom cover or a theory switch, and the
+    // commands that write them are not in this fake either. Present so the mirror can carry
+    // them as required fields, which they are on every real row; making them a fake deck's own
+    // state belongs with the task that stories those surfaces.
+    coverKind: "card_art",
+    folderId: null,
+    notes: null,
+    theoryEnabled: false,
   };
 }
 

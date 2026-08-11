@@ -57,6 +57,11 @@ const DECK: DeckRow = {
   archived: false,
   cardCount: 6,
   updatedAt: 1_800_000_000,
+  // The four v8 deck columns. Every real row carries all four, so the fixture does too.
+  coverKind: "card_art",
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
 };
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */

@@ -36,6 +36,13 @@ const DECK: DeckRow = {
   archived: false,
   cardCount: 4,
   updatedAt: 1_800_000_000,
+  // The four v8 deck columns. `theoryEnabled: false` is the ordinary deck — the switch is off
+  // until the reader turns it on, and turning it on seeds the theory list from live so that an
+  // empty second list is never a state anyone has to interpret.
+  coverKind: "card_art",
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
 };
 
 /**
