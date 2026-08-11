@@ -435,6 +435,36 @@ describe("facet counts", () => {
     expect(cold.formats).toEqual({});
     expect(cold.owned).toEqual({ owned: 0, missing: 0 });
   });
+
+  /**
+   * The other way to be not-ready, and the one every reader meets first: the index is fine,
+   * it just has nothing to count.
+   *
+   * `facets::compute` guards on `ix.all.count() == 0` because `lib.rs` spawns the build at
+   * setup and a first launch therefore publishes an index over zero rows for the whole of the
+   * ~93 s opening sync. Counted honestly every option is zero, the greying rule dims the whole
+   * row, and with no filter on there is no `Reset all` drawn to escape by — the rule holds and
+   * the app reads as broken.
+   *
+   * **This mirror went in without the guard**, answering `ready: true` unconditionally against
+   * a `compute` that had since grown one, and the `empty` seed is exactly the state it gets
+   * wrong. `Search/Page`'s `Empty`, `Decks/SearchPanel` and `Collection/Page` all render that
+   * seed, so the workbench drew a fully-greyed, escape-less filter row that the shipped window
+   * cannot produce — and nothing went red, because no `play` looked at the filter row. Two of
+   * them do now.
+   */
+  it("answers an empty corpus not-ready, exactly as a cold index does", () => {
+    const empty = facets(seed("empty"), {});
+    expect(empty.ready).toBe(false);
+    expect(empty.total).toBe(0);
+    expect(empty.sets).toEqual({});
+    expect(empty.colors).toEqual({});
+    expect(empty.manaValues).toEqual({});
+    expect(empty.formats).toEqual({});
+    // A corpus with rows in it is the contrast, and it is what keeps the line above from
+    // passing for the wrong reason: `starter` differs from `empty` in nothing but its cards.
+    expect(facets(seed("starter"), {}).ready).toBe(true);
+  });
 });
 
 describe("a row whose card is gone", () => {

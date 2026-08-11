@@ -2035,7 +2035,16 @@ export function readHandlers(db: FakeDb) {
       // A cold index is an answer and never an error, and **every map is empty on it** —
       // not a map of zeros. `ready: false` says "we did not count", which is what lets the
       // UI leave every control live; zeros would say "this is empty" and grey the lot.
-      if (db.fault === "indexCold") {
+      //
+      // **An empty corpus answers the same way**, and that is `facets::compute`'s own guard
+      // (`if ix.all.count() == 0`) rather than a convenience here. A first launch publishes
+      // an index over zero rows for the ~93 s its opening sync takes, and counted honestly
+      // every option is zero: the greying rule dims the whole row, and with no filter on
+      // there is no `Reset all` drawn to escape by. The `empty` seed is exactly that state,
+      // and it is the seed `Search/Page`'s `Empty`, `Decks/SearchPanel` and
+      // `Collection/Page` render — so without this line the workbench drew a dead filter row
+      // the shipped window cannot produce.
+      if (db.fault === "indexCold" || db.cards.length === 0) {
         return {
           colors: {},
           manaValues: {},
@@ -2125,7 +2134,8 @@ export function readHandlers(db: FakeDb) {
         // **Printings, always**: `collapse` is a view mode and not a filter, so this counts
         // what the search matched rather than the rows it will draw.
         total: base(null).length,
-        // A fake world has no warm-up; a story that wants the cold state sets `indexCold`.
+        // A fake world has no warm-up, so past the guard above this is always ready; a
+        // story that wants the cold state sets `indexCold`.
         ready: true,
       };
     },
