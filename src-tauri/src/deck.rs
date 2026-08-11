@@ -109,6 +109,17 @@ pub struct DeckPatch {
     /// Which folder the deck is filed in. `decks.folder_id` is `ON DELETE SET NULL`, so a
     /// folder the user deletes surfaces its decks at the root rather than taking them with it.
     pub folder_id: Option<i64>,
+    /// The deck's long-form notes — the v8 column, and **not** [`Self::description`], which is
+    /// the one-line blurb the "New deck" dialog fills and the gallery tile shows. Two columns
+    /// because they are two things: a caption and a notebook.
+    pub notes: Option<String>,
+    /// Whether this deck keeps a theory list beside its live one.
+    ///
+    /// **Switching it on seeds the theory list from live when there is nothing in it**, in this
+    /// same transaction — an empty theory list beside a full live one reads as data loss, not
+    /// as a blank page. Switching it off **keeps every row**: it hides a switch, it does not
+    /// delete a list. Both halves live in [`crate::deck_theory`].
+    pub theory_enabled: Option<bool>,
 }
 
 /// One deck as the gallery shows it.
@@ -148,6 +159,18 @@ pub struct DeckRow {
     /// inactive, and that is honest: being switched off is the whole of what the Maybeboard is.
     pub card_count: i64,
     pub updated_at: i64,
+    /// Which folder the deck is filed in, or `None` for the root of the tree.
+    pub folder_id: Option<i64>,
+    /// The deck's long-form notes — the v8 column, not [`Self::description`].
+    pub notes: Option<String>,
+    /// Whether this deck keeps a theory list beside its live one.
+    ///
+    /// Read here as well as written through [`DeckPatch`] because a switch the app can set and
+    /// never see is a switch nothing can draw: the editor's Live/Theory control is this
+    /// boolean, and without it on the row every reader would have to guess from whether the
+    /// theory list happens to be empty — which is exactly the state
+    /// [`crate::deck_theory::seed_from_live`] exists to make impossible to interpret.
+    pub theory_enabled: bool,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -322,7 +345,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND dc.variant = 'live'
                          AND cat.is_active = 1
                          AND cat.kind IN ('main','commander','maybe')), 0),
-            d.updated_at
+            d.updated_at, d.folder_id, d.notes, d.theory_enabled
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -340,6 +363,9 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         archived: r.get(8)?,
         card_count: r.get(9)?,
         updated_at: r.get(10)?,
+        folder_id: r.get(11)?,
+        notes: r.get(12)?,
+        theory_enabled: r.get(13)?,
     })
 }
 
@@ -403,6 +429,8 @@ struct DeckBefore {
     is_built: bool,
     archived: bool,
     folder_id: Option<i64>,
+    notes: Option<String>,
+    theory_enabled: bool,
 }
 
 /// Apply an edit. Absent fields are left alone (`coalesce(?n, column)`), which is what
@@ -437,7 +465,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // the UPDATE ran and the row would then record a change that never happened.
     let before: DeckBefore = tx
         .query_row(
-            "SELECT name, format_key, description, cover_card_id, is_built, archived, folder_id
+            "SELECT name, format_key, description, cover_card_id, is_built, archived, folder_id,
+                    notes, theory_enabled
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -449,6 +478,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     is_built: r.get(4)?,
                     archived: r.get(5)?,
                     folder_id: r.get(6)?,
+                    notes: r.get(7)?,
+                    theory_enabled: r.get(8)?,
                 })
             },
         )
@@ -465,6 +496,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 is_built = coalesce(?6, is_built),
                 archived = coalesce(?7, archived),
                 folder_id = coalesce(?8, folder_id),
+                notes = coalesce(?9, notes),
+                theory_enabled = coalesce(?10, theory_enabled),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -476,11 +509,25 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.is_built,
                 patch.archived,
                 patch.folder_id,
+                patch.notes,
+                patch.theory_enabled,
             ],
         )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(GONE.to_owned());
+    }
+    // **Switching the theory list on fills it, in this transaction.** The flag and the list it
+    // reveals are one fact: a flag that committed while the copy rolled back is the empty
+    // theory list beside a full live one that this exists to prevent. Only on the *transition*,
+    // and only when there is nothing there — a plan the user has started is not something a
+    // re-press of the switch may pour the live deck over
+    // (`enabling_theory_again_leaves_a_started_plan_alone`).
+    if patch.theory_enabled == Some(true)
+        && !before.theory_enabled
+        && crate::deck_theory::theory_is_empty(&tx, id)?
+    {
+        crate::deck_theory::seed_from_live(&tx, id)?;
     }
     record_deck_edit(&tx, id, patch, &name, &format_key, &before)?;
     // Sleeving a deck up (or taking it apart) is the one edit here that changes what is
@@ -549,6 +596,19 @@ fn record_deck_edit(
     }
     if let Some(to) = patch.archived.filter(|a| *a != before.archived) {
         field("archived", json!(before.archived), json!(to))?;
+    }
+    if let Some(to) = patch
+        .notes
+        .as_deref()
+        .filter(|n| Some(*n) != before.notes.as_deref())
+    {
+        field("notes", json!(before.notes), json!(to))?;
+    }
+    // One row, whether or not the theory list was seeded above: the seeding is part of
+    // switching the list on, not a second edit, and N `add` rows for one press would read as a
+    // deck somebody typed out.
+    if let Some(to) = patch.theory_enabled.filter(|t| *t != before.theory_enabled) {
+        field("theory", json!(before.theory_enabled), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         crate::deck_audit::record(
@@ -3538,6 +3598,9 @@ mod tests {
             archived: false,
             card_count: 60,
             updated_at: 1_800_000_000,
+            folder_id: Some(7),
+            notes: None,
+            theory_enabled: true,
         })
         .unwrap();
         assert_eq!(
@@ -3546,7 +3609,8 @@ mod tests {
                 "id": 3, "name": "Burn", "formatKey": "modern", "formatName": "Modern",
                 "description": null, "coverCardId": "bolt-lea",
                 "coverArtist": "Christopher Rush", "isBuilt": true, "archived": false,
-                "cardCount": 60, "updatedAt": 1800000000
+                "cardCount": 60, "updatedAt": 1800000000,
+                "folderId": 7, "notes": null, "theoryEnabled": true
             })
         );
 

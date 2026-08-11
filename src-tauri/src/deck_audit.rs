@@ -384,6 +384,28 @@ mod tests {
                 }),
             ),
             (
+                // The seeding rides along inside this one write — switching the theory list on
+                // copies the live deck into it — and it must still be **one** line. N `add`
+                // rows for one press would read as a deck somebody typed out.
+                "deck_update (theory)",
+                Box::new(|| {
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4)
+                        .unwrap();
+                    crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", 2)
+                        .unwrap();
+                    clear(&conn);
+                    crate::deck::update_deck(
+                        &conn,
+                        id,
+                        &DeckPatch {
+                            theory_enabled: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
                 "deck_duplicate",
                 Box::new(|| {
                     crate::deck::duplicate_deck(&conn, id).unwrap();
@@ -857,6 +879,36 @@ mod tests {
         assert_eq!(
             payload,
             json!({ "field": "cover", "from": null, "to": "serra-lea" })
+        );
+
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &DeckPatch {
+                notes: Some("Needs a second Bolt.".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, payload) = newest(&conn, id);
+        assert_eq!(
+            payload,
+            json!({ "field": "notes", "from": null, "to": "Needs a second Bolt." })
+        );
+
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, payload) = newest(&conn, id);
+        assert_eq!(
+            payload,
+            json!({ "field": "theory", "from": false, "to": true })
         );
     }
 

@@ -5,6 +5,7 @@ pub mod db;
 pub mod deck;
 pub mod deck_audit;
 pub mod deck_meta;
+pub mod deck_theory;
 pub mod filters;
 pub mod images;
 pub mod ingest;
@@ -230,6 +231,9 @@ pub fn run() {
             deck_meta::deck_folder_move,
             deck_meta::deck_folder_delete,
             deck_audit::deck_audit_list,
+            deck_theory::deck_theory_diff,
+            deck_theory::deck_theory_copy_from_live,
+            deck_theory::deck_theory_missing_to_wishlist,
             update_status,
             update_check,
             update_download,
