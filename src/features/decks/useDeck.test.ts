@@ -459,6 +459,9 @@ describe("useSwapFromPane", () => {
           categoryId: SIDE.id,
           categoryName: SIDE.name,
           cardId: "p1",
+          // The list the pane was opened from. `live` here, so these keep addressing the list they
+          // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
+          variant: "live",
         }),
       { wrapper },
     );
@@ -494,6 +497,9 @@ describe("useSwapFromPane", () => {
           categoryId: MAIN.id,
           categoryName: MAIN.name,
           cardId: "p1",
+          // The list the pane was opened from. `live` here, so these keep addressing the list they
+          // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
+          variant: "live",
         }),
       {
         wrapper,
@@ -525,6 +531,9 @@ describe("useSwapFromPane", () => {
           categoryId: MAIN.id,
           categoryName: MAIN.name,
           cardId: "p1",
+          // The list the pane was opened from. `live` here, so these keep addressing the list they
+          // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
+          variant: "live",
         }),
       {
         wrapper,

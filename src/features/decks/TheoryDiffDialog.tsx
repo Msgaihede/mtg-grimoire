@@ -261,17 +261,15 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
     // artboard, and a modal in the shipped window covers the window rather than whichever
     // positioned ancestor it happens to be mounted inside.
     //
-    // `LAYER.dragTray` is the rung the direction asks for and the right one — above every popup,
-    // below `SyncProgress`'s takeover, which really does outrank a shopping list. The *name*
-    // belongs to the editor's remove tray; `layers.ts` wants a `modal` entry of its own at the
-    // same height, and this file is not the one that may add it.
+    // `LAYER.overlay` is the rung the editor's four full-window surfaces share — above every
+    // popup, below `SyncProgress`'s takeover, which really does outrank a shopping list.
     //
     // The number is deliberately not written out here, in prose or anywhere else: Tailwind's
     // scanner reads a comment as eagerly as it reads code, so naming the class in a sentence
     // emits a rule for it — and `layers.test.ts`'s sweep counts that as a second place the scale
     // is written. It caught this very line.
     <div
-      className={cn("fixed inset-0 flex items-center justify-center bg-bg/70 p-4", LAYER.dragTray)}
+      className={cn("fixed inset-0 flex items-center justify-center bg-bg/70 p-4", LAYER.overlay)}
       // A press on the scrim and nowhere else. `onMouseDown` rather than `onClick`, because a
       // click fires on the nearest common ancestor of press and release — so a drag that starts
       // on a row's name and ends past the panel's edge is a "click" on the scrim, and the dialog

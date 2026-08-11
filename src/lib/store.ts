@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { DeckVariant } from "./ipc";
 
 /** The five top-level destinations in the sidebar. */
 export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
@@ -34,18 +35,21 @@ export interface PaneDeckContext {
    *  pane is showing. */
   cardId: string;
   /**
-   * **Missing, and known: there is no `variant` here.**
+   * **Which of the deck's two lists the row is in — the fourth part of the slot.**
    *
-   * Schema v8 made a deck two lists and put `variant` in `DECK_CARD_GRAIN`, so this context
-   * names three of the four parts of a slot. `useSwapFromPane` therefore defaults to `live`,
-   * and a pane opened from a **Theory** row either has its swap refused (no row matches) or —
-   * when the same printing sits in the same category of both lists — **swaps the live row while
-   * the reader is looking at the theory one**.
+   * Schema v8 made a deck two lists and put `variant` in `DECK_CARD_GRAIN`, so a context naming
+   * only the deck, the category and the printing names three quarters of a row. It was that for
+   * one task, and the cost was measurable rather than theoretical: `useSwapFromPane` defaults to
+   * `live`, so a pane opened from a **Theory** row either had its swap refused (no row matched)
+   * or — where the same printing sits in the same category of *both* lists — **rewrote the live
+   * row while the reader was looking at the theory one**, silently and with the right-looking
+   * answer.
    *
-   * The fix is a `variant: DeckVariant` field on this interface, set by `openCardFromDeck`'s
-   * two writers, and passed on at `CardDetailPane.tsx`'s `useSwapFromPane` call. Adding it here
-   * is what closes it; the hook already takes the argument.
+   * Written by whichever surface opened the card, because that surface is the one that knows
+   * which list it is drawing; read at `CardDetailPane`'s `useSwapFromPane` call, which is the
+   * only place the swap is pressed.
    */
+  variant: DeckVariant;
 }
 
 /** How the search results are laid out. */

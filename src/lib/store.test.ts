@@ -116,6 +116,7 @@ describe("the deck row a card was opened from", () => {
     categoryId: 1,
     categoryName: "Main deck",
     cardId: "p1",
+    variant: "live",
   };
 
   it("opens the card and remembers the row in one write", () => {

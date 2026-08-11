@@ -66,6 +66,24 @@ export const LAYER = {
    * pointer is being carried to.
    */
   dragTray: "z-40",
+  /**
+   * A full-window layer a view opens over everything it owns: the deck editor's categories
+   * drawer, its history drawer, its theory difference dialog and its settings dialog.
+   *
+   * **One rung for a drawer *and* a modal, deliberately, where two looks more careful.** The
+   * four surfaces above are held in one piece of state (`DeckEditor`'s `Layer` union), because
+   * `useDismissOnEscape` orders exactly two rungs and two `"inner"` peers open at once are not
+   * ordered at all. At most one of the four is ever mounted — so there is no pair for a second
+   * number to order, and inventing one would be a claim about a stack that cannot occur. If a
+   * layer ever has to open *over* one of these, that is the day the rung splits, and the split
+   * will have a real overlap to point at.
+   *
+   * Above `dragTray`, which is the top of what a *view* draws, and below `gate`: a sync taking
+   * the window over covers a deck dialog, never the other way round. The four used to borrow
+   * `gate` and `dragTray` two apiece — each right in effect and wrong in name, which is exactly
+   * the reading a `LAYER` entry exists to make impossible.
+   */
+  overlay: "z-45",
   /** `SyncProgress`'s full-window takeover, over everything. */
   gate: "z-50",
 } as const;

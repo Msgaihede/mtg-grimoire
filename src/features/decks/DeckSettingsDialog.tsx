@@ -207,8 +207,9 @@ function Settings({
       className={cn(
         "fixed inset-0 grid place-items-center bg-bg/75 p-4 sm:p-6",
         // Above every anchored popup and above the editor's drag tray: a settings dialog opened
-        // over the editor must not be painted under a menu the reader left open behind it.
-        LAYER.gate,
+        // over the editor must not be painted under a menu the reader left open behind it. Below
+        // `gate`, which is `SyncProgress` taking the whole window.
+        LAYER.overlay,
       )}
       // `onMouseDown`, not `onClick`, and the target check is why: a drag that starts on a
       // textarea's resize handle and ends out here fires a `click` on this element — the two

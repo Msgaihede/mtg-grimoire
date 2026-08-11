@@ -27,7 +27,8 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.raised)).toBeLessThan(numberOf(LAYER.header));
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
     expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.dragTray));
-    expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.gate));
+    expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.overlay));
+    expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.gate));
   });
 
   /**
