@@ -166,6 +166,14 @@ pub fn run() {
             focus_existing_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        // The system file picker, for one control: choosing a custom deck cover. Only
+        // `dialog:allow-open` is granted in `capabilities/default.json`, so the four other
+        // verbs this plugin can serve — save, message, ask and confirm — are unreachable from
+        // the webview however this is initialised. The app's own questions are drawn in the
+        // page (`DeleteConfirm`, the settings dialog), which is a deliberate choice and not an
+        // oversight: a native message box cannot be styled, tested over CDP, or read by the
+        // story runner.
+        .plugin(tauri_plugin_dialog::init())
         // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
         // (that is Electron): registering the scheme here is what privileges it, and the
         // CSP in tauri.conf.json is what lets the page load from it. On Windows the origin

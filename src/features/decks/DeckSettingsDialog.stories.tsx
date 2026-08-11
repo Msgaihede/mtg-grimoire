@@ -10,9 +10,12 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
  * the cover grid, the name, the format and the description are live here — picking art really
  * writes, and the credit line underneath the picture really changes. `deck_folder_list` and
  * `deck_set_folder` are not, so the Folder row draws its own read failure and disables the
- * move; `deck_set_cover_image` is not either, so the upload's own write refuses. That is the
- * honest picture of the surface today, and the alternative — teaching the fake here — would
- * mean this component's stories were the one place the fake and the mirror disagreed.
+ * move; `deck_set_cover_image` is not either. That is the honest picture of the surface today,
+ * and the alternative — teaching the fake here — would mean this component's stories were the
+ * one place the fake and the mirror disagreed.
+ *
+ * The **upload** is a third kind of gap and not the fake's to close: its picker is the
+ * operating system's, so no browser can show it. See `PickerUnavailable`.
  *
  * The **notes** field and the **theory** switch are a subtler version of the same gap: the fake
  * accepts their patch and answers the row's DDL defaults, so both write and neither sticks.
@@ -102,21 +105,29 @@ export const CommanderDeck: Story = {
 };
 
 /**
- * The upload, opened.
+ * The upload, pressed.
  *
- * **A path typed in rather than a file picker, because this app has no file picker** —
- * `@tauri-apps/plugin-dialog` is not a dependency, and `deck_set_cover_image` takes a path the
- * backend reads rather than bytes. The copy is the whole affordance: an "Upload" button that
- * silently wanted a path would fail on every ordinary attempt at using it.
+ * **The picker is the operating system's, so it is the one control on this screen that cannot
+ * work in a browser.** `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and
+ * outside the app window there is nothing behind it — so the press ends in the refusal line
+ * beside the button rather than in a file dialog. That is the honest state to story: what a
+ * reader sees here is exactly what the component does when the picker cannot be opened, which
+ * is a path the unit tests also cover with a rejection.
+ *
+ * The two answers a *working* picker gives are unit-tested rather than storied, for the same
+ * reason: a chosen path and a cancel are both things only the OS can produce.
  */
-export const UploadingAPicture: Story = {
+export const PickerUnavailable: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
     await userEvent.click(await canvas.findByRole("button", { name: "Upload an image…" }));
 
-    await expect(canvas.getByLabelText("Path to a picture on this computer")).toHaveFocus();
-    await expect(canvas.getByRole("button", { name: "Use this picture" })).toBeDisabled();
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(
+      /Could not open the file picker/,
+    );
+    // The button comes back: a picker that would not open is not a control that is now spent.
+    await expect(canvas.getByRole("button", { name: "Upload an image…" })).toBeEnabled();
   },
 };
 

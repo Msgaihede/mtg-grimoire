@@ -20,6 +20,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# The system file picker, and the *only* thing it is here for: choosing a custom deck cover.
+# The webview cannot name a file on disk on its own, and `deck_set_cover_image` takes a path
+# the backend reads rather than bytes — so this plugin is what stands between a button and a
+# command that already exists. `capabilities/default.json` grants `dialog:allow-open` and
+# nothing else; the other four dialog verbs (save, message, ask, confirm) are not permitted.
+tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 flate2 = "1"
