@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
-import { cardImageUrl } from "@/lib/images";
+import { cardImageUrl, imageOrigin } from "@/lib/images";
 import { spec } from "./validation/fixtures";
 
 const deckList = vi.hoisted(() => vi.fn());
@@ -211,6 +211,77 @@ describe("DecksPage", () => {
     await tileFor("Sunday draft");
     expect(screen.getAllByText(/art by/i)).toHaveLength(1);
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A custom cover is drawn, and it is drawn from `coverKind`.**
+   *
+   * The bug this pins was found in the live window and is invisible to a reading of the tile:
+   * `Cover` took only `cardId`, so a deck wearing the reader's own picture rendered "No cover"
+   * and no `<img>` at all while the route answered the file 626×457 in 2 ms. Nothing was wrong
+   * underneath — the gallery never asked.
+   *
+   * The URL names the **deck**, not the picture, and carries no cache-buster: the route is
+   * served `no-store` so a stable URL can carry changing bytes.
+   */
+  it("draws a custom cover from the cover route, not from the card id", async () => {
+    deckList.mockResolvedValue([{ ...BURN, coverKind: "custom" }]);
+
+    wrap(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    const img = tile.querySelector("img");
+    expect(img).toHaveAttribute("src", `${imageOrigin(navigator.userAgent)}/cover/4`);
+    // Not the card art, even though this deck still carries a `coverCardId`: setting a custom
+    // cover never clears the card id, so "has one" and "is showing one" are different questions.
+    expect(img).not.toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
+    expect(tile).not.toHaveTextContent("No cover");
+  });
+
+  /**
+   * **The artist rule is Scryfall's, so it stops at Scryfall's pictures.**
+   *
+   * A file the reader uploaded carries no Scryfall artist and needs no credit — so the custom
+   * arm must never be gated on `coverArtist` (or on `coverCardId`), or every custom cover
+   * disappears for a second and quieter reason than the first.
+   *
+   * The fixture is the deck that has only ever worn its own picture: **no card id, and so no
+   * artist either.** That is exactly the row such a gate would render invisible, and it is the
+   * ordinary state of a deck whose reader uploaded a photograph and never picked a card.
+   */
+  it("draws a custom cover for a deck that has no card art and no artist", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, coverKind: "custom", coverCardId: null, coverArtist: null },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    expect(tile.querySelector("img")).toHaveAttribute(
+      "src",
+      `${imageOrigin(navigator.userAgent)}/cover/4`,
+    );
+    // And not the empty frame: "No cover" is what this said before the fix.
+    expect(tile).not.toHaveTextContent("No cover");
+    expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
+  });
+
+  /** And the card-art arm keeps the rule: the credit rides the picture it is about. */
+  it("still credits the illustrator when the deck is showing card art", async () => {
+    // Two decks, identical but for which cover they wear — so the only thing that can explain
+    // one credit and not two is `coverKind`.
+    deckList.mockResolvedValue([
+      BURN,
+      { ...BURN, id: 5, name: "Sunday burn", coverKind: "custom" },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const cardArt = (await tileFor("Burn")).closest("li")!;
+    const custom = (await tileFor("Sunday burn")).closest("li")!;
+    expect(within(cardArt).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+    expect(within(custom).queryByText(/art by/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Art by Rebecca Guay")).toHaveLength(1);
   });
 
   /**
