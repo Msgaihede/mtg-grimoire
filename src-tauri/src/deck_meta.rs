@@ -13,10 +13,13 @@
 //!   order moves the same way a card add or a rename does.
 //! * **Folders** are not of any deck at all — they file decks the way a filesystem directory
 //!   files files, and `decks.folder_id` is `ON DELETE SET NULL` rather than the CASCADE every
-//!   category and tag write takes. A folder write therefore touches no deck's `updated_at`
-//!   and records nothing in `deck_audit` (which is `deck_id NOT NULL` — a folder edit has no
-//!   deck to name). The `folder` audit *kind* is not about folder CRUD at all: it records a
-//!   **deck being filed**, and it is written by `deck::update_deck`.
+//!   category and tag write takes. No folder write touches a deck's `updated_at`, and three of
+//!   the four record nothing in `deck_audit` (which is `deck_id NOT NULL` — creating, renaming
+//!   or moving a folder changes no deck, so there is no deck to name). **[`delete_folder`] is
+//!   the exception**: SET NULL re-files every deck in the folder and in the sub-folders that
+//!   CASCADE with it, so it writes one `folder` row per deck it un-filed. The `folder` audit
+//!   *kind* is not about folder CRUD even there: it records a **deck being filed**, and the
+//!   other two writers of it are `deck::update_deck` and `deck::set_folder`.
 //!
 //! Every category and tag write records one [`crate::deck_audit`] row inside its own
 //! transaction, so a refused write leaves no history. The `tag` kind covers two events and
@@ -103,6 +106,13 @@ pub const FOLDER_GONE: &str = "That folder is not there any more.";
 /// not merely a confusing tree, it is a graph SQLite's recursive CASCADE would walk forever
 /// the day the folder (or an ancestor of it) is deleted.
 pub const FOLDER_CYCLE: &str = "A folder cannot be moved inside itself.";
+
+/// How far [`move_folder`]'s cycle walk will climb before it calls the chain a cycle.
+///
+/// [`crate::deck::folder_path`]'s `MAX_DEPTH`, kept separately because the two answer to
+/// different things: that one gives up and reports the path it read, this one refuses the
+/// write. Deep enough that no filing anyone does by hand reaches it.
+const MAX_FOLDER_DEPTH: usize = 64;
 
 /// The variant a category or tag write reads its own row back with, when the command that
 /// changed it carries no variant of its own to ask by (`create`, `rename`, `setActive`,
@@ -1083,6 +1093,14 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<DeckFolde
 /// upward from the *proposed* parent, and if that walk ever meets `id` — immediately, if
 /// `parentId` names `id` itself — refuses rather than writing a loop `parent_id`'s own
 /// `ON DELETE CASCADE` would otherwise walk forever the day one of them is deleted.
+///
+/// **The walk has a hop budget**, [`crate::deck::folder_path`]'s reasoning applied to the one
+/// place it matters most. This walk is what *keeps* the tree acyclic, so it cannot assume it —
+/// and it runs inside `spawn_blocking` **while holding the app-wide write lock**, so a
+/// `parent_id` cycle that arrived some other way (a hand-edited database, a restored backup)
+/// would not hang this one command: it would deadlock every write in the app for the life of
+/// the process. Exceeding the budget is answered as a cycle, which is the only thing a chain
+/// that long can be.
 pub fn move_folder(
     conn: &Connection,
     id: i64,
@@ -1090,8 +1108,13 @@ pub fn move_folder(
 ) -> Result<DeckFolderRow, String> {
     if let Some(start) = parent_id {
         let mut cursor = Some(start);
+        let mut hops = 0usize;
         while let Some(candidate) = cursor {
             if candidate == id {
+                return Err(FOLDER_CYCLE.to_owned());
+            }
+            hops += 1;
+            if hops > MAX_FOLDER_DEPTH {
                 return Err(FOLDER_CYCLE.to_owned());
             }
             cursor = conn
@@ -1121,9 +1144,53 @@ pub fn move_folder(
 /// `ON DELETE SET NULL`, so they surface at the root, filed nowhere, still exactly as they
 /// were. Sub-folders go with it: `deck_folders.parent_id` is `ON DELETE CASCADE` on itself.
 /// Like [`crate::deck::delete_deck`], an id that resolves to nothing is a success.
+///
+/// **This is the one folder write that records history**, and it is the exception that proves
+/// the rule the other three follow: create, rename and move change a folder and no deck, so
+/// there is no `deck_audit.deck_id` to file a row under. A delete changes N decks' `folder_id`,
+/// and their ids are exactly the ones that changed — so each gets the same
+/// [`crate::deck::record_filed`] row that [`crate::deck::set_folder`] writes when the user
+/// re-files one deck by hand. Without it this is the single "a deck changed and nothing
+/// recorded it" hole in the app.
+///
+/// **The decks are read before the `DELETE`**, which is the whole of the ordering: afterwards
+/// their `folder_id` is already NULL and there is nothing left to say which they were. The
+/// recursive term collects the sub-folders `parent_id`'s CASCADE will take too, because their
+/// decks are un-filed by the same statement — `UNION`, never `UNION ALL`, so a `parent_id`
+/// cycle that arrived from outside this module terminates instead of running forever under the
+/// write lock ([`move_folder`]'s hop budget, wearing its other face).
+///
+/// **`decks.updated_at` is deliberately not moved.** The gallery sorts by it
+/// (`deck::list_decks`), and a folder delete would otherwise throw every deck that was in it to
+/// the front of the gallery. `set_folder` does move it, and the asymmetry is the point: there
+/// the user acted on that one deck and it is meant to rise.
 pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
-    conn.execute("DELETE FROM deck_folders WHERE id = ?1", params![id])
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let unfiled: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(
+                "WITH RECURSIVE subtree(id) AS (
+                     SELECT ?1
+                     UNION
+                     SELECT f.id FROM deck_folders f JOIN subtree s ON f.parent_id = s.id
+                 )
+                 SELECT d.id FROM decks d
+                  WHERE d.folder_id IN (SELECT id FROM subtree)
+                  ORDER BY d.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<i64>>>()
+            .map_err(|e| e.to_string())?
+    };
+    tx.execute("DELETE FROM deck_folders WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
+    for deck_id in unfiled {
+        crate::deck::record_filed(&tx, deck_id, None)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1955,6 +2022,38 @@ mod tests {
         );
     }
 
+    /// The walk that *keeps* the tree acyclic cannot assume it is, and this is the case that
+    /// proves the hop budget rather than the `candidate == id` arm: a cycle written straight
+    /// into the table, between two folders neither of which is the one being moved. The walk
+    /// from the proposed parent therefore never meets `id` and would climb for ever — inside
+    /// `spawn_blocking`, holding the app-wide write lock, so it is every write in the app that
+    /// stops rather than this one command.
+    #[test]
+    fn deck_folder_move_gives_up_on_a_cycle_it_did_not_write() {
+        let conn = conn();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, Some(a.id), "B").unwrap();
+        let moving = create_folder(&conn, None, "C").unwrap();
+        // Corruption this module cannot produce: a hand-edited database, a restored backup.
+        conn.execute(
+            "UPDATE deck_folders SET parent_id = ?2 WHERE id = ?1",
+            params![a.id, b.id],
+        )
+        .unwrap();
+
+        let err = move_folder(&conn, moving.id, Some(a.id)).unwrap_err();
+
+        assert_eq!(err, FOLDER_CYCLE, "a sentence, not a hang");
+        let unchanged: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM deck_folders WHERE id = ?1",
+                params![moving.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, None, "and the refused move wrote nothing");
+    }
+
     #[test]
     fn deck_folder_move_refuses_moving_a_folder_into_itself_directly() {
         let conn = conn();
@@ -2093,6 +2192,59 @@ mod tests {
             child_gone, 0,
             "the sub-folder cascades away with its parent"
         );
+    }
+
+    /// The one "a deck changed and nothing recorded it" hole this table exists to have none of.
+    ///
+    /// Two decks, one filed in the folder being deleted and one in a sub-folder that CASCADEs
+    /// away with it, so the recursive term is what puts the second row in the history at all.
+    /// A third deck outside the folder is the control: SET NULL never touched it, so it has
+    /// nothing to record. Each row is the same `folder`/`move` shape `set_folder` writes when
+    /// the user re-files one deck by hand, with `folder: null` for the root.
+    #[test]
+    fn deck_folder_delete_records_every_deck_it_un_files() {
+        let conn = conn();
+        let root = create_folder(&conn, None, "Standard").unwrap();
+        let child = create_folder(&conn, Some(root.id), "Aggro").unwrap();
+        let filed = deck(&conn, "Burn");
+        let nested = deck(&conn, "Prowess");
+        let elsewhere = deck(&conn, "Control");
+        crate::deck::set_folder(&conn, filed, Some(root.id)).unwrap();
+        crate::deck::set_folder(&conn, nested, Some(child.id)).unwrap();
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+
+        delete_folder(&conn, root.id).unwrap();
+
+        let rows: Vec<(i64, String, String)> = conn
+            .prepare("SELECT deck_id, kind, payload FROM deck_audit ORDER BY deck_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+            vec![filed, nested],
+            "one row per deck un-filed, and none for the deck that was never in the folder"
+        );
+        for (_, kind, payload) in &rows {
+            assert_eq!(kind, crate::deck_audit::FOLDER);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(payload).unwrap(),
+                serde_json::json!({ "action": "move", "folder": null }),
+                "filed nowhere is null, never the empty string"
+            );
+        }
+
+        // And an empty folder records nothing, because nothing changed.
+        let empty = create_folder(&conn, None, "Unused").unwrap();
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+        delete_folder(&conn, empty.id).unwrap();
+        let after: i64 = conn
+            .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, 0);
+        assert!(elsewhere > 0, "the control deck exists and was left alone");
     }
 
     // -- Rule 4: deck_tag_suggestions is global ---------------------------------------------

@@ -17,11 +17,16 @@
 //! * **Every deck write records exactly one row.** A write that silently records nothing is
 //!   precisely the bug this table exists to prevent, so the rule is a rule and not a
 //!   preference — `every_deck_write_leaves_exactly_one_audit_row` drives each command once
-//!   and counts. The four writes that deliberately record nothing each say why on their own
-//!   doc: [`crate::deck::delete_deck`] (the row would CASCADE away with the deck it describes),
-//!   [`crate::deck::missing_to_wishlist`] (it writes the wishlist, not the deck), and
-//!   [`crate::deck_meta`]'s folder CRUD (a folder belongs to no deck, and `deck_audit.deck_id`
-//!   is `NOT NULL` — there is nothing to file the row under).
+//!   and counts. **Six** writes deliberately record nothing, and each says why on its own doc:
+//!   [`crate::deck::delete_deck`] (the row would CASCADE away with the deck it describes);
+//!   [`crate::deck::missing_to_wishlist`] and [`crate::deck_theory::missing_to_wishlist`]
+//!   (they write the wishlist, not the deck); and three of `deck_meta`'s four folder writes —
+//!   [`crate::deck_meta::create_folder`], [`crate::deck_meta::rename_folder`] and
+//!   [`crate::deck_meta::move_folder`] — because a folder belongs to no deck and
+//!   `deck_audit.deck_id` is `NOT NULL`, so there is nothing to file the row under. The fourth,
+//!   [`crate::deck_meta::delete_folder`], is **not** exempt: `decks.folder_id` is
+//!   `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row per deck it
+//!   un-filed — N ids, and they are exactly the rows that changed.
 //!
 //! [`payload`]: DeckAuditEntry::payload
 
@@ -574,6 +579,20 @@ mod tests {
                         .id;
                     clear(&conn);
                     crate::deck_meta::delete_tag(&conn, tag).unwrap();
+                }),
+            ),
+            (
+                // The one folder write that is a deck write. Create and rename and move change
+                // no deck and are exempt; a delete re-files every deck in the folder through
+                // `decks.folder_id`'s SET NULL, and one deck in it is one row.
+                "deck_folder_delete",
+                Box::new(|| {
+                    let doomed = crate::deck_meta::create_folder(&conn, None, "Retired")
+                        .unwrap()
+                        .id;
+                    crate::deck::set_folder(&conn, id, Some(doomed)).unwrap();
+                    clear(&conn);
+                    crate::deck_meta::delete_folder(&conn, doomed).unwrap();
                 }),
             ),
         ];

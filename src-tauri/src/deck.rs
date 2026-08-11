@@ -730,12 +730,18 @@ pub fn set_folder(
     read_deck(conn, deck_id)?.ok_or_else(|| GONE.to_owned())
 }
 
-/// The one `folder` history row, written by both writers that can file a deck.
+/// The one `folder` history row, written by every writer that can file a deck: the two here,
+/// and [`crate::deck_meta::delete_folder`], which un-files every deck in the folder it
+/// destroys.
 ///
 /// `None` is the root of the tree and records `"folder": null` — the absence of a path, not the
 /// empty string, because a reader has to be able to tell "filed nowhere" from "filed under a
 /// folder whose name is blank" and only one of those is a state the app can produce.
-fn record_filed(tx: &Connection, deck_id: i64, folder_id: Option<i64>) -> Result<(), String> {
+pub(crate) fn record_filed(
+    tx: &Connection,
+    deck_id: i64,
+    folder_id: Option<i64>,
+) -> Result<(), String> {
     let folder = match folder_id {
         Some(id) => json!(folder_path(tx, id)?),
         None => json!(null),
