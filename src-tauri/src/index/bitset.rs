@@ -1,6 +1,6 @@
 //! A fixed-size bitset over `cards.rowid`, one bit per printing.
 //!
-//! 116 694 printings is 3 647 machine words — 14 KB — so intersecting two filters is a
+//! 116 694 printings is 1 824 machine words — 14 KB — so intersecting two filters is an
 //! `AND` and a `popcount` over 14 KB rather than a query. The whole low-cardinality half of
 //! [`super::CardIndex`] is 40 of these.
 
@@ -13,8 +13,16 @@ pub struct BitSet {
 const BITS: usize = 64;
 
 impl BitSet {
-    /// `capacity` is a rowid ceiling, not a count: index `capacity - 1` is the highest doc
-    /// this set can hold.
+    /// `capacity` is a floor, not a ceiling: it is rounded up to a whole word, and the set
+    /// then holds *every* doc below [`BitSet::capacity`] — `new(100)` takes two words and
+    /// holds doc 127, not 99. Pass `max_rowid + 1`.
+    ///
+    /// **Size any sibling array indexed by the same doc ids from [`BitSet::capacity`], never
+    /// from the number passed here.** The two differ by up to 63, and [`BitSet::set`]
+    /// deliberately *accepts* a doc that lands in that padding window rather than dropping
+    /// it — so [`BitSet::for_each`] can emit a doc past the end of an array sized from this
+    /// argument. Sizing from `capacity()` is what makes that impossible rather than merely
+    /// unlikely.
     pub fn new(capacity: usize) -> Self {
         BitSet {
             words: vec![0; capacity.div_ceil(BITS)],
@@ -124,14 +132,14 @@ mod tests {
         assert_eq!(seen, vec![5, 64, 130, 299]);
     }
 
-    /// A capacity that is not a multiple of 64 must not let a stray high bit be counted.
-    ///
-    /// `capacity` reports the rounded-up word capacity — 128 for the 100 asked for here, not
-    /// 100 — because that is what the set really holds: the tail of the last word is usable,
-    /// and doc 127 set on it stays set. Rounding up rather than down is what keeps the last
-    /// rowids of a corpus addressable.
+    /// A capacity that is not a multiple of 64 is rounded up to one, and `capacity` reports
+    /// the rounded figure — 128 here, not the 100 asked for — because that is what the set
+    /// really holds: the tail of the last word is usable storage, and doc 127 set on it stays
+    /// set. Rounding *up* rather than down is what keeps the last rowids of a corpus
+    /// addressable, and it is why a sibling array indexed by the same docs must be sized from
+    /// `capacity()` and never from the argument to `new`.
     #[test]
-    fn a_ragged_capacity_counts_nothing_past_its_end() {
+    fn a_ragged_capacity_rounds_up_to_a_whole_word() {
         let mut b = BitSet::new(100);
         assert_eq!(b.count(), 0);
         assert!(!b.contains(99));
