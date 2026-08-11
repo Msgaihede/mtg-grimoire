@@ -8,18 +8,31 @@ import { cn } from "@/lib/utils";
 /**
  * The holo sweep laid over a foil card's art.
  *
- * A real foil card is a diffraction grating: it throws a different hue at every angle, which
- * is exactly what a multi-stop gradient across the frame approximates. Scryfall's photography
- * has none of it — the art of a foil-only printing is byte-identical to a nonfoil one — so
- * without this the app has no way to show that 12 366 of its printings are foil.
+ * A real foil card is a diffraction grating: it throws a different hue at every angle, and
+ * what the eye actually reads as "shiny" is the **specular streak** running across it rather
+ * than the rainbow on its own. Scryfall's photography has neither — the art of a foil-only
+ * printing is byte-identical to a nonfoil one — so without this the app has no way to show
+ * that 12 366 of its printings are foil.
  *
- * `overlay` blend and 12 % opacity: it *tints* the art and never covers it, which is the
- * brief's one hard requirement. A screenshot is the acceptance test — whether 12 % over a dark
- * Phyrexian artwork is still legible is not something an assertion can answer.
+ * So: a bright narrow band at 41 % of a 115° sweep, with low-alpha rainbow stops either side,
+ * in **`screen`**. Every number here was chosen at the window rather than at the keyboard.
+ *
+ * **`overlay` at 12 % was the first attempt and it was invisible** — measured 2026-08-11 over
+ * CDP by screenshotting one magnified foil tile with the sheen shown and hidden: the two
+ * images were indistinguishable, and the corner chip was doing all the work. `overlay`
+ * preserves the underlying luminance and only nudges hue, which on already-saturated card art
+ * is no signal at all. Raising it to 30 % changed nothing worth seeing; `color-dodge` at 28 %
+ * was visible but blew the light areas out.
+ *
+ * `screen` lightens by the overlay's own brightness, so the alphas *are* the strength: the
+ * rainbow stops sit at 0.10–0.13 and only the band reaches 0.34. Verified on the live wall —
+ * two printings of one card side by side, one foil and one not, told apart at a glance with
+ * the rules text on both still readable.
  */
 const FOIL_SHEEN =
-  "linear-gradient(115deg, #ff5f6d 0%, #ffc371 20%, #47e5bc 40%, " +
-  "#3b8beb 60%, #a95fe8 80%, #ff5f6d 100%)";
+  "linear-gradient(115deg, rgba(255,0,90,.10) 0%, rgba(255,200,0,.11) 14%, " +
+  "rgba(0,255,180,.13) 28%, rgba(255,255,255,.34) 41%, rgba(0,160,255,.13) 56%, " +
+  "rgba(180,0,255,.12) 74%, rgba(255,0,120,.10) 100%)";
 
 /**
  * One card's art in its 5:7 frame — the picture, its retry, and what is drawn when there is
@@ -161,26 +174,38 @@ export function CardArt({
 export function FoilOverlay({ finish }: { finish: Finish | null }) {
   if (!finish) return null;
   return (
-    <>
-      {/* `aria-hidden` because the chip beside it already says the word, and a screen reader
-          does not need it twice. `pointer-events-none` because the frame is usually inside a
-          button and a full-bleed overlay would swallow every click on it. */}
+    // **`aria-hidden` over the whole overlay, chip included, and that is load-bearing.** This
+    // frame usually sits *inside* a button, and a button's accessible name is computed from
+    // its contents — so the chip's "Foil" joined it and a wall of foil tiles became buttons
+    // called "Consecrated Sphinx Foil". Measured over CDP 2026-08-11, where a tile button's
+    // name came back as bare "Foil". It is the same trap the owned badge avoids by being a
+    // *sibling* of the button rather than a child of it.
+    //
+    // Nothing is lost: the finish is stated in text on every surface that has room for it —
+    // the search table's Name cell, the deck row beside the card's name, the pane's per-finish
+    // prices — and the wall's tile adds an `sr-only` word to its caption. This is the
+    // decoration; those are the statement.
+    //
+    // `pointer-events-none` for the second half of the same idea: a full-bleed overlay inside
+    // a button would swallow every click on it.
+    <span aria-hidden="true" className="pointer-events-none">
       <span
         data-foil-sheen
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 opacity-[0.12] mix-blend-overlay"
+        // No opacity class: in `screen` the gradient's own alphas are the strength, and a
+        // second multiplier would be one more number to keep in step with them.
+        className="absolute inset-0 mix-blend-screen"
         style={{ backgroundImage: FOIL_SHEEN }}
       />
-      {/* The chip is what *says* foil; the sheen is what *looks* foil. Neither is asked to do
-          the other's job — a sheen alone is ambiguous at a glance on dark art, and a chip
+      {/* The chip is what *says* foil at a glance; the sheen is what *looks* foil. Neither is
+          asked to do the other's job — a sheen alone is ambiguous on busy art, and a chip
           alone says nothing about the object being a different physical thing.
 
           Top-right, because a tile's other two corners are spoken for: bottom-left the owned
           badge, top-left the printing count. The backing is the app's own table felt at 85 %,
           matching those two exactly. */}
-      <span className="pointer-events-none absolute top-1 right-1 flex items-center rounded bg-bg/85 px-1 py-0.5">
+      <span className="absolute top-1 right-1 flex items-center rounded bg-bg/85 px-1 py-0.5">
         <FinishMark finish={finish} />
       </span>
-    </>
+    </span>
   );
 }

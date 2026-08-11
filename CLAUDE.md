@@ -259,7 +259,7 @@ the user's, and it is never committed. Seed **user tables only**: `cards` and `s
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
 ## Storybook (measured 2026-08-09/10)
-`npm run storybook` · `npm run build-storybook`. **255 stories across 32 story files, 33 docs
+`npm run storybook` · `npm run build-storybook`. **275 stories across 35 story files, 36 docs
 pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
@@ -325,7 +325,7 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (176 plays today), which is what puts a story's own claim inside `npm run verify` —
+  (195 plays today), which is what puts a story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.
@@ -419,6 +419,50 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   **With any text filter every one of them is 12–15 ms**, because FTS narrows the set first.
   No index was added: a multi-term sort cannot use one past its leading column, and
   `schema::swap_staging` drops and replays every index on `cards` on each ~93 s sync.
+- **The search collapses printings into one row per card, and `idx_cards_collapse` is what
+  pays for it.** Measured 2026-08-11 through `run_search` itself (release build, read-only
+  copy of the live corpus, medians of five): **today's un-indexed browse 397 ms** (`SCAN c`,
+  a full table scan) → **25 ms uncollapsed** and **145 ms collapsed** with the index. The
+  index is worth more than the feature it was added for — every uncollapsed search gets that
+  16× for nothing — while grouping 107 337 rows into 37 553 costs ~120 ms on top. 14 MB,
+  0.7 s per sync, and it lives in `schema::CARDS_INDEXES` like every other index on `cards`.
+- **Time the query the app runs, not a transcription of it — and when a change adds an index,
+  measure the before-state with the index too.** The first draft of that table was wrong in
+  exactly that way: the uncollapsed baseline was taken before the index existed and the
+  collapsed figures after, which credited the grouping with a 2.3× win the index had paid
+  for. A `#[test]` calling `run_search` found it in one run.
+- **The collapsed shape is a `GROUP BY` step that also computes the representative's id, then
+  a primary-key join back.** `substr(max(coalesce(released_at,'0000-00-00') || id), 11)` is
+  the newest printing's id — the date is fixed-width, so the concatenation orders as
+  `released_at DESC, id DESC` and the id starts at character 11. That is 108 ms against
+  767 ms for joining on the group key, and against **2 486 ms** for the obvious
+  `row_number() OVER (PARTITION BY …)`, which stays slow even with the index.
+- **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must *not* be.**
+  `oracle_id` is nullable, so a bare `GROUP BY c.oracle_id` merges every null-oracle printing
+  into one card — silently, with a printing count and price range spanning unrelated cards.
+  Null-safety costs 69 ms and no live row needs it (0 of 116 590); it is spent because the
+  failure is invisible. But `owned`/`wishlisted` probe **`c.oracle_id` on the joined
+  representative row**: written against the group key instead they cost **1 514 ms** on the
+  browse and **12 729 ms** on the rarity sort, because `coalesce(…)` is not indexable and all
+  37 553 groups then re-scan `cards`. An *expression* index does not rescue it either —
+  SQLite scans one but will not treat it as covering (700 ms).
+- **`bm25()` cannot be aggregated.** `min(bm25(…))`, the same expression in a subquery, and an
+  ordinary CTE all fail with *"unable to use function bm25 in the requested context"*; only
+  `WITH … AS MATERIALIZED` works, so that keyword is load-bearing syntax. FTS5's `rank` column
+  *does* aggregate and carries the table's default weights, which would silently discard this
+  app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
+  unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
+- Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
+  gives up its `LIMIT` and the sort runs after the join: 670 ms on a completely unfiltered
+  browse, 88 ms with any text. Name and price are answered by the grouping itself (145/150 ms).
+- **Art series outrank the card they depict, and collapse does not fix it.**
+  `Lightning Bolt // Lightning Bolt` (`astx 76s`, `layout='art_series'`) held the phrase twice
+  in its name field and bm25 rewarded it; art series carry their own `oracle_id`, so grouping
+  leaves them as their own rows. One `CASE` term at the front of the **relevance fallback
+  only** fixes it at 0.2 ms — a ranking nudge, never a filter, and an explicit sort is left
+  exactly as the reader asked for it. `min()` over that term is exact because no oracle group
+  mixes the two kinds: 3 610 groups are represented by an art or token row and **0** of them
+  also contains a real printing.
 - **The default browse's 277 ms is a full table scan, and one `DESC` is why.** `ORDER_NAME`
   is `c.name ASC, c.released_at DESC` — `idx_cards_name` can satisfy a leading `c.name` and
   block-sort **one** trailing term within each group of identically-named printings, and with
@@ -444,7 +488,11 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v5.** v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
+- **Schema is v7.** v7 re-runs `cards_indexes_sql()` to add `idx_cards_collapse` to databases
+  that migrated before it existed — every statement in `CARDS_INDEXES` is `IF NOT EXISTS`, so
+  the step is "bring the index list up to date" and is idempotent. (v6 added `app_meta`; the
+  paragraph below describes v5.)
+- v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
   and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
   (2026) makes a commander out of a Vehicle or Spacecraft *with a P/T box*, and that is
   unanswerable without them. Its backfill reads `raw` through `schema::json_raw` exactly as
@@ -522,6 +570,30 @@ pages** (every story file is `autodocs`, plus `.storybook/DesignSystem.mdx`).
   is *element identity*, which is what `CardImage.test.tsx` and the two integration tests
   assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
   independently by keying its whole `Preview` on the printing.
+- **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
+  no-art fallback and the foil marking, in one place. Five surfaces draw a card and each had
+  rebuilt part of it. The card pane's main art is the deliberate exception: it keeps a flip
+  fade, a bespoke "no image yet" panel and no retry hook, so it borrows only `FoilOverlay`.
+- **The foil marking states what the object *is*, never what it could have been.**
+  `soleFinish` marks a printing that leaves no choice — 12 366 foil-only and 892 etched-only
+  paper printings — and never the 53 224 that merely *have* a foil version, which would put a
+  sheen on 61 % of every wall. A collection row passes its entry's own stored finish instead;
+  a deck row gets the glyph rather than the sheen, because its picture is a 48×36 art crop
+  where a gradient is a smudge.
+- **`mix-blend-mode: overlay` is invisible over card art, and only a screenshot says so.**
+  The first foil sheen was a rainbow gradient at 12 % in `overlay`; magnifying one foil tile
+  over CDP and shooting it with the sheen shown and hidden produced **indistinguishable
+  images** — `overlay` preserves luminance and only nudges hue, which on saturated art is no
+  signal at all. 30 % changed nothing worth seeing and `color-dodge` blew the highlights out.
+  What works is **`screen` with a specular band**: low-alpha rainbow stops (0.10–0.13) either
+  side of one white stop at 0.34, 41 % along a 115° sweep — the streak is what the eye reads
+  as "shiny", and being narrow it obscures almost nothing.
+- **A mark drawn *inside* the tile's button joins that button's accessible name.** The foil
+  chip did, and a wall of foils became buttons called "Consecrated Sphinx Foil" — measured in
+  the shipped window, where a tile button's name came back as bare "Foil". The whole
+  `FoilOverlay` is `aria-hidden` now and the finish is stated in text where each surface has
+  room (the wall's caption `sr-only`, the search table's Name cell, the pane's per-finish
+  prices). This is the same rule the owned badge follows by being a *sibling* of the button.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's

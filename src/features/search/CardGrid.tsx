@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
-import type { Finish } from "@/lib/finish";
+import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
@@ -340,6 +340,8 @@ function Tile<T extends GridCard>({
 }) {
   const mark = badge?.(card);
   const corner = topLeft?.(card);
+  const tileFinish = finish?.(card) ?? null;
+  const finishWord = tileFinish ? FINISH_LABEL[tileFinish] : null;
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -391,7 +393,7 @@ function Tile<T extends GridCard>({
             cardId={card.id}
             name={card.name}
             selected={selected}
-            finish={finish?.(card) ?? null}
+            finish={tileFinish}
             hoverZoom
           />
         </button>
@@ -434,6 +436,11 @@ function Tile<T extends GridCard>({
         <RarityGem rarity={card.rarity} />
         <span className="min-w-0 flex-1 truncate">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
+          {/* The finish in words, because the art's chip is `aria-hidden` — it sits inside
+              the tile's button, where any text of its own would join the button's accessible
+              name and make a wall of foils forty buttons called "… Foil". Stated here
+              instead, in the caption, which is a sibling of that button. */}
+          {finishWord && <span className="sr-only">, {finishWord}</span>}
         </span>
         {/* Whatever the caller hangs here — the search's quick-add, anchored to this
             caption. The tile does not build it, because what a control needs to be honest
