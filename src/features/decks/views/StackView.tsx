@@ -5,6 +5,12 @@
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { CardStack, stackHeight } from "../CardStack";
+import {
+  deckGroupProps,
+  useCategoryDrop,
+  type DeckCardActions,
+} from "../cardControl";
+import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns } from "./columns";
@@ -48,12 +54,16 @@ export function StackView({
   groups,
   violations,
   onSelect,
+  actions,
   columnHeight = DEFAULT_COLUMN_HEIGHT,
   className,
 }: {
   groups: readonly CardGroup[];
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
+  /** What may be done to a card here, and where a dropped one lands. See
+   *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
+  actions?: DeckCardActions;
   /** The height of the box this is being drawn into. See {@link DEFAULT_COLUMN_HEIGHT}. */
   columnHeight?: number;
   className?: string;
@@ -76,40 +86,80 @@ export function StackView({
           className="flex flex-col gap-5"
         >
           {column.map((group) => (
-            <section
+            <StackGroup
               key={group.key}
-              aria-labelledby={`group-${group.key}`}
-              className={cn(
-                "rounded-lg p-1.5",
-                // A switched-off pile is drawn as a dashed outline over the faintest of
-                // washes: present, reachable, and visibly not part of the deck.
-                group.isActive
-                  ? "border border-border"
-                  : "border border-dashed border-border bg-surface/40",
-              )}
-            >
-              <GroupHeader
-                group={group}
-                layout="stacked"
-                id={`group-${group.key}`}
-                className="px-1 pb-1.5"
-              />
-              {group.cards.length === 0 ? (
-                // An empty category is a place as well as a heading — this is where the next
-                // card goes, and saying so is what makes the empty column worth drawing.
-                <p className="px-1 pb-1 text-xs text-dim">Nothing here yet.</p>
-              ) : (
-                <CardStack
-                  cards={group.cards}
-                  label={group.name}
-                  violations={violations}
-                  onSelect={onSelect}
-                />
-              )}
-            </section>
+              group={group}
+              violations={violations}
+              onSelect={onSelect}
+              actions={actions}
+            />
           ))}
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * One pile: its heading, its stack, and the place a dragged card can be let go.
+ *
+ * A component of its own rather than markup inside the `map` above, because a drop target is a
+ * hook and a hook cannot be called per item of a list. The same shape the other three views
+ * take, for the same reason.
+ */
+function StackGroup({
+  group,
+  violations,
+  onSelect,
+  actions,
+}: {
+  group: CardGroup;
+  violations?: Map<string, ValidationIssue[]>;
+  onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
+}) {
+  const { attach, over } = useCategoryDrop(group.categoryId, actions?.drop);
+
+  return (
+    <section
+      ref={attach}
+      aria-labelledby={`group-${group.key}`}
+      // The caret lands here when a card leaves the pile under it — a stepper reaching zero, or
+      // a move landing somewhere else — so the reader is left looking at the pile that changed
+      // and hears its name. `tabIndex: -1`, so it is a place focus can be *put* and never a
+      // stop Tab has to travel through.
+      {...deckGroupProps(group.categoryId)}
+      className={cn(
+        "relative rounded-lg p-1.5",
+        // A switched-off pile is drawn as a dashed outline over the faintest of
+        // washes: present, reachable, and visibly not part of the deck.
+        group.isActive
+          ? "border border-border"
+          : "border border-dashed border-border bg-surface/40",
+        over && "border-accent",
+      )}
+    >
+      {/* The app's own drop mark, the same one the deck's columns used to draw. */}
+      {over && <DropIndicator />}
+      <GroupHeader
+        group={group}
+        layout="stacked"
+        id={`group-${group.key}`}
+        className="px-1 pb-1.5"
+      />
+      {group.cards.length === 0 ? (
+        // An empty category is a place as well as a heading — this is where the next card
+        // goes, and saying so is what makes the empty column worth drawing.
+        <p className="px-1 pb-1 text-xs text-dim">Nothing here yet.</p>
+      ) : (
+        <CardStack
+          cards={group.cards}
+          label={group.name}
+          violations={violations}
+          onSelect={onSelect}
+          actions={actions}
+        />
+      )}
+    </section>
   );
 }

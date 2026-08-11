@@ -10,7 +10,15 @@ import { usdPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "./CardMarks";
-import { deckCardName, FOCUS_INSET } from "./cardControl";
+import {
+  deckCardName,
+  deckCardProps,
+  DeckCardControls,
+  FOCUS_INSET,
+  REVEALED_ON_CARD,
+  useDeckCardDrag,
+  type DeckCardActions,
+} from "./cardControl";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -107,6 +115,14 @@ export interface CardStackProps {
    * is not derivable from the card.
    */
   onSelect?: (card: DeckCard) => void;
+  /**
+   * What the reader may do to a card here, or nothing — see {@link DeckCardActions}.
+   *
+   * **It cannot change the stack's height, and that is checked rather than intended**: the
+   * controls are drawn over the card, absolutely positioned, so they take no space at all.
+   * {@link stackHeight} is still a function of the count alone.
+   */
+  actions?: DeckCardActions;
   className?: string;
 }
 
@@ -124,7 +140,14 @@ export interface CardStackProps {
  * depend on which card is lifted, because nothing in this component knows; and the caret does
  * exactly what the pointer does for free, rather than by a second code path that would drift.
  */
-export function CardStack({ cards, label, violations, onSelect, className }: CardStackProps) {
+export function CardStack({
+  cards,
+  label,
+  violations,
+  onSelect,
+  actions,
+  className,
+}: CardStackProps) {
   if (cards.length === 0) return null;
 
   return (
@@ -151,6 +174,7 @@ export function CardStack({ cards, label, violations, onSelect, className }: Car
           card={card}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
           onSelect={onSelect}
+          actions={actions}
         />
       ))}
     </ul>
@@ -170,12 +194,15 @@ function StackedCard({
   card,
   ruleBreakText,
   onSelect,
+  actions,
 }: {
   card: DeckCard;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
 }) {
+  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
   // The `art` crop (626×457), not the whole card: the title bar above and the data line below
   // are this frame's own, so a full card face here would print its name twice. Fed `null` for
   // an orphan, whose printing has left the card database — nothing tries to draw a picture of
@@ -189,8 +216,11 @@ function StackedCard({
 
   return (
     <li
+      ref={dragRef}
       className={cn(
-        "relative block overflow-hidden rounded-md border shadow-lg",
+        // `group`, so the controls below can be revealed by the same two states that lift the
+        // card. Nothing else in a stack carries one, so the unqualified variant is unambiguous.
+        "group relative block overflow-hidden rounded-md border shadow-lg",
         // Collapsed, pulled up over its neighbour; lifted, standing 8px clear of it. The
         // margin is the whole animation — nothing scales, nothing translates — because a
         // margin is what pushes the cards *after* it down, which is the interaction this is
@@ -218,6 +248,8 @@ function StackedCard({
         // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
         // reader gets — including the red shortage figure, which nothing else would say.
         aria-label={deckCardName(card, ruleBreakText)}
+        // How the card pane hands the caret back after a printing swap replaces this card.
+        {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
         // Inset, because this button fills an `overflow-hidden` card: an outline standing off
         // its edge is painted entirely in the clipped region and is never seen.
@@ -295,6 +327,20 @@ function StackedCard({
           )}
         </span>
       </button>
+
+      {/* **Over the card, never in it.** An absolutely positioned bar takes no height, so a
+          card is still {@link STACK_CARD_HEIGHT} and `stackHeight` is still a function of the
+          count alone — the no-reflow property survives the controls by construction rather
+          than by care. `bottom-6` is the data line's own `h-6`, so the bar sits on the foot of
+          the art with the printing and the price still readable under it.
+
+          A **sibling** of the button rather than a child, because a button may not contain a
+          button: the whole card is the control that opens it, and these are three more. */}
+      <DeckCardControls
+        card={card}
+        actions={actions}
+        className={cn("absolute inset-x-0 bottom-6 px-1", REVEALED_ON_CARD)}
+      />
     </li>
   );
 }

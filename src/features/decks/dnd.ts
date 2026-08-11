@@ -26,11 +26,9 @@ import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
  * any printing that panel's own search can reach. If that detour stops being acceptable, the
  * answer is a button in the pane, not a rule here.
  *
- * **`"deck-card"` has no source at the moment.** The category columns that made a deck row
- * draggable were replaced by `views/`, and a view draws a card as a labelled button with no
- * `draggable()` registration — so the move-by-drag and the remove tray that read this kind have
- * nothing to carry. The kind stays: it is what a drop *means*, `dropWrite` is tested against it
- * either way, and the day a view picks a card up the rule is already written.
+ * **`"deck-card"` is carried by every card in every view**, through `cardControl.tsx`'s
+ * `useDeckCardDrag` — one registration, four surfaces, so a card picked up in the table means
+ * exactly what the same card picked up in the stack means.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string }
@@ -129,11 +127,11 @@ export const NOT_A_DRAG = "[data-no-drag], input, select, textarea";
  * tree; this module is already where a card control's DOM contracts live ({@link NOT_A_DRAG}
  * above).
  *
- * **Nothing writes it at the moment, and that is a gap rather than a retirement.** The category
- * columns that carried it were replaced by `views/`, which draw a card as a button with an
- * accessible name and no slot attribute — so the pane's lookup finds nothing and falls back to
- * closing without a hand-back. The string, the spelling and the reader are all still right; what
- * is missing is a view that stamps it.
+ * Written by `cardControl.tsx`'s `deckCardProps` and therefore by all four views — on the card's
+ * own button, or on the row in the table, because what the pane does with it is hand the caret
+ * back and the caret needs somewhere that takes focus. `App.test.tsx`'s "hands the caret back to
+ * the deck's card after a swap" is the only test in the repo that notices it going missing,
+ * which it did for exactly one task of the rebuild.
  */
 export const DECK_CARD_ATTR = "data-deck-card";
 

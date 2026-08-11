@@ -116,6 +116,34 @@ describe("CardStack does not reflow", () => {
   });
 
   /**
+   * **And the controls cannot change it either**, which is the claim worth making twice.
+   *
+   * A stepper and a move select were added to every card after this component was built, and
+   * the obvious place to put them — in the card, under the data line — would have made
+   * {@link STACK_CARD_HEIGHT} a lie and every number above it with it. They are drawn *over*
+   * the card instead, absolutely positioned, so they take no height at all: the same card is
+   * still 312px whether it can be edited or not, and `stackHeight` never learns that actions
+   * exist.
+   *
+   * This is the test that fails the day somebody puts them in the flow. It is deliberately not
+   * "the classes contain `absolute`" — it is the height, measured both ways, which is the thing
+   * that actually has to hold.
+   */
+  it("keeps its height when its cards carry controls", () => {
+    const actions = { setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop: vi.fn() };
+    const { unmount } = render(<CardStack cards={CARDS} label="Ramp" />);
+    const plain = list().style.height;
+    unmount();
+
+    render(<CardStack cards={CARDS} label="Ramp" actions={actions} />);
+
+    expect(list().style.height).toBe(plain);
+    expect(list().style.height).toBe(`${stackHeight(CARDS.length)}px`);
+    // …and the controls really are there, so this is not passing by drawing nothing.
+    expect(screen.getByRole("button", { name: "Decrease Copies of Sol Ring in Main deck" }));
+  });
+
+  /**
    * The other half of the same idea, and neither works alone: the height is what stops the
    * group resizing, and `overflow: visible` is what lets the lifted card — and the cards it
    * pushes down — leave the box instead of being clipped inside it.

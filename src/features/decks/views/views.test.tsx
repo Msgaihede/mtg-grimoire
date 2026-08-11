@@ -3,8 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { PRICES_AS_OF } from "@/lib/prices";
+import { dragOnto } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
+import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
+import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { GridView } from "./GridView";
 import { StackView, STACK_COLUMN_ATTR } from "./StackView";
@@ -94,6 +97,7 @@ interface ViewProps {
   groups: readonly CardGroup[];
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
 }
 
 describe.each(VIEWS)("$name", ({ render: renderView }) => {
@@ -134,6 +138,174 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
     expect(screen.getAllByText("RULE")).toHaveLength(1);
     expect(screen.getAllByText("INACTIVE")).toHaveLength(1);
     expect(screen.getByText("INACTIVE").getAttribute("title")).toContain("counts toward");
+  });
+});
+
+/**
+ * **The editing controls, across all four views.**
+ *
+ * A deck card can be stepped, moved, picked up and dropped on, and every view owes the reader
+ * all four — so this is a sweep rather than four tests. They come from one module
+ * (`cardControl.tsx`) precisely so that this can be one `describe.each`: four copies would be
+ * four chances for one surface to quietly stop offering something, and the failure would be a
+ * reader who switched view and lost the ability to remove a card.
+ *
+ * What differs between them is *placement* — the table spends them as columns, the other three
+ * draw them over the card — and placement is the one thing a table and a wall of card faces
+ * genuinely disagree about.
+ */
+describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
+  const actions = () => ({
+    setQuantity: vi.fn(),
+    move: vi.fn(),
+    moveTargets: [COMMANDER, RAMP, MAYBE],
+    drop: vi.fn(),
+  });
+
+  const draw = (over: Partial<DeckCardActions> = {}) => {
+    const spies = { ...actions(), ...over };
+    render(renderView({ groups: GROUPS, actions: spies, onSelect: vi.fn() }));
+    return spies;
+  };
+
+  /** Absolute, and zero removes — never a `−1` through the add path, which refuses the very
+   *  orphans a reader most needs to be able to clear (`useDeck.ts` has the reason). */
+  it("steps a card's copies, and sends the zero that removes it", async () => {
+    const user = userEvent.setup();
+    const spies = draw();
+
+    await user.click(screen.getByRole("button", { name: "Increase Copies of Sol Ring in Main deck" }));
+    expect(spies.setQuantity).toHaveBeenCalledWith(expect.objectContaining({ name: "Sol Ring" }), 3);
+
+    await user.click(screen.getByRole("button", { name: "Decrease Copies of Arcane Signet in Main deck" }));
+    expect(spies.setQuantity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: "Arcane Signet" }),
+      0,
+    );
+  });
+
+  /** A native `<select>` and deliberately not a popup: it needs no rung in the editor's Escape
+   *  union, no z-index and no focus hand-back. */
+  it("moves a card to another category, and never offers it its own", async () => {
+    const user = userEvent.setup();
+    const spies = draw();
+
+    const select = screen.getByLabelText("Move Sol Ring out of Main deck");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Move…",
+      "Commander",
+      "Maybeboard",
+    ]);
+
+    await user.selectOptions(select, String(MAYBE.id));
+    expect(spies.move).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Sol Ring" }),
+      MAYBE.id,
+    );
+  });
+
+  /**
+   * The controls belong to the *slot*, not to the card: the same printing sits in two piles
+   * often enough that a name without the pile is two controls nothing can tell apart.
+   *
+   * The pile is the **card's own** `categoryName` rather than the heading above it, and the two
+   * are the same fact in real data — the fixture here deliberately calls a category "Ramp"
+   * while its cards denormalise "Main deck", which is what makes this assert the card's answer
+   * rather than the heading's.
+   */
+  it("names every control by the slot it edits", () => {
+    draw();
+    expect(screen.getByLabelText("Copies of Serah Farron in Commander")).toBeInTheDocument();
+    expect(screen.getByLabelText("Move Serah Farron out of Commander")).toBeInTheDocument();
+  });
+
+  /** A press on a control is a press, never a drag — `cardDraggable` asks `closest()`, so one
+   *  mark on the wrapper covers the buttons inside it. Without it, `−` plus five pixels of
+   *  travel takes every copy out of the deck with nothing to undo it. */
+  it("keeps a press on a control from starting a drag", () => {
+    draw();
+    const stepper = screen.getByRole("button", { name: "Increase Copies of Sol Ring in Main deck" });
+    expect(stepper.closest("[data-no-drag]")).not.toBeNull();
+  });
+
+  /** The caret's way home after a printing swap. The pane is not in this tree and owns none of
+   *  these elements, so the slot is a question the DOM can answer after the fact. */
+  it("stamps every card with the slot it draws", () => {
+    render(renderView({ groups: GROUPS }));
+    const slots = [...document.querySelectorAll(`[${DECK_CARD_ATTR}]`)].map((n) =>
+      n.getAttribute(DECK_CARD_ATTR),
+    );
+    expect(slots).toContain(deckCardSlot(RAMP.id, "c-Sol Ring"));
+    // Stamped whether or not the card can be edited: opening a card from a deck is what puts
+    // the swap on offer, and that is true of a view drawn read-only.
+    expect(slots.length).toBe(4);
+  });
+
+  /** Where the caret goes when a card leaves a pile under it. Only a *category* group is a
+   *  place — a derived heading is a heading and no more. */
+  it("makes every category group a place the caret can be put", () => {
+    draw();
+    for (const id of [RAMP.id, COMMANDER.id, MAYBE.id]) {
+      const group = document.querySelector(`[${DECK_GROUP_ATTR}="${id}"]`);
+      expect(group).not.toBeNull();
+      expect(group).toHaveAttribute("tabindex", "-1");
+    }
+  });
+
+  /**
+   * **The pile you let go over is the one that takes the card.** A single target over the whole
+   * view would land every drop in whatever the toolbar's "Add to" happened to say, which is a
+   * silent difference between the drag and the button beside it.
+   */
+  it("takes a dropped card into the group it was dropped on", async () => {
+    const spies = draw();
+    const target = document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAYBE.id}"]`)!;
+    // The drag handle is the whole card: an `<li>` in the three card views, and the row itself
+    // in the table. Both carry the slot, so the slot is how one is found either way.
+    const marked = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+    )!;
+
+    await dragOnto(marked.closest("li") ?? marked, target);
+
+    expect(spies.drop).toHaveBeenCalledWith({
+      write: "move",
+      cardId: "c-Sol Ring",
+      from: RAMP.id,
+      to: MAYBE.id,
+    });
+  });
+
+  /**
+   * Nothing can be dropped into "Mana value 3": a derived group is a heading and not a place,
+   * which is `grouping.ts`'s own rule rather than a special case in a view.
+   *
+   * The one group that *is* a place under a derived grouping is the switched-off pile, which
+   * `buildGroups` appends as itself rather than bucketing — so exactly one target survives, and
+   * it is the Maybeboard. That is the assertion worth making: "none at all" would have passed
+   * against a view that dropped the inactive pile on the floor.
+   */
+  it("makes no drop target of a derived group", () => {
+    render(
+      renderView({
+        groups: buildGroups(CARDS, [COMMANDER, RAMP, MAYBE], "manaValue", "alphabetical"),
+        actions: actions(),
+      }),
+    );
+
+    expect(
+      [...document.querySelectorAll(`[${DECK_GROUP_ATTR}]`)].map((n) =>
+        n.getAttribute(DECK_GROUP_ATTR),
+      ),
+    ).toEqual([String(MAYBE.id)]);
+  });
+
+  /** A view handed nothing draws exactly what it always drew — which is what lets a story or a
+   *  test mount one without a deck behind it. */
+  it("draws no controls at all when it is given none", () => {
+    render(renderView({ groups: GROUPS }));
+    expect(screen.queryByLabelText(/^Copies of/)).toBeNull();
+    expect(screen.queryByLabelText(/^Move /)).toBeNull();
   });
 });
 
@@ -380,6 +552,16 @@ describe("TableView", () => {
     expect(screen.getByTitle("Game changer")).toHaveAttribute("aria-hidden", "true");
   });
 
+  /**
+   * The band is a heading, and pressing one opens nothing.
+   *
+   * It carries `tabindex="-1"` all the same, and the two are not in tension: a negative index
+   * is a place focus can be *put* and never a stop Tab travels through. The editor puts it
+   * there when a card leaves this pile under the caret — a stepper reaching zero, or a move
+   * landing elsewhere — which is the same hand-off the other three views make to a group's
+   * `<section>`. What would make this a row you can open is `tabindex="0"` and an `onClick`,
+   * and it has neither.
+   */
   it("bands the rows with a heading that is not itself a row you can open", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
@@ -387,7 +569,7 @@ describe("TableView", () => {
 
     const band = screen.getByText("Ramp").closest("[role=row]");
     expect(band).not.toBeNull();
-    expect(band).not.toHaveAttribute("tabindex");
+    expect(band).toHaveAttribute("tabindex", "-1");
 
     await user.click(band!);
     expect(onSelect).not.toHaveBeenCalled();

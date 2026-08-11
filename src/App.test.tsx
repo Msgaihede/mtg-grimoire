@@ -694,7 +694,7 @@ it("stops offering swaps into a deck the read says is gone", async () => {
  *    land somewhere, and the somewhere is the deck's card for the printing the deck now holds —
  *    the control the reader opened the card from, as the swap has just rebuilt it.
  */
-it("announces a fold, and closes cleanly when the pane is re-keyed by the write", async () => {
+it("announces a fold and hands the caret to the deck's card when the pane closes", async () => {
   deckList.mockResolvedValue([BURN]);
   deckGet
     .mockResolvedValueOnce(detail([DECK_BOLT, OTHER_BOLT]))
@@ -752,26 +752,22 @@ it("announces a fold, and closes cleanly when the pane is re-keyed by the write"
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
-  // Where the caret lands is the skipped test below — the hand-back needs a slot attribute no
-  // view writes any more.
+  // The deck's card for the printing the deck now holds — not `<body>`, and not the element the
+  // press was made from, which the swap deleted along with its row.
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveFocus());
 });
 
 /**
- * The same hand-back, asked the other way: one row, no fold — what is being asked is where the
+ * The same hand-back, asked the other way: one card, no fold — what is being asked is where the
  * caret lands, and the announcement is the other test's subject.
  *
- * **Skipped, because the affordance it reads is missing rather than wrong.** The pane finds its
- * way home through an attribute on the control that stands for the slot (`DECK_CARD_ATTR`,
- * `dnd.ts`), and the category columns that stamped it were replaced by `views/`, which draw a
- * card as a labelled button and stamp nothing. So the pane's `querySelector` finds no element,
- * hands the caret nowhere, and Escape drops it on `<body>` — which is exactly the bug this test
- * was written to catch, now reachable again.
- *
- * The lookup, the spelling and `deckCardSlot` are all still right; what is missing is a view
- * that writes the attribute. Held here rather than deleted so that adding one un-skips a real
- * claim, and nothing else should.
+ * The pane finds its way home through an attribute on the control that stands for the slot
+ * (`DECK_CARD_ATTR`, stamped by `cardControl.tsx`'s `deckCardProps` and therefore by all four
+ * views). Deleting it from the card left every suite green until this existed, and the deck
+ * builder's rebuild proved that the hard way: for one task no view stamped it, and this was the
+ * only test in the repo that noticed.
  */
-it.skip("hands the caret back to the deck's card after a swap (needs DECK_CARD_ATTR in views/)", async () => {
+it("hands the caret back to the deck's card after a swap", async () => {
   deckList.mockResolvedValue([BURN]);
   deckGet.mockResolvedValueOnce(detail([DECK_BOLT])).mockResolvedValue(detail([SWAPPED_BOLT]));
   cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });

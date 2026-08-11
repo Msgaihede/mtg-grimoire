@@ -9,7 +9,18 @@ import type { DeckCard } from "@/lib/ipc";
 import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
-import { deckCardName, FOCUS } from "../cardControl";
+import {
+  deckCardName,
+  deckCardProps,
+  DeckCardControls,
+  deckGroupProps,
+  FOCUS,
+  REVEALED_ON_CARD,
+  useCategoryDrop,
+  useDeckCardDrag,
+  type DeckCardActions,
+} from "../cardControl";
+import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
@@ -33,12 +44,15 @@ export function TextView({
   groups,
   violations,
   onSelect,
+  actions,
   columnHeight = 640,
   className,
 }: {
   groups: readonly CardGroup[];
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
+  /** What may be done to a card here — see {@link DeckCardActions}. */
+  actions?: DeckCardActions;
   columnHeight?: number;
   className?: string;
 }) {
@@ -53,31 +67,64 @@ export function TextView({
           className="flex flex-col gap-4"
         >
           {column.map((group) => (
-            <section key={group.key} aria-labelledby={`text-group-${group.key}`}>
-              <GroupHeader
-                group={group}
-                id={`text-group-${group.key}`}
-                className="border-b border-border px-1 pb-1"
-              />
-              {group.cards.length === 0 ? (
-                <p className="px-1 pt-1 text-xs text-dim">Nothing here yet.</p>
-              ) : (
-                <ul aria-label={group.name}>
-                  {group.cards.map((card) => (
-                    <TextRow
-                      key={card.id}
-                      card={card}
-                      ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-                      onSelect={onSelect}
-                    />
-                  ))}
-                </ul>
-              )}
-            </section>
+            <TextGroup
+              key={group.key}
+              group={group}
+              violations={violations}
+              onSelect={onSelect}
+              actions={actions}
+            />
           ))}
         </div>
       ))}
     </div>
+  );
+}
+
+/** One pile as a heading and its lines, and a place a dragged card can be let go —
+ *  `StackView`'s `StackGroup`, for its reason. */
+function TextGroup({
+  group,
+  violations,
+  onSelect,
+  actions,
+}: {
+  group: CardGroup;
+  violations?: Map<string, ValidationIssue[]>;
+  onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
+}) {
+  const { attach, over } = useCategoryDrop(group.categoryId, actions?.drop);
+
+  return (
+    <section
+      ref={attach}
+      aria-labelledby={`text-group-${group.key}`}
+      {...deckGroupProps(group.categoryId)}
+      className={cn("relative", over && "rounded-sm ring-1 ring-accent")}
+    >
+      {over && <DropIndicator />}
+      <GroupHeader
+        group={group}
+        id={`text-group-${group.key}`}
+        className="border-b border-border px-1 pb-1"
+      />
+      {group.cards.length === 0 ? (
+        <p className="px-1 pt-1 text-xs text-dim">Nothing here yet.</p>
+      ) : (
+        <ul aria-label={group.name}>
+          {group.cards.map((card) => (
+            <TextRow
+              key={card.id}
+              card={card}
+              ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+              onSelect={onSelect}
+              actions={actions}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -94,19 +141,27 @@ function TextRow({
   card,
   ruleBreakText,
   onSelect,
+  actions,
 }: {
   card: DeckCard;
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
 }) {
+  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
+
   return (
-    <li>
+    // The controls are drawn *over* the end of the line rather than in it, so this view stays
+    // what it is for: a decklist you read down, at 22px a line, with no room spent on chrome
+    // that is only wanted on the one card being edited.
+    <li ref={dragRef} className="group relative">
       <button
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
         aria-label={deckCardName(card, ruleBreakText)}
         title={ruleBreakText ?? undefined}
+        {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
         className={cn(
           "flex h-[22px] w-full cursor-pointer items-center gap-1.5 rounded px-1 text-xs",
@@ -128,6 +183,18 @@ function TextRow({
         {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />
       </button>
+
+      <DeckCardControls
+        card={card}
+        actions={actions}
+        // `bg-surface` because this bar covers the tail of the line it belongs to — the cost
+        // and the marks — rather than pushing them aside. A translucent one would print two
+        // things on top of each other.
+        className={cn(
+          "absolute inset-y-0 right-1 flex-nowrap rounded bg-surface pl-1",
+          REVEALED_ON_CARD,
+        )}
+      />
     </li>
   );
 }

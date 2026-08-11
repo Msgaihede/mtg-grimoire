@@ -13,7 +13,7 @@ import type {
   DeckTag,
   FormatSpec,
 } from "@/lib/ipc";
-import { dragOnto } from "@/test-drag";
+import { dragOnto, startDrag } from "@/test-drag";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -192,6 +192,11 @@ async function open() {
 /** A group, by the heading it draws. Every view labels its section with the group's name and
  *  nothing else — the count and the price are text beside it, not part of what it is called. */
 const group = (name: string) => screen.getByRole("region", { name });
+
+/** What the stepper on the fixture's Bolt is called. Named by the **slot** — the card and the
+ *  pile — because the same printing sits in two categories often enough that a name without one
+ *  would be two controls a screen reader cannot tell apart. */
+const COPIES = "Copies of Lightning Bolt in Main deck";
 
 /**
  * jsdom lays nothing out, so the docked panel's virtualised wall measures a scroll container of
@@ -436,6 +441,111 @@ describe("DeckEditor", () => {
     expect(screen.getByText("$4.50")).toBeInTheDocument();
     // Decoration beside a named button, never an `alt` repeating the card's name.
     expect(container.querySelector('li img[alt=""]')).not.toBeNull();
+  });
+
+  /**
+   * Zero removes, and it is `deck_set_card_quantity` that does it — never a `−1` through
+   * `deck_add_card`, which refuses the orphaned cards a reader most needs to be able to clear.
+   */
+  it("removes a card when its stepper reaches zero", async () => {
+    deckGet
+      .mockResolvedValueOnce(detail({}, [bolt({ quantity: 1 })]))
+      .mockResolvedValue(detail({}, []));
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: `Decrease ${COPIES}` }));
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * The stepper is controlled by the cache, so a press before the last answer would be computed
+   * from the number the last press was computed from: hold `+` on a 4-of and three presses all
+   * read 4, all send 5, and the deck lands on 5 instead of 7. The optimistic patch is what makes
+   * the second press know about the first — `CollectionPage`'s fix and `WishlistPage`'s, in the
+   * third place that needed it.
+   */
+  it("computes a held-down stepper from the press before it, not from the cache", async () => {
+    // Never answers: the only thing that can move the second press's number is the guess.
+    deckSetCardQuantity.mockReturnValue(new Promise(() => {}));
+    await open();
+
+    const up = screen.getByRole("button", { name: `Increase ${COPIES}` });
+    await userEvent.click(up);
+    await userEvent.click(up);
+    await userEvent.click(up);
+
+    expect(deckSetCardQuantity.mock.calls.map((c) => c[4])).toEqual([5, 6, 7]);
+  });
+
+  /**
+   * And the guess is rolled back when the write is refused — zero *removes* here, so a refusal
+   * that stayed on screen would be a card silently gone from the deck.
+   *
+   * The re-read that a refusal also triggers is left hanging on purpose: it would put the card
+   * back by itself, and a test that cannot tell the rollback from the refetch is a test that
+   * passes with no rollback at all.
+   */
+  it("puts a refused removal back before the re-read answers", async () => {
+    deckSetCardQuantity.mockRejectedValue("The database is busy with a sync — try again.");
+    deckGet
+      .mockResolvedValueOnce(detail({}, [bolt({ quantity: 1 })]))
+      .mockReturnValue(new Promise(() => {}));
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: `Decrease ${COPIES}` }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+  });
+
+  /** The card the caret was on leaves with the last copy. The pile it left is where the reader
+   *  is looking, and it announces its own name — the hand-off a move makes. */
+  it("hands the caret to the group when a card is stepped away", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt({ quantity: 1 })]));
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: `Decrease ${COPIES}` }));
+
+    expect(group("Main deck")).toHaveFocus();
+  });
+
+  /**
+   * The click path a move needs, and the one that is not a layer.
+   *
+   * A native `<select>` rather than the anchored row menu it replaces: the browser draws it in
+   * its own layer, so it needs no rung in the editor's Escape union, no z-index and no focus
+   * hand-back — three things the old menu had to get right and this cannot get wrong.
+   */
+  it("moves a card between categories from its own control", async () => {
+    await open();
+
+    await userEvent.selectOptions(
+      screen.getByLabelText("Move Lightning Bolt out of Main deck"),
+      String(SIDE),
+    );
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live");
+    // The caret follows the card to the pile that now has it.
+    await waitFor(() => expect(group("Sideboard")).toHaveFocus());
+  });
+
+  /** A card cannot be moved to the pile it is already in — `deck_move_card` would touch the
+   *  deck, reallocate and bump `updated_at` to leave the list exactly as it was. */
+  it("does not offer a card its own category as a move target", async () => {
+    await open();
+
+    const select = screen.getByLabelText("Move Lightning Bolt out of Main deck");
+    expect([...within(select).getAllByRole("option")].map((o) => o.textContent)).toEqual([
+      "Move…",
+      "Sideboard",
+      "Commander",
+      "Companion",
+      "Maybeboard",
+    ]);
   });
 
   /** Three ways to read the same list, and the deck decides which one answers the question in
@@ -1246,6 +1356,11 @@ describe("DeckEditor", () => {
  * the *same* write, not a second one.
  */
 describe("DeckEditor drag and drop", () => {
+  /** A card in the deck, from the name it shows. The `<li>` is the drag handle — the whole
+   *  card is. */
+  const card_ = (name: string) =>
+    screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!;
+
   /** One result in the panel, for the drags that start there. */
   function panelHolds(name: string) {
     searchCards.mockResolvedValue({ items: [found(name)], total: 1, totalIsCapped: false });
@@ -1256,40 +1371,98 @@ describe("DeckEditor drag and drop", () => {
   }
 
   /**
-   * Where a dropped card lands is the "Add to" select's answer, which is the same answer the
-   * panel's Add button gives.
-   *
-   * **It used to be the column that took the card**, and that difference is the one thing this
-   * gesture lost in the rebuild: the four views take `CardGroup[]` and expose no element per
-   * heading, so there is nothing for a per-category drop target to attach to. The whole deck is
-   * one target instead.
+   * **The pile that took the card decides, not the "Add to" select** — which is still saying
+   * Sideboard while the card lands in the main deck. That is the whole difference between the
+   * drag and the button beside it, and the reason a drop carries its own category.
    */
-  it("adds a card dragged out of the panel to the deck", async () => {
+  it("adds a card dragged out of the panel to the group it was dropped on", async () => {
     const tile = panelHolds("Goblin Guide");
     await open();
     await userEvent.selectOptions(await screen.findByLabelText("Add to"), String(SIDE));
 
     await dragOnto(await tile(), group("Main deck"));
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", SIDE, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", 1);
+    expect(screen.getByLabelText("Add to")).toHaveValue(String(SIDE));
   });
 
   /**
-   * **Three cases are held here rather than deleted, because the capability is missing and not
-   * obsolete.**
-   *
-   * A deck row dragged into another category, a row dragged onto the remove tray, and the tray
-   * staying away for a card dragged *in*: all three need a view to make a card draggable, and
-   * `views/StackView`, `TableView`, `TextView` and `GridView` draw a card as a labelled button
-   * with no `draggable()` registration and no per-group element. The rule they exercise is
-   * still written and still tested — `dnd.test.ts` covers `deck-card` onto a category and onto
-   * the tray, exhaustively and without a DOM — so what is unproven is the wiring, and the wiring
-   * does not exist to prove.
-   *
-   * They are skipped rather than removed so the claim stays in the file: restoring a drag source
-   * to the views is what un-skips them, and nothing else should.
+   * A card dropped on another pile is the move select's write by another route — the same
+   * command, and the same hand-off afterwards: the card the reader was holding has left, so the
+   * caret goes to the pile that now has it.
    */
-  it.skip("moves a row into the group it was dropped on (needs a drag source in views/)", () => {});
-  it.skip("offers a way out of the deck while a row is in the air (needs a drag source in views/)", () => {});
-  it.skip("does not offer the tray for a card dragged in (needs the tray back)", () => {});
+  it("moves a card into the group it was dropped on, and hands the caret to it", async () => {
+    await open();
+
+    await dragOnto(card_("Lightning Bolt"), group("Sideboard"));
+
+    await waitFor(() =>
+      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
+    );
+    await waitFor(() => expect(group("Sideboard")).toHaveFocus());
+  });
+
+  /**
+   * The tray is the drag's own way out of the deck: it is not there until a card is in the air,
+   * it names the card once it has it, and it writes the zero the stepper's last press writes.
+   */
+  it("offers a way out of the deck while a card is in the air", async () => {
+    await open();
+    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+
+    const held = await startDrag(card_("Lightning Bolt"));
+    const tray = screen.getByText("Remove from deck");
+    await held.over(tray);
+    expect(screen.getByText("Remove Lightning Bolt from deck")).toBeInTheDocument();
+    await held.drop();
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
+    await waitFor(() => expect(screen.queryByText(/remove/i)).not.toBeInTheDocument());
+  });
+
+  /**
+   * And it is not there for a card being dragged *in*: there is nothing in this deck to take
+   * out, so a tray that appeared would be offering to undo something that never happened.
+   */
+  it("does not offer the tray for a card dragged in from the panel", async () => {
+    const tile = panelHolds("Goblin Guide");
+    await open();
+
+    const held = await startDrag(await tile());
+    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+
+    await held.cancel();
+  });
+
+  /**
+   * **A cancelled drag is not a press of Escape as far as this app is concerned.**
+   *
+   * The platform cancels a drag itself — in Chromium the keypress goes to the drag operation
+   * and the page is told by a `dragend`, which is what takes the tray down here. jsdom has no
+   * drag to cancel, so what this pins is the app's half of that contract: while a card is in
+   * the air the editor is listening for no keys at all, so an Escape that reaches the window
+   * arrives with nothing consumed and the card detail pane behind this view still closes on its
+   * own press. An editor that treated a drag as a dismissible layer would eat that press and
+   * leave a card pinned open.
+   */
+  it("takes the tray away on the drag's own end, without spending the app's Escape", async () => {
+    await open();
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    const held = await startDrag(card_("Lightning Bolt"));
+    expect(screen.getByText("Remove from deck")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(heard).toEqual([false]);
+
+    await held.cancel();
+
+    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", listen);
+  });
 });
