@@ -64,7 +64,14 @@ impl CardIndex {
     ///
     /// **767 ms, measured 2026-08-11** — median of five (762–783 ms), release build, over a
     /// page-for-page online backup of the day's database: 116 695 printings, 107 338 of them
-    /// paper, 1 047 set codes. The spec left this figure *estimated* at "467 ms for five
+    /// paper, 1 047 set codes. **Two things bound what that number is worth.** It was taken
+    /// with a *warm* OS page cache on the 563 MB file, so it is the cost of any launch but
+    /// the machine's first — launch-after-reboot is the cold case, it is the case the 1.5 s
+    /// ceiling was really about, and nobody has measured it. And the snapshot came from
+    /// `main`'s schema lineage, so `legal_mask` was added to it by a hand-run `ALTER TABLE`
+    /// and a backfill that rewrote all 116 695 rows: the page layout scanned here is that
+    /// rewrite's, which may be more or less fragmented than a synced database's. The spec
+    /// left this figure *estimated* at "467 ms for five
     /// columns, and the real read wants about fifteen"; the read as built wants **six**
     /// (`rowid`, `set_code`, `cmc`, `color_identity`, `legal_mask`, `is_paper`), which is
     /// where the estimate's headroom went. Comfortably inside the ~1.5 s at which the spec
@@ -150,14 +157,33 @@ impl CardIndex {
                 }
             }
 
+            // **A bucket is what the matching chip would return, so some printings have
+            // none.** [`crate::filters::push_card_filters`] spells chips 0–7 as
+            // `cmc IN (0.0, 1.0, …)` — exact float equality — and chip 8 as `cmc >= 8.0`,
+            // a range. The two halves therefore treat a fractional cost differently, and
+            // the order of these arms is that difference:
+            //
+            // - at or above 8 a fraction **is** returned by the open-ended chip, so 8.5
+            //   belongs in bucket 8 and this arm has to come first;
+            // - below 8 a fraction equals no chip's value, so it belongs in **no** bucket.
+            //   Counting it under the truncated chip would promise a card the search will
+            //   not return, which is the whole failure faceting exists to prevent.
+            //
+            // Worth a branch for one card: the live corpus holds exactly one fractional
+            // printing, `Little Girl` (unh, cmc 0.5, paper), and none at all above 8
+            // (measured 2026-08-11). So chip 0 would over-count by one, permanently.
             let bucket = match cmc {
-                None => Self::MANA_UNKNOWN,
-                Some(v) if v >= 8.0 => 8,
-                // A fractional un-card cost truncates, and matches no chip a reader can
-                // press — the chips are integers.
-                Some(v) => (v as usize).min(8),
+                None => Some(Self::MANA_UNKNOWN),
+                Some(v) if v >= 8.0 => Some(8),
+                Some(v) if v.fract() != 0.0 => None,
+                // `v` is integral and below 8 here, so the clamp is a fence against a
+                // future reordering of these arms rather than live arithmetic — and a
+                // clamped index is a wrong count where a bare one is a panic.
+                Some(v) => Some((v as usize).min(8)),
             };
-            ix.mana[bucket].set(doc);
+            if let Some(bucket) = bucket {
+                ix.mana[bucket].set(doc);
+            }
 
             let mask = mask.unwrap_or(0) as u64;
             for (k, set) in ix.formats.iter_mut().enumerate() {
@@ -173,8 +199,11 @@ impl CardIndex {
         Ok(ix)
     }
 
-    /// Re-read just the `owned` dimension. 10–23 ms at 200–12 000 owned printings, measured
-    /// 2026-08-11 — cheap enough to run on every collection write.
+    /// Re-read just the `owned` dimension — cheap enough to run on every collection write.
+    ///
+    /// 10–23 ms at 200/2 000/12 000 owned printings, **per the design doc; not re-measured
+    /// here**, because the snapshot `build`'s figure above was taken over held no collection
+    /// entries at all. Unlike that figure, this one is inherited.
     ///
     /// The join reads `cards`' primary-key index for the rowid and never the row, so the
     /// cost is one index probe per collection entry.
@@ -243,6 +272,27 @@ mod tests {
         conn
     }
 
+    /// A collection entry for one printing. `set_code`/`collector_number` are denormalized
+    /// migration insurance rather than part of [`crate::schema::COLLECTION_GRAIN`], so they
+    /// are filler here — the `card_id` is what makes two entries distinct.
+    fn own(conn: &Connection, card_id: &str, quantity: i64) {
+        conn.execute(
+            "INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
+                quantity,created_at,updated_at)
+             VALUES (?1,'lea','1','en','nonfoil',?2,unixepoch(),unixepoch())",
+            rusqlite::params![card_id, quantity],
+        )
+        .unwrap();
+    }
+
+    /// One printing's rowid — the doc id every bitset here is keyed by.
+    fn doc(conn: &Connection, id: &str) -> u32 {
+        conn.query_row("SELECT rowid FROM cards WHERE id=?1", [id], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap() as u32
+    }
+
     #[test]
     fn the_paper_set_holds_paper_printings_and_nothing_else() {
         let ix = CardIndex::build(&seeded()).unwrap();
@@ -282,13 +332,7 @@ mod tests {
                 rusqlite::params![id],
             )
             .unwrap();
-            conn.execute(
-                "INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
-                    quantity,created_at,updated_at)
-                 VALUES (?1,'grn',?1,'en','nonfoil',1,unixepoch(),unixepoch())",
-                rusqlite::params![id],
-            )
-            .unwrap();
+            own(&conn, &id, 1);
         }
         ix.rebuild_owned(&conn).unwrap();
         assert_eq!(
@@ -326,27 +370,53 @@ mod tests {
 
     /// Bucket 9 is "no mana value at all", which is not bucket 0: a card that costs nothing
     /// and a card whose cost is unknown are different answers, and `cmc` is nullable.
+    ///
+    /// The two fractional rows pin the **order** of `build`'s arms against
+    /// [`crate::filters::push_card_filters`], which spells chips 0–7 as
+    /// `cmc IN (0.0, 1.0, …)` and chip 8 as `cmc >= 8.0`. Exact equality below, a range at
+    /// the top — so 0.5 is returned by no chip and 8.5 is returned by the last one, and a
+    /// bucket the search disagrees with is a greyed-out option that should have been live.
+    /// `Little Girl` is the live corpus's one fractional printing; nothing above 8 has a
+    /// fractional cost today, so row 8 is a fence for the arm order rather than a model of
+    /// real data.
     #[test]
     fn mana_buckets_separate_zero_from_unknown_and_cap_at_eight() {
         let conn = seeded();
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,is_paper,raw)
              VALUES ('5','Emrakul','roe','1','en','normal',15.0,1,'{}'),
-                    ('6','Ancestral','lea','2','en','normal',0.0,1,'{}')",
+                    ('6','Ancestral','lea','2','en','normal',0.0,1,'{}'),
+                    ('7','Little Girl','unh','3','en','normal',0.5,1,'{}'),
+                    ('8','Synthetic 8.5','unh','4','en','normal',8.5,1,'{}')",
             [],
         )
         .unwrap();
         let ix = CardIndex::build(&conn).unwrap();
-        assert_eq!(ix.mana[0].and_count(&ix.paper), 1, "the zero-cost card");
+        assert_eq!(
+            ix.mana[0].and_count(&ix.paper),
+            1,
+            "the zero-cost card, and not Little Girl"
+        );
         assert_eq!(
             ix.mana[8].and_count(&ix.paper),
-            1,
-            "15 lands in the open-ended bucket"
+            2,
+            "15 and 8.5 both, because chip 8 is a range"
         );
         assert_eq!(
             ix.mana[9].count(),
             1,
             "the NULL cmc row, digital though it is"
+        );
+
+        let little_girl = doc(&conn, "7");
+        assert!(
+            (0..CardIndex::MANA_BUCKETS).all(|b| !ix.mana[b].contains(little_girl)),
+            "a fractional cost below 8 equals no chip's value, so it belongs in no bucket \
+             — least of all bucket 9, which means having no cost at all"
+        );
+        assert!(
+            ix.mana[8].contains(doc(&conn, "8")),
+            "but `cmc >= 8.0` does return a fraction, so this one has a bucket"
         );
     }
 
@@ -372,24 +442,36 @@ mod tests {
         assert_eq!(ix.formats[modern].and_count(&ix.paper), 2);
     }
 
-    /// `owned` is the one dimension that changes while the app runs, so it rebuilds on its
-    /// own rather than forcing a full rebuild on every quick-add.
+    /// `owned` is read **at build** and can be re-read on its own — it is the one dimension
+    /// the user changes while the app is running, so a quick-add must not cost a full
+    /// rebuild.
+    ///
+    /// **The entry goes in before the build, and that ordering is the test.** A version that
+    /// only ever inserted afterwards could not tell whether `build` reads
+    /// `collection_entries` at all: its opening `owned.count() == 0` is equally true of an
+    /// index that read an empty collection and of one that never looked, because the bitset
+    /// arrives zeroed either way. Delete `build`'s `rebuild_owned` call and that version
+    /// stays green — while the app comes up at launch with an empty Owned facet over a real
+    /// collection, which is exactly the greyed-out-option-that-should-be-live harm faceting
+    /// exists to prevent.
     #[test]
-    fn owned_rebuilds_from_the_collection_without_touching_the_rest() {
+    fn owned_is_read_at_build_and_re_read_on_its_own() {
         let conn = seeded();
-        let mut ix = CardIndex::build(&conn).unwrap();
-        assert_eq!(ix.owned.count(), 0);
-        conn.execute(
-            "INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
-                quantity,created_at,updated_at)
-             VALUES ('1','lea','1','en','nonfoil',0,unixepoch(),unixepoch())",
-            [],
-        )
-        .unwrap();
-        ix.rebuild_owned(&conn).unwrap();
         // An **entry**, not a copy: quantity 0 still counts as owned, exactly as the
-        // search's `owned` filter reads it.
-        assert_eq!(ix.owned.count(), 1);
+        // search's `owned` filter reads it ("a row emptied to zero is a row the collection
+        // keeps").
+        own(&conn, "1", 0);
+
+        let mut ix = CardIndex::build(&conn).unwrap();
+        assert_eq!(ix.owned.count(), 1, "the build reads the collection");
+        assert!(
+            ix.owned.contains(doc(&conn, "1")),
+            "and reads the right row"
+        );
+
+        own(&conn, "2", 3);
+        ix.rebuild_owned(&conn).unwrap();
+        assert_eq!(ix.owned.count(), 2, "and a re-read picks up a later write");
         assert_eq!(ix.paper.count(), 3, "the rest of the index is untouched");
     }
 
