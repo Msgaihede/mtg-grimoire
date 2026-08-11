@@ -341,6 +341,14 @@ mod tests {
         let folder = crate::deck_meta::create_folder(&conn, None, "Commander")
             .unwrap()
             .id;
+        // A scratch covers directory for the one case that writes a file. Process-unique, for
+        // the reason `deck::tests::covers` gives.
+        let covers = std::env::temp_dir().join(format!("mtgtest-audit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&covers);
+        std::fs::create_dir_all(&covers).unwrap();
+        image::RgbaImage::new(8, 8)
+            .save(covers.join("source.png"))
+            .unwrap();
 
         /// One command under test: what to call it in a failure, and how to drive it.
         type Case<'a> = (&'a str, Box<dyn Fn() + 'a>);
@@ -406,9 +414,33 @@ mod tests {
                 }),
             ),
             (
+                "deck_theory_copy_from_live",
+                Box::new(|| {
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4)
+                        .unwrap();
+                    clear(&conn);
+                    crate::deck_theory::copy_from_live(&conn, id).unwrap();
+                }),
+            ),
+            (
                 "deck_duplicate",
                 Box::new(|| {
-                    crate::deck::duplicate_deck(&conn, id).unwrap();
+                    crate::deck::duplicate_deck(&conn, id, None).unwrap();
+                }),
+            ),
+            (
+                "deck_set_cover_image",
+                Box::new(|| {
+                    crate::deck::set_cover_image(&conn, &covers, id, &covers.join("source.png"))
+                        .unwrap();
+                }),
+            ),
+            (
+                "deck_set_folder",
+                Box::new(|| {
+                    crate::deck::set_folder(&conn, id, Some(folder)).unwrap();
+                    clear(&conn);
+                    crate::deck::set_folder(&conn, id, None).unwrap();
                 }),
             ),
             (
@@ -551,6 +583,7 @@ mod tests {
                 .unwrap();
             assert_eq!(written, 1, "`{name}` must record exactly one audit row");
         }
+        let _ = std::fs::remove_dir_all(&covers);
     }
 
     #[test]

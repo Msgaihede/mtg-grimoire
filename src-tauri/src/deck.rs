@@ -119,6 +119,10 @@ pub struct DeckPatch {
     pub archived: Option<bool>,
     /// Which folder the deck is filed in. `decks.folder_id` is `ON DELETE SET NULL`, so a
     /// folder the user deletes surfaces its decks at the root rather than taking them with it.
+    ///
+    /// **Un-filing is [`set_folder`]'s job, not this field's**, and no patch field could do it:
+    /// by the rule above, a `null` here means "leave it". A reader looking for the way to put a
+    /// deck back at the root of the tree wants that command.
     pub folder_id: Option<i64>,
     /// The deck's long-form notes — the v8 column, and **not** [`Self::description`], which is
     /// the one-line blurb the "New deck" dialog fills and the gallery tile shows. Two columns
@@ -662,17 +666,89 @@ fn record_deck_edit(
         field("theory", json!(before.theory_enabled), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
-        crate::deck_audit::record(
-            tx,
-            id,
-            crate::deck_audit::DECK_LEVEL,
-            crate::deck_audit::FOLDER,
-            None,
-            &json!({ "action": "move", "folder": folder_path(tx, to)? }),
-            0,
-        )?;
+        record_filed(tx, id, Some(to))?;
     }
     Ok(())
+}
+
+/// File a deck under a folder, or — with `None` — back at the **root of the tree**.
+///
+/// A command of its own rather than a [`DeckPatch`] field, and the reason is the convention
+/// every column in that struct is written under: `coalesce(?n, column)` reads a bound NULL as
+/// "leave it", so within a patch `null` cannot mean "clear it". A double-`Option` (absent versus
+/// null) would express it, but only across the *whole* struct, and inventing a second convention
+/// inside one that already has one is how a reader comes to distrust both. Here `None` genuinely
+/// means root, because there is nothing else it could mean.
+///
+/// `DeckPatch::folder_id` stays exactly as it is for the set-a-folder case; this is the one that
+/// can also take it back out.
+///
+/// Records one `folder` row **when the deck actually moves**, [`update_deck`]'s rule: a dialog
+/// that saves an untouched form must not fill the drawer with moves nobody made. The
+/// `updated_at` touch is unconditional, also [`update_deck`]'s.
+pub fn set_folder(
+    conn: &Connection,
+    deck_id: i64,
+    folder_id: Option<i64>,
+) -> Result<DeckRow, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Validated in words rather than left to the foreign key. `decks.folder_id` does declare
+    // `REFERENCES deck_folders(id)`, but `PRAGMA foreign_keys` is a per-connection setting and a
+    // constraint failure names the table and not the mistake — the same reason
+    // `valid_format` checks `format_specs` by hand.
+    if let Some(folder) = folder_id {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM deck_folders WHERE id = ?1)",
+                params![folder],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err(crate::deck_meta::FOLDER_GONE.to_owned());
+        }
+    }
+    let before: Option<i64> = tx
+        .query_row(
+            "SELECT folder_id FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| GONE.to_owned())?;
+    touch_deck(&tx, deck_id)?;
+    tx.execute(
+        "UPDATE decks SET folder_id = ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![deck_id, folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    if folder_id != before {
+        record_filed(&tx, deck_id, folder_id)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    read_deck(conn, deck_id)?.ok_or_else(|| GONE.to_owned())
+}
+
+/// The one `folder` history row, written by both writers that can file a deck.
+///
+/// `None` is the root of the tree and records `"folder": null` — the absence of a path, not the
+/// empty string, because a reader has to be able to tell "filed nowhere" from "filed under a
+/// folder whose name is blank" and only one of those is a state the app can produce.
+fn record_filed(tx: &Connection, deck_id: i64, folder_id: Option<i64>) -> Result<(), String> {
+    let folder = match folder_id {
+        Some(id) => json!(folder_path(tx, id)?),
+        None => json!(null),
+    };
+    crate::deck_audit::record(
+        tx,
+        deck_id,
+        crate::deck_audit::DECK_LEVEL,
+        crate::deck_audit::FOLDER,
+        None,
+        &json!({ "action": "move", "folder": folder }),
+        0,
+    )
 }
 
 /// A folder's full path, root first, joined with ` › ` — `"Commander › Legends"`.
@@ -845,6 +921,15 @@ struct CopiedCard {
 /// with them for the same reason: copying the rows and leaving the flag off would give the
 /// copy a list it cannot open.
 ///
+/// **A custom cover is copied as a file, not as a path**, and that is the trap this argument
+/// exists for: `cover_kind` and `cover_image_path` come across in the `INSERT … SELECT` above
+/// like every other column, which on its own leaves the copy claiming `custom` with no
+/// `<newId>.webp` behind it and a path pointing at the *original's* file — `mtgimg://…/cover/…`
+/// then 404s and the tile is blank. So the bytes are copied too, and if they cannot be (no
+/// covers directory, no source file, an unwritable disk) the copy falls back to `card_art`
+/// rather than keeping a claim it cannot honour. Best-effort like [`delete_deck`]'s removal: a
+/// failure is logged, never fatal, and a duplicate is never refused over a picture.
+///
 /// **Categories and tags are new rows with new ids**, and the cards are remapped onto them.
 /// This is the part a "copy the cards" implementation gets wrong invisibly: `deck_cards`
 /// stores a `category_id`, so copying a card row verbatim would file the copy's card under
@@ -859,9 +944,13 @@ struct CopiedCard {
 /// would be a second write with a failure mode of its own (a user category named "Sideboard"
 /// collides with the seeded one on `DECK_CATEGORY_GRAIN`) in exchange for an invariant that
 /// already holds.
-pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
+pub fn duplicate_deck(
+    conn: &Connection,
+    id: i64,
+    covers: Option<&Path>,
+) -> Result<DeckRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let copy: Option<(i64, String)> = tx
+    let copy: Option<(i64, String, String)> = tx
         .query_row(
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 cover_image_path, folder_id, notes, theory_enabled,
@@ -870,15 +959,18 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
                     cover_image_path, folder_id, notes, theory_enabled,
                     0, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
-             RETURNING id, name",
+             RETURNING id, name, cover_kind",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((copy, copy_name)) = copy else {
+    let Some((copy, copy_name, copy_cover_kind)) = copy else {
         return Err(GONE.to_owned());
     };
+    if copy_cover_kind == COVER_CUSTOM {
+        copy_cover_file(&tx, covers, id, copy)?;
+    }
 
     // Read then write, one row at a time with `RETURNING id`, rather than one
     // `INSERT … SELECT`: the map from old id to new is the whole point, and a set insert
@@ -995,6 +1087,53 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, copy)?.ok_or_else(|| GONE.to_owned())
+}
+
+/// Give a freshly duplicated deck its own copy of the original's cover image, or take the claim
+/// away.
+///
+/// The columns are already `custom` when this runs — [`duplicate_deck`]'s `INSERT … SELECT`
+/// copied them — so the only two honest outcomes are "the copy has its own file, pointing at
+/// itself" and "the copy shows card art". What must not survive is the state in between: a deck
+/// claiming `custom` whose `cover_image_path` names *another deck's* file, which outlives that
+/// deck's deletion as a path to nothing.
+///
+/// Best-effort in the sense [`delete_deck`] is: every failure lands in the second branch and is
+/// logged, and the duplicate itself is never refused. Inside the caller's transaction, so the
+/// columns and the file agree or neither happened.
+fn copy_cover_file(
+    tx: &Connection,
+    covers: Option<&Path>,
+    from: i64,
+    to: i64,
+) -> Result<(), String> {
+    let copied = covers.is_some_and(|dir| match crate::images::copy_cover(dir, from, to) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("could not copy the cover image from deck {from} to deck {to}: {e}");
+            false
+        }
+    });
+    if copied {
+        tx.execute(
+            "UPDATE decks SET cover_image_path = ?2 WHERE id = ?1",
+            params![
+                to,
+                crate::images::cover_file(
+                    covers.expect("a copy cannot have happened without a directory"),
+                    to
+                )
+                .to_string_lossy()
+            ],
+        )
+    } else {
+        tx.execute(
+            "UPDATE decks SET cover_kind = ?2, cover_image_path = NULL WHERE id = ?1",
+            params![to, COVER_CARD_ART],
+        )
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// The gallery, archived decks last and most recently touched first.
@@ -2283,15 +2422,39 @@ pub async fn deck_set_cover_image(
     .map_err(unfinished)?
 }
 
+/// Copy a deck, its categories, its tags, its cards — and its custom cover file.
+///
+/// The covers directory is resolved before the blocking task, like [`deck_delete`]'s, and `None`
+/// is not a reason to refuse: the copy falls back to card art. See [`duplicate_deck`].
 #[tauri::command]
 pub async fn deck_duplicate(
     state: tauri::State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
     id: i64,
 ) -> Result<DeckRow, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| duplicate_deck(c, id)))
-        .await
-        .map_err(unfinished)?
+    let covers = crate::paths::covers_dir(&app).ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| duplicate_deck(c, id, covers.as_deref()))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// File a deck under a folder, or with `folderId: null` back at the root of the tree — the one
+/// thing [`DeckPatch`] cannot express. See [`set_folder`].
+#[tauri::command]
+pub async fn deck_set_folder(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    folder_id: Option<i64>,
+) -> Result<DeckRow, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_folder(c, deck_id, folder_id))
+    })
+    .await
+    .map_err(unfinished)?
 }
 
 /// The deck gallery. **Read-only** connection, blocking pool — as every read in this app
@@ -3295,7 +3458,7 @@ mod tests {
         .unwrap();
         own_and_claim(&conn, deck.id);
 
-        let copy = duplicate_deck(&conn, deck.id).unwrap();
+        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
 
         assert_ne!(copy.id, deck.id);
         assert_eq!(copy.name, "Burn (copy)");
@@ -3703,8 +3866,17 @@ mod tests {
 
     /// A scratch `covers/` directory and a valid WEBP to put in it. Written through the real
     /// encoder, so what the tests below move around is the shape the app actually stores.
+    ///
+    /// Named for **this process** as well as for the test. That is a precaution rather than a
+    /// fix for anything measured: the directory is removed and recreated a moment later, and on
+    /// Windows a pending-delete directory and a file a scanner has just opened both surface as
+    /// `Access is denied`, so two `cargo test` processes sharing a fixed name would have a
+    /// window in which one can fail the other. One red run of this suite was seen and never
+    /// reproduced in twenty-four more; this removes a failure mode that could have caused it,
+    /// and does not diagnose it.
     fn covers(name: &str) -> (std::path::PathBuf, Vec<u8>) {
-        let dir = std::env::temp_dir().join(format!("mtgtest-deck-covers-{name}"));
+        let dir =
+            std::env::temp_dir().join(format!("mtgtest-deck-covers-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("source.png");
@@ -3794,6 +3966,153 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(refused, GONE);
         assert!(!written);
+    }
+
+    /// A duplicate of a custom-cover deck gets **its own file**, not a path to the original's.
+    ///
+    /// The columns come across in the `INSERT … SELECT` like everything else, which on its own
+    /// leaves the copy claiming `custom` over a file that is not there — the route 404s and the
+    /// tile is blank — and pointing at a path that dies with the original.
+    #[test]
+    fn duplicating_a_deck_gives_the_copy_its_own_cover_file() {
+        let conn = seeded();
+        let (dir, bytes) = covers("duplicate");
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        set_cover_image(&conn, &dir, deck.id, &dir.join("source.png")).unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id, Some(&dir)).unwrap();
+
+        let file = crate::images::cover_file(&dir, copy.id);
+        let landed = std::fs::read(&file).ok();
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT cover_image_path FROM decks WHERE id = ?1",
+                params![copy.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let original_kept = crate::images::cover_file(&dir, deck.id).is_file();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(copy.cover_kind, COVER_CUSTOM);
+        assert_eq!(landed.as_deref(), Some(bytes.as_slice()));
+        assert_eq!(
+            stored.as_deref(),
+            file.to_str(),
+            "and the row points at the copy's own file, not the original's"
+        );
+        assert!(original_kept, "the original is untouched");
+    }
+
+    /// When the bytes cannot be copied the claim is given up rather than kept: a deck showing
+    /// its card art is a deck that looks right, and one claiming `custom` over nothing is a
+    /// blank tile. Best-effort in both directions — the duplicate itself never fails over a
+    /// picture.
+    #[test]
+    fn a_duplicate_falls_back_to_card_art_when_the_cover_cannot_be_copied() {
+        let conn = seeded();
+        let (dir, _) = covers("duplicate-fallback");
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        set_cover_image(&conn, &dir, deck.id, &dir.join("source.png")).unwrap();
+        // The file goes, the columns stay — which is exactly the state a hand-deleted
+        // `data/covers` leaves behind, and `covers/` is documented as safe to delete.
+        std::fs::remove_file(crate::images::cover_file(&dir, deck.id)).unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id, Some(&dir)).unwrap();
+        // And with no covers directory at all, which is what an unwritable data folder gives.
+        let no_dir = duplicate_deck(&conn, deck.id, None).unwrap();
+
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT cover_image_path FROM decks WHERE id = ?1",
+                params![copy.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(copy.cover_kind, COVER_CARD_ART);
+        assert_eq!(no_dir.cover_kind, COVER_CARD_ART);
+        assert_eq!(stored, None, "and no path to a file that is not there");
+    }
+
+    /// The one thing a [`DeckPatch`] cannot say: **put this deck back at the root**. `None` is
+    /// root here because there is nothing else it could be — the whole reason this is a command
+    /// rather than a patch field.
+    #[test]
+    fn a_deck_can_be_filed_and_unfiled() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let commander = crate::deck_meta::create_folder(&conn, None, "Commander")
+            .unwrap()
+            .id;
+
+        let filed = set_folder(&conn, deck.id, Some(commander)).unwrap();
+        assert_eq!(filed.folder_id, Some(commander));
+
+        // The patch route can move it between folders but never out of one: `coalesce` reads a
+        // bound NULL as "leave it", which is what this command exists to work around.
+        let still_filed = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert_eq!(still_filed.folder_id, Some(commander));
+
+        let unfiled = set_folder(&conn, deck.id, None).unwrap();
+        assert_eq!(unfiled.folder_id, None, "back at the root of the tree");
+
+        // Both moves are in the history, and the root one says so with a null rather than an
+        // empty string — "filed nowhere" and "filed under a folder called nothing" are
+        // different, and only one of them is a state the app can produce.
+        let history = crate::deck_audit::list(&conn, deck.id, 10).unwrap();
+        let folders: Vec<serde_json::Value> = history
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::FOLDER)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .collect();
+        assert_eq!(
+            folders,
+            vec![
+                json!({ "action": "move", "folder": null }),
+                json!({ "action": "move", "folder": "Commander" }),
+            ]
+        );
+    }
+
+    /// A stale folder id is refused in words, not left to a foreign key that may not even be
+    /// enforced on this connection — and a deck that is not there is [`GONE`], as everywhere.
+    #[test]
+    fn filing_a_deck_somewhere_that_is_not_there_is_refused_by_name() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        assert_eq!(
+            set_folder(&conn, deck.id, Some(404)).unwrap_err(),
+            crate::deck_meta::FOLDER_GONE
+        );
+        assert_eq!(set_folder(&conn, 404, None).unwrap_err(), GONE);
+        // A refused filing wrote nothing, history included.
+        let filed: Option<i64> = conn
+            .query_row(
+                "SELECT folder_id FROM decks WHERE id = ?1",
+                params![deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(filed, None);
+    }
+
+    /// Re-filing a deck where it already is changed nothing, so it records nothing —
+    /// [`update_deck`]'s rule, and the reason a settings dialog that saves an untouched form
+    /// does not fill the drawer with moves nobody made.
+    #[test]
+    fn filing_a_deck_where_it_already_is_records_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let folder = crate::deck_meta::create_folder(&conn, None, "Commander")
+            .unwrap()
+            .id;
+        set_folder(&conn, deck.id, Some(folder)).unwrap();
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+
+        set_folder(&conn, deck.id, Some(folder)).unwrap();
+
+        assert_eq!(count(&conn, "deck_audit"), 0);
     }
 
     /// The two words `decks.cover_kind`'s CHECK allows, walked against the live column — the

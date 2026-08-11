@@ -1009,6 +1009,16 @@ pub fn remove_cover(covers: &std::path::Path, deck_id: i64) -> std::io::Result<(
     }
 }
 
+/// Give one deck a copy of another's cover file.
+///
+/// **A missing source is an error here, unlike in [`remove_cover`]**, and the asymmetry is the
+/// point: a delete that finds nothing already has what it wanted, while a copy that finds
+/// nothing has produced nothing — and its caller ([`crate::deck::duplicate_deck`]) has to know,
+/// because the copy is carrying a `cover_kind` of `custom` that only this file can honour.
+pub fn copy_cover(covers: &std::path::Path, from: i64, to: i64) -> std::io::Result<()> {
+    std::fs::copy(cover_file(covers, from), cover_file(covers, to)).map(|_| ())
+}
+
 /// Images **one** prefetch call will warm — two pages of results.
 ///
 /// A bound on the call, not on the app: nothing stops several of these loops running at
@@ -2337,6 +2347,25 @@ mod tests {
         r.headers().get(name).and_then(|v| v.to_str().ok())
     }
 
+    /// An empty scratch directory under `%TEMP%`, named for **this process** as well as for the
+    /// test.
+    ///
+    /// The pid is a precaution, not a fix for anything measured. Every one of these tests
+    /// removes its directory and recreates it a moment later, and on Windows a directory in the
+    /// pending-delete state and a file an indexer or scanner has just opened both surface as
+    /// `Access is denied` — so two `cargo test` processes sharing a fixed name (a rerun started
+    /// before the last one's cleanup landed, an editor running the suite alongside a terminal)
+    /// have a window in which one can fail the other. One red run of this suite has been seen
+    /// and never reproduced in twenty-four more; **this does not diagnose it**, it removes a
+    /// failure mode that could have caused it.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("mtgtest-covers-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     /// Bytes, and permission to keep them for a day — not forever. The URL is stable
     /// across Scryfall re-scanning a card, so an immutable cache would pin a superseded
     /// picture inside the webview until the app is reinstalled.
@@ -2383,9 +2412,7 @@ mod tests {
     /// served from here would hide the picture the deck actually has.
     #[test]
     fn a_cover_route_serves_the_file_and_404s_when_there_is_none() {
-        let dir = std::env::temp_dir().join("mtgtest-covers-route");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("route");
         std::fs::write(cover_file(&dir, 7), b"webp-bytes").unwrap();
 
         let served = cover_response(std::fs::read(cover_file(&dir, 7)).ok());
@@ -2485,9 +2512,7 @@ mod tests {
     /// the `to_rgba8` conversion is for.
     #[test]
     fn a_cover_is_re_encoded_to_the_art_crops_shape() {
-        let dir = std::env::temp_dir().join("mtgtest-covers-encode");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("encode");
         let source = dir.join("source.png");
         // Tall and narrow, so `resize_to_fill` has to crop rather than merely scale.
         let mut png = image::RgbaImage::new(64, 256);
@@ -2513,9 +2538,7 @@ mod tests {
     /// thing they need told is which file.
     #[test]
     fn a_source_that_is_not_an_image_is_refused_by_name() {
-        let dir = std::env::temp_dir().join("mtgtest-covers-refuse");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("refuse");
         let source = dir.join("notes.txt");
         std::fs::write(&source, b"this is not a picture").unwrap();
 

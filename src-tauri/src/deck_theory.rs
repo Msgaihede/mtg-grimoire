@@ -15,8 +15,9 @@
 //! * **The difference.** [`theory_diff`] answers what theory holds that live does not — **one
 //!   direction only**, because this is a shopping list rather than a reconciliation. What live
 //!   has and theory dropped is a cut the user already made; it needs no row.
-//! * **Buying it.** [`missing_to_wishlist`] turns that difference into wishes, less what the
-//!   binder can already supply.
+//! * **Buying it.** [`missing_to_wishlist`] turns that difference into wishes — the difference
+//!   itself, with nothing netted out of it. See that function on why subtracting
+//!   [`TheoryDiffRow::owned_spare`] there counts the live list twice.
 //!
 //! **Switching the theory list off keeps every row.** It hides a switch; it does not delete a
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
@@ -60,6 +61,12 @@ pub struct TheoryDiffRow {
     /// rule read from the other end: a deck on a table has its cards, a deck being planned is
     /// planning with copies it may share with every other draft — so an unbuilt deck's claim
     /// does not make a copy unavailable to this plan.
+    ///
+    /// **A display field, and never a term in an arithmetic.** It is deliberately *not* netted
+    /// out of [`Self::quantity`] anywhere, least of all by [`missing_to_wishlist`]: `quantity`
+    /// has already subtracted the live list and this number has not — an unbuilt deck's own live
+    /// copies read as spare here, which is right for a person and wrong for a subtraction. It is
+    /// for a reader, beside a price.
     pub owned_spare: i64,
 }
 
@@ -252,6 +259,10 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
 ///
 /// **Allocates nothing**, and must not: the allocator reserves collection copies for `live`
 /// only, so a theory list that claimed anything would take copies away from decks that are real.
+///
+/// Answers the number of **rows** written, which is what `execute` counts. [`copy_from_live`]
+/// wants **copies** for its history and measures them itself with [`theory_copies`] — a row is
+/// a line and a copy is a card, and this app counts decks in cards everywhere else.
 pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, String> {
     let sql = format!(
         "INSERT INTO deck_cards
@@ -280,33 +291,73 @@ pub(crate) fn theory_is_empty(conn: &Connection, deck_id: i64) -> Result<bool, S
     .map_err(|e| e.to_string())
 }
 
+/// Copies the theory list holds, summed. The unit a deck is counted in everywhere else in this
+/// app — two printings at 2 and 3 is 5 cards, not 2.
+fn theory_copies(conn: &Connection, deck_id: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+          WHERE deck_id = ?1 AND variant = ?2",
+        params![deck_id, THEORY],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// [`seed_from_live`] as a command of its own — "copy my deck into the plan", pressed.
 ///
 /// Opens the transaction its callee will not, and moves `updated_at` through
 /// [`crate::deck::touch_deck`] so the gallery surfaces the edit and a stale deck id is answered
 /// with [`crate::deck::GONE`] rather than with a silent no-op.
 ///
-/// **Records no history**, and this is a judgement rather than an oversight: every row it
-/// writes is a copy of a live row, and the `add` kind describes a card someone chose to put in
-/// a pile. The event that normally seeds a theory list — switching it on — *is* recorded, as
-/// the `deck` row for the `theory` field. A press of this button on an already-seeded list is
-/// therefore the one deck write with no line in the drawer.
+/// **Records exactly one history row**, kind `deck`, field `theory`, carrying the copies it
+/// added — and it has to, for a reason worth stating because the opposite was tried first. The
+/// toggle's own row is a fact about a *switch*, written once per deck whether the deck holds
+/// forty cards or none; on an already-seeded list, which is the only state where this button is
+/// meaningfully pressed, the toggle's row was written long ago and nothing else would be. "Log
+/// ALL changes" is the whole point of the table, and a press that moves forty cards into a list
+/// is a change.
+///
+/// One row and not one per card: N `add` rows would read as a deck somebody typed out, and the
+/// toggle path — where the same copy rides along inside `update_deck` — records one row for the
+/// same reason. `copied` is in the payload **and** in `delta`, which is [`crate::deck_audit`]'s
+/// established shape (an `add` carries its quantity in both): `delta` is the day header's
+/// arithmetic, the payload is the sentence's facts.
 pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
-    let copied = seed_from_live(&tx, deck_id)?;
+    // Measured either side of the insert rather than derived from its row count: `execute`
+    // counts rows and a row is a line, while what a reader (and `delta`) wants is cards.
+    let before = theory_copies(&tx, deck_id)?;
+    let rows = seed_from_live(&tx, deck_id)?;
+    let copied = theory_copies(&tx, deck_id)? - before;
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        THEORY,
+        crate::deck_audit::DECK,
+        None,
+        &serde_json::json!({ "field": "theory", "copied": copied }),
+        copied,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(copied)
+    Ok(rows)
 }
 
 /// Everything the plan is short of, onto the wishlist. Returns how many wishes were touched.
 ///
-/// [`crate::deck::missing_to_wishlist`]'s twin, and the differences are the two things a plan
-/// is: what it wants is measured against the **live list** rather than against the allocator's
-/// claims (a theory row reserves nothing, so it has no claims to measure), and what it still
-/// needs is that difference less [`TheoryDiffRow::owned_spare`] — the copies sitting in the
-/// binder that no built deck has spoken for. Buying what is already in the box is exactly the
-/// mistake a shopping list exists to prevent.
+/// [`crate::deck::missing_to_wishlist`]'s twin, and the difference is what a plan is: what it
+/// wants is measured against the **live list** rather than against the allocator's claims, a
+/// theory row reserving nothing and so having no claims to measure.
+///
+/// **The wish is [`TheoryDiffRow::quantity`] and nothing is subtracted from it.** That is not an
+/// oversight and it was wrong once: subtracting [`TheoryDiffRow::owned_spare`] here counts the
+/// live list's copies **twice**, because `quantity` is already *wanted minus held* and
+/// `owned_spare` nets out only the claims of decks that are **built**. An unbuilt deck's own
+/// live copies are therefore spare by that definition, so live 2 / owned 2 / theory 3 asked for
+/// nothing while the user needed one — `missing_to_wishlist_does_not_count_the_live_list_twice`
+/// is that arithmetic pinned. `owned_spare` is a **display** field: the diff row's way of saying
+/// "one of these is in the box already", for a person to read beside a price. It is not a term
+/// in this sum.
 ///
 /// **Any printing**, always: written through [`crate::wishlist::add_wish`] with an oracle id, so
 /// the grain, the canonicalisation and the fold all stay in the one module that owns them, and
@@ -331,10 +382,6 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
         let Some(oracle_id) = grouped.oracle_id else {
             continue;
         };
-        let need = grouped.row.quantity - grouped.row.owned_spare;
-        if need <= 0 {
-            continue;
-        }
         crate::wishlist::add_wish(
             &tx,
             &crate::wishlist::WishInput {
@@ -342,7 +389,7 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
                 // The deck row's own name, which is the one name an orphan-safe row always has
                 // and the same name the list would show for it.
                 name: Some(grouped.row.name),
-                quantity: need,
+                quantity: grouped.row.quantity,
                 ..Default::default()
             },
         )?;
@@ -695,29 +742,98 @@ mod tests {
         assert_eq!(theory_diff(&conn, id).unwrap()[0].owned_spare, 2);
     }
 
-    /// The shopping list buys what the binder cannot supply, and nothing more.
-    #[test]
-    fn missing_to_wishlist_asks_for_what_the_binder_cannot_cover() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        own(&conn, "bolt-lea", 1);
-        add(&conn, id, "bolt-lea", main, THEORY, 3);
-        add(&conn, id, "serra-lea", main, THEORY, 1);
-        own(&conn, "serra-lea", 4);
-
-        let touched = missing_to_wishlist(&conn, id).unwrap();
-
-        // Three Bolts wanted, one spare in the binder: two to buy. The Angel is covered.
-        assert_eq!(touched, 1);
-        let wishes: Vec<(Option<String>, i64)> = conn
-            .prepare("SELECT oracle_id, quantity FROM wishlist_entries ORDER BY id")
+    /// Every wish this deck raised, oldest first.
+    fn wishes(conn: &Connection) -> Vec<(Option<String>, i64)> {
+        conn.prepare("SELECT oracle_id, quantity FROM wishlist_entries ORDER BY id")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()
             .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(wishes, vec![(Some("o1".to_owned()), 2)]);
+            .unwrap()
+    }
+
+    /// The shopping list asks for the difference, and only for cards there is a difference on.
+    #[test]
+    fn missing_to_wishlist_asks_for_the_difference() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, THEORY, 3);
+        // A card the plan agrees with the deck about is not a purchase.
+        add(&conn, id, "serra-lea", main, LIVE, 1);
+        add(&conn, id, "serra-lea", main, THEORY, 1);
+
+        let touched = missing_to_wishlist(&conn, id).unwrap();
+
+        assert_eq!(touched, 1);
+        assert_eq!(wishes(&conn), vec![(Some("o1".to_owned()), 3)]);
+    }
+
+    /// **The live list is subtracted once.** Netting `owned_spare` out of the wish as well is
+    /// the bug this pins, and it hides from any fixture where the deck plays none of the card:
+    /// [`TheoryDiffRow::quantity`] is already *wanted minus held*, while `owned_spare` nets out
+    /// only the claims of decks that are **built** — so an unbuilt deck's own live copies read
+    /// as spare and are charged against the wish a second time.
+    ///
+    /// **Two cards, because the bug has two shapes and one fixture hides the other.** The Bolt
+    /// (live 2, binder 2, plan 3) makes the subtraction negative, which the old code skipped
+    /// outright — no wish at all. The Angel (live 1, binder 3, plan 5) makes it merely *small*:
+    /// 4 needed, 1 asked for. A fixture with only the first would still pass a half-reverted
+    /// fix, because `wishlist::add_wish` clamps a non-positive quantity to **1** — so the
+    /// negative arm's wrong answer and the right answer can be the same number, and only the
+    /// wish's absence tells them apart.
+    #[test]
+    fn missing_to_wishlist_does_not_count_the_live_list_twice() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        own(&conn, "bolt-lea", 2);
+        add(&conn, id, "bolt-lea", main, LIVE, 2);
+        add(&conn, id, "bolt-lea", main, THEORY, 3);
+        own(&conn, "serra-lea", 3);
+        add(&conn, id, "serra-lea", main, LIVE, 1);
+        add(&conn, id, "serra-lea", main, THEORY, 5);
+
+        // The premise: the deck is not built, so nothing has *claimed* those copies and every
+        // one of them reads spare — which is right for a reader and is the whole trap for a
+        // subtraction, since `quantity` has already taken the live list off.
+        let diff = theory_diff(&conn, id).unwrap();
+        assert_eq!((diff[0].quantity, diff[0].owned_spare), (1, 2));
+        assert_eq!((diff[1].quantity, diff[1].owned_spare), (4, 3));
+
+        let touched = missing_to_wishlist(&conn, id).unwrap();
+
+        assert_eq!(touched, 2, "the Bolt is a wish, not a skipped negative");
+        assert_eq!(
+            wishes(&conn),
+            vec![(Some("o1".to_owned()), 1), (Some("o2".to_owned()), 4)],
+            "and the Angel asks for four, not for four less what is in the box"
+        );
+    }
+
+    /// Rule 1 of the audit table reaches this button too: a press that moves forty cards into
+    /// the plan is a change, and on an already-seeded list the toggle's row was written long
+    /// ago. One row, carrying **copies** rather than rows — a line is not a card.
+    #[test]
+    fn copying_from_live_records_one_row_carrying_the_copies() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, LIVE, 4);
+        add(&conn, id, "serra-lea", main, LIVE, 2);
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+
+        copy_from_live(&conn, id).unwrap();
+
+        let history = crate::deck_audit::list(&conn, id, 100).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].kind, crate::deck_audit::DECK);
+        assert_eq!(history[0].variant, THEORY);
+        assert_eq!(history[0].delta, 6, "copies, not the two rows");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&history[0].payload).unwrap(),
+            serde_json::json!({ "field": "theory", "copied": 6 })
+        );
     }
 
     /// An explicit copy tops the plan up without touching a row the user changed — the
