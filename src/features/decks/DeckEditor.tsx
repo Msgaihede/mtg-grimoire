@@ -17,8 +17,9 @@ import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { newestWrite, writeFailure } from "@/lib/writes";
 import { AuditDrawer } from "./AuditDrawer";
-import { focusDeckGroup, type DeckCardActions } from "./cardControl";
+import { focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
 import { CategoriesPanel } from "./CategoriesPanel";
 import { DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -36,9 +37,6 @@ import { GridView } from "./views/GridView";
 import { StackView } from "./views/StackView";
 import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
-
-/** The shared focus recipe: a gold outline standing off the control, never a ring. */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /** A header/toolbar control that is not a chip: a select, a field, a plain press. 32px, so the
  *  two rows read as rows rather than as a pile of differently sized boxes. */
@@ -285,20 +283,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const chipRef = useRef<HTMLButtonElement>(null);
   const tookFocus = useRef(false);
 
-  /** The most recently *started* of a set of writes — which is the one whose refusal is still
-   *  news. Ties go to the later entry, which only happens when none of them has ever run. */
-  const newest = <T extends { submittedAt: number }>(of: T[]): T =>
-    of.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
-
-  // The three writes the editor's **own banner** speaks for, newest first. The *latest* of them
-  // owns it, not whichever is still holding an error: a refused move used to leave its sentence
-  // up while the reader went on to rename the deck successfully (the collection table's
-  // lesson). The docked panel's add is deliberately not here — it says so in the panel, beside
-  // the button that was pressed, and two banners for one refusal would be worse than one in the
-  // wrong place.
-  const writes = [deck.setQuantity, deck.moveCard, deck.update];
-  const lastWrite = newest(writes);
-  const writeFailure = lastWrite.isError ? ipcError(lastWrite.error) : null;
+  // The three writes the editor's **own banner** speaks for. The *latest* of them owns it, not
+  // whichever is still holding an error: a refused move used to leave its sentence up while the
+  // reader went on to rename the deck successfully (the collection table's lesson). That rule
+  // is `lib/writes.ts` now, shared with the gallery, the settings dialog and the categories
+  // drawer, because four copies of it were four places to keep one rule — and one of the four
+  // had it backwards. The docked panel's add is deliberately not here — it says so in the
+  // panel, beside the button that was pressed, and two banners for one refusal would be worse
+  // than one in the wrong place.
+  const writes = [deck.setQuantity, deck.moveCard, deck.update] as const;
+  const bannerFailure = writeFailure(writes);
 
   /**
    * The columns and the move targets: **every category the deck has, in `sortOrder`.**
@@ -393,7 +387,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // exists, and reading any of the three as live GONE coverage would be reading it as something
   // it cannot do today.
   const refetch = deck.query.refetch;
-  const lastOfAny = newest([...writes, deck.addCard, deck.missingToWishlist, deck.swapPrinting]);
+  const lastOfAny = newestWrite([
+    ...writes,
+    deck.addCard,
+    deck.missingToWishlist,
+    deck.swapPrinting,
+  ]);
   const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;
   useEffect(() => {
     if (failedAt) void refetch();
@@ -1138,12 +1137,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {writeFailure && (
+      {bannerFailure && (
         <p
           role="alert"
           className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
-          Could not change this deck — {writeFailure}
+          Could not change this deck — {bannerFailure}
         </p>
       )}
 

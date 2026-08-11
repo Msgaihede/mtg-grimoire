@@ -7,6 +7,7 @@ import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
@@ -288,8 +289,9 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
         // draws it.
         aria-label="Theory to Live difference"
         // The caret stays inside, which is what makes the `aria-modal` above true rather than
-        // merely claimed — see {@link trapTab}.
-        onKeyDown={(e) => trapTab(e, panelRef.current)}
+        // merely claimed — see {@link trapTab}. Registered on the panel, which is where that
+        // helper reads it from.
+        onKeyDown={trapTab}
         className={cn(
           "flex max-h-[80%] w-full max-w-[47.5rem] flex-col overflow-hidden rounded-xl border",
           "border-border bg-bg shadow-2xl",
@@ -536,47 +538,4 @@ function Row({
   );
 }
 
-/**
- * Keep Tab inside the dialog.
- *
- * The one thing `aria-modal` promises that no attribute can deliver: the app behind this really
- * is still in the tab order, so without this a few presses of Tab walk the caret out into an
- * editor the reader cannot see and cannot get back from. Written here rather than reached for
- * from a library because the app ships `style-src 'self'` and every overlay primitive in reach
- * injects a runtime `<style>` — `SetCombobox`'s finding, and the reason nothing in this app is
- * portalled.
- *
- * Cycling both ways off the *live* list of focusables, read on each press: the row buttons
- * disable themselves as they are used, and a list captured once would send the caret to a control
- * the browser now skips.
- */
-function trapTab(e: React.KeyboardEvent, panel: HTMLElement | null): void {
-  if (e.key !== "Tab" || panel === null) return;
-  const focusable = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
-  );
-  // Nothing to cycle between — an empty or failed diff, where the ✕ may be the only control. The
-  // panel itself holds the caret, which is where the open effect put it.
-  if (focusable.length === 0) {
-    e.preventDefault();
-    panel.focus({ preventScroll: true });
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  // `document.activeElement`, not `e.target`: the caret may be on the panel itself, which is
-  // `tabIndex={-1}` and therefore in neither end of the list.
-  const active = document.activeElement;
-  if (e.shiftKey && (active === first || active === panel)) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && active === last) {
-    e.preventDefault();
-    first.focus();
-  }
-}
 
-/** What counts as a stop on the way round. `[tabindex="-1"]` is excluded by the selector rather
- *  than by the filter, so the panel itself never appears in its own cycle. */
-const FOCUSABLE =
-  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
