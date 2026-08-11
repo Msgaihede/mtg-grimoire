@@ -16,7 +16,18 @@ import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { identityTint } from "../CardStack";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "../CardMarks";
-import { deckCardName, FOCUS_INSET } from "../cardControl";
+import {
+  deckCardName,
+  deckCardProps,
+  DeckCardControls,
+  deckGroupProps,
+  FOCUS_INSET,
+  REVEALED_ON_CARD,
+  useCategoryDrop,
+  useDeckCardDrag,
+  type DeckCardActions,
+} from "../cardControl";
+import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
@@ -26,11 +37,14 @@ export function GridView({
   groups,
   violations,
   onSelect,
+  actions,
   className,
 }: {
   groups: readonly CardGroup[];
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
+  /** What may be done to a card here — see {@link DeckCardActions}. */
+  actions?: DeckCardActions;
   className?: string;
 }) {
   return (
@@ -38,32 +52,65 @@ export function GridView({
     // pack into are the window's own width here.
     <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-auto", className)}>
       {groups.map((group) => (
-        <section key={group.key} aria-labelledby={`grid-group-${group.key}`}>
-          {/* `tight`, because this section is as wide as the window: counts pushed to the far
-              edge would be a price 1 200px away from the heading it belongs to. */}
-          <GroupHeader
-            group={group}
-            layout="tight"
-            id={`grid-group-${group.key}`}
-            className="px-0.5 pb-1.5"
-          />
-          {group.cards.length === 0 ? (
-            <p className="px-0.5 text-xs text-dim">Nothing here yet.</p>
-          ) : (
-            <ul aria-label={group.name} className="flex flex-wrap gap-2.5">
-              {group.cards.map((card) => (
-                <GridCard
-                  key={card.id}
-                  card={card}
-                  ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-                  onSelect={onSelect}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
+        <GridGroup
+          key={group.key}
+          group={group}
+          violations={violations}
+          onSelect={onSelect}
+          actions={actions}
+        />
       ))}
     </div>
+  );
+}
+
+/** One pile as a heading and its wall, and a place a dragged card can be let go —
+ *  `StackView`'s `StackGroup`, for its reason. */
+function GridGroup({
+  group,
+  violations,
+  onSelect,
+  actions,
+}: {
+  group: CardGroup;
+  violations?: Map<string, ValidationIssue[]>;
+  onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
+}) {
+  const { attach, over } = useCategoryDrop(group.categoryId, actions?.drop);
+
+  return (
+    <section
+      ref={attach}
+      aria-labelledby={`grid-group-${group.key}`}
+      {...deckGroupProps(group.categoryId)}
+      className={cn("relative", over && "rounded-md ring-1 ring-accent")}
+    >
+      {over && <DropIndicator />}
+      {/* `tight`, because this section is as wide as the window: counts pushed to the far
+          edge would be a price 1 200px away from the heading it belongs to. */}
+      <GroupHeader
+        group={group}
+        layout="tight"
+        id={`grid-group-${group.key}`}
+        className="px-0.5 pb-1.5"
+      />
+      {group.cards.length === 0 ? (
+        <p className="px-0.5 text-xs text-dim">Nothing here yet.</p>
+      ) : (
+        <ul aria-label={group.name} className="flex flex-wrap gap-2.5">
+          {group.cards.map((card) => (
+            <GridCard
+              key={card.id}
+              card={card}
+              ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+              onSelect={onSelect}
+              actions={actions}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -79,11 +126,14 @@ function GridCard({
   card,
   ruleBreakText,
   onSelect,
+  actions,
 }: {
   card: DeckCard;
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
 }) {
+  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
   // The `art` crop, not the whole card: the title bar above is this frame's own, so a full
   // card face would print the name twice. `null` for an orphan — nothing fetches a picture of
   // a card that is not in the database.
@@ -91,14 +141,16 @@ function GridCard({
 
   return (
     <li
+      ref={dragRef}
       className={cn(
-        "w-[150px] overflow-hidden rounded-md border bg-surface",
+        "group relative w-[150px] overflow-hidden rounded-md border bg-surface",
         ruleBreakText !== null ? "border-destructive" : "border-border",
       )}
     >
       <button
         type="button"
         aria-label={deckCardName(card, ruleBreakText)}
+        {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
         // Inset, for the stacked card's reason: this button fills a tile that clips its own
         // corners, and an outline standing off its edge is never drawn at all.
@@ -157,6 +209,15 @@ function GridCard({
           </span>
         </span>
       </button>
+
+      {/* Over the art, as in the stack — 150px is too narrow for a stepper and a select on one
+          line, so the wrapper's `flex-wrap` puts the move control on a second. Absolute either
+          way, so the tile is still 150px whatever it holds. */}
+      <DeckCardControls
+        card={card}
+        actions={actions}
+        className={cn("absolute inset-x-0 bottom-5 px-1", REVEALED_ON_CARD)}
+      />
     </li>
   );
 }

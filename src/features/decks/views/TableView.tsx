@@ -26,6 +26,14 @@ import type { DeckCard } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
+import {
+  deckCardProps,
+  DeckCardControls,
+  deckGroupProps,
+  useCategoryDrop,
+  useDeckCardDrag,
+  type DeckCardActions,
+} from "../cardControl";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
@@ -45,16 +53,27 @@ export function TableView({
   groups,
   violations,
   onSelect,
+  actions,
   selectedCardId,
   className,
 }: {
   groups: readonly CardGroup[];
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
+  /**
+   * What may be done to a card here — see {@link DeckCardActions}.
+   *
+   * **This view spends them as columns, where the other three draw them over the card**, and
+   * that is the one difference worth having: a table's answer to "where does a control go" is
+   * a column of its own, and an overlay would cover the very cells a reader came here to
+   * compare. The controls themselves are `cardControl.tsx`'s, the same ones.
+   */
+  actions?: DeckCardActions;
   /** Which card the open pane is about, so its row says so. */
   selectedCardId?: string | null;
   className?: string;
 }) {
+  const editable = actions?.setQuantity !== undefined || actions?.move !== undefined;
   const rows = useMemo<Row[]>(
     () =>
       groups.flatMap((group) => [
@@ -74,10 +93,21 @@ export function TableView({
     () => [
       {
         key: "quantity",
-        width: "3rem",
+        // Wide enough for the stepper when there is one, and no wider when there is not — a
+        // read-only deck table should not carry an empty 8rem gutter.
+        width: editable ? "8.5rem" : "3rem",
         header: "Qty",
-        cellClassName: "font-mono text-xs tabular-nums text-dim",
-        cell: (row) => (row.kind === "card" ? row.card.quantity : null),
+        // `interactive` is the whole of what keeps a press on `−` from also opening the card
+        // and a typed `12` from scrolling the list a screenful — `VirtualTable` applies
+        // `data-no-drag` and swallows the click and the two activation keys.
+        interactive: editable,
+        cellClassName: editable ? undefined : "font-mono text-xs tabular-nums text-dim",
+        cell: (row) =>
+          row.kind !== "card" ? null : editable ? (
+            <DeckCardControls card={row.card} actions={actions} className="flex-nowrap" />
+          ) : (
+            row.card.quantity
+          ),
       },
       {
         key: "name",
@@ -176,15 +206,28 @@ export function TableView({
             : null,
       },
     ],
-    [],
+    [editable, actions],
   );
 
   // Closed over the column count, because the band's one cell has to say how many columns it
   // stands in and the count is data here rather than a literal.
+  //
+  // A **component** rather than an element, because a row is a drag source and a drop target
+  // and both of those are hooks — and a hook cannot be called from inside a `map` or a
+  // callback. `DeckTableRow` is where they live; the band gets one too, so letting a card go
+  // on a group's heading files it under that group like letting it go on any of its rows.
+  const drop = actions?.drop;
   const renderRow = useCallback(
-    (props: RowRenderProps, row: Row) =>
-      row.kind === "card" ? <div {...props} /> : bandRow(props, row.group, columns.length),
-    [columns.length],
+    (props: RowRenderProps, row: Row) => (
+      <DeckTableRow
+        props={props}
+        row={row}
+        columns={columns.length}
+        actions={actions}
+        onDrop={drop}
+      />
+    ),
+    [columns.length, actions, drop],
   );
 
   return (
@@ -212,6 +255,65 @@ export function TableView({
 }
 
 /**
+ * One row of the table, as a component — which is what lets it be a drag source and a drop
+ * target, since both are hooks and `renderRow` is a callback.
+ *
+ * **Every row of a group is a drop target for that group**, the band included: the bands are
+ * this view's only heading, so a reader aiming a card at "Ramp" is aiming at the band, and a
+ * target that covered only the cards would refuse the most obvious drop on the screen.
+ */
+function DeckTableRow({
+  props,
+  row,
+  columns,
+  actions,
+  onDrop,
+}: {
+  props: RowRenderProps;
+  row: Row;
+  columns: number;
+  actions?: DeckCardActions;
+  onDrop?: DeckCardActions["drop"];
+}) {
+  const { attach, over } = useCategoryDrop(row.group.categoryId, onDrop);
+  const dragRef = useDeckCardDrag(
+    row.kind === "card" ? row.card : EMPTY_CARD,
+    row.kind === "card" && actions?.drop !== undefined,
+  );
+  // One element, two registrations — a row is both the thing that can be picked up and the
+  // place a card can be let go. React 19 calls the returned function as the cleanup, so the
+  // two teardowns are chained rather than one of them being dropped.
+  const ref = useCallback(
+    (element: HTMLDivElement | null) => {
+      const stopDrag = dragRef(element);
+      const stopDrop = attach(element);
+      return () => {
+        stopDrag?.();
+        stopDrop?.();
+      };
+    },
+    [dragRef, attach],
+  );
+
+  if (row.kind === "group") return bandRow(props, row.group, columns, ref, over);
+
+  return (
+    <div
+      {...props}
+      ref={ref}
+      // The caret's way home after a printing swap, on the row because the row is what takes
+      // focus in this table (`VirtualTable` owns the click, Enter and Space on it).
+      {...deckCardProps(row.card)}
+      className={cn(props.className, over && "ring-1 ring-inset ring-accent")}
+    />
+  );
+}
+
+/** A row's drag payload needs a card, and a band has none. Never read: `useDeckCardDrag` is
+ *  handed `enabled: false` for a band, so nothing registers and nothing is asked for it. */
+const EMPTY_CARD = { cardId: "", name: "", categoryId: 0 } as DeckCard;
+
+/**
  * A card row is the table's own; a group row is one band spanning every column.
  *
  * The props are spread whole in both cases, and the band then overrides **six** of them:
@@ -225,18 +327,28 @@ export function TableView({
  * to assistive tech — a row that owns nothing — so the heading sits in one cell carrying
  * `aria-colspan`, which is the same thing the design canvas's `colspan="9"` says in HTML.
  */
-function bandRow(props: RowRenderProps, group: CardGroup, columns: number) {
+function bandRow(
+  props: RowRenderProps,
+  group: CardGroup,
+  columns: number,
+  ref: (element: HTMLDivElement | null) => void,
+  over: boolean,
+) {
   return (
     <div
       {...props}
+      ref={ref}
       tabIndex={undefined}
       onClick={undefined}
       onKeyDown={undefined}
+      // The caret lands here when a card leaves this pile under it, exactly as it lands on a
+      // group's section in the other three views — the band *is* the group here.
+      {...deckGroupProps(group.categoryId)}
       // One track, not nine. `props.className` already carries `grid`; overriding the
       // template is the whole of what makes this row one cell wide, and adding a second
       // display utility beside it would leave which one wins to the class sorter.
       style={{ ...props.style, gridTemplateColumns: "minmax(0,1fr)" }}
-      className={cn(props.className, "bg-surface")}
+      className={cn(props.className, "bg-surface", over && "ring-1 ring-inset ring-accent")}
     >
       <span role="cell" aria-colspan={columns} className="flex min-w-0 items-center">
         <GroupHeader group={group} className="w-full" />

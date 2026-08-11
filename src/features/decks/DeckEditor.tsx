@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import {
+  dropTargetForElements,
+  monitorForElements,
+} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
@@ -9,15 +13,17 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AuditDrawer } from "./AuditDrawer";
+import { focusDeckGroup, type DeckCardActions } from "./cardControl";
 import { CategoriesPanel } from "./CategoriesPanel";
 import { DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
-import { dropWrite, readDragData, type DeckWrite } from "./dnd";
+import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
 import { buildGroups, GROUP_BY_OPTIONS, type GroupBy } from "./grouping";
 import { SORT_OPTIONS, type SortBy } from "./sorting";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
@@ -196,6 +202,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [quickMiss, setQuickMiss] = useState<string | null>(null);
 
   /**
+   * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
+   * deck.
+   *
+   * Only ever a `deck-card` — `canMonitor` says so — and that is the whole reason this state
+   * exists: the remove tray is drawn from it, and a card being dragged *in* from the search
+   * panel has nothing to remove. It also keeps a panel drag from re-rendering this editor at
+   * all, which is what keeps the tiles' `draggable` registrations still under the reader's
+   * pointer while they drag one.
+   */
+  const [dragging, setDragging] = useState<DragPayload | null>(null);
+  /** Whether the card being dragged is over the tray, so the tray can say what letting go
+   *  would do. */
+  const [overTray, setOverTray] = useState(false);
+
+  /**
    * Where the docked panel's adds land, and the quick add with them. Here rather than in the
    * panel because it is a fact about the deck being edited, and the categories it may take are
    * this editor's own.
@@ -231,9 +252,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** The row the deck, the stats block and the panel share, and the only width any of them can
    *  be judged against — the window's own is three layouts away from it. */
   const deskRef = useRef<HTMLDivElement>(null);
-  /** The box the current view draws into: a drop target, and the height the two column-packing
-   *  views are told to pack to. */
+  /** The box the current view draws into — the one scroller a drag may have to move inside to
+   *  reach its target, and the height the two column-packing views are told to pack to. */
   const viewRef = useRef<HTMLDivElement>(null);
+  const trayRef = useRef<HTMLDivElement>(null);
   const [desk, setDesk] = useState({ width: 0, height: 0 });
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -379,6 +401,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [openLayer],
   );
 
+  // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
+  // that is all a *drop* carries, and a drag and a control press must not be two ways of
+  // writing the same thing. The card controls below hand their own card to the same three.
+  //
+  // Each takes the mutation's `mutate` rather than the mutation: TanStack hands back a fresh
+  // result object on every render, so a callback that depended on the whole thing would have a
+  // new identity every render — and these are what the drop targets are registered with, so
+  // that would be every group unregistering and re-registering itself in the middle of a drag.
+  // `mutate` is stable for the life of the component, which makes the stability
+  // `useCategoryDrop` asks for true rather than merely intended.
+  const writeQuantity = deck.setQuantity.mutate;
+  const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
 
   /** One copy into a category — the panel's Add button's write, the quick add's, and a drop. */
@@ -388,49 +422,152 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * Give the caret to a pile, now **and once more after the deck redraws.**
+   *
+   * The second half is not belt and braces, it is the whole thing working. A card leaving a
+   * pile takes the control the caret was on with it, so the caret has to go somewhere — and the
+   * somewhere is the pile that changed, which announces its own name. Focusing it at the moment
+   * of the write is right and is not enough: the stack and the text view **pack groups into
+   * columns**, and a pile that changes size can push the pile after it into a different column.
+   * A group that changes column changes parent, so React unmounts its section and mounts a new
+   * one — taking the caret to `<body>` a beat after it was carefully placed there.
+   *
+   * So the target is remembered and re-focused on the next render that carries new cards.
+   * `focusDeckGroup` looks the pile up by attribute rather than by ref for exactly this reason:
+   * the element it finds the second time is a different element with the same identity.
+   *
+   * Measured, not guessed: `DeckEditor.stories.tsx`'s `MoveBetweenPiles` fails without the
+   * second pass and passes with it.
+   */
+  const owedFocus = useRef<number | null>(null);
+  const handOffTo = useCallback((categoryId: number) => {
+    owedFocus.current = categoryId;
+    if (!focusDeckGroup(categoryId)) editorRef.current?.focus();
+  }, []);
+  const cards = deck.cards;
+  useEffect(() => {
+    const owed = owedFocus.current;
+    if (owed === null) return;
+    owedFocus.current = null;
+    focusDeckGroup(owed);
+  }, [cards]);
+
+  const setQuantityAt = useCallback(
+    (cardId: string, categoryId: number, quantity: number) => {
+      // Zero takes the card out from under the caret — optimistically, so it happens on the
+      // press — and the control the caret was on goes with it. Before the write, because the
+      // card is gone by the time an answer arrives.
+      if (quantity === 0) handOffTo(categoryId);
+      writeQuantity({ cardId, categoryId, quantity });
+    },
+    [writeQuantity, handOffTo],
+  );
+
+  const moveTo = useCallback(
+    (cardId: string, from: number, to: number) => {
+      writeMove(
+        { cardId, from, to },
+        {
+          // The card this control belongs to has left the pile, so the caret goes to where it
+          // landed — which announces the category it is now in. A dropped card is handed on the
+          // same way: it is the card that unmounts either way, and focus follows it.
+          onSuccess: () => handOffTo(to),
+        },
+      );
+    },
+    [writeMove, handOffTo],
+  );
+
+  /**
    * What a drop writes — the one place a drag becomes a command.
    *
    * `dnd.ts` decided *what* the drop means and refused the ones that mean nothing; this decides
    * nothing at all, which is why the rule can be tested without a browser and this can be read
-   * in one breath.
+   * in one breath. Every branch is a write a control already makes: a drag adds nothing to what
+   * a reader can do, only to how fast they can do it.
    */
   const applyDrop = useCallback(
     (write: DeckWrite) => {
       if (write.write === "add") addTo(write.cardId, write.categoryId);
+      else if (write.write === "move") moveTo(write.cardId, write.from, write.to);
+      else setQuantityAt(write.cardId, write.categoryId, 0);
     },
-    [addTo],
+    [addTo, moveTo, setQuantityAt],
   );
 
   /**
-   * The deck itself as a drop target: let a card go anywhere over the list and it lands in the
-   * category the toolbar is pointed at.
+   * What every view is handed, and the whole of what a card can be made to do.
    *
-   * **The whole view rather than a target per group, and that is a real narrowing.** The four
-   * views take `CardGroup[]` and an `onSelect` and expose no element per heading, so there is
-   * nothing for a per-category registration to attach to — which also means a *row* cannot be
-   * picked up, so there is no move-by-drag and no remove tray here any more. What survives is
-   * the direction that still has a source: the docked panel's tiles, the search wall, the
-   * collection table, the pinned wishes and the card pane's printings rows all carry a payload
-   * `dnd.ts` can read, and letting one go over the deck adds it. Where it lands is the "Add to"
-   * select's answer, which is the same answer the panel's own button gives — so the drag is a
-   * shortcut over a click path, exactly as it was.
+   * One object rather than four props, because it travels three components deep — the view, the
+   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
+   * views spend it differently (a table gets columns, the other three get a bar over the card),
+   * and every control inside it is `cardControl.tsx`'s.
    */
+  const setQuantity = useCallback(
+    (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.categoryId, quantity),
+    [setQuantityAt],
+  );
+  const move = useCallback(
+    (card: DeckCard, to: number) => moveTo(card.cardId, card.categoryId, to),
+    [moveTo],
+  );
+  const actions = useMemo<DeckCardActions>(
+    () => ({ setQuantity, move, moveTargets: categories, drop: applyDrop }),
+    [setQuantity, move, categories, applyDrop],
+  );
+
+  // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
+  // the deck's own cards: a tile dragged in from the panel is not something the tray can take,
+  // and a monitor that answered for it would re-render the panel — and with it the tile the
+  // reader has hold of — in the middle of the drag.
+  useEffect(
+    () =>
+      monitorForElements({
+        canMonitor: ({ source }) => readDragData(source.data)?.kind === "deck-card",
+        onDragStart: ({ source }) => setDragging(readDragData(source.data)),
+        // Dropped, or cancelled with Escape: the platform's own way out of a drag ends in the
+        // same event, so the tray goes away either way without this view hearing a keypress.
+        onDrop: () => {
+          setDragging(null);
+          setOverTray(false);
+        },
+      }),
+    [],
+  );
+
+  // The tray, while it exists. Registered from an effect that re-runs when it mounts, because
+  // it only exists during a drag — a drop target added mid-drag is picked up on the next
+  // `dragover`, which is how a tray that appears on `dragstart` can be dropped on at all.
+  const trayShown = dragging !== null;
   useEffect(() => {
-    const element = viewRef.current;
-    if (!element || targetCategoryId === 0) return;
+    const element = trayRef.current;
+    if (!element) return;
     const writeFor = (data: Record<string, unknown>) => {
       const payload = readDragData(data);
-      return payload && dropWrite(payload, { kind: "category", categoryId: targetCategoryId });
+      return payload && dropWrite(payload, { kind: "remove" });
     };
     return dropTargetForElements({
       element,
-      canDrop: ({ source }) => writeFor(source.data)?.write === "add",
+      canDrop: ({ source }) => writeFor(source.data) !== null,
+      onDragEnter: () => setOverTray(true),
+      onDragLeave: () => setOverTray(false),
       onDrop: ({ source }) => {
+        setOverTray(false);
         const write = writeFor(source.data);
         if (write) applyDrop(write);
       },
     });
-  }, [targetCategoryId, applyDrop, hasRow, view]);
+  }, [trayShown, applyDrop]);
+
+  // A pile can be off the bottom of the view while a card is in the air over it — the stack
+  // packs into columns that scroll sideways, and the grid runs down the page. This scrolls the
+  // view when the drag nears its edge: the one motion in here, and the platform's own idea of a
+  // drag rather than the app's.
+  useEffect(() => {
+    const element = viewRef.current;
+    if (!element) return;
+    return autoScrollForElements({ element });
+  }, [hasRow]);
 
   /**
    * Open a card **as a deck row** — the only write of `paneDeckContext` in the app, and the
@@ -593,6 +730,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     violations,
     onSelect: openCard,
+    actions,
     className: "min-h-0",
   };
 
@@ -979,7 +1117,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // against: it is the width the three of them actually have, after the sidebar, the page
         // padding and the card pane have taken theirs.
         <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
-          <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
             {view === "stacks" && (
               <StackView {...viewProps} columnHeight={desk.height || undefined} />
             )}
@@ -1038,9 +1176,54 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* Spec §5: a price is never shown without saying how old it is — once, here, rather than
-          as a tooltip on every one of sixty rows. */}
-      <p className="shrink-0 text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+      {/* The strip under the deck. Spec §5: a price is never shown without saying how old it
+          is — once, here, rather than as a tooltip on every one of sixty cards. And, while a
+          card is in the air, the way out of the deck, drawn over it. */}
+      <div className="relative shrink-0">
+        <p className="text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+
+        {dragging && (
+          // The way out of a deck, for a hand that is already holding the card. It exists only
+          // while a card is in the air, and it takes the place of the price line rather than a
+          // place of its own: appearing in the flow would push every pile up by its own height
+          // at the exact moment the reader is aiming at one.
+          //
+          // **Exactly the strip and not a pixel more.** `-top-3` is the `gap-3` above this
+          // line, which is empty; the height is whatever the price line is. A tray taller than
+          // that overhangs the deck, and an overhang here is a drop aimed at a pile's last card
+          // that removes the card instead — the one mistake in this view with nothing to undo
+          // it.
+          //
+          // No transition on either state — it appears instantly and it answers instantly. An
+          // affordance that fades in during a drag is an affordance that is still arriving when
+          // the reader has let go.
+          //
+          // Destructive rather than gold: gold is where a card is *going*, and this is the one
+          // drop that takes something away. It names the card once it has it, because by then
+          // the platform's drag preview is the only other thing saying which card this is.
+          //
+          // `aria-hidden` like the drop line: this is chrome for a gesture only a pointer can
+          // make, and the click path it shortcuts — the stepper's zero — is the one a screen
+          // reader is given.
+          <div
+            ref={trayRef}
+            aria-hidden="true"
+            className={cn(
+              "absolute inset-x-0 -top-3 bottom-0 flex items-center justify-center gap-1.5",
+              "rounded-md border border-dashed text-xs",
+              // Above the popups rather than among them: a drag can start while a select is
+              // open, and this is the target the pointer is being carried to.
+              LAYER.dragTray,
+              overTray
+                ? "border-destructive/60 bg-destructive/10 text-destructive"
+                : "border-border bg-surface text-dim",
+            )}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+            {overTray ? `Remove ${dragging.name} from deck` : "Remove from deck"}
+          </div>
+        )}
+      </div>
 
       {/* The four overlays, mounted **at the editor's top level and as siblings of the layout
           above**, which is not a tidiness preference. Each is `fixed inset-0` and none is

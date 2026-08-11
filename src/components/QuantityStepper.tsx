@@ -9,6 +9,19 @@ import { cn } from "@/lib/utils";
  */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
+/**
+ * The same outline, drawn **inside** the control's own edge.
+ *
+ * For a stepper sitting in a box that clips — a deck card's frame, a grid tile — where an
+ * outline standing 2px *off* the control is painted entirely in the clipped region and is
+ * never seen at all. That is not a smaller ring, it is no focus indicator, WCAG 2.4.7, and it
+ * is invisible to anyone testing with a mouse. `cardControl.tsx`'s `FOCUS_INSET` is the same
+ * string for the same reason one floor up; this copy exists because this component is
+ * `components/` and may not import a feature's.
+ */
+const FOCUS_INSET =
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+
 const BUTTON =
   "grid place-items-center rounded-md border border-border text-dim transition-colors " +
   "duration-150 hover:text-text disabled:opacity-40 disabled:hover:text-dim " +
@@ -29,6 +42,7 @@ export function QuantityStepper({
   max = 9999,
   label,
   size = "md",
+  focus = "outside",
 }: {
   value: number;
   onChange: (next: number) => void;
@@ -36,10 +50,22 @@ export function QuantityStepper({
   max?: number;
   /** The accessible name of the number itself — "Quantity of Lightning Bolt", not "Quantity". */
   label: string;
-  size?: "sm" | "md";
+  /** `xs` is the deck's: a stepper that has to sit inside a card frame, a 150px grid tile or a
+   *  22px text row, where `sm`'s 28px does not fit. */
+  size?: "xs" | "sm" | "md";
+  /** Which side of the control's own edge the focus outline is drawn on. `inset` for a stepper
+   *  inside a box that clips — see {@link FOCUS_INSET}. */
+  focus?: "outside" | "inset";
 }) {
-  const box = size === "sm" ? "size-7" : "size-9";
-  const field = size === "sm" ? "h-7 w-12 text-xs" : "h-9 w-14 text-sm";
+  const box = size === "xs" ? "size-5" : size === "sm" ? "size-7" : "size-9";
+  const field =
+    size === "xs"
+      ? "h-5 w-8 text-[0.625rem]"
+      : size === "sm"
+        ? "h-7 w-12 text-xs"
+        : "h-9 w-14 text-sm";
+  const icon = size === "xs" ? "size-3" : "size-3.5";
+  const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const clamp = (n: number) => Math.min(max, Math.max(min, n));
 
   /**
@@ -61,9 +87,9 @@ export function QuantityStepper({
         aria-label={`Decrease ${label}`}
         disabled={value <= min}
         onClick={() => onChange(clamp(value - 1))}
-        className={cn(BUTTON, FOCUS, box)}
+        className={cn(BUTTON, ring, box)}
       >
-        <Minus className="size-3.5" aria-hidden="true" />
+        <Minus className={icon} aria-hidden="true" />
       </button>
       <input
         type="number"
@@ -91,7 +117,7 @@ export function QuantityStepper({
         onBlur={() => setDraft(null)}
         className={cn(
           "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
-          FOCUS,
+          ring,
           field,
         )}
       />
@@ -100,9 +126,9 @@ export function QuantityStepper({
         aria-label={`Increase ${label}`}
         disabled={value >= max}
         onClick={() => onChange(clamp(value + 1))}
-        className={cn(BUTTON, FOCUS, box)}
+        className={cn(BUTTON, ring, box)}
       >
-        <Plus className="size-3.5" aria-hidden="true" />
+        <Plus className={icon} aria-hidden="true" />
       </button>
     </span>
   );
