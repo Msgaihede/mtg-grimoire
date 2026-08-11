@@ -168,10 +168,9 @@ describe("DecksPage", () => {
 
     wrap(<DecksPage />);
 
-    await waitFor(() => expect(prefetchImages).toHaveBeenCalled());
-    const [ids, variant] = prefetchImages.mock.calls.at(-1) as [string[], string];
-    expect(variant).toBe("art");
-    expect(ids).toEqual([BURN.coverCardId]);
+    // Exactly the one card cover: the custom-cover deck contributes nothing, and `DRAFT` has
+    // no cover at all.
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith([BURN.coverCardId], "art"));
   });
 
   /**

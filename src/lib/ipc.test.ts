@@ -509,6 +509,22 @@ describe("ipc argument names match the Rust command signatures", () => {
     // background loop owns the batch.
     expect(queued).toBe(412);
   });
+
+  /**
+   * The error log's two commands, and the trap `prewarm_collection` documents above: a
+   * command that takes no arguments must be invoked with none, or Tauri answers a
+   * deserialization error rather than a type error the compiler could have caught.
+   */
+  it("reads the error log with a limit and clears it with nothing", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.errorLogList(50);
+    expect(invoke).toHaveBeenCalledWith("error_log_list", { limit: 50 });
+
+    invoke.mockResolvedValue(3);
+    const gone = await ipc.errorLogClear();
+    expect(invoke).toHaveBeenCalledWith("error_log_clear");
+    expect(gone).toBe(3);
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {

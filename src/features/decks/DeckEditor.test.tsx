@@ -300,10 +300,12 @@ describe("DeckEditor", () => {
   it("warms the art its own views draw, not the grid the search wall uses", async () => {
     await open();
 
-    await waitFor(() => expect(prefetchImages).toHaveBeenCalled());
-    const [ids, variant] = prefetchImages.mock.calls.at(-1) as [string[], string];
-    expect(variant).toBe("art");
-    expect(ids).toEqual(expect.arrayContaining(["c-Lightning Bolt", "c-Bear"]));
+    await waitFor(() =>
+      expect(prefetchImages).toHaveBeenCalledWith(
+        expect.arrayContaining(["c-Lightning Bolt", "c-Bear"]),
+        "art",
+      ),
+    );
   });
 
   /** The header is the deck: what it is called, what it is for, and whether it is sleeved up. */
