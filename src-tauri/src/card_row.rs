@@ -41,6 +41,10 @@ pub struct CardRow {
     pub colors: Option<String>,
     pub color_identity: Option<String>,
     pub legalities: Option<String>,
+    /// [`crate::legalities`]' mask of the line above, a column of its own since v8: the
+    /// format filter is a bitwise test rather than 23 `json_extract`s per row, and — the
+    /// part no blob can do at any price — it can live in an index.
+    pub legal_mask: u64,
     pub games: Option<String>,
     pub finishes: Option<String>,
     pub prices: Option<String>,
@@ -259,6 +263,7 @@ impl CardRow {
                 .or_else(|| face0.and_then(|f| joined_letters(f, "colors"))),
             color_identity: joined_letters(v, "color_identity"),
             legalities: compact(v, "legalities"),
+            legal_mask: v.get("legalities").map_or(0, crate::legalities::legal_mask),
             games: compact(v, "games"),
             finishes: compact(v, "finishes"),
             prices: compact(v, "prices"),
@@ -345,6 +350,24 @@ mod tests {
         );
         assert_eq!(c.collector_number, "1★");
         assert_eq!(c.cmc, Some(0.5));
+    }
+
+    /// The ingest fills the mask natively, so the v8 backfill is only ever paid once — and
+    /// a printing Scryfall gave no `legalities` at all masks to zero, which is legal
+    /// nowhere and is an answer rather than a gap.
+    #[test]
+    fn a_parsed_row_carries_its_legality_mask() {
+        let c = parse(
+            r#"{"object":"card","id":"x","name":"Bolt","lang":"en","layout":"normal","set":"lea",
+                "collector_number":"1","legalities":{"modern":"legal"},"games":["paper"]}"#,
+        );
+        assert_eq!(c.legal_mask, crate::legalities::bit("modern").unwrap());
+
+        let none = parse(
+            r#"{"object":"card","id":"y","name":"No Legalities","lang":"en","layout":"normal",
+                "set":"lea","collector_number":"2","games":["paper"]}"#,
+        );
+        assert_eq!(none.legal_mask, 0);
     }
 
     #[test]

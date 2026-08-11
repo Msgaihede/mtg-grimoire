@@ -84,6 +84,15 @@ const CARDS_COLUMNS: &str = "
 /// put them all back. When these statements were written out twice — once in [`migrate`],
 /// once in the swap — an index added to one of them silently disappeared at the next sync
 /// on every machine that had already migrated. `IF NOT EXISTS` so `migrate` can rerun.
+///
+/// **This list describes the table at HEAD, so only the NEWEST migration step may replay
+/// it.** It names `legal_mask`, which the v8 step is what adds — so the v1 block that used
+/// to replay it would now fail on every fresh install with "no such column", the list
+/// describing a table seven versions ahead of the one in front of it. The steps below v8
+/// therefore create no index at all: v8's replay is where every database walking the ladder
+/// gets them, and every statement being `IF NOT EXISTS` is what makes that a bring-up-to-date
+/// rather than a rebuild. A step that *changes* a definition — as v8 changes this one —
+/// drops the old one first, or `IF NOT EXISTS` silently keeps what is already there.
 const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
@@ -99,8 +108,18 @@ const CARDS_INDEXES: &[&str] = &[
     // was built and measured, and is a straight loss: it made the name sort 38 → 61 ms and
     // left the sorts it was meant to help unchanged, because those cost row lookups rather
     // than index reads.
+    //
+    // **The trailing three are the filter columns, and they are why a *filtered* browse is
+    // cheap.** Without them every filter the search offers — format, colours, mana value —
+    // knocks the group scan off this index and into row lookups: 455–505 ms against
+    // 22–47 ms with them, measured 2026-08-11 over the live corpus. They cost +0.89 MB
+    // (13.45 → 14.34 MB) and 4 ms on the *unfiltered* browse, which is the trade.
+    //
+    // `legal_mask` and not `legalities`: a JSON path is not indexable, which is the whole
+    // reason [`crate::legalities`] exists.
     "CREATE INDEX IF NOT EXISTS idx_cards_collapse \
-     ON cards(oracle_id, is_paper, released_at, id, name, price_usd)",
+     ON cards(oracle_id, is_paper, released_at, id, name, price_usd, \
+              legal_mask, cmc, color_identity)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch.
@@ -161,7 +180,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -304,15 +323,18 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // step fails the database stays at version 0 and the next run retries cleanly.
         // Bumping it before the FTS table exists would mark the database migrated with
         // no search index and no path back.
+        //
+        // The indexes are deliberately not here. [`CARDS_INDEXES`] describes the table at
+        // head and names columns later steps add, so the newest step replays it and no
+        // older one may — see the constant. A fresh install gets its indexes at v8, in the
+        // same `migrate` call as this.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS cards ({CARDS_COLUMNS});
-             {indexes}
              CREATE TABLE IF NOT EXISTS sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
                 set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
-             CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-            indexes = cards_indexes_sql()
+             CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         ))?;
         create_fts(&tx)?;
         tx.execute_batch("PRAGMA user_version = 1;")?;
@@ -704,20 +726,69 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     if v < 7 {
-        let tx = conn.unchecked_transaction()?;
-        // One index on `cards`, for the collapsed search. This re-runs the whole
-        // [`CARDS_INDEXES`] batch rather than naming the new one: every statement in it is
-        // `IF NOT EXISTS`, so the step means "bring the index list up to date" and the
-        // other three are untouched. A fresh install already has it from the v1 block and
-        // arrives here with nothing to do.
+        // v7 is `idx_cards_collapse`, the collapsed search's covering index — and it has no
+        // statements of its own any more. It used to replay [`CARDS_INDEXES`] here; v8 puts
+        // a column in that list which no step before v8 has added, so the replay moved down
+        // to v8 and this step's index is created there, in its widened form, for every
+        // database that walks past here. What is left is the version this step stands for,
+        // kept rather than deleted because the ladder is the record of what each version
+        // was — and because creating the narrow index only for v8 to drop it would be a
+        // 0.7 s index build over the live corpus, spent on nothing.
         //
         // Nothing here reads `raw`, so [`json_raw`] has no part to play. Nothing here
         // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
         // renumbered, so no `cards_fts` rebuild is owed — the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
-        tx.execute_batch(&cards_indexes_sql())?;
+        //
         // Literal `7`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA user_version = 7;")?;
+        conn.execute_batch("PRAGMA user_version = 7;")?;
+    }
+    if v < 8 {
+        let tx = conn.unchecked_transaction()?;
+        // One nullable column, and the index it goes into. `CARDS_COLUMNS` stays frozen —
+        // a fresh install replays v1 and arrives here to do the same work an upgrade does.
+        //
+        // **The DROP is load-bearing.** Every statement in [`CARDS_INDEXES`] is
+        // `IF NOT EXISTS`, so replaying the batch over a database that already carries
+        // `idx_cards_collapse` in its narrow v7 form would keep that definition and skip
+        // the widening — silently, on exactly the machines that have the problem. v7 could
+        // replay the batch bare because its index was new; this one is not. Dropping it
+        // first is what makes the replay build the new one, and
+        // `the_v8_step_replaces_the_narrow_collapse_index_rather_than_skipping_it` is the
+        // fence: it fails without this line.
+        //
+        // The replay is this step's because [`CARDS_INDEXES`] describes the table at head
+        // and only the newest step may create from it (see the constant) — so these four
+        // statements are also where a fresh install, and every database that arrives here
+        // missing an index, gets them. Hence the whole batch rather than the one name.
+        //
+        // The backfill reads `legalities`, which is a plain JSON TEXT column and not `raw`,
+        // so [`json_raw`] has no part to play — [`crate::legalities::mask_sql`] says why
+        // `raw` could not be the argument even where it holds the same object. Nothing here
+        // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
+        // renumbered, so no `cards_fts` rebuild is owed — the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // It is paid exactly once: [`crate::card_row`] computes the mask natively from the
+        // next sync on, so this UPDATE is the only time it is ever derived in SQL. Unlike
+        // v2's and v5's backfills it cannot be narrowed to the rows that have something to
+        // give — every row needs a mask, and a row with no `legalities` needs the 0 that
+        // says "legal nowhere" rather than the NULL that would sit in the index meaning
+        // nothing. **The whole step is 3–5 s of launch, before there is a window to say so
+        // in**: measured 2026-08-11 over three runs against a *synthetic* 116 590-row,
+        // 469 MB stand-in for the corpus (release build), backfill 2.9–5.0 s and index build
+        // 0.46–0.63 s. About 2.2 s of the backfill is the full-table row rewrite that any
+        // UPDATE of every row pays — the 23 `json_extract`s are the rest, and are the reason
+        // the app will not be doing this at query time.
+        tx.execute_batch("ALTER TABLE cards ADD COLUMN legal_mask INTEGER;")?;
+        tx.execute_batch(&format!(
+            "UPDATE cards SET legal_mask = {mask};",
+            mask = crate::legalities::mask_sql("legalities")
+        ))?;
+        tx.execute_batch("DROP INDEX IF EXISTS idx_cards_collapse;")?;
+        tx.execute_batch(&cards_indexes_sql())?;
+        // Literal `8`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 8;")?;
         tx.commit()?;
     }
     Ok(())
@@ -1120,14 +1191,14 @@ pub(crate) mod tests {
         assert_eq!(after, 1, "the swap must replay the collapse index");
     }
 
-    /// A database already at head must gain the index, and running the step twice must be a
-    /// no-op — every statement in [`CARDS_INDEXES`] is `IF NOT EXISTS`, which is what lets
-    /// the v7 step re-run the whole list rather than naming one index.
+    /// A database that migrated before the collapse index existed must gain it, and a
+    /// second `migrate` must be a no-op — every statement in [`CARDS_INDEXES`] is
+    /// `IF NOT EXISTS`, which is what lets the v8 step replay the whole list rather than
+    /// naming the one index it changed.
     #[test]
-    fn the_v7_step_is_idempotent_and_adds_the_index_to_an_existing_database() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        // Stand in for a database that migrated before v7 existed.
+    fn a_database_from_before_the_collapse_index_gains_it_and_a_rerun_is_a_no_op() {
+        // One version further back than [`v7_database`]: v6 had no collapse index at all.
+        let conn = v7_database();
         conn.execute_batch("DROP INDEX idx_cards_collapse; PRAGMA user_version = 6;")
             .unwrap();
 
@@ -1583,18 +1654,20 @@ pub(crate) mod tests {
 
     /// A database that stopped at version 1 — what every machine that ran Plan 1 has on
     /// disk. Built from the frozen v1 constant rather than by calling `migrate`, because
-    /// `migrate` now runs straight through to 2 and there is no way back.
+    /// `migrate` now runs straight through to head and there is no way back.
+    ///
+    /// No indexes, for the reason the v1 step creates none: [`CARDS_INDEXES`] describes the
+    /// table at head and names columns a v1 table does not have. The v8 step replays the
+    /// list, so a database built here has its indexes by the time `migrate` returns.
     fn v1_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!(
             "CREATE TABLE cards ({CARDS_COLUMNS});
-             {indexes}
              CREATE TABLE sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
                 set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
              CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             PRAGMA user_version = 1;",
-            indexes = cards_indexes_sql()
+             PRAGMA user_version = 1;"
         ))
         .unwrap();
         create_fts(&conn).unwrap();
@@ -2625,5 +2698,107 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1, "the FTS index must survive the v5 backfill");
+    }
+
+    // ---- v8: `legal_mask` and the widened collapse index ----------------------------
+
+    /// A database that stopped at version 7 — the shape a machine that has run this app
+    /// before is in.
+    ///
+    /// [`v1_database`]'s trick cannot reach v7: only version 1's DDL is frozen, and every
+    /// version after it is an `ALTER` inside a step there is no way back through. So this
+    /// walks to head and undoes exactly what the v8 step did — the same rewind
+    /// `a_database_from_before_the_collapse_index_gains_it_and_a_rerun_is_a_no_op` then
+    /// takes one version further.
+    ///
+    /// The index goes **before** the column: SQLite refuses to drop a column that an index
+    /// names, and the widened `idx_cards_collapse` names this one.
+    fn v7_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_cards_collapse;
+             ALTER TABLE cards DROP COLUMN legal_mask;
+             CREATE INDEX idx_cards_collapse
+                 ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
+             PRAGMA user_version = 7;",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// The mask every row on disk gets without waiting for a sync. `legalities` is a plain
+    /// TEXT column, so this backfill needs no [`json_raw`] guard — and the row is seeded
+    /// with a **gzip `raw`** anyway, because a step that reached for `raw` by mistake would
+    /// then fail here rather than in the field, where `json_extract` over a gzip member is a
+    /// hard `malformed JSON` error and not the NULL one might expect.
+    #[test]
+    fn the_v8_backfill_fills_legal_mask_and_leaves_gzip_raw_alone() {
+        let conn = v7_database();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,legalities,is_paper,raw)
+             VALUES ('1','Black Lotus','lea','232','en','normal',
+                     '{\"vintage\":\"restricted\",\"modern\":\"not_legal\"}',1,?1)",
+            [crate::card_row::gzip_raw("{}")],
+        )
+        .unwrap();
+
+        migrate(&conn).expect("a gzip `raw` must not fail the v8 step");
+
+        let mask: i64 = conn
+            .query_row("SELECT legal_mask FROM cards WHERE id='1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let vintage = crate::legalities::bit("vintage").unwrap() as i64;
+        let modern = crate::legalities::bit("modern").unwrap() as i64;
+        assert_ne!(mask & vintage, 0, "restricted is playable");
+        assert_eq!(mask & modern, 0);
+
+        // And the column the step must not have touched is still the bytes it was handed.
+        let stored: Vec<u8> = conn
+            .query_row(
+                "SELECT CAST(raw AS BLOB) FROM cards WHERE id='1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(crate::card_row::raw_json(&stored).as_deref(), Some("{}"));
+    }
+
+    /// The widened index is what makes a *filtered* browse cheap — 505 ms to 41 ms, measured
+    /// 2026-08-11 over the live corpus. A v7 database already carries the narrow definition,
+    /// and every statement in [`CARDS_INDEXES`] is `IF NOT EXISTS`, so the step has to DROP
+    /// first or the widening is a silent no-op on exactly the machines that need it.
+    #[test]
+    fn the_v8_step_replaces_the_narrow_collapse_index_rather_than_skipping_it() {
+        let conn = v7_database();
+
+        migrate(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.contains("legal_mask"), "widened: {sql}");
+        assert!(sql.contains("cmc"), "widened: {sql}");
+        assert!(sql.contains("color_identity"), "widened: {sql}");
+    }
+
+    /// The ladder ends where the constant says it does. Written as a literal so that
+    /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
+    /// step and forgetting the constant — fails here rather than in the field.
+    #[test]
+    fn the_schema_version_is_eight() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 8);
     }
 }

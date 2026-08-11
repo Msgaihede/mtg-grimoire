@@ -185,6 +185,12 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
                 c.colors,
                 c.color_identity,
                 c.legalities,
+                // `as i64` because rusqlite implements `ToSql` for the unsigned types only
+                // up to `u32` — SQLite's INTEGER is signed 64-bit, so a `u64` bind cannot
+                // be infallible in general. It is lossless while `LEGALITY_KEYS` stays
+                // under 63 entries, which `the_key_list_fits_in_a_u64` fences and 23 keys
+                // is nowhere near.
+                c.legal_mask as i64,
                 c.games,
                 c.finishes,
                 c.prices,
@@ -223,12 +229,12 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
 const STAGING_INSERT: &str =
     "INSERT INTO cards_staging (id, oracle_id, name, lang, released_at, set_code, set_name,
         collector_number, rarity, layout, mana_cost, cmc, type_line, oracle_text, colors,
-        color_identity, legalities, games, finishes, prices, price_usd, price_eur, faces,
-        illustration_id, frame_effects, border_color, full_art, promo, promo_types, digital,
-        is_paper, edhrec_rank, game_changer, image_status, image_updated_at, image_uris,
-        face_image_uris, artist, power, toughness, search_text, raw)
+        color_identity, legalities, legal_mask, games, finishes, prices, price_usd, price_eur,
+        faces, illustration_id, frame_effects, border_color, full_art, promo, promo_types,
+        digital, is_paper, edhrec_rank, game_changer, image_status, image_updated_at,
+        image_uris, face_image_uris, artist, power, toughness, search_text, raw)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
-        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42)";
+        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43)";
 
 #[cfg(test)]
 mod tests {
@@ -340,7 +346,7 @@ mod tests {
         assert_eq!(ticks, 1, "the final progress call always fires");
     }
 
-    /// The 42-parameter INSERT is positional, and SQLite columns are dynamically typed:
+    /// The 43-parameter INSERT is positional, and SQLite columns are dynamically typed:
     /// two transposed parameters would still insert without complaint and only show
     /// up much later as wrong data. So read a fully-populated row back and check
     /// every column against the value its name promises. Every text value is distinct
@@ -367,7 +373,7 @@ mod tests {
         ingest_gz(&db, &gz_fixture(&[line, bools_2, bools_3]), &mut |_| {}).unwrap();
         let conn = crate::db::lock_blocking(&db);
 
-        let expected: [(&str, Option<&str>); 39] = [
+        let expected: [(&str, Option<&str>); 40] = [
             ("id", Some("ID1")),
             ("oracle_id", Some("OID")),
             ("name", Some("NAME")),
@@ -385,6 +391,10 @@ mod tests {
             ("colors", Some("R")),
             ("color_identity", Some("RG")),
             ("legalities", Some(r#"{"modern":"legal"}"#)),
+            // Next to the column it is derived from, which is where a one-place slip is
+            // easiest to make and hardest to see — SQLite would take an integer in `games`
+            // and a JSON array in `legal_mask` without a word. `modern` is bit 9.
+            ("legal_mask", Some("512")),
             ("games", Some(r#"["paper"]"#)),
             ("finishes", Some(r#"["foil"]"#)),
             ("prices", Some(r#"{"eur":"2.5","usd":"1.25"}"#)),
