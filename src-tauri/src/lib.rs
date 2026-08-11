@@ -398,12 +398,26 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
     // Built before the struct, because `data_dir` is moved into it.
     let images = images::Cache::new(data_dir.join("images"));
 
+    // Re-enter any 429 lockout an earlier run earned, before a single request can go out.
+    //
+    // Scryfall limits the *application*, not the process, so restarting the app is not a way
+    // out of a lockout — and going straight back in is exactly what turns "your access is
+    // limited for 30 seconds" into the temporary or permanent ban the docs promise repeat
+    // offenders. `restore_penalty` clamps, so neither a clock that moved nor a hand-edited
+    // row can lock the app out for longer than this app would ever impose on itself.
+    let client = scryfall::Client::new(SCRYFALL_API.to_owned());
+    if let Some(until) = update::get_app_meta(&conn, sync::K_SCRYFALL_PENALTY_UNTIL)
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        client.restore_penalty(until, scryfall::unix_now());
+    }
+
     Ok(AppState {
         db: Mutex::new(conn),
         db_read: Mutex::new(conn_read),
         data_dir,
         syncing: AtomicBool::new(false),
-        client: scryfall::Client::new(SCRYFALL_API.to_owned()),
+        client,
         images,
     })
 }

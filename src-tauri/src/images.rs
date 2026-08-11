@@ -15,7 +15,10 @@
 //! * **The cache is disposable.** `image_cache` records what was fetched; deleting
 //!   `data/images` is always safe and costs only re-downloads (spec §8).
 
-use crate::scryfall::{self, ScryfallError};
+// `rate_limit_penalty` is the *API* client's clamp, imported rather than copied: the API's
+// lockout and this cache's are separate deadlines over separate hosts, but they are one
+// rule, and a second copy of a clamp is a second place for it to drift.
+use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,16 +41,6 @@ use std::time::Duration;
 /// about two screenfuls of tiles arriving together. The 429 handling below is untouched and
 /// is what still makes this safe if that assumption ever stops holding.
 const MAX_CONCURRENT_FETCHES: usize = 16;
-
-/// Shortest pause a 429 can buy: what Scryfall documents a rate limit as costing.
-/// A `Retry-After: 0` or `: 1` is not permission to retry inside the window we are
-/// already being punished for — and Scryfall bans repeat offenders.
-const MIN_RATE_LIMIT_PENALTY_SECS: u64 = scryfall::RATE_LIMIT_BACKOFF_SECS;
-
-/// Longest pause a 429 can buy. The header is attacker- (or bug-) controlled and this
-/// value stops *every* image in the app, so a broken `Retry-After: 31536000` must not be
-/// able to park the fetcher for a year. Five minutes is far past any real lockout.
-const MAX_RATE_LIMIT_PENALTY_SECS: u64 = 300;
 
 pub const WEBP: &str = "image/webp";
 pub const SVG: &str = "image/svg+xml";
@@ -422,18 +415,6 @@ pub enum ImageError {
     Db(String),
 }
 
-/// How long a 429 stops the *whole* image cache, given the `Retry-After` it came with.
-///
-/// Clamped at both ends because neither end is ours to trust. Below
-/// [`MIN_RATE_LIMIT_PENALTY_SECS`] we would be retrying inside Scryfall's documented
-/// lockout — the behaviour it escalates to bans over — and a `Retry-After: 0` is exactly
-/// the header a proxy or a bug produces. Above [`MAX_RATE_LIMIT_PENALTY_SECS`] a single
-/// header would take every picture in the app out for the rest of the session.
-fn rate_limit_penalty(retry_after_secs: u64) -> Duration {
-    Duration::from_secs(
-        retry_after_secs.clamp(MIN_RATE_LIMIT_PENALTY_SECS, MAX_RATE_LIMIT_PENALTY_SECS),
-    )
-}
 
 /// The on-disk image cache: lazy, permanent, paced.
 pub struct Cache {
@@ -1729,25 +1710,9 @@ mod tests {
         assert!(art.contains("Card back"), "{art}");
     }
 
-    /// A 429 is per *application*, so the number in it decides how long every tile waits
-    /// — which makes an unclamped `Retry-After` a header that can either walk us into
-    /// Scryfall's 30 s lockout (and from there into a ban) or park the fetcher for a year.
-    #[test]
-    fn the_rate_limit_penalty_is_clamped_at_both_ends() {
-        assert_eq!(rate_limit_penalty(45), Duration::from_secs(45));
-
-        // Below the floor: Scryfall's own documented lockout is 30 s, so a 0 or a 1 must
-        // not let us retry *inside* the window we are already being punished for.
-        assert_eq!(rate_limit_penalty(0), Duration::from_secs(30));
-        assert_eq!(rate_limit_penalty(1), Duration::from_secs(30));
-        assert_eq!(rate_limit_penalty(30), Duration::from_secs(30));
-
-        // Above the cap: a hostile or broken header must not be able to stop the app
-        // fetching images for the rest of the session.
-        assert_eq!(rate_limit_penalty(300), Duration::from_secs(300));
-        assert_eq!(rate_limit_penalty(3_600), Duration::from_secs(300));
-        assert_eq!(rate_limit_penalty(u64::MAX), Duration::from_secs(300));
-    }
+    // The clamp this cache charges a 429 with now lives in `scryfall`, and so does its
+    // test (`the_rate_limit_penalty_is_clamped_at_both_ends`) — one rule over two hosts,
+    // one place it is asserted.
 
     /// A real file database and a real cache directory: the connection discipline is part
     /// of what these exercise. `read` is opened `SQLITE_OPEN_READ_ONLY`, so bookkeeping

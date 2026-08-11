@@ -56,6 +56,13 @@ const K_LAST_INGEST_SKIPPED: &str = "last_ingest_skipped";
 /// the `sync:progress` event does not.
 const K_LAST_ERROR: &str = "last_error";
 
+/// Where a 429 lockout is remembered, as unix seconds.
+///
+/// **`app_meta`, not `sync_meta`.** The lockout belongs to the *application* — Scryfall
+/// limits an application, not a sync — and it is read at startup, before any sync has run.
+/// The same separation the updater's two keys make, for the same reason.
+pub const K_SCRYFALL_PENALTY_UNTIL: &str = "scryfall_penalty_until";
+
 /// How long an update check stays fresh. Scryfall rebuilds the bulk files roughly
 /// daily, and the app must not poll the API on every launch.
 const CHECK_INTERVAL_SECS: u64 = 86_400;
@@ -488,6 +495,11 @@ pub async fn run_sync(
     let _guard = SyncingGuard(&state.syncing);
 
     let result = do_sync(&state, &app, force).await;
+    // Unconditionally, and before the error funnel below: a 429 can be earned on a path that
+    // *succeeds* overall — `reconcile_ids` logs its failure and returns — so keying this off
+    // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
+    // not worth being clever about.
+    persist_penalty(&state);
     if let Err(e) = &result {
         {
             let conn = lock_db(&state);
@@ -496,6 +508,18 @@ pub async fn run_sync(
         let _ = app.emit("sync:progress", Progress::error(e.clone()));
     }
     result
+}
+
+/// Write the client's current lockout deadline to `app_meta`, so a restart cannot shake it
+/// off.
+///
+/// Best-effort throughout: this is bookkeeping about a refusal that has already happened,
+/// and failing a sync over it would be absurd.
+fn persist_penalty(state: &Arc<AppState>) {
+    let until = state.client.penalty_until_unix();
+    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        let _ = crate::update::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
+    }
 }
 
 /// Finish a run that found nothing new to ingest.
