@@ -602,7 +602,9 @@ describe("DecksPage folders", () => {
     // The row says where it lands, for a reader who cannot see the indent.
     expect(screen.getByText("in Commander")).toBeInTheDocument();
 
-    await userEvent.type(field, "Legends");
+    // `keyboard` rather than `type` for the reason the F2 case spells out: `type` focuses what
+    // it is handed, which would repair the assertion above rather than build on it.
+    await userEvent.keyboard("Legends");
     await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
 
     expect(deckFolderCreate).toHaveBeenCalledWith(1, "Legends");
@@ -616,7 +618,11 @@ describe("DecksPage folders", () => {
       await screen.findByRole("button", { name: "New folder at the top level" }),
     );
 
-    await userEvent.type(await screen.findByLabelText("New folder name"), "Cubes");
+    // The same pair as every other field on this screen: assert where the caret is, then send
+    // keystrokes to wherever it is rather than to an element handed to `type`.
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    await userEvent.keyboard("Cubes");
     await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
 
     expect(deckFolderCreate).toHaveBeenCalledWith(null, "Cubes");
@@ -696,8 +702,14 @@ describe("DecksPage folders", () => {
     expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH");
   });
 
-  /** F2 renames the row the caret is on — the file manager's key, and a rename that never
-   *  needs the pointer. */
+  /**
+   * F2 renames the row the caret is on — the file manager's key, and a rename that never needs
+   * the pointer.
+   *
+   * **This is the route where the caret's landing place is the whole feature**, so it is
+   * asserted positively: where the caret *is*, not where it is not. A keyboard reader who
+   * presses F2 and finds the caret still on the row has a field they cannot type into.
+   */
   it("renames the row the caret is on when F2 is pressed", async () => {
     withFolders();
 
@@ -706,7 +718,14 @@ describe("DecksPage folders", () => {
     row.focus();
     await userEvent.keyboard("{F2}");
 
-    expect(await screen.findByLabelText("Rename Legends")).toHaveValue("Legends");
+    const field = await screen.findByLabelText("Rename Legends");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Legends");
+    // `keyboard`, never `type`: `type` focuses the element it is handed, so a test that reached
+    // the field that way would silently repair the very thing it is checking and pass against
+    // a field that never took the caret. This sends to wherever the caret already is.
+    await userEvent.keyboard("Partners");
+    expect(field).toHaveValue("Partners");
     // Not a selection: F2 renames the row, it does not open the drawer.
     expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
   });
