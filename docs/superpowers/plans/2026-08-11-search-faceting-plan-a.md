@@ -55,6 +55,19 @@
 **Interfaces:**
 - Produces: `legalities::LEGALITY_KEYS: [&str; 23]`, `legalities::legal_mask(&serde_json::Value) -> u64`, `legalities::bit(key: &str) -> Option<u64>`, `legalities::mask_sql(column: &str) -> String`.
 
+> **Amended after review, 2026-08-11.** The two tests below as first written did not pin what
+> their names and comments claimed, and the reviewer proved it by running them against broken
+> implementations: `the_sql_expression_names_every_key_once` passed against a **fully reversed**
+> key→bit mapping, because it checked that each key and each bit appeared *somewhere* in the
+> string rather than in the *same term*; and `the_key_order_is_frozen` sampled four of
+> twenty-three positions, so most reorders passed. Both were strengthened — per-term assertions,
+> and the whole array asserted at once — along with three related fixes: `mask_sql` builds its
+> `IN (…)` list from `PLAYABLE` rather than hand-writing the same pair a second time, the key
+> list is asserted duplicate-free (the one input where the Rust and SQL mappings genuinely
+> disagree), and `mask_sql`'s doc names `cards.legalities` and rules out `cards.raw`, which is a
+> gzip BLOB whose `json_extract` failure is invisible to tests. **The code blocks below are the
+> original text; the shipped tests are stronger.** See the ledger and `git log` for the fix.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `src-tauri/src/legalities.rs` with only the tests and empty stubs:
