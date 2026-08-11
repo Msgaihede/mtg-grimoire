@@ -185,12 +185,14 @@ export interface TheoryDiffDialogProps {
  * taken in `deck_theory.rs`; drawing it silently would make a correct list read as a broken one,
  * which is why {@link ONE_DIRECTION} is copy rather than a comment.
  *
- * **A real modal, which is the one place this surface parts company with every other layer in the
- * app.** The card pane, the validation panel, the row menus and the set picker are all anchored,
- * non-`aria-modal` layers over a page that stays live, because they are things a reader consults
- * *while* editing. This is not: it covers the editor, it is centred, and its two buttons write to
- * a list outside the deck. So it traps the caret and hands it back — and it is still an `"inner"`
- * Escape rung, so one press closes it and the card pane behind the view keeps its own.
+ * **A real modal, like every other surface that paints a scrim.** The card pane, the validation
+ * panel and the set picker are anchored, non-`aria-modal` layers over a page that stays live,
+ * because they are things a reader consults *while* editing and nothing covers what is behind
+ * them. The editor's four full-window overlays are the other kind — this one, the settings
+ * dialog, the categories drawer and the history drawer — and all four now agree: a scrim is a
+ * statement that what is behind it is not available, a pointer already cannot cross one, so the
+ * caret does not either. Trapped, `aria-modal`, and handed back on the way out — and still an
+ * `"inner"` Escape rung, so one press closes it and the card pane behind the view keeps its own.
  *
  * Escape and an outside click are deliberately different: Escape is the reader saying "put me
  * back", so `onDismiss` returns the caret to whatever opened this; a click on the scrim is the

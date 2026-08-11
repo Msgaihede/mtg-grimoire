@@ -1172,6 +1172,62 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **All four full-window overlays are modal, and Tab cannot leave one.**
+   *
+   * Each paints a scrim over the whole app, which is a statement that what is behind it is not
+   * available right now — a pointer already cannot cross one. Two of the four used to let the
+   * caret walk back into the editor anyway, which offered the capability to one input method and
+   * denied it to the other while the docs argued it was deliberate.
+   *
+   * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
+   * claim about what is behind it: each layer's own test file mounts it alone, where there is
+   * nothing to escape to and the test would pass on a broken trap.
+   *
+   * **The walk is measured from the layer, not a round number**, and that is not tidiness — a
+   * fixed count is a test whose strength depends on which layer it is pointed at. Written first
+   * as 15 presses, it caught the history drawer (a ✕ and five chips) and *missed* the categories
+   * drawer, whose thirty-odd controls swallow fifteen presses without ever reaching the end.
+   * One full cycle plus three is the shortest walk that must leave every layer if nothing holds
+   * it, and the three are what catch a trap that wraps once and then leaks.
+   */
+  it.each([
+    ["Categories & tags", "Categories and tags", null],
+    ["History", "Deck history", null],
+    ["Deck settings", "Deck settings", null],
+    [
+      "2 cards differ",
+      "Theory to Live difference",
+      () => {
+        const live = detail({ theoryEnabled: true }, [bolt({ quantity: 4 })]);
+        const theory = detail({ theoryEnabled: true }, [
+          bolt({ quantity: 2, variant: "theory" }),
+          card({ name: "Bear", variant: "theory" }),
+        ]);
+        deckGet.mockImplementation((_id: number, variant: string) =>
+          Promise.resolve(variant === "theory" ? theory : live),
+        );
+      },
+    ],
+  ] as const)("keeps Tab inside %s", async (button, dialog, stage) => {
+    stage?.();
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: button }));
+    const layer = await screen.findByRole("dialog", { name: dialog });
+    // The claim it makes to assistive tech, and the trap below is what makes it true.
+    expect(layer).toHaveAttribute("aria-modal", "true");
+
+    const stops = layer.querySelectorAll(
+      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ).length;
+    expect(stops).toBeGreaterThan(0);
+    for (let i = 0; i < stops + 3; i += 1) {
+      await userEvent.tab();
+      expect(layer.contains(document.activeElement)).toBe(true);
+    }
+  });
+
+  /**
    * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
    * would consume one press — so the editor holds *one* piece of state for all five, and
    * opening any of them takes whichever was up down with it.

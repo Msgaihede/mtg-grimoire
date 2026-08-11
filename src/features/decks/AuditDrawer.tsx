@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { ToggleChip } from "@/components/FilterChips";
 import type { DeckAuditEntry } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { auditSentence, type AuditDay } from "./auditText";
@@ -237,9 +238,19 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
         tabIndex={-1}
         role="dialog"
         aria-labelledby={titleId}
-        // Not `aria-modal`, for `ValidationPanel`'s reason one floor down: the editor behind
-        // this stays live and reachable, and a reader who spots a mistake in the history should
-        // be able to go and fix it without dismissing what told them about it.
+        // **Modal, and the scrim above is the whole argument.** This drawer used to claim the
+        // opposite — that the editor behind stayed reachable, so a reader who spotted a mistake
+        // in the history could go and fix it without dismissing what told them about it. That
+        // reading was already false for a pointer: the `bg-black/60` above covers the window,
+        // and a scrim is a statement that what is behind it is not available right now. Leaving
+        // Tab able to walk out was not preserving the capability, it was offering it to one
+        // input method and denying it to the other. Escape is the way back to the editor, and it
+        // hands the caret to the control that opened this.
+        //
+        // (`ValidationPanel` is genuinely not modal and is right not to be — it is a popup
+        // anchored to its chip, with no scrim at all. The two questions look alike and are not.)
+        aria-modal="true"
+        onKeyDown={trapTab}
         className={cn(
           "flex h-full w-[40rem] max-w-full flex-col border-l border-border bg-bg shadow-2xl",
           // Inside, not off the edge — `CategoriesPanel`'s measured case on the sibling drawer:

@@ -153,6 +153,12 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * here focuses itself on the way up. The preview is a *dwell*, so it can coexist with an
  * anchored layer out here; the four overlays make it unreachable, because a pointer cannot get
  * to the pane through a scrim.
+ *
+ * **All four overlays are modal, and that is what makes the sentence above true of a keyboard
+ * too.** Each paints a full-window scrim, each claims `aria-modal="true"`, and each installs
+ * `lib/trapTab.ts` — so nothing behind one can be reached by Tab any more than by a pointer.
+ * Two of them used to argue the opposite in their own docs; the scrim had always contradicted
+ * it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds the four together.
  */
 type Layer =
   | { kind: "check" }
