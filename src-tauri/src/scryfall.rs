@@ -451,9 +451,8 @@ impl Client {
     /// flips whenever any of the seven files rotate.
     pub async fn check_bulk_update(&self, etag: Option<&str>) -> Result<BulkCheck, ScryfallError> {
         let url = format!("{}/bulk-data/default_cards", self.base_url);
-        let headers: Vec<(&str, &str)> = etag
-            .map(|e| vec![("If-None-Match", e)])
-            .unwrap_or_default();
+        let headers: Vec<(&str, &str)> =
+            etag.map(|e| vec![("If-None-Match", e)]).unwrap_or_default();
         let resp = self.api_send(&url, &headers).await?;
         match resp.status().as_u16() {
             304 => Ok(BulkCheck::NotModified),
@@ -806,7 +805,9 @@ pub(crate) fn unix_now() -> u64 {
 /// hosts, but they are the same *rule*, and a second copy of a clamp is a second place for
 /// it to drift.
 pub fn rate_limit_penalty(retry_after_secs: u64) -> Duration {
-    Duration::from_secs(retry_after_secs.clamp(RATE_LIMIT_BACKOFF_SECS, MAX_RATE_LIMIT_BACKOFF_SECS))
+    Duration::from_secs(
+        retry_after_secs.clamp(RATE_LIMIT_BACKOFF_SECS, MAX_RATE_LIMIT_BACKOFF_SECS),
+    )
 }
 
 /// The path of a URL, with no query string and no dependency on a URL crate.
@@ -1420,7 +1421,11 @@ mod tests {
     fn a_lockout_is_persisted_restored_and_clamped() {
         let now = 1_800_000_000u64;
         let c = Client::new("http://127.0.0.1:1".into());
-        assert_eq!(c.penalty_until_unix(), 0, "a fresh client is not locked out");
+        assert_eq!(
+            c.penalty_until_unix(),
+            0,
+            "a fresh client is not locked out"
+        );
         assert_eq!(c.penalty_remaining(now), None);
 
         assert_eq!(c.charge_penalty(45, now), 45);

@@ -6,6 +6,7 @@ pub mod deck;
 pub mod deck_audit;
 pub mod deck_meta;
 pub mod deck_theory;
+pub mod errors;
 pub mod filters;
 pub mod images;
 pub mod ingest;
@@ -91,6 +92,41 @@ async fn update_apply(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     update::apply(updater.inner(), &app)
+}
+
+/// The error log, newest first.
+///
+/// Read through `db_read` like every other read, so opening Settings during a sync answers
+/// rather than queueing behind the ingest — which matters more here than anywhere: the
+/// reason to open this panel is usually that something is going wrong right now.
+#[tauri::command]
+async fn error_log_list(
+    state: tauri::State<'_, Arc<AppState>>,
+    limit: i64,
+) -> Result<Vec<errors::ErrorEntry>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = sync::lock_db_read(&state);
+        errors::list(&conn, limit).map_err(|e| format!("could not read the error log: {e}"))
+    })
+    .await
+    .map_err(|e| format!("could not read the error log: {e}"))?
+}
+
+/// Empty the error log. The one write the UI can make to it.
+#[tauri::command]
+async fn error_log_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        match db::lock_for(&state.db, db::WRITE_LOCK_WAIT) {
+            Some(conn) => {
+                errors::clear(&conn).map_err(|e| format!("could not clear the error log: {e}"))
+            }
+            None => Err(collection::BUSY.to_owned()),
+        }
+    })
+    .await
+    .map_err(|e| format!("could not clear the error log: {e}"))?
 }
 
 /// Open the release on github.com, for the install kinds that cannot update in place.
@@ -244,6 +280,8 @@ pub fn run() {
             deck_theory::deck_theory_diff,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
+            error_log_list,
+            error_log_clear,
             update_status,
             update_check,
             update_download,
@@ -342,9 +380,7 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
     // bytes already on disk that nothing will ever serve, so paying the queue off here is
     // the difference between a warm cache and re-fetching those images forever. It is one
     // upsert per owed row and the queue is empty on a normal exit.
-    state
-        .images
-        .flush_records(&state.db, EXIT_CHECKPOINT_WAIT);
+    state.images.flush_records(&state.db, EXIT_CHECKPOINT_WAIT);
 
     let held = db::lock_for(&state.db, EXIT_CHECKPOINT_WAIT);
     match held {

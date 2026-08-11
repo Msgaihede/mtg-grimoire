@@ -415,7 +415,6 @@ pub enum ImageError {
     Db(String),
 }
 
-
 /// The on-disk image cache: lazy, permanent, paced.
 pub struct Cache {
     dir: PathBuf,
@@ -473,6 +472,16 @@ struct PendingRecord {
 /// window measured in the gaps of one sync. If it ever fills, the app has a much larger
 /// problem than a re-fetch, and dropping is still better than growing without limit.
 const MAX_PENDING_RECORDS: usize = 4_096;
+
+/// How long an image failure waits for the write connection before giving up on being
+/// logged.
+///
+/// Short, because this runs on an async worker holding one of
+/// [`MAX_CONCURRENT_FETCHES`]'s permits, and because the thing being recorded has already
+/// happened. Long enough to ride out an ordinary write rather than losing the row to a
+/// single unlucky microsecond — and the grain folds repeats, so a screenful of the same
+/// failure needs only one of them to land.
+const NOTE_LOCK_WAIT: Duration = Duration::from_millis(200);
 
 impl Cache {
     pub fn new(images_dir: PathBuf) -> Cache {
@@ -540,6 +549,43 @@ impl Cache {
     /// How many owed rows were abandoned because the queue was full.
     pub fn dropped_records(&self) -> u64 {
         self.dropped_records.load(Ordering::Relaxed)
+    }
+
+    /// Write an image failure to the error log.
+    ///
+    /// Bounded and best-effort: this describes a failure on a path that is already returning
+    /// an error, and a grid that could not *log* a dead host must not also stop drawing.
+    /// A skipped row costs nothing — the grain folds repeats, and a host that is down will
+    /// be back within a screenful.
+    fn note(
+        &self,
+        write: &Mutex<Connection>,
+        source: crate::errors::Source,
+        operation: &str,
+        err: &ImageError,
+        detail: &str,
+    ) {
+        let kind = match err {
+            ImageError::RateLimited { .. } => crate::errors::Kind::RateLimited,
+            ImageError::Io(_) => crate::errors::Kind::Io,
+            ImageError::Db(_) => crate::errors::Kind::Io,
+            ImageError::UnknownCard => crate::errors::Kind::Other,
+            // The fetch arm carries a `ScryfallError`'s message, and a timeout is the one
+            // worth telling apart: it is what a dead or throttled host looks like from here,
+            // and it is what the reader is trying to diagnose.
+            ImageError::Fetch(m) if m.contains("timed out") => crate::errors::Kind::Timeout,
+            ImageError::Fetch(_) => crate::errors::Kind::Http,
+        };
+        if let Some(conn) = crate::db::lock_for(write, NOTE_LOCK_WAIT) {
+            crate::errors::record(
+                &conn,
+                source,
+                operation,
+                kind,
+                &err.to_string(),
+                Some(detail),
+            );
+        }
     }
 
     /// The lock for one key, created if this is the first caller to ask.
@@ -705,7 +751,23 @@ impl Cache {
             }
         }
 
-        let bytes = self.fetch(client, uri).await?;
+        let bytes = match self.fetch(client, uri).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // Every one of these used to be invisible: an `<img>` fired `error`, the tile
+                // drew its fallback, and nothing anywhere said why. The grain folds them, so
+                // a host that is down is one row counting up rather than one row per tile —
+                // which is the shape the path-MTU incident actually had.
+                self.note(
+                    write,
+                    crate::errors::Source::ScryfallImage,
+                    "image_fetch",
+                    &e,
+                    uri,
+                );
+                return Err(e);
+            }
+        };
 
         match store(path, &bytes).await {
             // Bookkeeping last, and **owed rather than optional**. The row is what
@@ -726,6 +788,17 @@ impl Cache {
             Err(e) => {
                 self.store_failures.fetch_add(1, Ordering::Relaxed);
                 eprintln!("image cache: could not store {}: {e}", path.display());
+                // A read-only data folder or a full disk. The images still *display* — the
+                // bytes are in hand — so the only symptom is a grid that re-downloads itself
+                // forever, which is precisely the kind of thing that needs somewhere to be
+                // said out loud.
+                self.note(
+                    write,
+                    crate::errors::Source::ImageStore,
+                    "image_store",
+                    &ImageError::Io(e.to_string()),
+                    &path.display().to_string(),
+                );
             }
         }
         Ok(Served {
@@ -1244,11 +1317,7 @@ pub fn prewarm_keys(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<Ima
           LIMIT ?3",
     )?;
     let rows = stmt.query_map(
-        params![
-            COLLECTION_PREWARM.key(),
-            DECK_PREWARM.key(),
-            limit as i64
-        ],
+        params![COLLECTION_PREWARM.key(), DECK_PREWARM.key(), limit as i64],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
     Ok(rows
@@ -3125,7 +3194,11 @@ mod tests {
         // And the freshness rule is unchanged: a re-scanned card carries a new cache-buster,
         // and that — not a clock, not an mtime — is what makes these bytes stale.
         assert!(
-            !is_current(&conn, &key, "https://cards.scryfall.io/grid/front/0/0/x.webp?99"),
+            !is_current(
+                &conn,
+                &key,
+                "https://cards.scryfall.io/grid/front/0/0/x.webp?99"
+            ),
             "a newer cache-buster is a different image and must be fetched"
         );
     }
