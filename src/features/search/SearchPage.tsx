@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -8,6 +9,7 @@ import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/Ad
 import type { DragPayload } from "@/features/decks/dnd";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
+import { statusLine } from "@/lib/motion";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
@@ -307,28 +309,38 @@ function Results({ search }: { search: CardSearch }) {
         {summaryOf(search, failure)}
       </p>
 
-      {!empty && failure && (
-        <div
-          role="alert"
-          className="flex items-center gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-        >
-          <span className="min-w-0">
-            {query.isFetchNextPageError
-              ? "Could not load more cards"
-              : "Could not refresh these results"}{" "}
-            — {failure}
-          </span>
-          {query.isFetchNextPageError && (
-            <button
-              type="button"
-              onClick={() => void query.fetchNextPage()}
-              className="ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-1 transition-colors hover:bg-destructive/20 motion-reduce:transition-none"
+      {/* The banner grows into place rather than shoving the results list down by its whole
+          height the instant a page fails. The animated element is the wrapper and carries only
+          `overflow-hidden`: `statusLine` takes `height` to 0, and under `box-sizing:
+          border-box` a box with its own padding and border can never be shorter than the two
+          of them, so an animated element wearing either would bottom out short and jump the
+          rest. `role="alert"` stays on the element that holds the sentence. */}
+      <AnimatePresence initial={false}>
+        {!empty && failure && (
+          <motion.div {...statusLine} className="overflow-hidden">
+            <div
+              role="alert"
+              className="flex items-center gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
             >
-              Try again
-            </button>
-          )}
-        </div>
-      )}
+              <span className="min-w-0">
+                {query.isFetchNextPageError
+                  ? "Could not load more cards"
+                  : "Could not refresh these results"}{" "}
+                — {failure}
+              </span>
+              {query.isFetchNextPageError && (
+                <button
+                  type="button"
+                  onClick={() => void query.fetchNextPage()}
+                  className="ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-1 transition-colors hover:bg-destructive/20 motion-reduce:transition-none"
+                >
+                  Try again
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {!empty &&
         (view === "grid" ? (

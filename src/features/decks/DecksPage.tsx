@@ -8,6 +8,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
@@ -15,6 +16,7 @@ import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import { ipc, ipcError, type DeckRow } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
+import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -48,19 +50,30 @@ import { useFormatSpecs } from "./useFormatSpecs";
  */
 const GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4";
 
-/** Every icon control on a tile, so four of them are one row rather than four sizes. */
+/**
+ * Every icon control on a tile, so four of them are one row rather than four sizes.
+ *
+ * The property list is written out instead of a colour utility beside a transform one: those
+ * two compile to the same CSS longhand, tailwind-merge keeps one and drops the other, and what
+ * it drops is only visible the moment someone presses the control.
+ */
 const ICON_BUTTON = cn(
-  "grid size-6 place-items-center rounded-md text-dim",
-  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+  "grid size-6 place-items-center rounded-md text-dim hover:text-text",
+  "transition-[color,background-color,border-color,opacity,transform]",
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
+  "motion-reduce:transition-none",
   FOCUS,
 );
 
 /** The quiet controls in the wall's heading row — everything that is not "New deck". Same
  *  height as it, because a row of controls that disagree about their own size reads as two
- *  rows that happen to be next to each other. */
+ *  rows that happen to be next to each other. One property list, for {@link ICON_BUTTON}'s
+ *  reason. */
 const HEADING_BUTTON = cn(
-  "h-9 rounded-md border border-border bg-surface px-3 text-sm text-dim",
-  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+  "h-9 rounded-md border border-border bg-surface px-3 text-sm text-dim hover:text-text",
+  "transition-[color,background-color,border-color,opacity,transform]",
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
+  "motion-reduce:transition-none",
   FOCUS,
 );
 
@@ -455,14 +468,22 @@ export function DecksPage() {
           would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Decks</h2>
 
-      {bannerFailure && (
-        <p
-          role="alert"
-          className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-        >
-          Could not change your decks — {bannerFailure}
-        </p>
-      )}
+      {/* Grown into place rather than shoved in: the wall and the folder tree below it both
+          move by the banner's whole height otherwise. Only `overflow-hidden` on the animated
+          wrapper — `statusLine` takes `height` to 0, and under `box-sizing: border-box` a box
+          carrying its own padding and border can never be shorter than the two of them. */}
+      <AnimatePresence initial={false}>
+        {bannerFailure && (
+          <motion.div {...statusLine} className="overflow-hidden">
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              Could not change your decks — {bannerFailure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="flex min-h-0 flex-1 gap-5">
         <FolderTree
@@ -701,9 +722,13 @@ export function DecksPage() {
                   FOCUS,
                 )}
               >
+                {/* The one chevron in this file that is a disclosure's, and the only one that
+                    turns. On the app's `fast` tier, off the shared token, so it agrees with
+                    the press feedback its own button carries. */}
                 <ChevronRight
                   className={cn(
-                    "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                    "size-3.5 transition-transform duration-[var(--duration-fast)] ease-standard",
+                    "motion-reduce:transition-none",
                     showArchived && "rotate-90",
                   )}
                   aria-hidden="true"
@@ -1520,11 +1545,23 @@ function CreateDeckForm({
           </select>
         </div>
 
-        {failure && (
-          <p role="alert" className="text-xs text-destructive">
-            Could not create the deck — {failure}
-          </p>
-        )}
+        {/* No wrapper here, for a reason worth stating: this line carries no padding and no
+            border, so `height: 0` on the element itself really is 0 and it can be the animated
+            one. `overflow-hidden` is still owed — the sentence is laid out at its full size
+            whatever the box is, and without it the text is drawn over the button below for the
+            first frame. The form is a `space-y-3` stack, so the 12px the line brings with it
+            still arrives at once; it is the two lines of the sentence that grow. */}
+        <AnimatePresence initial={false}>
+          {failure && (
+            <motion.p
+              {...statusLine}
+              role="alert"
+              className="overflow-hidden text-xs text-destructive"
+            >
+              Could not create the deck — {failure}
+            </motion.p>
+          )}
+        </AnimatePresence>
 
         <button
           type="submit"

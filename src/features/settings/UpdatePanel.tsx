@@ -1,13 +1,21 @@
 import { CircleArrowUp, CircleCheck, Download, ExternalLink, RefreshCw } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { statusLine } from "@/lib/motion";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
 
-/** The shared shape of the panel's two buttons — the app's existing bordered control. */
+/** The shared shape of the panel's two buttons — the app's existing bordered control, and the
+ *  same string `ErrorLogPanel` carries, down to the character. The property list is spelled out
+ *  because a colour utility and a transform one compile to the same CSS longhand and
+ *  tailwind-merge would keep only one of them; a `disabled` button is held at full size, since
+ *  a control that depresses and then refuses is a control that lies. */
 const BUTTON =
   "inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-1.5 text-sm " +
-  "transition-colors duration-150 motion-reduce:transition-none " +
+  "transition-[color,background-color,border-color,opacity,transform] " +
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "motion-reduce:transition-none " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
-  "disabled:cursor-not-allowed disabled:opacity-50";
+  "disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
 
 /**
  * The download bar.
@@ -151,11 +159,22 @@ export function UpdatePanel({ update }: { update: Update }) {
           </p>
         )}
 
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        {/* Grown into place rather than shoving the panel's own footing down by its height —
+            `ErrorLogPanel`'s line, and the same reasoning: its own animated element because it
+            carries no padding and no border, `overflow-hidden` because the sentence is laid out
+            at full size whatever the box is doing, and the `space-y-4` gap still arrives at
+            once. */}
+        <AnimatePresence initial={false}>
+          {error && (
+            <motion.p
+              {...statusLine}
+              role="alert"
+              className="overflow-hidden text-sm text-destructive"
+            >
+              {error}
+            </motion.p>
+          )}
+        </AnimatePresence>
       </div>
     </section>
   );

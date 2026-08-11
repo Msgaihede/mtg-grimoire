@@ -1,7 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
+import { statusLine } from "@/lib/motion";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
@@ -721,12 +723,18 @@ function Missing({
 
       {/* Beside the button that was pressed, not in the editor's banner: that one speaks for
           the three writes the deck's own controls make, and a refusal reported somewhere else
-          is a refusal the reader has to go looking for. */}
-      {failure && (
-        <p role="alert" className="text-destructive">
-          Could not add to the wishlist — {failure}
-        </p>
-      )}
+          is a refusal the reader has to go looking for.
+
+          The line is its own animated element — it carries no padding and no border, so
+          `height: 0` really is 0 — and `overflow-hidden` is still owed, because the sentence
+          is laid out at full size whatever the box around it is doing. */}
+      <AnimatePresence initial={false}>
+        {failure && (
+          <motion.p {...statusLine} role="alert" className="overflow-hidden text-destructive">
+            Could not add to the wishlist — {failure}
+          </motion.p>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

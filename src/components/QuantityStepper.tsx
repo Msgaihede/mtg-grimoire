@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "lucide-react";
+import { motion, useAnimationControls } from "motion/react";
+import { TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,9 +24,21 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
 const FOCUS_INSET =
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
+/**
+ * The two buttons.
+ *
+ * The property list is written out rather than assembled from a colour utility beside a
+ * transform one: those two compile to the same CSS longhand, so tailwind-merge keeps one and
+ * drops the other, and the press feedback would snap with nothing to show for it. A button at
+ * its floor or its ceiling is `disabled` and must not appear to depress — it is the one
+ * control here that uses the attribute, because a stepper button with nothing left to do has
+ * no reason to hold a tab stop.
+ */
 const BUTTON =
-  "grid place-items-center rounded-md border border-border text-dim transition-colors " +
-  "duration-150 hover:text-text disabled:opacity-40 disabled:hover:text-dim " +
+  "grid place-items-center rounded-md border border-border text-dim hover:text-text " +
+  "transition-[color,background-color,border-color,opacity,transform] " +
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100 " +
   "motion-reduce:transition-none";
 
 /**
@@ -80,6 +94,34 @@ export function QuantityStepper({
    */
   const [draft, setDraft] = useState<string | null>(null);
 
+  /**
+   * The tick: the number swells by a tenth and settles, once per change.
+   *
+   * A press on `+` and a press on `−` produce the same thing — a box with a different number
+   * in it — and at the sizes this control is drawn at (a 20px box inside a 34px card strip, a
+   * 28px one in a table row) the difference between "it stepped" and "it repainted" is a
+   * single glyph. The tick is what makes the two read differently, and 1.1 is chosen for the
+   * `xs` box: two pixels of travel is felt without a table of steppers becoming a trampoline.
+   *
+   * **Controls rather than a keyframe on the `animate` prop.** A keyframe array is a new array
+   * every render, so `animate={{ scale: [1, 1.1, 1] }}` restarts on renders that changed
+   * nothing; and rekeying the `<input>` to force a replay would take the caret out of it
+   * mid-type. `useAnimationControls` also goes through the visual element's own target
+   * resolution, which is where the app's one `MotionConfig` applies the reader's reduced-motion
+   * preference — an imperative `animate()` out of `useAnimate` does not.
+   *
+   * The ref is compared rather than the render being trusted: this fires on the value the
+   * control *reports*, so a step, a typed digit and a quantity that came back changed from the
+   * database all tick, and a re-render that moved nothing does not.
+   */
+  const tick = useAnimationControls();
+  const ticked = useRef(value);
+  useEffect(() => {
+    if (ticked.current === value) return;
+    ticked.current = value;
+    void tick.start({ scale: [1, 1.1, 1] });
+  }, [value, tick]);
+
   return (
     <span className="inline-flex items-center gap-1">
       <button
@@ -91,7 +133,9 @@ export function QuantityStepper({
       >
         <Minus className={icon} aria-hidden="true" />
       </button>
-      <input
+      <motion.input
+        animate={tick}
+        transition={TRANSITION.fast}
         type="number"
         inputMode="numeric"
         aria-label={label}

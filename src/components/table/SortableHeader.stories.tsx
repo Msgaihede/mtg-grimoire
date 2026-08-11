@@ -99,8 +99,14 @@ export const Ascending: Story = {
   },
 };
 
-/** The second press. The arrow is `ArrowDown` here and `ArrowUp` above — the one thing on
- *  screen that separates the two, and the reason `aria-sort` carries the same fact in words. */
+/**
+ * The second press. It is the **same arrow** as above, turned half a turn — the one thing on
+ * screen that separates the two, and the reason `aria-sort` carries the same fact in words.
+ *
+ * One element rotated rather than `ArrowUp` swapped for `ArrowDown`: two components in one slot
+ * is an unmount and a mount, so the indicator would teleport, and the whole of what a second
+ * press means is that the order reversed. Press **Name** twice in {@link Live} to watch it.
+ */
 export const Descending: Story = {
   args: { spec: [{ key: "name", dir: "desc" }] },
   play: async ({ canvasElement }) => {

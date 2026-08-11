@@ -1,14 +1,22 @@
 import { CircleCheck, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import type { ErrorEntry, ErrorKind, ErrorSource } from "@/lib/ipc";
+import { statusLine } from "@/lib/motion";
 import type { ErrorLog } from "@/lib/useErrorLog";
 import { cn } from "@/lib/utils";
 
-/** The panel's one button — the app's existing bordered control, as `UpdatePanel` draws it. */
+/** The panel's one button — the app's existing bordered control, as `UpdatePanel` draws it,
+ *  down to the character. The property list is spelled out because a colour utility and a
+ *  transform one compile to the same CSS longhand and tailwind-merge would keep only one of
+ *  them; a `disabled` button is held at full size, since a control that depresses and then
+ *  refuses is a control that lies. */
 const BUTTON =
   "inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-1.5 text-sm " +
-  "transition-colors duration-150 motion-reduce:transition-none " +
+  "transition-[color,background-color,border-color,opacity,transform] " +
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "motion-reduce:transition-none " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
-  "disabled:cursor-not-allowed disabled:opacity-50";
+  "disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
 
 /**
  * What each `source` is called on screen.
@@ -125,11 +133,18 @@ export function ErrorLogPanel({ log }: { log: ErrorLog }) {
           </button>
         </div>
 
-        {error && (
-          <p role="alert" className="text-sm text-text">
-            {error}
-          </p>
-        )}
+        {/* Grown into place rather than shoving the log down by its height. Its own animated
+            element, since it carries no padding and no border — `overflow-hidden` is still
+            owed, because the sentence is laid out at full size whatever the box is doing. The
+            panel is a `space-y-4` stack, so the 16px between it and the list still arrives at
+            once; the sentence itself is what grows. */}
+        <AnimatePresence initial={false}>
+          {error && (
+            <motion.p {...statusLine} role="alert" className="overflow-hidden text-sm text-text">
+              {error}
+            </motion.p>
+          )}
+        </AnimatePresence>
 
         {loading ? (
           <p className="text-sm text-dim">Reading the log…</p>
