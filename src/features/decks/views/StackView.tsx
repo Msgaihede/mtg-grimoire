@@ -15,6 +15,14 @@ import { GroupHeader } from "./GroupHeader";
 const COLUMN_WIDTH = "14rem";
 
 /**
+ * How a test finds a column. An attribute rather than a role, because a column is a *layout*
+ * and carries no meaning for a reader — `packColumns` decides which groups share one, and the
+ * only claim worth pinning is that it decided rather than dropped everything into one box.
+ * `ZoneColumn`'s `data-zone-scroller` is the same idea for the same reason.
+ */
+export const STACK_COLUMN_ATTR = "data-stack-column";
+
+/**
  * A group's height in the column, header and padding included, so the packer can fill a
  * column without measuring anything.
  *
@@ -63,6 +71,7 @@ export function StackView({
           // is not a thing the reader can address, and its identity is exactly "the nth
           // column of this layout".
           key={index}
+          {...{ [STACK_COLUMN_ATTR]: "" }}
           style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
           className="flex flex-col gap-5"
         >

@@ -13,7 +13,7 @@
  * to say what it meant to do to the grouping, which is a question the toolbar has already
  * answered.
  */
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
@@ -93,7 +93,16 @@ export function TableView({
               title={row.ruleBreakText ?? undefined}
             >
               <span className="min-w-0 truncate">{row.card.name}</span>
-              {row.card.gameChanger === true && <GameChangerBadge />}
+              {/* The badge and the stripe are both `aria-hidden` decoration; this is where
+                  the table says the two facts in words. It works here and not on the other
+                  three views because a row is not an `aria-label`-ed button — a cell's text
+                  is really read. */}
+              {row.card.gameChanger === true && (
+                <>
+                  <GameChangerBadge />
+                  <span className="sr-only">Game changer</span>
+                </>
+              )}
               {row.ruleBreakText !== null && (
                 <span className="sr-only">Rule break: {row.ruleBreakText}</span>
               )}
@@ -170,6 +179,14 @@ export function TableView({
     [],
   );
 
+  // Closed over the column count, because the band's one cell has to say how many columns it
+  // stands in and the count is data here rather than a literal.
+  const renderRow = useCallback(
+    (props: RowRenderProps, row: Row) =>
+      row.kind === "card" ? <div {...props} /> : bandRow(props, row.group, columns.length),
+    [columns.length],
+  );
+
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
       <VirtualTable<Row>
@@ -195,25 +212,35 @@ export function TableView({
 }
 
 /**
- * A card row is the table's own; a group row replaces every cell with one band.
+ * A card row is the table's own; a group row is one band spanning every column.
  *
- * The props are spread whole in both cases — the role, the row index, the focus ring and the
- * geometry all still apply — and the band overrides exactly two of them: the children, and
- * the column template, which a full-width band has no use for.
+ * The props are spread whole in both cases, and the band then overrides **six** of them:
+ * `tabIndex`, `onClick` and `onKeyDown` because a heading is not something Enter opens;
+ * `style.gridTemplateColumns`, because a band has one track rather than nine; `className`,
+ * for the surface colour; and `children`, which is the band itself. Everything it does not
+ * touch — `role`, `aria-rowindex`, the absolute geometry, the focus ring — is exactly what a
+ * row in this table is, and a band is still a row of it.
+ *
+ * **The band owns a real cell.** A `role="row"` with no `role="cell"` inside it is malformed
+ * to assistive tech — a row that owns nothing — so the heading sits in one cell carrying
+ * `aria-colspan`, which is the same thing the design canvas's `colspan="9"` says in HTML.
  */
-function renderRow(props: RowRenderProps, row: Row) {
-  if (row.kind === "card") return <div {...props} />;
+function bandRow(props: RowRenderProps, group: CardGroup, columns: number) {
   return (
     <div
       {...props}
-      // Not activatable: a band is a heading, and Enter on one would open nothing.
       tabIndex={undefined}
       onClick={undefined}
       onKeyDown={undefined}
-      style={{ ...props.style, gridTemplateColumns: undefined }}
-      className={cn(props.className, "flex items-center bg-surface")}
+      // One track, not nine. `props.className` already carries `grid`; overriding the
+      // template is the whole of what makes this row one cell wide, and adding a second
+      // display utility beside it would leave which one wins to the class sorter.
+      style={{ ...props.style, gridTemplateColumns: "minmax(0,1fr)" }}
+      className={cn(props.className, "bg-surface")}
     >
-      <GroupHeader group={row.group} className="w-full" />
+      <span role="cell" aria-colspan={columns} className="flex min-w-0 items-center">
+        <GroupHeader group={group} className="w-full" />
+      </span>
     </div>
   );
 }

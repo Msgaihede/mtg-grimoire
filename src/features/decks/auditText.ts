@@ -134,13 +134,8 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
       return text(p.action) !== null || entry.cardId === null ? tagLine(p) : cardTagLine(p, name);
     case "category":
       return categoryLine(p);
-    case "folder": {
-      const folder = text(p.folder);
-      return {
-        text: folder ? `Moved the deck to ${folder}` : "Moved the deck out of its folder",
-        detail: null,
-      };
-    }
+    case "folder":
+      return folderLine(p);
     case "deck":
       return deckLine(p);
     // A kind this build has never heard of, written by a newer one. The drawer still lists
@@ -189,6 +184,30 @@ function tagLine(p: Record<string, unknown>): AuditLine {
       return { text: `Deleted tag ${name}`, detail: moved("untagged") };
     default:
       return { text: `Changed tag ${name}`, detail: null };
+  }
+}
+
+/**
+ * Where the deck is filed.
+ *
+ * **`folder` is nullable and null is the root**, which is a place rather than an absence — a
+ * deck at the top level is not a deck with no folder, it is a deck in the one folder that has
+ * no name. Saying "out of its folder" read as a removal.
+ *
+ * It switches on `action` like its two neighbours rather than answering every row with the
+ * move sentence, so a row this build has never seen does not claim a move it cannot know
+ * happened.
+ */
+function folderLine(p: Record<string, unknown>): AuditLine {
+  const folder = text(p.folder);
+  switch (text(p.action)) {
+    case "move":
+      return {
+        text: folder ? `Moved the deck to ${folder}` : "Moved the deck to the top level",
+        detail: null,
+      };
+    default:
+      return { text: "Changed the deck's folder", detail: null };
   }
 }
 
@@ -253,11 +272,23 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         text: flag(p.to) ? "Marked the deck built" : "Marked the deck not built",
         detail: null,
       };
-    case "theory":
+    case "theory": {
+      // **Two different rows wear `field: "theory"`**, and `copied` is the discriminator: the
+      // copy row carries it and has no `from`/`to` at all, while the toggle carries `to` and
+      // no `copied`. Reading only the toggle answers a copy as `flag(undefined)` — "Turned
+      // the theory list off" — which is a sentence about the opposite of what happened.
+      if ("copied" in p) {
+        const copied = count(p.copied);
+        return {
+          text: "Copied the live deck into theory",
+          detail: copied > 0 ? `${copied} ${copied === 1 ? "card" : "cards"}` : null,
+        };
+      }
       return {
         text: flag(p.to) ? "Turned the theory list on" : "Turned the theory list off",
         detail: null,
       };
+    }
     case "archived":
       // Filed away, never deleted — `DeckPatch.archived`'s own words, which is why neither
       // half of this says "removed".

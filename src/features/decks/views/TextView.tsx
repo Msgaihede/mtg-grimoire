@@ -9,6 +9,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
+import { deckCardName, FOCUS } from "../cardControl";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
@@ -27,8 +28,6 @@ const COLUMN_WIDTH = "18.75rem";
 export function groupHeight(group: CardGroup): number {
   return HEADER_HEIGHT + Math.max(1, group.cards.length) * ROW_HEIGHT + GROUP_GAP;
 }
-
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 export function TextView({
   groups,
@@ -100,21 +99,13 @@ function TextRow({
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
 }) {
-  const name = [
-    card.name,
-    card.quantity > 1 ? `${card.quantity} copies` : null,
-    card.tagName,
-    card.gameChanger ? "game changer" : null,
-    ruleBreakText && `rule break: ${ruleBreakText}`,
-  ]
-    .filter(Boolean)
-    .join(", ");
-
   return (
     <li>
       <button
         type="button"
-        aria-label={name}
+        // The stripe is the only mark this row has room for, so the name is where the words
+        // are — `deckCardName` is the one definition, shared with the stack and the grid.
+        aria-label={deckCardName(card, ruleBreakText)}
         title={ruleBreakText ?? undefined}
         onClick={onSelect ? () => onSelect(card) : undefined}
         className={cn(

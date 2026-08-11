@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { CardStack, stackHeight } from "./CardStack";
@@ -50,28 +50,40 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {};
 
 /**
- * The lift, checked rather than described: the list's height is the same before, during and
- * after a hover.
+ * The list's height is **a function of the card count and nothing else** — which is the whole
+ * of why the group cannot reflow, and it is a property that can be checked without hovering
+ * anything.
  *
- * Two assertions, and only one of them means anything here. The inline height is a string this
- * component computes from the card count, and it is checked in every runner. The *measured*
- * height is a real number in the Storybook browser and zero in jsdom, where nothing is laid
- * out — so it proves the paint in one place and is merely quiet in the other.
+ * **This play does not prove the no-reflow claim, and it is named so it does not pretend to.**
+ * The earlier version hovered each card and asserted `getBoundingClientRect().height` was
+ * unchanged; that assertion is **vacuous in both runners**, because `userEvent.hover`
+ * dispatches pointer events and never engages the CSS `:hover` state — so nothing moved in
+ * the first place and the assertion could not have failed. Leaving it green would have been a
+ * test standing in for a claim it cannot make, on the headline interaction of the redesign.
+ *
+ * What actually holds the property up is two things, both recorded rather than implied:
+ *
+ * * **structurally** — the lift is `hover:` / `focus-within:` in CSS and there is no hover
+ *   state in JavaScript, so no height can depend on one. `CardStack.test.tsx`'s
+ *   `hovering_a_card_does_not_change_the_group_height` drives both gestures and reads the
+ *   height back, which is what fails the day someone reaches for `useState`.
+ * * **by measurement** — a real Chromium over CDP, three-step pointer approach, reported the
+ *   list at 796px before, during and after a hover on a 15-card stack while the first card's
+ *   margin went −278px → 8px and the second card's top went 50 → 336. That run is in the lane
+ *   report.
+ *
+ * So what is asserted here is the derived height, at three counts, against the arithmetic.
  */
-export const HoverDoesNotReflow: Story = {
+export const FixedHeightFromTheCardCount: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const list = canvas.getByRole("list", { name: "Ramp" });
 
-    const height = list.style.height;
-    const measured = list.getBoundingClientRect().height;
-    expect(height).toBe(`${stackHeight(RAMP.length)}px`);
-
-    for (const card of canvas.getAllByRole("button")) {
-      await userEvent.hover(card);
-      expect(list.style.height).toBe(height);
-      expect(list.getBoundingClientRect().height).toBe(measured);
-    }
+    expect(list.style.height).toBe(`${stackHeight(RAMP.length)}px`);
+    // The canvas's own formula, and the slack that lets a lifted card overflow rather than
+    // resize its group.
+    expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 286);
+    expect(stackHeight(RAMP.length) - stackHeight(RAMP.length - 1)).toBe(34);
   },
 };
 
@@ -138,8 +150,12 @@ export const TaggedAndShortOfCopies: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    expect(canvas.getByText("Tagged Wincon")).toBeInTheDocument();
-    expect(canvas.getByText("You own 1 of 3")).toBeInTheDocument();
+    // Both marks are decoration with a `title`; the words are in the card's own name, which
+    // is the only text inside an `aria-label`-ed button that anyone hears.
+    expect(canvas.getByTitle("Wincon")).toHaveAttribute("aria-hidden", "true");
+    expect(canvas.getByRole("button", { name: /Wincon.*/ }).getAttribute("aria-label")).toContain(
+      "you own 1 of 3",
+    );
   },
 };
 
