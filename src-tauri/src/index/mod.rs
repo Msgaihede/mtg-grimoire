@@ -334,7 +334,7 @@ pub(crate) mod fixtures {
             // Never called: nothing in the lifecycle reaches the network or an image.
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
             images: crate::images::Cache::new(dir.join("images")),
-            index: std::sync::RwLock::new(None),
+            index: std::sync::RwLock::default(),
         })
     }
 

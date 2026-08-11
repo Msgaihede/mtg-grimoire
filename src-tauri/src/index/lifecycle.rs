@@ -28,22 +28,92 @@ use super::CardIndex;
 use crate::sync::AppState;
 use std::sync::Arc;
 
+/// What [`crate::sync::AppState`] holds: the published index, and the generation of the
+/// corpus it was built against.
+///
+/// **The two are one lock and not an index plus an `AtomicU64` beside it**, because the
+/// counter is only ever read or written while holding this lock — an atomic sibling would be
+/// a field that belongs in here wearing a workaround for not being, and it would leave
+/// "re-check the generation *under the write guard*" as a rule to remember rather than the
+/// only thing the code can express.
+#[derive(Default)]
+pub struct IndexSlot {
+    /// Bumped by every [`clear`]. A rebuild reads it on entry and refuses to publish a result
+    /// built against a generation that has since moved — see [`publish_build`].
+    generation: u64,
+    index: Option<Arc<CardIndex>>,
+}
+
 /// The current index, or `None` while it is cold.
 ///
 /// Clones the `Arc` and drops the read guard at once, deliberately: a facet pass is then
 /// free to take as long as it likes over a snapshot nobody can pull out from under it, and a
 /// sync's rebuild never waits on a reader.
 pub fn current(state: &AppState) -> Option<Arc<CardIndex>> {
-    crate::db::lock_read(&state.index).clone()
+    crate::db::lock_read(&state.index).index.clone()
 }
 
-/// Go cold, now.
+/// Go cold, now, and answer the generation that starts here.
 ///
 /// The first half of every rebuild, and callable on its own for the moment a swap has landed
 /// but the run that owes the rebuild has not finished — see `sync::do_sync`, which clears
 /// here and builds several seconds later.
-pub fn clear(state: &AppState) {
-    *crate::db::lock_write(&state.index) = None;
+///
+/// The returned generation is what a rebuild carries to its publish. Returned rather than
+/// re-read, because re-reading it is itself a race: a second clear between the two would be
+/// invisible.
+pub fn clear(state: &AppState) -> u64 {
+    let mut slot = crate::db::lock_write(&state.index);
+    slot.index = None;
+    slot.generation += 1;
+    slot.generation
+}
+
+/// Publish a freshly built index, **unless a clear landed while it was being built**.
+///
+/// Clearing first only makes staleness impossible against *one* operation at a time. Two are
+/// reachable: `setup` spawns the launch build, and a legacy database's first sync reaches
+/// `compact_once`'s `VACUUM` clear 0.5–2 s later — well inside a build whose 767 ms was
+/// measured warm and has never been measured cold. Without this check that build lands after
+/// the clear and republishes a pre-`VACUUM` index for the 22–37 s of the conversion, which is
+/// the exact harm clearing first exists to prevent.
+///
+/// Answers whether it landed. A refusal is not a failure: the clear that superseded it belongs
+/// to something that owes a rebuild of its own.
+fn publish_build(state: &AppState, generation: u64, ix: CardIndex) -> bool {
+    let mut slot = crate::db::lock_write(&state.index);
+    if slot.generation != generation {
+        return false;
+    }
+    slot.index = Some(Arc::new(ix));
+    true
+}
+
+/// Publish an amended copy, **unless the copy it was made from has been replaced**.
+///
+/// [`invalidate_owned`] clones the live index and then re-reads `owned` from the database, and
+/// those are two moments: a swap landing between them leaves the copy's corpus bitsets on one
+/// generation of rowids and its `owned` bits on the next — the same split-snapshot hazard
+/// [`CardIndex::build`] closes with a read transaction, which cannot help here because half of
+/// the pair is in memory and not in the database at all. Identity is what closes it instead: if
+/// the slot no longer holds the exact `Arc` the copy was made from, the copy describes a corpus
+/// the app has stopped believing in.
+///
+/// `Arc::ptr_eq` rather than the generation, and it is strictly stronger here — a clear is not
+/// the only thing that can supersede an amendment. Two collection writes racing each other
+/// clone the same base, and without this the slower one's re-read wins and the faster one's
+/// row is lost until the next write.
+fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> bool {
+    let mut slot = crate::db::lock_write(&state.index);
+    if !slot
+        .index
+        .as_ref()
+        .is_some_and(|live| Arc::ptr_eq(live, base))
+    {
+        return false;
+    }
+    slot.index = Some(Arc::new(ix));
+    true
 }
 
 /// Read the corpus and publish a new index, **clearing the old one first**.
@@ -58,12 +128,17 @@ pub fn clear(state: &AppState) {
 /// and holding the read connection for it would queue every search behind it at launch,
 /// which is the exact failure that second connection exists to prevent.
 pub fn build_now(state: &AppState) -> Result<(), String> {
-    clear(state);
+    let generation = clear(state);
     // Spelled here and in `lib.rs`'s `init_state`, which is the one that creates it.
     let conn = crate::db::open_read_only(&state.data_dir.join("mtg.db"))
         .map_err(|e| format!("index connection: {e}"))?;
     let ix = CardIndex::build(&conn).map_err(|e| format!("index build: {e}"))?;
-    *crate::db::lock_write(&state.index) = Some(Arc::new(ix));
+    if !publish_build(state, generation, ix) {
+        // Not an error: something cleared while this ran, and whatever cleared owes a rebuild
+        // of its own. Said out loud because it is also the trace of the two-rebuild
+        // interleaving being real on this machine.
+        eprintln!("a card index build was superseded while it ran and was dropped");
+    }
     Ok(())
 }
 
@@ -101,18 +176,20 @@ pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
 /// index is behind an `Arc` that readers are holding — there is no `&mut` to be had, and
 /// there should not be.
 pub fn invalidate_owned(state: &AppState) {
-    let Some(current) = current(state) else {
+    let Some(base) = current(state) else {
         return;
     };
     let Ok(conn) = crate::db::open_read_only(&state.data_dir.join("mtg.db")) else {
         return;
     };
-    let mut next = (*current).clone();
+    let mut next = (*base).clone();
     if let Err(e) = next.rebuild_owned(&conn) {
         eprintln!("the owned facet could not be refreshed: {e}");
         return;
     }
-    *crate::db::lock_write(&state.index) = Some(Arc::new(next));
+    // Dropped in silence if the base is gone: a sync taking the index cold underneath a
+    // quick-add is ordinary, and the sync's own rebuild is the answer to it.
+    publish_amendment(state, &base, next);
 }
 
 #[cfg(test)]
@@ -231,6 +308,85 @@ mod tests {
         assert!(
             current(&state).is_none(),
             "a cold index stays cold — a quick-add is not the place to spend a full build"
+        );
+    }
+
+    /// One printing's worth of index, built the way [`build_now`] builds it — the thing a
+    /// rebuild is holding in its hands when the moment below arrives.
+    fn built(state: &AppState) -> CardIndex {
+        let conn = crate::db::open_read_only(&state.data_dir.join("mtg.db")).unwrap();
+        CardIndex::build(&conn).unwrap()
+    }
+
+    /// **Clearing first is only half of it.** A rebuild reads its generation, spends ~767 ms
+    /// in the database and then publishes — and a clear that lands in between is silently
+    /// undone by an unconditional publish. Reachable at launch: `setup` spawns the build, and
+    /// a legacy database's first sync reaches `compact_once`'s `VACUUM` clear 0.5–2 s later.
+    ///
+    /// The race is not simulated here — a build over four rows takes microseconds and there is
+    /// no seam to park one in — so this drives the decision the race comes down to at exactly
+    /// the point `build_now` makes it, with the interleaving arranged by hand.
+    #[test]
+    fn a_build_superseded_while_it_ran_is_dropped_rather_than_published() {
+        let state = state_with_seeded_cards("superseded");
+
+        // Nothing moved: the build lands, which is the ordinary case and the control.
+        let generation = clear(&state);
+        assert!(publish_build(&state, generation, built(&state)));
+        assert_eq!(current(&state).unwrap().paper.count(), 3);
+
+        // And now the real one. A build starts...
+        let generation = clear(&state);
+        let ix = built(&state);
+        // ...a swap lands and takes the index cold while it is still reading...
+        clear(&state);
+        // ...and the build must not undo that clear on its way past.
+        assert!(
+            !publish_build(&state, generation, ix),
+            "a build against a superseded generation must not publish"
+        );
+        assert!(
+            current(&state).is_none(),
+            "cold, rather than warm with an index of a corpus that has left"
+        );
+    }
+
+    /// The same hazard on the cheap path, and worse there: an amendment carries the **old**
+    /// index's corpus bitsets and a **new** read of `owned`, so publishing one over a swap
+    /// does not merely go stale, it mixes two generations of rowids in one index. The read
+    /// transaction inside `CardIndex::build` cannot help — half of this pair is in memory.
+    ///
+    /// The last case is the side benefit: identity catches a *sibling* amendment too, so two
+    /// collection writes racing cannot end with the slower one's re-read winning.
+    #[test]
+    fn an_amendment_whose_base_has_been_replaced_is_dropped() {
+        let state = state_with_seeded_cards("amendment");
+        build_now(&state).unwrap();
+        let base = current(&state).unwrap();
+
+        // The control: the base is still the live index, so the amendment lands.
+        assert!(publish_amendment(&state, &base, (*base).clone()));
+
+        // A swap takes the index cold while the amendment is being read.
+        let base = current(&state).unwrap();
+        let amended = (*base).clone();
+        clear(&state);
+        assert!(!publish_amendment(&state, &base, amended));
+        assert!(current(&state).is_none(), "and it stays cold");
+
+        // And a base that was replaced rather than cleared is just as gone.
+        build_now(&state).unwrap();
+        let stale = current(&state).unwrap();
+        let amended = (*stale).clone();
+        build_now(&state).unwrap();
+        assert!(
+            !publish_amendment(&state, &stale, amended),
+            "an amendment of an index nobody is publishing any more is not an amendment"
+        );
+        assert_eq!(
+            current(&state).unwrap().paper.count(),
+            3,
+            "the live index is left exactly as it was"
         );
     }
 

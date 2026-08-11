@@ -419,7 +419,7 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         images,
         // Cold, and built by `setup` the moment this state is in an `Arc` — see there for
         // why the build cannot be started from in here.
-        index: std::sync::RwLock::new(None),
+        index: std::sync::RwLock::default(),
     })
 }
 

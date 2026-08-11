@@ -1759,7 +1759,7 @@ mod tests {
             // Neither is ever touched: this test stops at the lock.
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
             images: crate::images::Cache::new(std::path::PathBuf::from("D:\\app\\data\\images")),
-            index: std::sync::RwLock::new(None),
+            index: std::sync::RwLock::default(),
         });
 
         let held = crate::db::lock_blocking(&state.db);

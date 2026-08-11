@@ -86,13 +86,14 @@ pub struct AppState {
     /// The image cache. Lives here so the `mtgimg://` handler can reach it from an
     /// `AppHandle` — that handle is the only state the handler is given.
     pub images: crate::images::Cache,
-    /// The in-memory facet index, or `None` while it is cold — which is a supported state
-    /// and not an error: see [`crate::index::lifecycle`].
+    /// The in-memory facet index and the generation of the corpus it describes — cold, which
+    /// is a supported state and not an error, until the first build lands. Read it through
+    /// [`crate::index::lifecycle::current`]; everything else about it is that module's.
     ///
     /// `RwLock` and not `Mutex`: every facet request reads it and only a sync or a collection
-    /// write replaces it. `Arc` so a reader clones the handle and lets the lock go at once —
-    /// a facet pass must never hold a lock a sync's rebuild is waiting on.
-    pub index: std::sync::RwLock<Option<std::sync::Arc<crate::index::CardIndex>>>,
+    /// write replaces it. The `Arc` inside is so a reader clones the handle and lets the lock
+    /// go at once — a facet pass must never hold a lock a sync's rebuild is waiting on.
+    pub index: std::sync::RwLock<crate::index::lifecycle::IndexSlot>,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -1011,7 +1012,7 @@ mod tests {
                 // Never touched either — a `Cache` creates nothing until it is asked for
                 // an image, so this directory does not have to exist.
                 images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
-                index: std::sync::RwLock::new(None),
+                index: std::sync::RwLock::default(),
             },
             dir,
         )
