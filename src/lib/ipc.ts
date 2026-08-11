@@ -640,11 +640,28 @@ export interface DeckCategory {
    */
   isActive: boolean;
   sortOrder: number;
-  /** Copies filed here — `sum(quantity)`, not a row count — in the variant that was asked
-   *  for. Two printings at 2 and 3 copies read 5. */
+  /**
+   * Copies filed here **in the variant that was asked for** — `sum(quantity)`, not a row count.
+   * Two printings at 2 and 3 copies read 5.
+   *
+   * The number a *list* row wants: a panel drawing the deck's columns is drawing the list the
+   * reader is editing. It is **not** the number a delete confirmation wants — see
+   * {@link DeckCategory.cardCountAllVariants}, and read both before reaching for either.
+   */
   cardCount: number;
   /** Nonfoil `usd` × copies over the same variant, `null` when nothing here has a price. */
   totalPriceUsd: number | null;
+  /**
+   * Copies filed here **across both variants**, live and theory together — the number a
+   * destructive confirmation has to quote, and the same answer whichever variant was asked by.
+   *
+   * A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so deleting
+   * one takes its rows out of **both** lists, and `deckCategoryDelete`'s move arm moves both for
+   * the same reason. A dialog quoting {@link DeckCategory.cardCount} therefore understates what
+   * it is about to do on any theory-enabled deck — and understates the **destructive** arm in
+   * particular, which is a control lying in the direction of the reader pressing it.
+   */
+  cardCountAllVariants: number;
 }
 
 /**

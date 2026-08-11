@@ -1233,9 +1233,16 @@ function toDeckAudit(a: FakeDeckAudit): DeckAuditEntry {
  * nonfoil `usd` key of each printing's blob times its copies. A category holding nothing (or
  * nothing priced) reads `null` rather than `0`, because SQL's `sum()` of no non-NULL terms is
  * NULL — and "nothing here has a price" is a different statement from "this is free".
+ *
+ * `cardCountAllVariants` is the **third** number and the one that is not scoped: a category is
+ * not per-variant, and `deck_cards.category_id` is `ON DELETE CASCADE`, so a delete reaches
+ * both lists. It is *derived here* rather than stored on `FakeDeckCategory`, like every other
+ * DTO field in this file — a stored copy is a number that can disagree with the rows it claims
+ * to count, which is the whole reason this fake keeps table rows and derives DTOs.
  */
 function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): DeckCategory {
-  const rows = db.deckCards.filter((dc) => dc.categoryId === c.id && dc.variant === variant);
+  const filed = db.deckCards.filter((dc) => dc.categoryId === c.id);
+  const rows = filed.filter((dc) => dc.variant === variant);
   const priced = rows
     .map((dc) => {
       const unit = priceKey(cardById(db, dc.cardId), "usd");
@@ -1251,6 +1258,7 @@ function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): 
     sortOrder: c.sortOrder,
     cardCount: rows.reduce((n, dc) => n + dc.quantity, 0),
     totalPriceUsd: priced.length === 0 ? null : priced.reduce((n, p) => n + p, 0),
+    cardCountAllVariants: filed.reduce((n, dc) => n + dc.quantity, 0),
   };
 }
 

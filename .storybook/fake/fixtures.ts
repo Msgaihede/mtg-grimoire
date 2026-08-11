@@ -116,7 +116,7 @@ export const DECK_CATEGORIES: readonly {
 export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {}): DeckCategory {
   const category = DECK_CATEGORIES.find((c) => c.kind === kind);
   if (!category) throw new Error(`No fixture category of kind ${kind}`);
-  return {
+  const row = {
     id: category.sortOrder + 1,
     deckId: 1,
     name: category.name,
@@ -127,6 +127,11 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
     totalPriceUsd: null,
     ...over,
   };
+  // Both lists, defaulting to the one-list count — so a fixture that says nothing is a deck
+  // with nothing in its theory list, and the two numbers differ only where a test means them
+  // to. They must never be defaulted independently: a total *below* the variant-scoped count
+  // is a shape the backend cannot produce, and the delete confirmation reads the total.
+  return { ...row, cardCountAllVariants: over.cardCountAllVariants ?? row.cardCount };
 }
 
 /**

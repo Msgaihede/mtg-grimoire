@@ -565,6 +565,15 @@ function CategoryRow({
  * both outcomes would be a dialog that hid the difference it exists to ask about.
  *
  * An empty category asks nothing — there is nothing to move and nothing to lose.
+ *
+ * **Every number in here is `cardCountAllVariants`, never `cardCount`.** A category is not
+ * per-variant: `deck_cards.category_id` is `ON DELETE CASCADE`, so the delete reaches the live
+ * list and the theory list alike, and the move arm moves both. The row above this dialog shows
+ * the variant-scoped count and is right to — that is the list the reader is editing — but a
+ * confirmation quoting it would promise less than it takes, and it would understate the
+ * **destructive** arm in particular. Found on the fake's seeded deck 4, where "Ramp" offered to
+ * move 2 cards and moved 7. When copies exist in the list that is *not* on screen, the sentence
+ * says so in words: the reader can see one list and cannot be asked to infer the other.
  */
 function DeleteCategory({
   category,
@@ -586,8 +595,15 @@ function DeleteCategory({
     // cards. Reaching the destructive one takes a deliberate pick.
     others.length > 0 ? String(others[0].id) : "delete",
   );
-  const cards = category.cardCount;
+  // Both lists, because both go. See this component's doc.
+  const cards = category.cardCountAllVariants;
   const count = `${cards} ${cards === 1 ? "card" : "cards"}`;
+  /** Copies in the list the reader is **not** looking at. `> 0` is exactly the condition for
+   *  mentioning the other list at all: a deck with no theory rows in this pile has one list to
+   *  talk about, and a sentence about two would be chrome. */
+  const elsewhere = cards - category.cardCount;
+  const bothLists =
+    elsewhere > 0 ? " — that is both the live and theory lists, not just the one on screen" : "";
   /** The question is only asked when there is something to lose *and* somewhere to put it. */
   const choosing = cards > 0 && others.length > 0;
   const target = choosing ? (others.find((c) => String(c.id) === choice) ?? null) : null;
@@ -639,8 +655,8 @@ function DeleteCategory({
         {cards === 0
           ? "It is empty, so nothing goes with it."
           : losing
-            ? `The ${count} in it are deleted too. This cannot be undone.`
-            : `The ${count} in it move to “${target?.name}”. Nothing is lost.`}
+            ? `The ${count} in it are deleted too${bothLists}. This cannot be undone.`
+            : `The ${count} in it move to “${target?.name}”${bothLists}. Nothing is lost.`}
       </p>
 
       <div className="mt-2 flex gap-2">

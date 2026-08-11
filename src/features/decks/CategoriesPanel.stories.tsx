@@ -152,29 +152,42 @@ export const ReorderedFromTheKeyboard: Story = {
  * `deck_category_delete` takes `moveToCategoryId`, and `null` is the half that takes the cards
  * with the category by cascade — so the dialog defaults to a move, spells the outcome out in a
  * sentence, and changes the confirm button's own words with the answer.
+ *
+ * **The numbers here are the bug this dialog was fixed for, drawn on the deck that had it.**
+ * Deck 4's "Ramp" holds **2** copies in the live list and **5** in the theory list, and the row
+ * above the dialog says 2 because 2 is what the reader is editing. The delete takes all **7** —
+ * `deck_cards.category_id` is `ON DELETE CASCADE` and a category is not per-variant — so the
+ * confirmation quotes 7 and says in words that both lists are in scope. It said 2 before.
  */
 export const DeletingACategory: Story = {
   play: async ({ canvas }) => {
     const ramp = (await canvas.findByText("Ramp")).closest("li") as HTMLElement;
+    // The row is the list being edited, and stays that way.
+    await expect(within(ramp).getByText("2 cards")).toBeInTheDocument();
     await userEvent.click(within(ramp).getByRole("button", { name: "Delete" }));
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
-    await expect(within(dialog).getByText(/Nothing is lost/)).toBeInTheDocument();
+    await expect(within(dialog).getByText(/Nothing is lost/)).toHaveTextContent(
+      "both the live and theory lists",
+    );
     await expect(
-      within(dialog).getByRole("button", { name: "Move 2 cards and delete" }),
+      within(dialog).getByRole("button", { name: "Move 7 cards and delete" }),
     ).toBeInTheDocument();
   },
 };
 
-/** The same dialog after the reader has chosen the other outcome: red, and saying so. */
+/** The same dialog after the reader has chosen the other outcome: red, and saying so — over the
+ *  same seven copies, which is the arm where undercounting would have cost the most. */
 export const DeletingACategoryAndItsCards: Story = {
   play: async ({ canvas }) => {
     const ramp = (await canvas.findByText("Ramp")).closest("li") as HTMLElement;
     await userEvent.click(within(ramp).getByRole("button", { name: "Delete" }));
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
-    await userEvent.selectOptions(within(dialog).getByLabelText("Its 2 cards"), "delete");
-    await expect(within(dialog).getByText(/This cannot be undone/)).toBeInTheDocument();
+    await userEvent.selectOptions(within(dialog).getByLabelText("Its 7 cards"), "delete");
+    await expect(within(dialog).getByText(/This cannot be undone/)).toHaveTextContent(
+      "The 7 cards in it are deleted too",
+    );
     await expect(within(dialog).getByRole("button", { name: "Delete “Ramp”" })).toBeInTheDocument();
   },
 };

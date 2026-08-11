@@ -890,6 +890,15 @@ describe("the deck read", () => {
     expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2].cardCount).toBe(
       9,
     );
+    // `cardCountAllVariants` is the one number that is *not* scoped, and the Sideboard is where
+    // that shows: 0 live, 9 theory, 9 either way you ask. It is what the delete confirmation
+    // quotes, because `deck_cards.category_id` is `ON DELETE CASCADE` and a category is not
+    // per-variant — a dialog reading `cardCount` would have promised 0 and taken 9.
+    expect(detail.categories.map((c) => c.cardCountAllVariants)).toEqual([0, 3, 9, 0, 1]);
+    expect(
+      readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2]
+        .cardCountAllVariants,
+    ).toBe(9);
     // No tag has been made, so the palette is empty — and it is a list, not a null.
     expect(detail.tags).toEqual([]);
   });

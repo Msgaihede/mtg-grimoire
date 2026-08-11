@@ -104,9 +104,10 @@ function category(
     kind,
     isActive: kind !== "maybe",
     sortOrder: id - 1,
-    // The heading counts the rows it was handed, so these two are read by nothing here.
+    // The heading counts the rows it was handed, so these three are read by nothing here.
     cardCount: 0,
     totalPriceUsd: null,
+    cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
 }
