@@ -272,6 +272,7 @@ const BOLT_WISH: WishRow = {
   lang: "en",
   rarity: "common",
   manaCost: "{R}",
+  typeLine: "Instant",
   quantity: 2,
   preferredFinish: null,
   unitPriceUsd: 400.5,

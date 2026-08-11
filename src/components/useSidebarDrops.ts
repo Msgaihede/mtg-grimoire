@@ -129,20 +129,25 @@ export function useSidebarDrops() {
       // on, into a mutation state nothing here draws).
       if (openDeckId === null) return;
       writeToDeck(
-        // **No category, and one copy.** A sidebar entry is a destination rather than a form: it
-        // is a nav item several views away from the deck, so there is no column here for a
-        // reader to have pointed at, and the deck's own columns are where somebody who means
-        // the sideboard drops a card. Omitting `categoryId` is what says that — `deck_add_card`
-        // then takes a *name* to find or create, and `useDeck`'s `DEFAULT_CATEGORY_NAME` is the
-        // one it sends: the v8 migration's own word for the pile it filed every legacy main-deck
-        // row into, so a deck that predates categories and one made since agree about where a
-        // plain add goes.
+        // **One copy, and the pile is whatever the payload knows.** A sidebar entry is a
+        // destination rather than a form: it is a nav item several views away from the deck, so
+        // for a card off a wall there is no column here a reader could have pointed at, and the
+        // deck's own columns are where somebody who means the sideboard drops one. So that card
+        // names no category and rides its **type line** instead, which `useDeck`'s `addCard`
+        // files through `autoCategoryFor` — a Ramp artifact dropped here lands under Artifact,
+        // found or created. The line comes from the payload rather than a lookup, which is what
+        // keeps this a gesture and not a query: every source that carries a `"card"` has it in
+        // hand when it registers its draggable (`dnd.ts`). `null` — an orphaned collection row
+        // whose printing has left `cards` — files under `Uncategorised`.
         //
-        // A placeholder for the rule that is coming, not a decision made here: the spec's answer
-        // is `autoCategoryFor` — one TypeScript rule reading a card's type line and naming the
-        // pile it belongs in — and it is a later task's. When it lands, the name this hook sends
-        // changes on `useDeck`'s single definition and this call site does not move.
-        { cardId: payload.cardId, quantity: 1 },
+        // **A card dragged out of the open deck keeps its own category**, because it has one:
+        // `fromCategoryId` is a pile of *this* deck (a deck card exists only while its editor is
+        // mounted), so the rule that a drag names its own destination holds here too. It used to
+        // land in a found-or-created "Main deck" instead, which quietly moved a Sideboard card's
+        // extra copy into the main deck.
+        payload.kind === "deck-card"
+          ? { cardId: payload.cardId, categoryId: payload.fromCategoryId, quantity: 1 }
+          : { cardId: payload.cardId, typeLine: payload.typeLine, quantity: 1 },
         {
           // The fallback is the sliver where the editor's read has not landed yet — the drop
           // still writes, and the sentence says what it can.

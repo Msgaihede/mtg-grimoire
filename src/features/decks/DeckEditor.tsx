@@ -21,7 +21,7 @@ import { newestWrite, writeFailure } from "@/lib/writes";
 import { AuditDrawer } from "./AuditDrawer";
 import { focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
 import { CategoriesPanel } from "./CategoriesPanel";
-import { DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
@@ -246,12 +246,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * panel because it is a fact about the deck being edited, and the categories it may take are
    * this editor's own.
    *
-   * `0` is the one value that is not a category: `deck_categories.id` is an `INTEGER PRIMARY
-   * KEY` and `dnd.ts`'s `isCategoryId` refuses anything but a positive safe integer, so zero is
-   * a sentinel meaning "nothing picked yet" that no real category can collide with. The clamp
-   * below replaces it on the first render that has a deck.
+   * {@link AUTO_CATEGORY} (`0`) is the one value that is not a category, and it is the
+   * **default**: an add nobody filed is filed by its type line. It used to mean "nothing picked
+   * yet" and the clamp below replaced it with `categories[0]` — which is the seeded **Commander**
+   * pile, so on a fresh deck every quick add and every panel press landed there and the
+   * quick-add field said so in its own label.
    */
-  const [targetCategoryId, setTargetCategoryId] = useState(0);
+  const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
 
   /** What is in the name field while it is being typed in, or `null` when the field is simply
    *  the deck's name (`QuantityStepper`'s draft, for its reason). */
@@ -317,11 +318,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // own options, with every press filing a card somewhere nothing is drawing. Reset during
   // render, which is React's own answer to state that has to follow a prop.
   //
-  // The **first** category, not a hard-coded word: there is no `main` to fall back to any more.
-  // A deck always has at least the four `PREDEFINED_CATEGORIES` the migration seeds, so the
-  // list is only empty while the read is still in flight.
-  if (categories.length > 0 && !categories.some((c) => c.id === targetCategoryId)) {
-    setTargetCategoryId(categories[0].id);
+  // **Back to `AUTO_CATEGORY`, and only from a real id that has gone.** This used to fire on the
+  // *initial* value too, because `0` meant "nothing picked yet" — so the first render with a
+  // deck replaced it with `categories[0]`, which is the seeded Commander pile. Now zero is a
+  // choice with a meaning, so the clamp is what it always claimed to be in its own first
+  // sentence: a repair for a pile that is not there any more. A reader whose Sideboard is
+  // deleted under them lands on Auto rather than silently on somebody else's first column.
+  if (
+    targetCategoryId !== AUTO_CATEGORY &&
+    categories.length > 0 &&
+    !categories.some((c) => c.id === targetCategoryId)
+  ) {
+    setTargetCategoryId(AUTO_CATEGORY);
   }
 
   // A deck deleted under an open layer takes its trigger with it — but not the state that says
@@ -460,9 +468,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
 
-  /** One copy into a category — the panel's Add button's write, the quick add's, and a drop. */
+  /**
+   * One copy into a category — the quick add's write, and a drop's.
+   *
+   * `categoryId` may be {@link AUTO_CATEGORY}, in which case the card's own type line goes
+   * instead and `useDeck`'s `addCard` names the pile (`autoCategoryFor`). A drop always passes a
+   * real id — pointing at a column is naming one — so the auto arm is the click path's alone,
+   * and a caller with a real id may pass no type line at all.
+   */
   const addTo = useCallback(
-    (cardId: string, categoryId: number) => writeAdd({ cardId, categoryId, quantity: 1 }),
+    (cardId: string, categoryId: number, typeLine?: string | null) =>
+      writeAdd(
+        categoryId === AUTO_CATEGORY
+          ? { cardId, typeLine: typeLine ?? null, quantity: 1 }
+          : { cardId, categoryId, quantity: 1 },
+      ),
     [writeAdd],
   );
 
@@ -735,7 +755,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.cards],
   );
 
-  const targetName = categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck";
+  /** What the add target is called, or `null` under {@link AUTO_CATEGORY} — where there is no
+   *  one answer, because the pile is per card. */
+  const targetName =
+    targetCategoryId === AUTO_CATEGORY
+      ? null
+      : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
   /**
    * The quick add: a name, and the card it turns out to be.
@@ -760,13 +785,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       }
       setQuickMiss(null);
       setQuickText("");
-      addTo(card.id, targetCategoryId);
+      // The search answered a whole `CardSummary`, so the type line is already in hand and the
+      // auto arm costs nothing extra — which is the point of filing from a *found* card rather
+      // than from a typed name.
+      addTo(card.id, targetCategoryId, card.typeLine);
     },
   });
   const quickAddFailure = quickAdd.isError ? ipcError(quickAdd.error) : null;
   const submitQuickAdd = () => {
     const text = quickText.trim();
-    if (!text || targetCategoryId === 0) return;
+    // No `targetCategoryId === 0` guard any more: zero is `AUTO_CATEGORY` now, which is a
+    // perfectly good destination. The guard existed because zero meant "the deck has not loaded
+    // yet", and a load that has not happened is now covered by the field being in an editor that
+    // only mounts for an open deck.
+    if (!text) return;
     setQuickMiss(null);
     quickAdd.mutate(text);
   };
@@ -1027,7 +1059,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <span className="text-[0.6875rem] text-dim">Quick add</span>
             <input
               type="text"
-              aria-label={`Quick add a card to ${targetName}`}
+              // Named for where the card will land, and under `Auto` that is per card — so the
+              // name says only what it can promise. "Quick add a card to Auto (by card type)"
+              // would be a control named after a setting rather than after what pressing it does.
+              aria-label={targetName === null ? "Quick add a card" : `Quick add a card to ${targetName}`}
               placeholder="Sol Ring…"
               value={quickText}
               onChange={(e) => setQuickText(e.target.value)}

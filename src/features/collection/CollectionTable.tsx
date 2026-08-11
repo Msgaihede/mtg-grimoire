@@ -237,18 +237,28 @@ function columnsFor(
 function DraggableRow({
   cardId,
   name,
+  typeLine,
   children,
   ...rest
-}: { cardId: string; name: string | null } & ComponentProps<"div">) {
+}: {
+  cardId: string;
+  name: string | null;
+  typeLine: string | null;
+} & ComponentProps<"div">) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
     // An orphaned entry has no name — `cards` does not know this printing any more — and an
     // empty one is what the payload contract allows for exactly that (`dnd.ts`: a name may be
-    // empty, an id may not).
-    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name: name ?? "" }) });
-  }, [cardId, name]);
+    // empty, an id may not). Its type line is `null` for the same reason, which files it under
+    // `Uncategorised` if it is carried into a deck — the honest pile for a card the database
+    // cannot describe.
+    return cardDraggable({
+      element,
+      payload: () => ({ kind: "card", cardId, name: name ?? "", typeLine }),
+    });
+  }, [cardId, name, typeLine]);
   return (
     <div ref={ref} {...rest}>
       {children}
@@ -314,7 +324,9 @@ export function CollectionTable({
       // disappearing (see the stepper's contract).
       rowClassName={(row) => (row.quantity === 0 ? "text-dim" : undefined)}
       onNeedNextPage={onNeedNextPage}
-      renderRow={(props, row) => <DraggableRow cardId={row.cardId} name={row.name} {...props} />}
+      renderRow={(props, row) => (
+        <DraggableRow cardId={row.cardId} name={row.name} typeLine={row.typeLine} {...props} />
+      )}
     />
   );
 }
