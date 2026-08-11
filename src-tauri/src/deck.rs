@@ -3571,7 +3571,7 @@ mod tests {
     }
 
     #[test]
-    fn list_decks_counts_main_and_commander_and_reads_the_cover_artist() {
+    fn list_decks_counts_the_active_piles_in_the_deck_and_reads_the_cover_artist() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Bolt Tribal", "commander")).unwrap();
         let main = main_of(&conn, deck.id);
