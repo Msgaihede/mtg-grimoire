@@ -97,6 +97,7 @@ export function CardGrid<T extends GridCard>({
   selectedId = null,
   label = "Search results",
   badge,
+  topLeft,
   action,
   tileRef,
   dragPayload,
@@ -122,6 +123,15 @@ export function CardGrid<T extends GridCard>({
    * of the whole database almost every tile has nothing to say.
    */
   badge?: (card: T) => ReactNode;
+  /**
+   * A mark over the art's **top-left** corner — the search's printing count.
+   *
+   * Its own slot rather than a second `badge`, because each corner of a tile has exactly one
+   * owner and drift is what happens when they do not: bottom-left the owned/wishlist badge,
+   * top-right the finish chip, top-left this. It shares the badge's rules — the same backing,
+   * `pointer-events-none`, and `empty:hidden` so a mark with nothing to say draws nothing.
+   */
+  topLeft?: (card: T) => ReactNode;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
   /**
@@ -273,6 +283,7 @@ export function CardGrid<T extends GridCard>({
                 onSelect={onSelect}
                 selected={card.id === selectedId}
                 badge={badge}
+                topLeft={topLeft}
                 action={action}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
@@ -298,6 +309,7 @@ function Tile<T extends GridCard>({
   onSelect,
   selected,
   badge,
+  topLeft,
   action,
   tileRef,
   dragPayload,
@@ -307,11 +319,13 @@ function Tile<T extends GridCard>({
   onSelect: (id: string) => void;
   selected: boolean;
   badge?: (card: T) => ReactNode;
+  topLeft?: (card: T) => ReactNode;
   action?: (card: T) => ReactNode;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
 }) {
   const mark = badge?.(card);
+  const corner = topLeft?.(card);
 
   // The self-healing half of the rate limit, and the reset that goes with it: this component
   // belongs to a *slot* in the grid rather than to a card, so a new search hands it a
@@ -425,6 +439,13 @@ function Tile<T extends GridCard>({
           // then it holds for every caller instead of for the ones that remembered.
           <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden">
             {mark}
+          </span>
+        )}
+        {corner && (
+          // The opposite corner, under the same rules as the badge above — see `topLeft`
+          // for why each corner has exactly one owner.
+          <span className="pointer-events-none absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 font-mono text-[0.7rem] text-dim empty:hidden">
+            {corner}
           </span>
         )}
       </div>

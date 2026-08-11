@@ -257,6 +257,37 @@ describe("SearchPage", () => {
     await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
   });
 
+  it("says how many printings a collapsed row stands for, and prices across them", async () => {
+    searchCards.mockResolvedValue(
+      page([
+        {
+          ...BOLT,
+          name: "Sol Ring",
+          printings: 132,
+          priceUsd: 2.15,
+          priceLow: 0.75,
+          priceHigh: 4200,
+        },
+      ]),
+    );
+    wrap(<SearchPage />);
+
+    await screen.findByText("Sol Ring");
+    expect(screen.getByText("×132 printings")).toBeInTheDocument();
+    expect(screen.getByText("$0.75–$4,200.00")).toBeInTheDocument();
+  });
+
+  it("says nothing about printings when a row stands for one", async () => {
+    searchCards.mockResolvedValue(page([BOLT]));
+    wrap(<SearchPage />);
+
+    await screen.findByText(BOLT.name);
+    // `/printings/` alone would match the All-printings toggle, which is always mounted.
+    expect(screen.queryByText(/×\d+ printings/)).not.toBeInTheDocument();
+    // Both ends are the row's own price, so the range renders as the single price it is.
+    expect(screen.getByText("$400.50")).toBeInTheDocument();
+  });
+
   it("passes the format filter", async () => {
     wrap(<SearchPage />);
 
