@@ -56,6 +56,13 @@ const K_LAST_INGEST_SKIPPED: &str = "last_ingest_skipped";
 /// the `sync:progress` event does not.
 const K_LAST_ERROR: &str = "last_error";
 
+/// Where a 429 lockout is remembered, as unix seconds.
+///
+/// **`app_meta`, not `sync_meta`.** The lockout belongs to the *application* — Scryfall
+/// limits an application, not a sync — and it is read at startup, before any sync has run.
+/// The same separation the updater's two keys make, for the same reason.
+pub const K_SCRYFALL_PENALTY_UNTIL: &str = "scryfall_penalty_until";
+
 /// How long an update check stays fresh. Scryfall rebuilds the bulk files roughly
 /// daily, and the app must not poll the API on every launch.
 const CHECK_INTERVAL_SECS: u64 = 86_400;
@@ -496,6 +503,11 @@ pub async fn run_sync(
     let _guard = SyncingGuard(&state.syncing);
 
     let result = do_sync(&state, &app, force).await;
+    // Unconditionally, and before the error funnel below: a 429 can be earned on a path that
+    // *succeeds* overall — `reconcile_ids` logs its failure and returns — so keying this off
+    // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
+    // not worth being clever about.
+    persist_penalty(&state);
     if let Err(e) = &result {
         {
             let conn = lock_db(&state);
@@ -504,6 +516,58 @@ pub async fn run_sync(
         let _ = app.emit("sync:progress", Progress::error(e.clone()));
     }
     result
+}
+
+/// Note a failed call to Scryfall in the error log.
+///
+/// Called where the [`scryfall::ScryfallError`] is still in hand, rather than from
+/// [`run_sync`]'s funnel, because by the time an error reaches the funnel it is a `String`
+/// and its *kind* — the difference between a rate limit and a parse failure, which is the
+/// whole of what a reader acts on — has been thrown away.
+///
+/// Best-effort, and skipped rather than waited for if the write connection is busy: this
+/// describes a failure that has already happened, on a path that is already returning an
+/// error, and no part of it is worth blocking on.
+fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::ScryfallError) {
+    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        crate::errors::record(
+            &conn,
+            crate::errors::Source::ScryfallApi,
+            operation,
+            crate::errors::kind_of(err),
+            &err.to_string(),
+            None,
+        );
+    }
+}
+
+/// Note a failure of the app's own database work — a sweep, a reclaim, a compaction.
+///
+/// These were `eprintln!` and nothing else, which in a release build is a message with
+/// nowhere to go.
+fn note_database(state: &Arc<AppState>, operation: &str, message: &str) {
+    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        crate::errors::record(
+            &conn,
+            crate::errors::Source::Database,
+            operation,
+            crate::errors::Kind::Io,
+            message,
+            None,
+        );
+    }
+}
+
+/// Write the client's current lockout deadline to `app_meta`, so a restart cannot shake it
+/// off.
+///
+/// Best-effort throughout: this is bookkeeping about a refusal that has already happened,
+/// and failing a sync over it would be absurd.
+fn persist_penalty(state: &Arc<AppState>) {
+    let until = state.client.penalty_until_unix();
+    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        let _ = crate::update::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
+    }
 }
 
 /// Finish a run that found nothing new to ingest.
@@ -525,7 +589,12 @@ async fn finish_unchanged(
     };
     if needs_sets {
         emit(app, "sets", 0, 0);
-        let sets = state.client.fetch_sets().await.map_err(|e| e.to_string())?;
+        let sets = state
+            .client
+            .fetch_sets()
+            .await
+            .inspect_err(|e| note_scryfall(state, "sets", e))
+            .map_err(|e| e.to_string())?;
         let mut conn = lock_db(state);
         insert_sets(&mut conn, &sets).map_err(|e| e.to_string())?;
     }
@@ -572,18 +641,25 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let migrations = match state.client.fetch_migrations().await {
         Ok(m) => m,
         Err(e) => {
+            // Logged in both senses now. The `eprintln!` is still useful in a dev console;
+            // the row is the half a shipped build has, and this failure is otherwise silent
+            // by design — it does not fail the sync, so nothing else would ever mention it.
             eprintln!("could not read Scryfall's id migrations: {e}");
+            note_scryfall(state, "migrations", &e);
             return;
         }
     };
     // On a blocking thread, and taking the write lock inside it, for the reason the whole
     // module repeats: the lock is never held across an `.await`, and a pass over the log is
     // synchronous SQLite work.
-    // Its own handle rather than shadowing `state`, because the arm below still needs the
-    // caller's — a moved clone would take the state the index refresh reads from with it.
-    let worker = state.clone();
+    // Two handles: one moved into the blocking task, one kept here — and the arms below now
+    // need the caller's for two independent reasons, which is why shadowing `state` is no
+    // longer an option. A failure has to be written to the error log after the task has
+    // consumed its own handle, and a pass that moved a `card_id` has to refresh the index's
+    // `owned` set.
+    let owned = state.clone();
     let applied = tauri::async_runtime::spawn_blocking(move || {
-        let mut conn = lock_db(&worker);
+        let mut conn = lock_db(&owned);
         crate::reconcile::apply(&mut conn, &migrations)
     })
     .await;
@@ -609,8 +685,14 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
             );
         }
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => eprintln!("could not apply Scryfall's id migrations: {e}"),
-        Err(e) => eprintln!("the id-migration task failed: {e}"),
+        Ok(Err(e)) => {
+            eprintln!("could not apply Scryfall's id migrations: {e}");
+            note_database(state, "reconcile", &e.to_string());
+        }
+        Err(e) => {
+            eprintln!("the id-migration task failed: {e}");
+            note_database(state, "reconcile", &e.to_string());
+        }
     }
 }
 
@@ -642,8 +724,14 @@ async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
     };
     match joined {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => eprintln!("could not return freed pages after the swap: {e}"),
-        Err(e) => eprintln!("the page-return task failed: {e}"),
+        Ok(Err(e)) => {
+            eprintln!("could not return freed pages after the swap: {e}");
+            note_database(state, "reclaim", &e.to_string());
+        }
+        Err(e) => {
+            eprintln!("the page-return task failed: {e}");
+            note_database(state, "reclaim", &e.to_string());
+        }
     }
 }
 
@@ -703,11 +791,17 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
         // in the run touches `cards`, so without this a legacy database would carry an index
         // pointing at pre-`VACUUM` rowids for the rest of the session. The rebuild is the
         // caller's, which is what the return value is for.
+        //
+        // Before the clone below and therefore before the `VACUUM` itself, which is the only
+        // ordering that is safe: a clear after it would leave a window where the index is
+        // published over rowids the `VACUUM` has already moved.
         crate::index::lifecycle::clear(state);
     }
-    let state = state.clone();
+    // As in `reconcile_ids`: one handle for the blocking task, one kept so a failure can
+    // still be written down after the task has taken its own.
+    let owned = state.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let conn = lock_db(&state);
+        let conn = lock_db(&owned);
         if !convert {
             // Nothing to convert, only a rebuild owing: paying that off is not a
             // conversion attempt and must not be recorded as one.
@@ -728,8 +822,14 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
         Ok(Ok(())) => {}
         // Neither failure is the sync's failure: the cards are ingested and stored either
         // way, and a database that did not compact is a database that works.
-        Ok(Err(e)) => eprintln!("database compaction failed: {e}"),
-        Err(e) => eprintln!("database compaction task failed: {e}"),
+        Ok(Err(e)) => {
+            eprintln!("database compaction failed: {e}");
+            note_database(state, "compact", &e.to_string());
+        }
+        Err(e) => {
+            eprintln!("database compaction task failed: {e}");
+            note_database(state, "compact", &e.to_string());
+        }
     }
     convert
 }
@@ -759,6 +859,7 @@ async fn do_sync(
         .client
         .check_bulk_update(conditional_etag(stored.etag.as_deref(), stored.card_count))
         .await
+        .inspect_err(|e| note_scryfall(state, "bulk_check", e))
         .map_err(|e| e.to_string())?;
 
     let scryfall::BulkCheck::Available(info) = check else {
@@ -807,6 +908,7 @@ async fn do_sync(
         )
         .await;
     if let Err(e) = downloaded {
+        note_scryfall(state, "bulk_download", &e);
         // A short file is a resume point and is kept on purpose. Anything else — a
         // server lying about sizes, a rotated file, a dead connection — must not leave
         // a partial behind that every future resume then argues with.
@@ -895,7 +997,20 @@ async fn do_sync(
                 eprintln!("collection review: {flagged} rows flagged, {cleared} cleared")
             }
             Ok(_) => {}
-            Err(e) => eprintln!("could not sweep for orphaned collection rows: {e}"),
+            Err(e) => {
+                eprintln!("could not sweep for orphaned collection rows: {e}");
+                // The connection is already in hand here, so this one records directly
+                // rather than through `note_database` — which would deadlock trying to take
+                // a lock this scope is holding.
+                crate::errors::record(
+                    &conn,
+                    crate::errors::Source::Database,
+                    "orphan_sweep",
+                    crate::errors::Kind::Io,
+                    &e.to_string(),
+                    None,
+                );
+            }
         }
     }
 
@@ -916,7 +1031,12 @@ async fn do_sync(
     }
 
     emit(app, "sets", 0, 0);
-    let sets = state.client.fetch_sets().await.map_err(|e| e.to_string())?;
+    let sets = state
+        .client
+        .fetch_sets()
+        .await
+        .inspect_err(|e| note_scryfall(state, "sets", e))
+        .map_err(|e| e.to_string())?;
     {
         let mut conn = lock_db(state);
         insert_sets(&mut conn, &sets).map_err(|e| e.to_string())?;

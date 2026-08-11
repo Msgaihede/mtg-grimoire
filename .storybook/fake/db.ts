@@ -101,6 +101,7 @@ import type {
   CollectionSummary,
   DeckAuditEntry,
   DeckAuditKind,
+  ErrorEntry,
   DeckCard,
   DeckCategory,
   DeckCoverKind,
@@ -422,7 +423,8 @@ export type Fault =
   | "indexCold"
   | "deckMeta"
   | "updateAvailable"
-  | "updateError";
+  | "updateError"
+  | "errorLog";
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -435,7 +437,61 @@ export interface FakeDb {
   deckCards: FakeDeckCard[];
   deckAudit: FakeDeckAudit[];
   update: FakeUpdate;
+  /**
+   * `error_log`, which is empty in every world but the `errorLog` fault's.
+   *
+   * A **table**, like everything else here, rather than a canned response: `error_log_clear`
+   * writes to it, and a panel whose Clear button did nothing would be a panel whose one
+   * interaction no story could exercise.
+   */
+  errorLog: ErrorEntry[];
   fault: Fault | null;
+}
+
+/**
+ * What the `errorLog` fault seeds: one of each shape the panel has to draw.
+ *
+ * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
+ * exists for), a rate limit (the one kind that is the app's own behaviour to fix), a row with
+ * no `detail`, and one old enough to read "days ago". Stamps are relative to *now* so the
+ * relative times stay true whenever a story runs.
+ */
+export function errorLogSeed(now: number = Math.floor(Date.now() / 1000)): ErrorEntry[] {
+  return [
+    {
+      id: 1,
+      firstAt: now - 900,
+      lastAt: now - 120,
+      source: "scryfall_image",
+      operation: "image_fetch",
+      kind: "timeout",
+      message: "timed out after 10s",
+      detail: "https://cards.scryfall.io/art/front/0/0/a1b2.webp?1699999999",
+      count: 617,
+    },
+    {
+      id: 2,
+      firstAt: now - 3_600,
+      lastAt: now - 3_600,
+      source: "scryfall_api",
+      operation: "migrations",
+      kind: "rate_limited",
+      message: "rate limited by Scryfall; retry after 30s",
+      detail: null,
+      count: 2,
+    },
+    {
+      id: 3,
+      firstAt: now - 300_000,
+      lastAt: now - 300_000,
+      source: "image_store",
+      operation: "image_store",
+      kind: "io",
+      message: "could not use the image cache: The disk is full.",
+      detail: "D:\\MTG Grimoire\\data\\images\\grid\\a1\\a1b2-0.webp",
+      count: 1,
+    },
+  ];
 }
 
 /**
@@ -458,6 +514,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     deckCards: [],
     deckAudit: [],
     update: defaultUpdate(),
+    // Empty here, and filled by the `errorLog` **fault** rather than by any seed: "what has
+    // failed" is a state of the world, not a shape of collection, so every seed can be in
+    // either state. `installWorld` is where a fault is applied, so that is where it is filled.
+    errorLog: [],
     fault: null,
     ...init,
   };
@@ -2436,6 +2496,18 @@ export function readHandlers(db: FakeDb) {
     update_status: (): UpdateStatus => toUpdateStatus(db),
 
     /**
+     * `error_log_list` — newest first, clamped exactly as the Rust does.
+     *
+     * The clamp's low end is the part worth mirroring: SQLite reads a negative `LIMIT` as no
+     * limit at all, so `Math.max(1, …)` is what stops a stray `-1` behaving differently here
+     * from in the app.
+     */
+    error_log_list: (args: { limit: number }): ErrorEntry[] =>
+      [...db.errorLog]
+        .sort((a, b) => b.lastAt - a.lastAt || b.id - a.id)
+        .slice(0, Math.min(Math.max(1, args.limit), 200)),
+
+    /**
      * Fire-and-forget in the app, and a no-op here.
      *
      * `images::prefetch_images` resolves as soon as the work is *queued*, and an image that
@@ -4357,6 +4429,21 @@ export function writeHandlers(db: FakeDb) {
     sync_run: (): SyncOutcome => {
       if (db.fault === "syncError") throw refuse(SYNC_ERROR);
       return { updated: false, cardCount: db.cards.length, updatedAt: null };
+    },
+
+    /**
+     * `lib::error_log_clear` — the panel's one write, answering how many rows went.
+     *
+     * A real write against the table rather than a stub, so a story can press Clear and see
+     * the panel fall to its empty state. It honours `busy` like every other write here: the
+     * command takes `AppState.db` through `lock_for`, so it is refusable, which the reading
+     * side (`error_log_list`, on `db_read`) is not.
+     */
+    error_log_clear: (): number => {
+      if (db.fault === "busy") throw refuse(BUSY);
+      const gone = db.errorLog.length;
+      db.errorLog = [];
+      return gone;
     },
 
     /**

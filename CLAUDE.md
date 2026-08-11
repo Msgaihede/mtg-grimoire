@@ -402,6 +402,68 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   remain the live CDP pass's to prove** — see the section above, and note that the same is true
   of the story runner, whose drags are synthetic events in jsdom.
 
+## Talking to Scryfall — the rules, and where they are enforced (read live 2026-08-11)
+The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocked" FAQ. Both
+**403 a default HTTP client**, which is itself the first rule: read them with an explicit
+`User-Agent`. What they require, and what already satisfies it:
+
+- **`api.scryfall.com` is paced, and there is exactly one place it can be.**
+  `scryfall::Client::api_send` is the only way this module issues an API request: it refuses
+  inside a lockout, waits out the endpoint's interval, adds `Accept`, and retries. The
+  interval table is transcribed from the doc — **500 ms** for `/cards/search|named|random|
+  collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — and is keyed on
+  the **path**, because Scryfall hands back absolute `next_page` URLs and a page 2 must take
+  the same budget as the page 1 we built. Only the last arm is used today; the other two are
+  written down and tested so a future call site cannot quietly take five times its budget.
+- **Pacing sleeps, a 429 refuses.** A sub-second wait is invisible and worth taking; parking a
+  worker thread for up to five minutes is not, and a second caller could not report its own
+  rate limit until the first sleeper woke. Same split `images::Cache::fetch` already made.
+- **A 429 is remembered across a restart.** `rate_limit_penalty` clamps to 30–300 s (one
+  definition, shared with the image cache's gate), `max` never assignment, persisted to
+  `app_meta.scryfall_penalty_until` and restored in `init_state`. Scryfall limits the
+  *application*, not the process — "It is not acceptable to ignore HTTP 429 responses", and
+  repeat offenders are banned — so restarting must not be a way back in.
+- **Retry is for what is nobody's answer**: 5xx, timeouts, connect failures, 3 attempts,
+  exponential backoff with jitter. **Never a 429** (the docs forbid exactly that) and never a
+  404.
+- **Bulk data is already the only card source, and that is the compliance story.**
+  `default_cards` JSONL.gz feeds the 116 k corpus; there is no per-card API lookup anywhere.
+  `/sets` and `/migrations` stay API calls because neither has a bulk equivalent, and both are
+  polled at most once per 24 h. **`/cards/manifest` is deliberately not adopted**: it would add
+  traffic rather than remove it, and the research doc measured `created_at`/`data_updated_at`
+  as null on every sampled row, so it cannot answer "what data changed" today.
+- **The error log is `error_log`, schema v9, and repeats fold.** The grain is
+  `(source, operation, kind, message)`; `detail` sits **outside** it because it carries the
+  per-occurrence URL that would defeat the folding, and the newest one wins. That is what turns
+  the path-MTU incident's ~600 failed fetches into one row reading `×600`. Capped at 200 rows,
+  evicting least-recently-seen. `errors::record` returns `()` — it can never fail the thing it
+  describes — and is called inside the caller's transaction, so a rolled-back write leaves no
+  history, exactly as `deck_audit` does. It carries the five failures that previously reached
+  only `eprintln!` (reconcile, orphan sweep, page reclaim, compaction, image store), which in a
+  release build has no console to print to.
+- **An image's bookkeeping row is owed, not optional.** It used to be written under a
+  zero-wait `try_lock` and *dropped* when the write connection was busy — which during an
+  ingest it is, for all but the gaps between its 2 000-row batches. Nothing retried it, so the
+  bytes sat on disk that `is_current` would never vouch for and **every later request refetched
+  them for the life of the installation**. The row is now queued in `Cache::pending` and paid
+  off by whichever later call finds the connection free, with a flush at exit beside the WAL
+  checkpoint. The module's old doc comment called this "one extra request"; it was not.
+- **Freshness is the URI, and that is the whole rule.** `is_current` compares the stored
+  `source_uri` character for character, and Scryfall's `?<epoch>` cache-buster **equals**
+  `image_updated_at` — so "has the art been updated more recently than ours" needs no clock and
+  no mtime. A re-scanned card refetches; nothing else does.
+- **Every deck surface draws `art`, and both warming paths used to produce `grid`.** Measured
+  against the live database 2026-08-11: all 17 deck cards had a `grid` row, **12** had an
+  `art` one, and with an empty collection and wishlist the `deck_cards` arm was the *only* work
+  pre-warming had to do — so it warmed a variant no deck surface asks for, while
+  `prewarm_keys`' own comment said the arm existed for the deck builder. `art` is a different
+  URL on the CDN, so a 100 %-warm `grid` cache contributed nothing: the builder fetched every
+  tile cold, from plain scrollers that mount every row at once against 16 permits, and on a
+  slow link that reads as timeouts. `prewarm_keys` now pairs each arm with the variant its
+  screen draws (`COLLECTION_PREWARM`/`DECK_PREWARM`), and `DeckEditor`/`DecksPage` call
+  `prefetchImages(ids, "art")` the way `SearchPage` calls it with `"grid"`. **A card that is
+  both owned and in a deck is two keys now, not one** — two screens, two pictures.
+
 ## Data & sync (measured against the live Scryfall API, 2026-08-04/05)
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
@@ -584,17 +646,22 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v9.** v9 adds `cards.legal_mask`, backfills it, and widens `idx_cards_collapse`
-  to carry the filter columns. **Our step sits *below* main's v8 in the ladder deliberately**
-  — ours was renumbered when v8 landed, and `migrate` reads `user_version` **once** and then
-  walks every block above it, so a higher-numbered block placed above a lower one commits its
-  version and then has the lower block write back over it. Position in the file is the order
-  of execution; the number is only the gate. v8 replaced `deck_cards.zone` with a user-owned category and
-  added the deck's four new tables — the paragraph under "Hard rules — decks" describes it.
+- **Schema is v10.** v10 adds `cards.legal_mask`, backfills it, and widens
+  `idx_cards_collapse` to carry the filter columns. **Our step sits *below* main's v8 and v9
+  in the ladder deliberately** — it has now been renumbered **twice**, from v8 when main's
+  deck-category step landed and from v9 when main's error log did, and each time it had to
+  move *down* the file as well as up in number. `migrate` reads `user_version` **once** and
+  then walks every block above it, so a higher-numbered block placed above a lower one commits
+  its version and then has the lower block write back over it. Position in the file is the
+  order of execution; the number is only the gate. **Expect a third renumber**, and treat
+  "renumber, then move to the bottom, then re-point the fixtures" as one operation.
+  v9 adds `error_log` — see "Talking to Scryfall" below. v8 replaced `deck_cards.zone` with a
+  user-owned category and added the deck's four new tables — the paragraph under "Hard rules
+  — decks" describes it.
   v7 is the collapse index's version and has **no statements of its own**: `CARDS_INDEXES`
   describes the table *at head* and now names `legal_mask`, so **only the newest step may
-  create from that list**, and every step below v9 creates no index at all. Every statement
-  in it is `IF NOT EXISTS`, which is what makes v9's replay "bring the index list up to date"
+  create from that list**, and every step below v10 creates no index at all. Every statement
+  in it is `IF NOT EXISTS`, which is what makes v10's replay "bring the index list up to date"
   rather than a rebuild — but a step that *changes* a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
@@ -616,18 +683,21 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   computed in SQL. **Verified live 2026-08-11 over the whole 116 695-row corpus**, both ways
   in: the migration backfill and a full fresh ingest each agree with `json_extract` on all 23
   keys, 0 rows disagreeing and 0 NULL masks.
-- **The v8→v9 migration on a real database is ~7 s of launch, before there is a window to say
-  so in.** Measured 2026-08-11 on the live 563 MB / 116 695-row file (debug build, 67 MB WAL
-  to replay): `user_version` flipped 8 → 9 **7.0 s** after the process started, and the app
+- **Our `legal_mask` migration on a real database is ~7 s of launch, before there is a window
+  to say so in.** Measured 2026-08-11 on the live 563 MB / 116 695-row file (debug build,
+  67 MB WAL to replay), when the step was still numbered v9: `user_version` flipped **7.0 s**
+  after the process started, and the app
   came up on the corpus rather than on "move `mtg.db` aside". That is process start, WAL
   recovery, the `ALTER`, the full-table backfill and the index rebuild together — the
   synthetic 469 MB stand-in the step's own comment quotes measured the backfill alone at
   2.9–5.0 s in a release build, and this is the first time the step has run against real data.
 - **A migration that touches `cards` must take the `CARDS_INDEXES` replay from the step below
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
-  what fails if it does not: it migrates a v1, a v6 and a v8 fixture to head and compares
+  what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
   `cards`' columns *and* its indexes — by stored SQL, since a narrow and a widened
-  `idx_cards_collapse` share a name. It is also why a rewind fixture may only undo the steps
+  `idx_cards_collapse` share a name. **The v9 fixture is "head minus one" and is renamed on
+  every renumber** (`v8_database` → `v9_database` so far) — it means "the version below ours",
+  never a fixed number. It is also why a rewind fixture may only undo the steps
   *above* where it claims to sit: `migrate` reads `user_version` once and walks every step
   above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
   tables and dies on a duplicate column — a failure no real upgrade can produce.
@@ -676,6 +746,17 @@ to guess.
   zeroed, and `facetsOrUndefined` collapses that to `undefined` so all five controls stay
   live. Nothing here is fatal either — if the index cannot be built the app runs exactly as it
   did before the feature existed.
+- **A failed build is recorded in `error_log`, because failing open is otherwise completely
+  silent.** The UI's answer to a cold index is to leave every control live, which looks
+  exactly like a warm index that greyed nothing — so nothing on screen distinguishes "the
+  index is fine" from "the index has never built". `lifecycle::note_index_failure` is
+  `sync.rs`'s `note_database` pattern (`Source::Database`, `Kind::Io`, operations
+  `index_build` and `index_owned_refresh`) and it keeps the `eprintln!` beside it for a dev
+  console. It takes the **write** lock, which is only safe because both call sites hold
+  nothing: `spawn_build` is on its own thread, and `collection::with_write_owned` releases
+  its guard *before* calling `invalidate_owned`. The "build superseded" message stays an
+  `eprintln!` and is deliberately **not** recorded — it is an expected interleaving, not a
+  failure, and whatever superseded it owes a rebuild of its own.
 - **The warm-up is ~767 ms** (median of five, 762–783, release build, warm page cache), so a
   launch answers not-ready for about that long. On this machine the webview does not reach
   first paint until ~2.6 s, so **the cold path is not reachable through the UI on a warm
@@ -1324,6 +1405,16 @@ are all things no suite could have seen.
   registered and routing — the failures were the app's own **502**, its documented "failed
   fetch", not a browser-level protocol error — and the `/cover/` route needs no network and was
   verified end to end. But **no card image has been seen decoding in this build.**
+  **Diagnosed 2026-08-11, and it is not the app: a path-MTU black hole.** The host is *not*
+  unreachable — DNS answers (OVH, `57.130.33.1`/`15.204.104.240`, not Cloudflare like the API
+  host) and the TCP connect completes in **51 ms**. The TLS handshake is what never finishes:
+  `ping -f -l 1472` to it gets no reply where `-l 1440` does, so the path carries ~1 468 bytes
+  and swallows the ICMP that would say so, and the server's certificate flight — a full-size
+  segment — vanishes. curl, Node and reqwest all stall identically at the same point, after
+  ALPN and before ServerHello. **The tell is which half of the app breaks**: card *data* syncs
+  fine because `api.scryfall.com` rides a different path, while every picture hangs. Before
+  suspecting the image cache, probe the MTU. Nothing in this repo can fix it; lowering the
+  interface MTU (or clamping MSS) can.
 - **The system file picker was not driven.** `dialog:allow-open` opens a native window that CDP
   cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
   path. The encode → write → serve → render half is measured; **the picker → path half is not.**

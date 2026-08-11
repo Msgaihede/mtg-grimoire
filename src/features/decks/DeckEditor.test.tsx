@@ -37,9 +37,14 @@ const deckTagSuggestions = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
+// The editor warms the `art` its own views draw — the variant the deck builder renders, and
+// a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
+// stub only has to resolve; what it is *called with* is asserted in its own test below.
+const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
+    prefetchImages,
     deckGet,
     deckUpdate,
     deckSetCardQuantity,
@@ -291,9 +296,30 @@ beforeEach(() => {
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
+  prefetchImages.mockClear();
 });
 
 describe("DeckEditor", () => {
+  /**
+   * The deck's own images are warmed as `art`, and that is the whole of the fix.
+   *
+   * Every deck surface renders `cardImageUrl(…, "art")` while both warming paths used to
+   * produce `grid` — a different URL on the CDN, so a fully warm `grid` cache contributed
+   * nothing here and the builder fetched every tile cold. Measured against the live database
+   * on 2026-08-11: all 17 deck cards had a `grid` row, 12 had an `art` one, and the deck arm
+   * of the pre-warm was the only work there was to do.
+   */
+  it("warms the art its own views draw, not the grid the search wall uses", async () => {
+    await open();
+
+    await waitFor(() =>
+      expect(prefetchImages).toHaveBeenCalledWith(
+        expect.arrayContaining(["c-Lightning Bolt", "c-Bear"]),
+        "art",
+      ),
+    );
+  });
+
   /** The header is the deck: what it is called, what it is for, and whether it is sleeved up. */
   it("heads the editor with the deck's name, format and build state", async () => {
     await open();

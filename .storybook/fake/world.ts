@@ -34,7 +34,7 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { allHandlers } from "./db";
+import { allHandlers, errorLogSeed } from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -189,6 +189,10 @@ export function installWorld(
   bindTimers();
   const db = seed(params?.seed ?? "starter");
   db.fault = params?.fault ?? null;
+  // The one fault that seeds *rows* rather than changing how a handler answers. It lands here
+  // and not in `makeDb`, because this is where a fault is applied at all — a seed is built
+  // before anyone has said what has gone wrong with it.
+  if (db.fault === "errorLog") db.errorLog = errorLogSeed();
 
   const scope = createScope(allHandlers(db));
   activateScope(scope);

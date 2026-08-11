@@ -1914,9 +1914,12 @@ describe("the busy fault", () => {
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
     };
-    // 38 commands in the table, the five above excluded: 33 that really take the lock.
+    // 39 commands in the table, the five above excluded: 34 that really take the lock.
+    // `error_log_clear` is the newest of them — it takes `AppState.db` through `lock_for`
+    // like every other write, which is what makes it refusable where `error_log_list`
+    // (on `db_read`) is not.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(33);
+    expect(names).toHaveLength(34);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

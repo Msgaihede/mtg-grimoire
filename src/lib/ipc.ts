@@ -1478,6 +1478,44 @@ export interface UpdateProgressEvent {
   total: number;
 }
 
+/**
+ * Which of the app's dealings with the outside world a failure belongs to.
+ *
+ * Mirrors `errors::Source` and the `CHECK` on `error_log.source`. A closed union, so a new
+ * arm on the Rust side is a type error here rather than a blank badge.
+ */
+export type ErrorSource =
+  | "scryfall_api"
+  | "scryfall_image"
+  | "github_update"
+  | "database"
+  | "image_store";
+
+/** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
+export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";
+
+/**
+ * One row of the error log.
+ *
+ * `operation` is deliberately *not* a union: the Rust column has no `CHECK`, because a new
+ * call site must not need a migration before it is allowed to report that it failed.
+ */
+export interface ErrorEntry {
+  id: number;
+  /** Unix **seconds**. A pair, because "started an hour ago and is still going" and
+   *  "happened once, an hour ago" are different stories one stamp cannot tell apart. */
+  firstAt: number;
+  lastAt: number;
+  source: ErrorSource;
+  operation: string;
+  kind: ErrorKind;
+  message: string;
+  /** The URL, card id or path. Outside the folding grain, so the most recent one wins. */
+  detail: string | null;
+  /** How many times this exact failure has happened. `1` unless it repeated. */
+  count: number;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /**
@@ -1854,6 +1892,16 @@ export const ipc = {
   onSyncProgress: (cb: (e: SyncProgressEvent) => void): Promise<UnlistenFn> =>
     listen<SyncProgressEvent>("sync:progress", (evt) => cb(evt.payload)),
   /** What is already known about a newer release. Reads `app_meta`; makes no network call. */
+  /**
+   * The error log, newest first. Repeats are folded, so a row's `count` is how many times
+   * that exact failure happened rather than how many rows it wrote.
+   *
+   * `limit` is clamped to `1..=200` by the backend — the low end load-bearing, since SQLite
+   * reads a negative `LIMIT` as no limit at all.
+   */
+  errorLogList: (limit: number) => invoke<ErrorEntry[]>("error_log_list", { limit }),
+  /** Empty the log. Answers how many rows went. */
+  errorLogClear: () => invoke<number>("error_log_clear"),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Ask GitHub. `force` skips the 24 h throttle, which is what the Check now button sends. */
   updateCheck: (force: boolean) => invoke<UpdateStatus>("update_check", { force }),

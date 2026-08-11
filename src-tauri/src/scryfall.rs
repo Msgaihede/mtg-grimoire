@@ -29,6 +29,8 @@
 //! under `*.scryfall.io` are explicitly unlimited.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Sent on every request. Scryfall requires an accurate, app-specific UA and says
 /// plainly: "Do not allow HTTP libraries to choose the header for you."
@@ -53,9 +55,73 @@ const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";
 /// complete silence, though, is a connection that is not coming back.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// The whole of how long one card image may take.
+///
+/// The "no overall request timeout" rule above is about the **bulk download**, which
+/// legitimately runs for minutes. An image is not that: the largest variant this app stores
+/// is ~93 KB and a cold one measures ~127 ms, so ten seconds is 6 KB/s — slower than dial-up
+/// — and nothing that misses it was going to arrive.
+///
+/// It exists because the two timeouts above between them do not bound a host that accepts
+/// the connection and then goes silent. `connect_timeout` is already spent, the connection
+/// *was* made; `READ_TIMEOUT` is the backstop, and sixty seconds of a blank frame is not a
+/// backstop the reader can tell apart from a broken app. **Every failure affordance the app
+/// has is behind the `<img>`'s `error` event** — the card pane's "No image yet", `CardArt`'s
+/// "No image", `useImageRetry`'s two automatic retries — and none of them can fire until
+/// this call returns. While it does not, the request also holds one of
+/// `images::MAX_CONCURRENT_FETCHES`'s sixteen permits.
+///
+/// Not a hypothesis: measured 2026-08-11 against a path-MTU black hole between one machine
+/// and `cards.scryfall.io`. The TCP connect succeeded in **51 ms** and the TLS handshake
+/// never completed, because the path carried ~1 468 bytes and dropped the ICMP that says so,
+/// so the server's certificate flight vanished. Every card image in the app hung; the API
+/// host, on a different path, answered in 96 ms throughout. [`Client::fetch_image`] against
+/// that same stalled URL now answers `Timeout(10s)` in **10.011 s**.
+const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What Scryfall says a 429 costs: "your access being limited for 30 seconds". The floor
 /// when the response carries no `Retry-After` of its own.
 pub const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
+
+/// The longest lockout this app will hold itself to.
+///
+/// A `Retry-After` is a number from someone else's server, and an absurd one — a day, a
+/// year, a typo — must not brick an app whose whole job is local. Five minutes is far past
+/// Scryfall's documented thirty seconds and still a length a person can wait out.
+pub const MAX_RATE_LIMIT_BACKOFF_SECS: u64 = 300;
+
+/// The gap this app leaves between two requests to the **cards** family.
+///
+/// Transcribed from <https://scryfall.com/docs/api/rate-limits>, read live 2026-08-11:
+/// "`/cards/search` — 2/second (500ms)", and the same for `/cards/named`, `/cards/random`
+/// and `/cards/collection`.
+pub const INTERVAL_CARDS: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The gap for `/cards/manifest` — "10/minute (10,000ms)", by far the strictest.
+pub const INTERVAL_MANIFEST: std::time::Duration = std::time::Duration::from_millis(10_000);
+
+/// The gap for everything else — "All other methods — 10/second (100ms)".
+///
+/// This is the only one the app uses today: `/bulk-data/default_cards`, `/sets` and
+/// `/migrations` are all "other methods". The other two are written down anyway, and
+/// pinned by a test, because the failure they prevent is a future call site quietly taking
+/// five times the budget its endpoint is allowed.
+pub const INTERVAL_DEFAULT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How many times one API request is attempted before giving up.
+///
+/// Three, and only for the failures that are *nobody's answer*: a 5xx, a timeout, a
+/// connection that never came up. A 429 is never retried — Scryfall's own words are "It is
+/// not acceptable to ignore HTTP 429 responses… have your application retry the requests
+/// until you power through them" — and neither is a 404, which is an answer.
+const MAX_ATTEMPTS: u32 = 3;
+
+/// The first backoff between two attempts; each later one doubles it.
+///
+/// 250 ms → 500 ms, so three attempts add at most 750 ms plus jitter to a failing call.
+/// Small against [`READ_TIMEOUT`] on purpose: a retry must not outlive the sync that
+/// spawned it.
+const RETRY_BASE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The largest image body this app will read into memory.
 ///
@@ -123,6 +189,12 @@ pub enum ScryfallError {
     /// will never answer.
     #[error("not found")]
     NotFound,
+    /// The deadline passed with the response unfinished. Its own variant rather than an
+    /// [`Unexpected`](ScryfallError::Unexpected), because that one is *an* answer this app
+    /// did not expect and this is **no answer at all** — a distinction the caller acts on
+    /// (retryable, and worth naming in the log) and a reader needs to debug a silent host.
+    #[error("timed out after {0:?}")]
+    Timeout(std::time::Duration),
     #[error("unexpected response from Scryfall: {0}")]
     Unexpected(String),
 }
@@ -183,6 +255,21 @@ pub struct Migration {
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
+    /// The deadline one image gets. A field rather than a straight read of
+    /// [`IMAGE_TIMEOUT`] for the same reason `base_url` is one: the behaviour worth testing
+    /// is "the deadline is what ends the call", and a test that had to sit out the
+    /// production number to prove it would be a ten-second test.
+    image_timeout: std::time::Duration,
+    /// The pacing gate: the earliest instant the next `api.scryfall.com` request may go
+    /// out. Shared through an `Arc` so a cloned `Client` paces against the same budget —
+    /// two clones with two gates would be two applications as far as Scryfall can tell.
+    next_api_slot: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
+    /// Unix seconds until which the API has locked this application out, `0` for none.
+    ///
+    /// Wall-clock rather than a [`tokio::time::Instant`] because it has to outlive the
+    /// process — see [`Client::penalty_until_unix`]. A `std` mutex, not a `tokio` one,
+    /// because every access is one integer read or write with no `.await` inside it.
+    penalty_until: Arc<Mutex<u64>>,
 }
 
 impl Client {
@@ -208,14 +295,140 @@ impl Client {
             // Trailing slash trimmed so joining a path can never produce `//`.
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
+            image_timeout: IMAGE_TIMEOUT,
+            // In the past, so the first request of a session goes out immediately: the
+            // gate spaces requests apart, it does not charge an entry fee.
+            next_api_slot: Arc::new(tokio::sync::Mutex::new(tokio::time::Instant::now())),
+            penalty_until: Arc::new(Mutex::new(0)),
         }
     }
 
-    /// The only way this module issues an API request, so no call site can forget the
-    /// mandatory `Accept` header. (`User-Agent` is pinned on the client itself and so
-    /// rides along on downloads too.)
-    fn api_get(&self, url: &str) -> reqwest::RequestBuilder {
-        self.http.get(url).header("Accept", ACCEPT)
+    /// The lockout this application is currently under, in unix seconds, or `0`.
+    ///
+    /// Read at shutdown-ish moments and persisted to `app_meta`, because a 429 outlives the
+    /// process that earned it: Scryfall limits the *application*, and restarting the app is
+    /// otherwise a way to walk straight back into a live lockout. That is precisely the
+    /// behaviour the docs escalate to a ban.
+    pub fn penalty_until_unix(&self) -> u64 {
+        *crate::db::lock_plain(&self.penalty_until)
+    }
+
+    /// Re-enter a lockout persisted by an earlier run.
+    ///
+    /// Clamped to [`MAX_RATE_LIMIT_BACKOFF_SECS`] past *now*, so neither a clock that moved
+    /// nor a hand-edited row can lock the app out for longer than this module would ever
+    /// impose itself.
+    pub fn restore_penalty(&self, until_unix: u64, now: u64) {
+        let ceiling = now.saturating_add(MAX_RATE_LIMIT_BACKOFF_SECS);
+        let mut guard = crate::db::lock_plain(&self.penalty_until);
+        *guard = until_unix.min(ceiling);
+    }
+
+    /// Seconds left on the lockout, or `None` if the gate is open.
+    pub fn penalty_remaining(&self, now: u64) -> Option<u64> {
+        let until = *crate::db::lock_plain(&self.penalty_until);
+        until.checked_sub(now).filter(|remaining| *remaining > 0)
+    }
+
+    /// Charge a 429 to the gate every later API request has to pass.
+    ///
+    /// `max`, never assignment — the same rule [`crate::images::Cache::penalise`] follows,
+    /// and for the same reason: two calls meeting the same 429 window can come back with
+    /// different `Retry-After` values, and the shorter one arriving second must not release
+    /// the app from the longer lockout already in force.
+    fn charge_penalty(&self, retry_after_secs: u64, now: u64) -> u64 {
+        let penalty = rate_limit_penalty(retry_after_secs);
+        let mut guard = crate::db::lock_plain(&self.penalty_until);
+        *guard = (*guard).max(now.saturating_add(penalty.as_secs()));
+        penalty.as_secs()
+    }
+
+    /// The same client with a different image deadline. See the field.
+    #[cfg(test)]
+    pub fn with_image_timeout(mut self, timeout: std::time::Duration) -> Client {
+        self.image_timeout = timeout;
+        self
+    }
+
+    /// The only way this module issues an API request.
+    ///
+    /// One choke point, doing four things no call site may be trusted to remember:
+    ///
+    /// 1. **Refuses inside a lockout**, without sending a byte. A 429 means "your access is
+    ///    limited for 30 seconds"; sending anyway is the one behaviour the docs single out
+    ///    as unacceptable, and repeat offenders are banned.
+    /// 2. **Paces** to the endpoint's documented interval ([`min_interval`]).
+    /// 3. **Adds the mandatory `Accept`** — Cloudflare answers 403 without it. (The
+    ///    `User-Agent` is pinned on the client itself, so it rides along on downloads too.)
+    /// 4. **Retries what is nobody's answer** — a 5xx, a timeout, a connection that never
+    ///    came up — up to [`MAX_ATTEMPTS`], and never a 429 or a 404.
+    ///
+    /// The pacing is a *sleep* and the lockout is a *refusal*, which is the same split
+    /// [`crate::images::Cache::fetch`] makes: a sub-second wait is invisible and worth
+    /// taking, while parking a worker thread for up to five minutes is not — and a second
+    /// caller could not even report its own rate limit until the first sleeper woke.
+    ///
+    /// Non-5xx statuses come back untouched, so callers keep reading 304, 404 and 200 for
+    /// themselves.
+    async fn api_send(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<reqwest::Response, ScryfallError> {
+        let mut attempt: u32 = 0;
+        loop {
+            if let Some(remaining) = self.penalty_remaining(unix_now()) {
+                return Err(ScryfallError::RateLimited {
+                    retry_after_secs: remaining,
+                });
+            }
+            self.await_slot(url).await;
+
+            let mut req = self.http.get(url).header("Accept", ACCEPT);
+            for (name, value) in headers {
+                req = req.header(*name, *value);
+            }
+
+            // Whatever this attempt earned, if it is worth another go.
+            let pending = match req.send().await {
+                Ok(resp) if resp.status().as_u16() == 429 => {
+                    let asked = retry_after_secs(&resp);
+                    return Err(ScryfallError::RateLimited {
+                        retry_after_secs: self.charge_penalty(asked, unix_now()),
+                    });
+                }
+                Ok(resp) if resp.status().is_server_error() => {
+                    ScryfallError::Unexpected(format!("status {}", resp.status().as_u16()))
+                }
+                Ok(resp) => return Ok(resp),
+                Err(e) if e.is_timeout() => ScryfallError::Timeout(READ_TIMEOUT),
+                Err(e) if e.is_connect() || e.is_request() => ScryfallError::Http(e),
+                Err(e) => return Err(ScryfallError::Http(e)),
+            };
+
+            attempt += 1;
+            if attempt >= MAX_ATTEMPTS {
+                return Err(pending);
+            }
+            tokio::time::sleep(retry_backoff(attempt)).await;
+        }
+    }
+
+    /// Wait for this request's turn on the pacing gate, then claim the next slot.
+    ///
+    /// The lock is held across the sleep deliberately: it is what serialises concurrent
+    /// callers into a queue rather than letting them all read the same "next" instant and
+    /// leave together. The waits are the documented intervals — 100 ms for everything this
+    /// app calls — so a queue of them is bounded by the number of requests in flight, which
+    /// for this app is one.
+    async fn await_slot(&self, url: &str) {
+        let interval = min_interval(url);
+        let mut next = self.next_api_slot.lock().await;
+        let now = tokio::time::Instant::now();
+        if *next > now {
+            tokio::time::sleep_until(*next).await;
+        }
+        *next = tokio::time::Instant::now() + interval;
     }
 
     /// GET `uri`, optionally resuming from byte `from`. File origins, not the API, so
@@ -237,16 +450,12 @@ impl Client {
     /// Uses the per-type endpoint rather than the `/bulk-data` collection, whose ETag
     /// flips whenever any of the seven files rotate.
     pub async fn check_bulk_update(&self, etag: Option<&str>) -> Result<BulkCheck, ScryfallError> {
-        let mut req = self.api_get(&format!("{}/bulk-data/default_cards", self.base_url));
-        if let Some(e) = etag {
-            req = req.header("If-None-Match", e);
-        }
-        let resp = req.send().await?;
+        let url = format!("{}/bulk-data/default_cards", self.base_url);
+        let headers: Vec<(&str, &str)> =
+            etag.map(|e| vec![("If-None-Match", e)]).unwrap_or_default();
+        let resp = self.api_send(&url, &headers).await?;
         match resp.status().as_u16() {
             304 => Ok(BulkCheck::NotModified),
-            429 => Err(ScryfallError::RateLimited {
-                retry_after_secs: retry_after_secs(&resp),
-            }),
             200 => {
                 let etag = resp
                     .headers()
@@ -390,14 +599,9 @@ impl Client {
         // at the cap — the one exit that silently returns a partial answer — can say so.
         let mut followed_the_chain = false;
         for _ in 0..MAX_SET_PAGES {
-            let resp = self.api_get(&url).send().await?;
+            let resp = self.api_send(&url, &[]).await?;
             match resp.status().as_u16() {
                 200 => {}
-                429 => {
-                    return Err(ScryfallError::RateLimited {
-                        retry_after_secs: retry_after_secs(&resp),
-                    })
-                }
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
             let v = json_body(resp).await?;
@@ -444,14 +648,9 @@ impl Client {
         // long-standing collection is still parked on.
         let mut followed_the_chain = false;
         for _ in 0..MAX_MIGRATION_PAGES {
-            let resp = self.api_get(&url).send().await?;
+            let resp = self.api_send(&url, &[]).await?;
             match resp.status().as_u16() {
                 200 => {}
-                429 => {
-                    return Err(ScryfallError::RateLimited {
-                        retry_after_secs: retry_after_secs(&resp),
-                    })
-                }
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
             let v = json_body(resp).await?;
@@ -511,7 +710,22 @@ impl Client {
     /// ~93 KB, and a file that small does not repay the temporary and the rename the 77 MB
     /// bulk download needs. **Read** as a stream all the same, so that "buffered into
     /// memory" is a bounded claim: see [`MAX_IMAGE_BYTES`].
+    ///
+    /// **Bounded end to end by [`IMAGE_TIMEOUT`]** — the request *and* the body, because a
+    /// host can go silent at either. The deadline is the whole call rather than a per-read
+    /// one for the same reason it is short: this is 93 KB from a CDN, not the 77 MB bulk
+    /// file, so there is no legitimate reason for one of these to be slow and every reason
+    /// for the `<img>` waiting on it to be told quickly when it is.
     pub async fn fetch_image(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
+        tokio::time::timeout(self.image_timeout, self.image_bytes(uri))
+            .await
+            .unwrap_or_else(|_| Err(ScryfallError::Timeout(self.image_timeout)))
+    }
+
+    /// The fetch itself, with no deadline of its own — [`fetch_image`](Client::fetch_image)
+    /// owns that, so there is exactly one place the bound is applied and no way to reach
+    /// this without it.
+    async fn image_bytes(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
         use futures_util::StreamExt;
 
         let resp = self.get_from(uri, None).await?;
@@ -567,6 +781,80 @@ fn image_too_large(bytes: u64) -> ScryfallError {
 fn content_range_start(value: &str) -> Option<u64> {
     let range = value.trim().strip_prefix("bytes")?.trim_start();
     range.split('-').next()?.trim().parse().ok()
+}
+
+/// Seconds since the Unix epoch. A clock before 1970 reads as 0, which leaves every gate
+/// open rather than panicking over a wall clock this module does not control.
+pub(crate) fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// How long a 429 stops this application, given the `Retry-After` it came with.
+///
+/// Clamped at both ends because neither end is ours to trust. Below
+/// [`RATE_LIMIT_BACKOFF_SECS`] we would be retrying inside Scryfall's documented lockout —
+/// the behaviour it escalates to bans over — and a `Retry-After: 0` is exactly the header a
+/// proxy or a bug produces. Above [`MAX_RATE_LIMIT_BACKOFF_SECS`] a single header would take
+/// the app out for the rest of the session.
+///
+/// **One definition, two gates.** The API's lockout ([`Client::charge_penalty`]) and the
+/// image cache's ([`crate::images::Cache::penalise`]) are separate deadlines over separate
+/// hosts, but they are the same *rule*, and a second copy of a clamp is a second place for
+/// it to drift.
+pub fn rate_limit_penalty(retry_after_secs: u64) -> Duration {
+    Duration::from_secs(
+        retry_after_secs.clamp(RATE_LIMIT_BACKOFF_SECS, MAX_RATE_LIMIT_BACKOFF_SECS),
+    )
+}
+
+/// The path of a URL, with no query string and no dependency on a URL crate.
+///
+/// Written against the *path* rather than the whole URL because Scryfall hands back its own
+/// absolute `next_page` links, and a page 2 of `/sets` has to be classified exactly as the
+/// page 1 this app built for itself.
+fn url_path(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let from_root = match after_scheme.find('/') {
+        Some(i) => &after_scheme[i..],
+        None => "/",
+    };
+    from_root
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("/")
+        .trim_end_matches('/')
+}
+
+/// The documented minimum gap before another request may be sent to this endpoint.
+///
+/// Transcribed from <https://scryfall.com/docs/api/rate-limits>, read live 2026-08-11. The
+/// app only ever hits the default arm today; the other two are here so that adding a call
+/// to the cards family cannot silently take five times the budget it is allowed.
+fn min_interval(url: &str) -> Duration {
+    match url_path(url) {
+        "/cards/search" | "/cards/named" | "/cards/random" | "/cards/collection" => INTERVAL_CARDS,
+        "/cards/manifest" => INTERVAL_MANIFEST,
+        _ => INTERVAL_DEFAULT,
+    }
+}
+
+/// How long to wait before attempt `attempt + 1`: exponential, with jitter.
+///
+/// The jitter is derived from the wall clock's sub-second digits rather than from a random
+/// number generator, because this crate has no `rand` dependency and does not need one for
+/// what jitter is *for* — keeping two clients that failed at the same instant from retrying
+/// at the same instant. It is a spreading function, not a source of secrets.
+fn retry_backoff(attempt: u32) -> Duration {
+    let base = RETRY_BASE_BACKOFF * 2u32.saturating_pow(attempt.saturating_sub(1));
+    let spread = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_millis()))
+        .unwrap_or(0)
+        % 100;
+    base + Duration::from_millis(spread)
 }
 
 /// The backoff a 429 asks for: `Retry-After` when it is a plain seconds count, and
@@ -927,10 +1215,53 @@ mod tests {
         ));
     }
 
+    /// A host that takes the connection and then says nothing is the failure neither
+    /// timeout above catches: `connect_timeout` is spent (the connection was made) and
+    /// `READ_TIMEOUT` is a minute away. Until this call returns, the `<img>` that asked for
+    /// the image has had neither a `load` nor an `error` — so the frame is blank, the card
+    /// pane's "No image yet" panel is unreachable, `useImageRetry` schedules nothing, and
+    /// one of the image cache's sixteen permits is held the whole time.
+    ///
+    /// The delay stands in for a stalled response because from this side they are the same
+    /// thing: bytes that have not arrived yet.
+    #[tokio::test]
+    async fn a_stalled_image_gives_up_rather_than_hanging() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/stalled.webp");
+            then.status(200)
+                .header("content-type", "image/webp")
+                .delay(std::time::Duration::from_secs(2))
+                .body(vec![0x52u8, 0x49, 0x46, 0x46]);
+        });
+        let c = Client::new(server.base_url())
+            .with_image_timeout(std::time::Duration::from_millis(150));
+
+        let started = std::time::Instant::now();
+        let result = c
+            .fetch_image(&format!("{}/stalled.webp", server.base_url()))
+            .await;
+        let waited = started.elapsed();
+
+        assert!(
+            matches!(result, Err(ScryfallError::Timeout(_))),
+            "a silent host is a timeout, not bytes and not a hang: {result:?}"
+        );
+        assert!(
+            waited < std::time::Duration::from_secs(1),
+            "the deadline has to be what ends the call, not the response finally arriving \
+             ({waited:?})"
+        );
+    }
+
     /// Scryfall limits access for 30 seconds on a 429 and bans repeat offenders, so the
     /// number has to reach the caller — a bare "rate limited" marker is something a
     /// caller can only guess at. `Retry-After` is honoured when sent; 30 s is the
     /// documented floor when it is not.
+    ///
+    /// **A client per endpoint, and that is the point.** A 429 now shuts a gate the whole
+    /// client passes, so four calls on one client would measure the gate rather than the
+    /// four responses. The gate has its own test below.
     #[tokio::test]
     async fn rate_limiting_carries_the_backoff_the_caller_must_wait() {
         let server = MockServer::start();
@@ -950,16 +1281,15 @@ mod tests {
             when.method(GET).path("/slow.webp");
             then.status(429).header("retry-after", "45");
         });
-        let c = Client::new(server.base_url());
 
         assert!(matches!(
-            c.check_bulk_update(None).await,
+            Client::new(server.base_url()).check_bulk_update(None).await,
             Err(ScryfallError::RateLimited {
                 retry_after_secs: 30
             })
         ));
         assert!(matches!(
-            c.fetch_sets().await,
+            Client::new(server.base_url()).fetch_sets().await,
             Err(ScryfallError::RateLimited {
                 retry_after_secs: 30
             })
@@ -967,18 +1297,213 @@ mod tests {
         // The migration log is polled on every sync, so it is the endpoint most likely to
         // meet a 429 — and the one whose backoff a caller has no other way to learn.
         assert!(matches!(
-            c.fetch_migrations().await,
+            Client::new(server.base_url()).fetch_migrations().await,
             Err(ScryfallError::RateLimited {
                 retry_after_secs: 60
             })
         ));
+        // The image origin is a different host with no documented limit, so it keeps its own
+        // gate in `images::Cache` and does not pass through the API governor at all.
         assert!(matches!(
-            c.fetch_image(&format!("{}/slow.webp", server.base_url()))
+            Client::new(server.base_url())
+                .fetch_image(&format!("{}/slow.webp", server.base_url()))
                 .await,
             Err(ScryfallError::RateLimited {
                 retry_after_secs: 45
             })
         ));
+    }
+
+    /// The published limits, transcribed. This test is the reason the two intervals the app
+    /// does not use are written down: it is the thing that fails if someone adds a
+    /// `/cards/collection` call and leaves it on the 10/s budget.
+    ///
+    /// Classified by **path**, because Scryfall hands back absolute `next_page` URLs and a
+    /// page 2 must take the same budget as the page 1 this app built.
+    #[test]
+    fn the_paced_intervals_are_the_ones_scryfall_publishes() {
+        for path in [
+            "/cards/search",
+            "/cards/named",
+            "/cards/random",
+            "/cards/collection",
+        ] {
+            assert_eq!(
+                min_interval(&format!("https://api.scryfall.com{path}")),
+                INTERVAL_CARDS,
+                "{path} is documented as 2/second"
+            );
+        }
+        assert_eq!(
+            min_interval("https://api.scryfall.com/cards/manifest"),
+            INTERVAL_MANIFEST,
+            "the manifest is 10/minute, by far the strictest"
+        );
+        for path in ["/sets", "/migrations", "/bulk-data/default_cards"] {
+            assert_eq!(
+                min_interval(&format!("https://api.scryfall.com{path}")),
+                INTERVAL_DEFAULT,
+                "{path} is an 'other method' at 10/second"
+            );
+        }
+
+        // A query string is not part of the path, and neither is a trailing slash.
+        assert_eq!(
+            min_interval("https://api.scryfall.com/cards/search?q=bolt&page=2"),
+            INTERVAL_CARDS
+        );
+        assert_eq!(url_path("https://api.scryfall.com/sets?page=2"), "/sets");
+        assert_eq!(url_path("https://api.scryfall.com/sets/"), "/sets");
+        assert_eq!(url_path("https://api.scryfall.com"), "");
+    }
+
+    /// The whole point of the governor: requests to one endpoint leave at most as fast as
+    /// the published rate, whatever the caller does.
+    ///
+    /// Three "other method" calls are two intervals apart at minimum — the first goes out
+    /// immediately, because the gate spaces requests apart rather than charging an entry fee.
+    #[tokio::test]
+    async fn requests_are_paced_to_the_published_rate() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/default_cards");
+            then.status(304);
+        });
+        let c = Client::new(server.base_url());
+
+        let started = std::time::Instant::now();
+        for _ in 0..3 {
+            let _ = c.check_bulk_update(Some("W/\"x\"")).await;
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed >= INTERVAL_DEFAULT * 2,
+            "three requests must be at least two intervals apart, took {elapsed:?}"
+        );
+    }
+
+    /// "It is not acceptable to ignore HTTP 429 responses." So the next request is not
+    /// *sent* — the gate answers it, and the mock never sees a second hit.
+    #[tokio::test]
+    async fn a_rate_limit_stops_the_next_request_before_it_is_sent() {
+        let server = MockServer::start();
+        let limited = server.mock(|when, then| {
+            when.method(GET).path("/sets");
+            then.status(429).header("retry-after", "45");
+        });
+        let c = Client::new(server.base_url());
+
+        assert!(matches!(
+            c.fetch_sets().await,
+            Err(ScryfallError::RateLimited {
+                retry_after_secs: 45
+            })
+        ));
+        let second = c.fetch_sets().await;
+
+        assert!(
+            matches!(second, Err(ScryfallError::RateLimited { retry_after_secs }) if retry_after_secs > 0),
+            "a call inside the lockout must be refused with the time remaining: {second:?}"
+        );
+        assert_eq!(
+            limited.calls(),
+            1,
+            "the second call must never reach the network"
+        );
+    }
+
+    /// The lockout outlives the process, because Scryfall limits the application rather than
+    /// the process — restarting must not be a way back in. Clamped on the way in so a clock
+    /// that moved, or a hand-edited row, cannot lock the app out for longer than it would
+    /// ever choose to.
+    #[test]
+    fn a_lockout_is_persisted_restored_and_clamped() {
+        let now = 1_800_000_000u64;
+        let c = Client::new("http://127.0.0.1:1".into());
+        assert_eq!(
+            c.penalty_until_unix(),
+            0,
+            "a fresh client is not locked out"
+        );
+        assert_eq!(c.penalty_remaining(now), None);
+
+        assert_eq!(c.charge_penalty(45, now), 45);
+        assert_eq!(c.penalty_until_unix(), now + 45);
+        assert_eq!(c.penalty_remaining(now), Some(45));
+        assert_eq!(c.penalty_remaining(now + 45), None, "the gate reopens");
+
+        // `max`, never assignment: a shorter penalty arriving second must not release a
+        // longer lockout already in force.
+        c.charge_penalty(300, now);
+        c.charge_penalty(30, now);
+        assert_eq!(c.penalty_until_unix(), now + 300);
+
+        // Restored across a restart...
+        let restarted = Client::new("http://127.0.0.1:1".into());
+        restarted.restore_penalty(now + 45, now);
+        assert_eq!(restarted.penalty_remaining(now), Some(45));
+
+        // ...and a deadline past the ceiling is clamped rather than honoured.
+        let absurd = Client::new("http://127.0.0.1:1".into());
+        absurd.restore_penalty(now + 31_536_000, now);
+        assert_eq!(
+            absurd.penalty_remaining(now),
+            Some(MAX_RATE_LIMIT_BACKOFF_SECS)
+        );
+    }
+
+    /// The clamp both gates share. A `Retry-After: 0` is not permission to retry inside the
+    /// window we are already being punished for, and a broken one must not park the app for
+    /// a year.
+    #[test]
+    fn the_rate_limit_penalty_is_clamped_at_both_ends() {
+        assert_eq!(rate_limit_penalty(45), Duration::from_secs(45));
+        assert_eq!(rate_limit_penalty(0), Duration::from_secs(30));
+        assert_eq!(rate_limit_penalty(1), Duration::from_secs(30));
+        assert_eq!(rate_limit_penalty(30), Duration::from_secs(30));
+        assert_eq!(rate_limit_penalty(300), Duration::from_secs(300));
+        assert_eq!(rate_limit_penalty(3_600), Duration::from_secs(300));
+        assert_eq!(rate_limit_penalty(u64::MAX), Duration::from_secs(300));
+    }
+
+    /// What is retried and what is not. A 5xx is nobody's answer and gets
+    /// [`MAX_ATTEMPTS`]; a 429 and a 404 are answers, and retrying either is a request
+    /// Scryfall has already refused.
+    #[tokio::test]
+    async fn only_failures_that_are_nobodys_answer_are_retried() {
+        let server = MockServer::start();
+        let flaky = server.mock(|when, then| {
+            when.method(GET).path("/sets");
+            then.status(503);
+        });
+        let limited = server.mock(|when, then| {
+            when.method(GET).path("/migrations");
+            then.status(429);
+        });
+        let missing = server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/default_cards");
+            then.status(404);
+        });
+
+        let flaky_result = Client::new(server.base_url()).fetch_sets().await;
+        assert!(
+            matches!(&flaky_result, Err(ScryfallError::Unexpected(m)) if m.contains("503")),
+            "three 503s give up and report the last one: {flaky_result:?}"
+        );
+        assert_eq!(flaky.calls(), MAX_ATTEMPTS as usize, "a 5xx is retried");
+
+        assert!(matches!(
+            Client::new(server.base_url()).fetch_migrations().await,
+            Err(ScryfallError::RateLimited { .. })
+        ));
+        assert_eq!(limited.calls(), 1, "a 429 is never retried");
+
+        assert!(Client::new(server.base_url())
+            .check_bulk_update(None)
+            .await
+            .is_err());
+        assert_eq!(missing.calls(), 1, "a 404 is an answer, not a blip");
     }
 
     /// A `next_page` chain that walks A→B→A is not a loop the `next == url` guard can
