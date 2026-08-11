@@ -69,6 +69,34 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
   });
 
+  /**
+   * Facets are a **second command over the same request shape**, which is what makes them
+   * easy to get wrong here: `facet_cards(req)` spells its parameter exactly as
+   * `search_cards` does, so a wrapper that reached for `search_cards` — or for a plausible
+   * `facets` — is a runtime failure with no type error anywhere, and both surfaces send the
+   * identical object.
+   */
+  it("sends a facet request under `req`, to its own command", async () => {
+    invoke.mockResolvedValue({
+      colors: {},
+      manaValues: {},
+      formats: {},
+      sets: {},
+      owned: { owned: 0, missing: 0 },
+      total: 0,
+      ready: false,
+    });
+
+    const res = await ipc.facetCards({ text: "bolt", limit: 50, offset: 0 });
+
+    expect(invoke).toHaveBeenCalledWith("facet_cards", {
+      req: { text: "bolt", limit: 50, offset: 0 },
+    });
+    // `ready` is the field a cold index answers with, and it is the one a mirror that typed
+    // this as a bare count map would throw away — the UI cannot tell "empty" from "not yet".
+    expect(res.ready).toBe(false);
+  });
+
   it("takes no arguments for the set list", async () => {
     invoke.mockResolvedValue([]);
     await ipc.listSets();

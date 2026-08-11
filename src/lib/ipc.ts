@@ -10,6 +10,7 @@
  *
  * Sources, verified field by field:
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
+ * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
  * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`      — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
@@ -186,6 +187,52 @@ export interface SearchResponse {
    * a caption should read `5,000+`.
    */
   totalIsCapped: boolean;
+}
+
+/**
+ * Facet counts for one search — how many results each filter option would leave.
+ *
+ * Mirrors `src-tauri/src/index/facets.rs`. **`ready: false` means the index is still
+ * building**, not that everything is empty: the UI leaves every control live, because
+ * not-greyed has to mean "we don't know" rather than "this is empty".
+ *
+ * A **separate command** from {@link SearchResponse}'s, because these depend on neither the
+ * sort nor the offset — they must not be recomputed per page, and they must never delay
+ * page one.
+ */
+export interface FacetResponse {
+  /**
+   * Keyed `W`/`U`/`B`/`R`/`G`/`C`, and **the size of the result set after toggling that
+   * chip** rather than a count of cards carrying that colour. Colours are subset semantics,
+   * so pressing one with another already on *broadens*; compare against {@link total}.
+   */
+  colors: Record<string, number>;
+  /** Keyed `"0"`–`"8"`, `8` meaning eight-or-more. Plain counts. */
+  manaValues: Record<string, number>;
+  /** Keyed by `legalities` key. Plain counts. */
+  formats: Record<string, number>;
+  /**
+   * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
+   * included** — 1 047 keys on the live corpus, on every response, whatever the filters
+   * are. A key is never absent, so treat a missing one as a bug rather than as a zero.
+   */
+  sets: Record<string, number>;
+  /**
+   * Both sides of the tri-state chip, for its tooltip. The chip is never disabled. Mirrors
+   * Rust's `OwnedFacets`, inline because nothing else here needs the name.
+   */
+  owned: { owned: number; missing: number };
+  /**
+   * The current result size, which a colour count is read against.
+   *
+   * **Printings, and not {@link SearchResponse.total}** — the two are different numbers
+   * under one name. `collapse` folds printings into cards for the *page*, and this count
+   * ignores it; `SearchResponse.total` also stops counting at 5 000 and says so in
+   * `totalIsCapped`, while this one is exact. The colour rule is only correct against this
+   * one.
+   */
+  total: number;
+  ready: boolean;
 }
 
 /** One physical side of a card. Empty for single-faced printings. */
@@ -1428,6 +1475,12 @@ export interface UpdateProgressEvent {
 
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
+  /**
+   * Facet counts for one search — the same request shape as `searchCards`, whose `sort`,
+   * `offset` and `limit` are ignored. Its own command so a page turn does not recompute
+   * them and so they never delay page one; key it on the filter half of the search alone.
+   */
+  facetCards: (req: SearchRequest) => invoke<FacetResponse>("facet_cards", { req }),
   /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
   listSets: () => invoke<SetSummary[]>("list_sets"),
   /** One printing in full, or `null` when no row has that id. */

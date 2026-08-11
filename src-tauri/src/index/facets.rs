@@ -20,8 +20,10 @@
 use super::bitset::BitSet;
 use super::CardIndex;
 use crate::search::SearchRequest;
+use crate::sync::{lock_db_read, AppState};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,10 +42,19 @@ pub struct FacetResponse {
     pub mana_values: BTreeMap<String, i64>,
     /// Keyed by `legalities` key. Plain counts.
     pub formats: BTreeMap<String, i64>,
-    /// Keyed by set code, and **only** codes the base can still reach. Plain counts.
+    /// Keyed by set code. Plain counts, and **every code in the corpus is sent, zeros
+    /// included** — 1 047 keys on the live corpus, on every response, whatever the filters
+    /// are. A key is never absent, so a reader may treat a missing one as a bug rather than
+    /// as a zero.
     pub sets: BTreeMap<String, i64>,
     pub owned: OwnedFacets,
     /// The current result size, which is what a colour count is compared against.
+    ///
+    /// **Printings, always** — `collapse` is a view mode and not a filter, so this counts
+    /// what the search matched rather than the rows it will draw. It is therefore *not*
+    /// [`crate::search::SearchResponse::total`] under another roof: that one counts cards
+    /// when the search is collapsed, and stops counting at 5 000. Both reach the frontend
+    /// under the name `total`, and only this one is what a colour count is read against.
     pub total: i64,
     /// False when the index was cold and nothing was counted. The UI leaves every control
     /// live on `false` — not-greyed means "we do not know", never "this is empty".
@@ -284,9 +295,11 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, text: Option<&BitSet>) -> Fa
         ..Default::default()
     };
 
-    // Sets: one walk of the base, bumping a counter per ordinal. Every code the base can
-    // reach is emitted, including at zero — an absent key and a zero are the same answer to
-    // the frontend, but emitting it keeps the tooltip honest.
+    // Sets: one walk of the base, bumping a counter per ordinal. **Every code the index
+    // holds is emitted, whether the base can reach it or not** — the loop below is over
+    // `set_codes` and not over the codes that counted, so a set the search has narrowed away
+    // arrives as an explicit zero rather than as an absent key. That is what lets the picker
+    // grey a row instead of dropping it, and it is why the response is a fixed size.
     let sets_base = base(Skip::Sets);
     let mut counts = vec![0i64; ix.set_codes.len()];
     sets_base.for_each(|d| counts[usize::from(ix.set_ord[d as usize])] += 1);
@@ -355,10 +368,81 @@ fn toggle_colors(picked: &str, letter: char) -> String {
         .collect()
 }
 
+/// Facet counts for one search, over the published index. Pure over the state so it is
+/// testable without a Tauri app; [`facet_cards`] is the only caller in production.
+///
+/// **A cold index answers `ready: false`, never an error.** An error surfaces as a failed
+/// query and the UI has to guess what it meant; `ready: false` says it plainly, and every
+/// control stays live — see [`super::lifecycle`], which owns why that is the only safe guess.
+/// It does not build one either: a facet request arrives on every keystroke and a build is
+/// ~767 ms.
+pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse, String> {
+    let Some(ix) = super::lifecycle::current(state) else {
+        return Ok(FacetResponse {
+            ready: false,
+            ..Default::default()
+        });
+    };
+
+    // **The one thing that still needs the database**: FTS has no precomputed bitset, so a
+    // text search is resolved to rowids and turned into one. 25 ms at 100 129 matches, which
+    // is the floor for any design (measured 2026-08-11).
+    //
+    // `nonblank` then `fts_query`, exactly as `search::run_search` does it — including the
+    // arm that reads as a bug and is not: **all-punctuation input leaves nothing to match on,
+    // and the answer is no text clause at all**, which is what an empty search box does
+    // anyway. An empty bitset there would turn a search for `"!!!"` into zero results instead
+    // of everything, and grey every option over a page that is full.
+    let text = match crate::filters::nonblank(&req.text).and_then(crate::filters::fts_query) {
+        None => None,
+        Some(query) => {
+            let conn = lock_db_read(state);
+            let mut stmt = conn
+                .prepare("SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?")
+                .map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([query]).map_err(|e| e.to_string())?;
+            // **`ix.capacity`, never a row count.** It is already word-rounded, and it is the
+            // figure every bitset in the index was built against — `BitSet::and` takes the
+            // shorter operand, so a text set built to any other size would silently truncate
+            // every base it narrows and send back counts that are low. Low counts grey out
+            // options that would have worked, which hides cards and which nobody reports.
+            let mut b = BitSet::new(ix.capacity);
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let doc: i64 = row.get(0).map_err(|e| e.to_string())?;
+                b.set(doc as u32);
+            }
+            Some(b)
+        }
+    };
+
+    Ok(compute(&ix, req, text.as_ref()))
+}
+
+/// Facet counts for one search.
+///
+/// A **separate command** from `search_cards` on purpose: facets depend on neither `sort` nor
+/// `offset`, so they must not be recomputed per page, and they must never delay page one. The
+/// frontend keys them on the filter half of the search key alone.
+///
+/// `async` + `spawn_blocking` for [`crate::search::search_cards`]' reason: a sync command body
+/// runs inline on the IPC thread, and the FTS half of this is blocking SQLite work. It reads
+/// through `db_read` like every other read, so a text facet during a sync is not stuck behind
+/// the ingest.
+#[tauri::command]
+pub async fn facet_cards(
+    state: tauri::State<'_, Arc<AppState>>,
+    req: SearchRequest,
+) -> Result<FacetResponse, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_facets(&state, &req))
+        .await
+        .map_err(|e| format!("facets could not be computed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::fixtures::{doc, own, seeded};
+    use crate::index::fixtures::{doc, own, seeded, state_with_seeded_cards};
     use crate::search::SearchRequest;
 
     fn req(f: impl FnOnce(&mut SearchRequest)) -> SearchRequest {
@@ -630,6 +714,107 @@ mod tests {
             Some(0),
             "the digital set counts nothing"
         );
+    }
+
+    /// The frontend mirrors these names by hand in `src/lib/ipc.ts`; a rename here that is
+    /// not mirrored there is a silently `undefined` field in the UI. Whole-value equality,
+    /// so a field added and never mirrored fails as loudly as a rename.
+    #[test]
+    fn the_facet_json_uses_the_camel_case_names_the_frontend_expects() {
+        let mut f = FacetResponse {
+            total: 3,
+            ready: true,
+            ..Default::default()
+        };
+        f.colors.insert("W".into(), 1);
+        f.mana_values.insert("0".into(), 2);
+        f.formats.insert("modern".into(), 3);
+        f.sets.insert("lea".into(), 4);
+        f.owned = OwnedFacets {
+            owned: 1,
+            missing: 2,
+        };
+        assert_eq!(
+            serde_json::to_value(f).unwrap(),
+            serde_json::json!({
+                "colors": {"W": 1},
+                "manaValues": {"0": 2},
+                "formats": {"modern": 3},
+                "sets": {"lea": 4},
+                "owned": {"owned": 1, "missing": 2},
+                "total": 3,
+                "ready": true
+            })
+        );
+    }
+
+    /// The app's state over the four fixture printings, with the search index rebuilt.
+    ///
+    /// `cards_fts` is external-content with no triggers, so rows inserted straight into
+    /// `cards` — which is what the fixture does — match nothing until this runs. Without it
+    /// every text assertion below would pass by counting zero.
+    fn state(name: &str) -> std::sync::Arc<crate::sync::AppState> {
+        let state = state_with_seeded_cards(name);
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+                .unwrap();
+        }
+        state
+    }
+
+    /// Cold has to be answerable, not an error: an error surfaces as a failed query and the
+    /// UI would have to guess what it meant. `ready: false` says it, and the frontend leaves
+    /// every control live on it.
+    ///
+    /// It must also not *build* one. A facet request arrives on every keystroke, and ~767 ms
+    /// of corpus scan is not something a keystroke may buy.
+    #[test]
+    fn a_cold_index_answers_not_ready_rather_than_failing() {
+        let state = state("cold-facets");
+        let f = run_facets(&state, &req(|_| {})).expect("cold is an answer, never an error");
+        assert!(!f.ready);
+        assert_eq!(f.total, 0);
+        assert!(
+            f.sets.is_empty(),
+            "nothing is counted, so nothing is greyed"
+        );
+        assert!(
+            crate::index::lifecycle::current(&state).is_none(),
+            "and a facet request does not spend a build"
+        );
+    }
+
+    /// Text is the one filter with no dimension in the index, so it is resolved against FTS
+    /// and handed to `compute` as a bitset. Every count in the response is narrowed by it.
+    #[test]
+    fn a_text_search_is_resolved_through_fts_and_narrows_every_count() {
+        let state = state("text-facets");
+        crate::index::lifecycle::build_now(&state).unwrap();
+
+        let f = run_facets(&state, &req(|r| r.text = Some("bolt".into()))).unwrap();
+        assert!(f.ready);
+        assert_eq!(f.total, 1, "Lightning Bolt alone");
+        assert_eq!(f.sets.get("lea").copied(), Some(1));
+        assert_eq!(f.sets.get("rav").copied(), Some(0), "offered, and empty");
+    }
+
+    /// **All-punctuation input leaves nothing to match on, and the answer is no text clause
+    /// at all** — which is what an empty search box does anyway. `fts_query` answers `None`
+    /// there, and an implementation that reads that as an empty match set turns a search for
+    /// `"!!!"` into zero results instead of everything. `run_search` makes the same choice;
+    /// facets that disagreed with it would grey every option over a page that is full.
+    #[test]
+    fn text_with_nothing_indexable_in_it_counts_everything_rather_than_nothing() {
+        let state = state("punctuation-facets");
+        crate::index::lifecycle::build_now(&state).unwrap();
+
+        let f = run_facets(&state, &req(|r| r.text = Some("!!!".into()))).unwrap();
+        assert_eq!(
+            f.total, 3,
+            "the three paper printings, as with no text at all"
+        );
+        assert_eq!(f.sets.get("lea").copied(), Some(2));
     }
 
     /// Not a unit test — a stopwatch, over a synthetic corpus the size and shape of the live

@@ -197,6 +197,7 @@ pub fn run() {
             sync_status,
             search::search_cards,
             search::list_sets,
+            index::facets::facet_cards,
             card::card_detail,
             card::card_printings,
             images::prefetch_images,
