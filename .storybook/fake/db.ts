@@ -747,8 +747,9 @@ function matchesCardFilters(
     const cmc = card?.cmc ?? null;
     const exact = new Set(f.manaValues.filter((v) => v < MANA_VALUE_OPEN_ENDED));
     const openEnded = f.manaValues.some((v) => v >= MANA_VALUE_OPEN_ENDED);
-    // `cmc` is REAL and nullable: a card with no cost matches no chip, and neither does a
-    // fractional un-card cost.
+    // `cmc` is REAL and nullable: a card with no cost matches no chip, and a fractional
+    // un-card cost matches none *below* 8 (exact equality) but is returned by the open-ended
+    // chip, which is `>= 8` — the same split `push_card_filters` emits.
     const hit = cmc !== null && (exact.has(cmc) || (openEnded && cmc >= MANA_VALUE_OPEN_ENDED));
     if (!hit) return false;
   }

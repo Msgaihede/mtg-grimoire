@@ -17,9 +17,12 @@ import type { FacetResponse } from "@/lib/ipc";
  * unselected option greys and `Reset all` is the escape. **An absent answer fails open**,
  * because not-greyed means "we don't know" while greyed means "this is empty", and only one
  * of those is safe to guess. And a *key* that is absent from a present answer is treated the
- * same way, for the same reason: `FacetResponse` promises every key on a ready response
- * (`sets` sends the whole corpus, zeros included), so a missing one is a broken contract
- * rather than an empty option — and the honest reading of a broken contract is "unknown".
+ * same way, for the same reason: `FacetResponse` promises every key on a **ready** response
+ * (`sets` sends the whole corpus, zeros included), so a missing one is either a broken
+ * contract or two sources disagreeing — the set picker's options come from a session-cached
+ * `list_sets()` while its counts come from the index, so a set the corpus has since lost is
+ * a code the picker still offers and the counts have never heard of. Both readings are
+ * "unknown", and neither is an empty option.
  *
  * That last arm is also what makes a cold response harmless if one ever reaches here without
  * going through {@link facetsOrUndefined}: its maps are empty rather than zeroed, so every

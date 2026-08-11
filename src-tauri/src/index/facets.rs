@@ -43,9 +43,14 @@ pub struct FacetResponse {
     /// Keyed by `legalities` key. Plain counts.
     pub formats: BTreeMap<String, i64>,
     /// Keyed by set code. Plain counts, and **every code in the corpus is sent, zeros
-    /// included** — 1 047 keys on the live corpus, on every response, whatever the filters
-    /// are. A key is never absent, so a reader may treat a missing one as a bug rather than
-    /// as a zero.
+    /// included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
+    /// filters are. A cold one sends this map empty, which is the point of [`Self::ready`].
+    ///
+    /// **An absent key reads as "unknown", never as a zero**, and that is not a broken
+    /// contract on the frontend's side: the set picker's options come from a session-cached
+    /// `list_sets()` while its counts come from this index, so a set the corpus has since
+    /// lost is a code the picker still knows and this map has never heard of. It has to stay
+    /// live — greying is only ever safe on a counted zero.
     pub sets: BTreeMap<String, i64>,
     pub owned: OwnedFacets,
     /// The current result size, which is what a colour count is compared against.

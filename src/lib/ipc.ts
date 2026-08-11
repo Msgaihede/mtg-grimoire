@@ -213,8 +213,13 @@ export interface FacetResponse {
   formats: Record<string, number>;
   /**
    * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
-   * included** — 1 047 keys on the live corpus, on every response, whatever the filters
-   * are. A key is never absent, so treat a missing one as a bug rather than as a zero.
+   * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
+   * filters are. A cold one carries this map empty; that is what {@link ready} is for.
+   *
+   * **An absent key means "unknown", never zero.** The set picker's options come from a
+   * session-cached `list_sets()` and its counts come from the index, so the two sources can
+   * disagree — a set the corpus has since lost is a code the picker still offers and this
+   * map has never heard of, and it stays live rather than greying.
    */
   sets: Record<string, number>;
   /**

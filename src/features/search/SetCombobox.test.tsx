@@ -179,7 +179,8 @@ describe("SetCombobox", () => {
   });
 
   /**
-   * `search.rs` filters on at most `MAX_SET_FILTER` sets and silently truncates past it,
+   * `filters.rs`'s `picked_sets` keeps at most `MAX_SET_FILTER` sets and silently truncates
+   * past it,
    * so a 65th pick would leave the button claiming "65 sets" over results computed from
    * 64. The button is not allowed to say something the search will not do.
    */

@@ -92,7 +92,8 @@ export function useCardFacets(req: FacetRequest): FacetResponse | undefined {
     // Chosen over the two backend fixes because it is keyed on the meaning rather than on
     // one cause. `ready: false` is the app's word for "we have not counted", so this covers
     // every way of being in that state at once — the launch build, a sync's rebuild, the
-    // empty corpus that a first run sits in for its whole ~93 s opening sync, and a build
+    // empty corpus that a first run sits in for its whole opening sync (~20 s measured on a
+    // release build 2026-08-11; the ~93 s in CLAUDE.md is a debug figure), and a build
     // that failed outright and will never emit anything. Moving `emit_done` behind the join
     // would make every other query root (searches, collection, decks, the set picker) wait
     // ~767 ms on an index none of them reads and that `lifecycle`'s own docs call

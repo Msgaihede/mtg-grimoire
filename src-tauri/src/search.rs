@@ -996,7 +996,7 @@ mod tests {
 
     /// Filters are ANDed, and every `?` must bind to the clause that pushed it: the SQL
     /// fragments and their parameters are appended in one pass, so a mis-ordered push
-    /// would feed the set code to the format's json path and silently match nothing.
+    /// would feed the set code to the format's mask test and silently match nothing.
     #[test]
     fn filters_combine_and_parameters_bind_in_order() {
         let conn = seeded();

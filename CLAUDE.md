@@ -173,18 +173,6 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
 
-- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
-  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
-  index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
-  the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
-  "live" **twice** against a binary that did not contain it, and the tell is cheap —
-  `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
-  `ls dist/assets/*.js`, or just the exe's own mtime. `touch src-tauri/src/main.rs` first,
-  which is the same rule this file already gives for `tauri.conf.json` and for the same reason.
-  **`npm run tauri dev` does not have this problem** (Vite serves the frontend), which is
-  exactly why it is the command above — a worktree pass that builds instead inherits the trap.
-  And stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
-
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
 `drag <source css> <target css>` · `hover <css> [--rest ms] [--probe expr]` ·
@@ -201,6 +189,17 @@ synthesises, so one `onClick` reading `e.shiftKey` serves the mouse and the keyb
 the app mid-pass and every later interaction goes unwatched while the file still exists and
 still holds its `attached` line. Re-attach after any relaunch, and check the line count.
 
+- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
+  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
+  index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
+  the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
+  "live" **twice** against a binary that did not contain it, and the tell is cheap —
+  `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
+  `ls dist/assets/*.js`, or just the exe's own mtime. `touch src-tauri/src/main.rs` first,
+  which is the same rule this file already gives for `tauri.conf.json` and for the same reason.
+  **`npm run tauri dev` does not have this problem** (Vite serves the frontend), which is
+  exactly why it is the command above — a worktree pass that builds instead inherits the trap.
+  And stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
 - **`key` and `press` are two commands because Enter is two things.** `key` sends a
   `rawKeyDown`, which carries no `text` — the page *hears* the key and Chromium activates
   nothing, so `key Enter` on a focused button is a keydown and not a click (measured live
@@ -478,7 +477,11 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **68.7–77.6 ms**; `a` (capped at 5 000) **2 077–2 432 ms**. FTS narrowing first is real, but
   what it buys scales with how much it narrowed. No index was added *for sorting*: a
   multi-term sort cannot use one past its leading column, and `schema::swap_staging` drops and
-  replays every index on `cards` on each ~93 s sync.
+  replays every index on `cards` on each sync. (**That sync's ~93 s is a debug figure**,
+  measured 2026-08-05 under `tauri dev`; the one release first-run measured 2026-08-11 had the
+  facet index answering `ready: true` 21 s after launch, which puts the whole opening sync
+  inside ~20 s. Every "~93 s sync" in this file is the debug number until someone times a
+  release sync end to end.)
 - **The browse today: 27.4 ms uncollapsed, 131.8 ms collapsed.** Measured 2026-08-11 end to
   end through the shipped window over the live 107 346-row paper corpus — a **release** build,
   `invoke("search_cards")` from the webview, medians of nine after two warm-ups — which puts
@@ -539,8 +542,12 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
   unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
 - Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
-  gives up its `LIMIT` and the sort runs after the join: 670 ms on a completely unfiltered
-  browse, 88 ms with any text. Name and price are answered by the grouping itself (145/150 ms).
+  gives up its `LIMIT` and the sort runs after the join; name and price are answered by the
+  grouping itself. The mechanism stands; **its numbers are superseded and must not be quoted**
+  — the 670 ms unfiltered figure by the end-to-end table above (collapsed `set` 524.2 ms,
+  `rarity` 489.7 ms), and "88 ms with any text" by the breadth bullet above, which is the
+  finding that a text filter's help scales with how far it narrowed (4.4 ms on `bolt`, 69–78 ms
+  on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is not "any text".
 - **Art series outrank the card they depict, and collapse does not fix it.**
   `Lightning Bolt // Lightning Bolt` (`astx 76s`, `layout='art_series'`) held the phrase twice
   in its name field and bm25 rewarded it; art series carry their own `oracle_id`, so grouping
@@ -599,7 +606,12 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   *and* a sync has run. `restricted` counts as playable alongside `legal` — a Vintage search
   that hid Black Lotus would be wrong. It buys two things: a facet pass over the live corpus
   is **16.8 ms against 695 ms** for 23 `json_extract`s per row, and a JSON path cannot be
-  indexed while a bitwise test on a column can. It is derived natively by `card_row` from the
+  indexed while a bitwise test on a column can. **Name the build**: that pair, and every
+  other SQL figure this branch added (`filters.rs`'s 40.6/591 ms, `schema.rs`'s 455–505 →
+  22–47 ms and +0.89 MB, `index/mod.rs`'s 2 238/62/106–167 ms) was timed 2026-08-11 through
+  `node:sqlite` against a **page-for-page online backup** of the live database — SQLite's own
+  C, which is compiled the same whether the caller is a debug or a release crate, so the
+  fixture is the thing worth naming and a cargo profile would say nothing. It is derived natively by `card_row` from the
   next sync on, so the v9 backfill's `legalities::mask_sql` is the only time it is ever
   computed in SQL. **Verified live 2026-08-11 over the whole 116 695-row corpus**, both ways
   in: the migration backfill and a full fresh ingest each agree with `json_extract` on all 23
@@ -638,10 +650,15 @@ to guess.
 
 - **`CardIndex` is an in-memory index over the corpus, in the shape a search engine uses**,
   and it exists because faceting needs a count per option per dimension on every keystroke.
-  Measured 2026-08-11 against the live 116 694-printing database: a four-dimension pass costs
-  **2 238 ms** against `cards` as it stands, 62 ms with a covering index and the mask, 106–167
-  ms over a rowid-aligned shadow table — and **0.31 ms in memory**, worst case 57 ms of which
-  25 ms is an FTS scan nothing avoids. **Low cardinality gets a bitset, high cardinality an
+  The three SQL shapes were measured 2026-08-11 (see the build note under `legal_mask`): a
+  four-dimension pass costs **2 238 ms** against `cards` as it stands, 62 ms with a covering
+  index and the mask, 106–167 ms over a rowid-aligned shadow table. **The in-memory column of
+  that comparison is a projection** — the design doc's §3.2 says 0.31 ms and a 57 ms worst
+  case from a *JS harness* over a structure that did not exist yet, and its own header calls
+  that "a conservative bound on Rust". It was not one: the shipped `facets::compute` measures
+  **1.8 ms** unfiltered (release, synthetic corpus, best of five), 5.8× the projection and
+  still two orders inside the 100 ms budget. Quote `facets::compute` for what this costs;
+  quote §3.2 only for what the design was decided on. **Low cardinality gets a bitset, high cardinality an
   ordinal array**: giving each of the 986 **paper** set codes its own bitset was the first
   design and was wrong by 18× on memory and 35× on speed (14.3 MB / 11 ms against
   0.78 MB / 0.12 ms). **986 and 1 047 are both right and mean different things** — 986 paper
@@ -681,7 +698,9 @@ to guess.
   `dataUpdateCount` stopped dead at 40 (≈40 × 500 ms over a ~20 s cold window) rather than
   climbing, which is the half of the claim that says it does not poll a healthy index forever.
 - **An index over an *empty* corpus answers `ready: false` too**, and that is the state a new
-  user is in for the whole of the ~93 s opening sync. Counted honestly every option is zero,
+  user is in for the whole of the opening sync — **~20 s** on the release build this was
+  verified on (2026-08-11), against the ~93 s the Data & sync section quotes from a *debug*
+  run. Counted honestly every option is zero,
   the greying rule dims the entire row, and with no filter on there is no `Reset all` drawn to
   escape by. Verified in the shipped window 2026-08-11 against a cleared `data/`: **0 of 19
   chips greyed, 0 of 8 format options disabled, and no chip carrying a count in its name**,
@@ -705,17 +724,24 @@ to guess.
   `disabled` is right is the format `<option>` — a native listbox option is not a tab stop
   there is anything to lose.
 - **A chip greyed by the previous search swallows a press for ~300–330 ms after the box is
-  cleared — and this is faceting's debt, not the search box's.** Measured live: pressing
-  "Mana value 7" 5, 167 and 288 ms after clearing `Lightning Bolt` did nothing; at 336 ms and
-  beyond it acted. The *trigger* is `DEBOUNCE_MS` (300), and the undebounced path has no such
-  window — a format change swaps the counts within **6 ms** when the new filter set is already
-  in React Query's cache, so `keepPreviousData` contributes only the ~32 ms of flight. But the
-  **defect** is this feature's own invariant running backwards: for those 300 ms the row is
-  greying against text the counts do not describe, which is *greying while not knowing*, and
-  the whole rule is that not-knowing fails open. It is shipped deliberately — the result
-  caption still reads "7 cards", so the chip agrees with everything visible beside it — and
-  the fix, when it is wanted, is one line **inside faceting**: fail open while
-  `text !== debouncedText`. Not a change to the search box.
+  cleared, and the defect is the swallowed press — not "greying while not knowing".**
+  Measured live: pressing "Mana value 7" 5, 167 and 288 ms after clearing `Lightning Bolt`
+  did nothing; at 336 ms and beyond it acted. The *trigger* is `DEBOUNCE_MS` (300). **The app
+  is not guessing during those 300 ms**: the search's query key and the facet request are
+  both built from `debouncedText` (`useCardSearch.ts`) and both hold previous data, so the
+  counts describe *exactly* the search the results list is still showing — the caption still
+  reads "7 cards" and the chip agrees with every row on screen. What it disagrees with is the
+  **box**, which is already empty. So the harm is narrow and real: a press is silently dropped
+  on a control the reader can see is dim beside a search box they can see they have cleared.
+  It is shipped deliberately, and the fix, when it is wanted, is **inside faceting** rather
+  than in the search box. Note what one line buys: failing open while `text !== debouncedText`
+  closes the debounce window and **not** the in-flight one — `keepPreviousData` holds the
+  previous *filter set's* answer for the ~32 ms a facet call is in flight (a format change
+  swaps the counts within **6 ms** when the new filter set is already in React Query's cache),
+  which is the same disagreement one filter wide instead of one search wide. Only
+  `!query.isPlaceholderData` closes both, at the cost of the flicker `keepPreviousData` exists
+  to prevent. That is a design call between a chip that can be one answer stale and a row that
+  blinks on every keystroke — not a debt someone forgot to pay.
 
 ## Image cache (measured 2026-08-04, live)
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`

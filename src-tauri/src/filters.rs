@@ -140,8 +140,10 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
 
     // **The mask, not `json_extract`.** A JSON path cannot be indexed, so the old form
     // knocked the collapsed browse's scan off `idx_cards_collapse` and into a row lookup per
-    // card: 591 ms against 40.6 ms through the mask, measured 2026-08-11 over the live corpus
-    // with the widened index in place. [`crate::legalities`] exists for this.
+    // card: 591 ms against 40.6 ms through the mask, measured 2026-08-11 with the widened
+    // index in place — timed through `node:sqlite` against a page-for-page online backup of
+    // the live database, so the build these name is SQLite's own C rather than a cargo
+    // profile. [`crate::legalities`] exists for this.
     //
     // `restricted` still counts as playable — that lives in the mask now rather than in this
     // SQL, which is why the predicate no longer says so.
@@ -201,8 +203,12 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     }
 
     // Discrete chips, not a range: 0–7 are exact and 8 is open-ended. `cmc` is REAL and
-    // nullable — a fractional un-card cost matches no chip, and a card with no cost at all
-    // matches none either, because `NULL IN (…)` and `NULL >= 8` are both NULL.
+    // nullable, and the two halves treat a fraction differently — **below 8 it matches no
+    // chip** (exact float equality against 0.0–7.0, so 0.5 is nobody's), while **at or above
+    // 8 it does**, because the open-ended arm below is `cmc >= 8.0` and 8.5 satisfies it. A
+    // card with no cost at all matches nothing either way: `NULL IN (…)` and `NULL >= 8` are
+    // both NULL. `index/mod.rs`'s mana buckets mirror exactly this split and cite this
+    // function for it.
     //
     // Deduplicated first: a payload that repeats a chip would otherwise generate a
     // placeholder per repeat, which is a longer statement for the same answer (carryover
@@ -285,8 +291,10 @@ mod tests {
     use super::*;
 
     /// The filter has to reach the index, and it cannot while it parses JSON per row.
-    /// Measured on the live corpus with the widened `idx_cards_collapse` in place: 40.6 ms
-    /// through the mask against 591 ms through `json_extract`.
+    /// Measured 2026-08-11 with the widened `idx_cards_collapse` in place: 40.6 ms through
+    /// the mask against 591 ms through `json_extract` — through `node:sqlite` against a
+    /// page-for-page online backup of the live database, so the build named is SQLite's own
+    /// and not a cargo profile (see [`super::push_card_filters`]).
     ///
     /// The only test here that reads the SQL rather than an answer, because the shape *is*
     /// the claim: what the filter matches is identical either way, and that is exactly why

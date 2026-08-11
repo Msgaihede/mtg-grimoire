@@ -1,12 +1,23 @@
 //! An in-memory index over the card corpus, in the shape a search engine uses.
 //!
 //! **Why this exists rather than more SQL.** Faceting needs a count per option per
-//! dimension on every filter press. Measured against the live 116 694-printing database on
-//! 2026-08-11: a four-dimension pass costs 2 238 ms against `cards` as it stands, 62 ms with
-//! a covering index and [`crate::legalities`]' mask, and 106–167 ms at best over a
+//! dimension on every filter press. The SQL side is measured, 2026-08-11, timed through
+//! `node:sqlite` against a page-for-page online backup of the live 116 694-printing
+//! database — the work is inside SQLite's own C, so no build of this crate enters into
+//! those numbers: a four-dimension pass costs 2 238 ms against `cards` as it stands, 62 ms
+//! with a covering index and [`crate::legalities`]' mask, and 106–167 ms at best over a
 //! rowid-aligned shadow table — because a one-character search box entry matches 100 129
-//! rows and seeking those rowids is the floor. In memory the same pass is 0.31 ms, and the
-//! worst case there is is 57 ms, of which 25 ms is the FTS scan nothing avoids.
+//! rows and seeking those rowids is the floor.
+//!
+//! **The in-memory side of that comparison is a projection, not a measurement of this
+//! code.** 0.31 ms for the same pass and a 57 ms worst case (25 ms of it the FTS scan
+//! nothing avoids) come from the design doc's §3.2 table, whose own header reads "JS
+//! harness, so a conservative bound on Rust" — a model of a structure that did not exist
+//! yet. It was not a conservative bound on the one case both cover: [`facets::compute`]
+//! measures **1.8 ms** unfiltered (release, synthetic corpus, best of five), 5.8× the
+//! projected figure and still two orders inside spec §2's 100 ms budget. Read the Rust
+//! numbers off [`facets::compute`]; the projection is kept only because it is what the
+//! design was decided on.
 //!
 //! **Low cardinality gets a bitset, high cardinality an ordinal array.** Giving each of the
 //! 986 set codes its own bitset was the first design and was wrong by 18× on memory and 35×
@@ -314,9 +325,15 @@ pub(crate) mod fixtures {
     /// databases, so an in-memory state would build an index over an empty corpus and every
     /// count here would be zero.
     ///
-    /// `name` is per test rather than one shared directory because `cargo test` runs these in
-    /// parallel — the brief's parameterless version had five tests sharing one path, where
+    /// `name` is a directory name rather than one shared path because `cargo test` runs these
+    /// in parallel — the brief's parameterless version had five tests sharing one path, where
     /// each one's first act is to delete the directory the others are mid-build over.
+    ///
+    /// **Unique crate-wide, not merely within a module.** The name is the whole of the temp
+    /// directory, so two callers agreeing by accident is the same collision whatever files
+    /// they live in — and the failure it produces is a flaky test blaming a count. 15 names
+    /// across three modules today (`index::lifecycle`, `index::facets` via its own `state`
+    /// wrapper, and `collection`); `grep` for the call before inventing a sixteenth.
     pub(crate) fn state_with_seeded_cards(name: &str) -> std::sync::Arc<crate::sync::AppState> {
         let dir = std::env::temp_dir().join(format!("mtgtest-lifecycle-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
