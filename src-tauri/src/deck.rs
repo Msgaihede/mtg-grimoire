@@ -808,6 +808,13 @@ pub struct DeckCardRow {
     /// Tiny Leaders' per-face MV cap and DFC commander fronts both read them.
     pub faces: Option<String>,
     pub game_changer: Option<bool>,
+    /// The finishes this printing exists in, as the JSON array `cards.finishes` stores.
+    ///
+    /// A deck names a *printing* and never a finish — the model has no opinion on whether a
+    /// copy is foil. What this answers is the narrower question the art can carry: whether
+    /// the printing itself leaves no choice, which is true of 12 366 foil-only and 892
+    /// etched-only paper printings. `None` for an orphan, whose card has left `cards`.
+    pub finishes: Option<String>,
     /// Printed at uncommon on **any** printing of this oracle card. Computed, not read: a
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
@@ -862,7 +869,7 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id, dc.zone, dc.quantity, 
             dc.set_code, dc.collector_number, dc.lang, dc.needs_review,
             c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
             c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
-            c.faces, c.game_changer,
+            c.faces, c.game_changer, c.finishes,
             CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
             EXISTS(SELECT 1 FROM cards u
                     WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
@@ -914,8 +921,9 @@ fn read_deck_cards(conn: &Connection, deck_id: i64) -> Result<Vec<DeckCardRow>, 
                 rarity: r.get(20)?,
                 faces: r.get(21)?,
                 game_changer: r.get(22)?,
-                unit_price_usd: r.get(23)?,
-                ever_uncommon: r.get(24)?,
+                finishes: r.get(23)?,
+                unit_price_usd: r.get(24)?,
+                ever_uncommon: r.get(25)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -3006,6 +3014,7 @@ mod tests {
             rarity: Some("common".to_owned()),
             faces: None,
             game_changer: Some(false),
+            finishes: Some(r#"["nonfoil","foil"]"#.to_owned()),
             ever_uncommon: false,
             unit_price_usd: Some(400.0),
             owned_quantity: 3,
@@ -3021,7 +3030,8 @@ mod tests {
                 "colors": "R", "colorIdentity": "R",
                 "legalities": "{\"modern\":\"legal\"}", "power": null, "toughness": null,
                 "layout": "normal", "rarity": "common", "faces": null,
-                "gameChanger": false, "everUncommon": false, "unitPriceUsd": 400.0,
+                "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
+                "everUncommon": false, "unitPriceUsd": 400.0,
                 "ownedQuantity": 3
             })
         );

@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
+import type { Finish } from "@/lib/finish";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
@@ -96,6 +97,7 @@ export function CardGrid<T extends GridCard>({
   label = "Search results",
   badge,
   topLeft,
+  finish,
   action,
   tileRef,
   dragPayload,
@@ -130,6 +132,17 @@ export function CardGrid<T extends GridCard>({
    * `pointer-events-none`, and `empty:hidden` so a mark with nothing to say draws nothing.
    */
   topLeft?: (card: T) => ReactNode;
+  /**
+   * The finish a tile's card **is** — a holo sheen and a corner chip, drawn by `CardArt`.
+   *
+   * A callback rather than a field on {@link GridCard}, for that interface's stated reason:
+   * the search's rows carry `finishes` and a mapped collection row does not, and a tile that
+   * guessed would mark the wrong cards. Absent means no wall is marked, which is how the
+   * collection's wall behaves until it has an answer worth drawing.
+   *
+   * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
+   */
+  finish?: (card: T) => Finish | null;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
   /**
@@ -282,6 +295,7 @@ export function CardGrid<T extends GridCard>({
                 selected={card.id === selectedId}
                 badge={badge}
                 topLeft={topLeft}
+                finish={finish}
                 action={action}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
@@ -308,6 +322,7 @@ function Tile<T extends GridCard>({
   selected,
   badge,
   topLeft,
+  finish,
   action,
   tileRef,
   dragPayload,
@@ -318,6 +333,7 @@ function Tile<T extends GridCard>({
   selected: boolean;
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
+  finish?: (card: T) => Finish | null;
   action?: (card: T) => ReactNode;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
@@ -371,7 +387,13 @@ function Tile<T extends GridCard>({
               `CardArt` — five surfaces draw a card and this is the one definition of what
               that looks like. The button, the focus ring and the caption stay here, because
               they are what makes this frame a *tile* rather than a picture. */}
-          <CardArt cardId={card.id} name={card.name} selected={selected} hoverZoom />
+          <CardArt
+            cardId={card.id}
+            name={card.name}
+            selected={selected}
+            finish={finish?.(card) ?? null}
+            hoverZoom
+          />
         </button>
         {mark && (
           // The corner *and* the backing are the wall's, not the mark's: a mark sits on a

@@ -32,6 +32,30 @@ describe("CardArt", () => {
     expect(screen.getByText("No card")).toBeInTheDocument();
   });
 
+  /**
+   * The sheen tints, the chip speaks. Only the chip is information, so only the chip is in
+   * the accessibility tree — a screen reader hearing "Foil" twice per card would be being
+   * told about the decoration.
+   */
+  it("lays a sheen over a foil card and hides it from screen readers", () => {
+    const { container } = render(<CardArt cardId="unf" name="Sole Performer" finish="foil" />);
+    const sheen = container.querySelector("[data-foil-sheen]");
+    expect(sheen).toBeInTheDocument();
+    expect(sheen).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByLabelText("Foil")).toBeInTheDocument();
+  });
+
+  it("marks etched as etched, not as foil", () => {
+    render(<CardArt cardId="etch" name="Etched Card" finish="etched" />);
+    expect(screen.getByLabelText("Etched")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Foil")).not.toBeInTheDocument();
+  });
+
+  it("draws no sheen for a card that is not foil", () => {
+    const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
+    expect(container.querySelector("[data-foil-sheen]")).not.toBeInTheDocument();
+  });
+
   /** The face and the variant both reach the URL, which is what keys the image. */
   it("asks for the face and variant it was given", () => {
     render(<CardArt cardId="bolt" name="Lightning Bolt" face={1} variant="art" />);

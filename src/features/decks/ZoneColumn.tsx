@@ -14,6 +14,8 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
+import { FinishMark } from "@/components/FinishMark";
+import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard, DeckZone } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -558,6 +560,11 @@ function CardRow({
         >
           {card.name}
         </button>
+        {/* The finish the printing leaves no choice about, as a glyph rather than as the
+            sheen the search wall draws. The row's picture is a 48×36 art crop, where a 12 %
+            gradient is a smudge and not a signal — and this row is a line of text, where a
+            12px glyph beside the name is legible and says the same thing. */}
+        {soleFinish(card.finishes) && <FinishMark finish={soleFinish(card.finishes)!} />}
         <ManaText source={card.manaCost} className="shrink-0 text-xs" />
       </span>
 

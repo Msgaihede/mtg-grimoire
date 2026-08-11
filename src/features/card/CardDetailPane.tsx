@@ -8,7 +8,9 @@ import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/Ad
 import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { ZONE_LABEL } from "@/features/decks/ZoneColumn";
-import { FINISH_LABEL, FINISH_MARK, finishPrice, parseFinishes } from "@/lib/finish";
+import { FoilOverlay } from "@/components/CardArt";
+import { FinishMark } from "@/components/FinishMark";
+import { FINISH_LABEL, finishPrice, parseFinishes, soleFinish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
@@ -449,6 +451,12 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
 
   return (
     <div className="space-y-2">
+      {/* Positioned, so the foil overlay has something to hang from. Wrapped rather than
+          routed through `CardArt`: this frame keeps a flip fade, a bespoke "no image yet"
+          panel and no retry hook, and trading those three deliberate behaviours for one
+          shared frame would be a bad bargain. What it *must* share with the wall is the
+          marking, which is why `FoilOverlay` is its own component. */}
+      <span className="relative block overflow-hidden rounded-xl">
       {broken === src ? (
         // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
         // rather than guessing: the card is still identified, and the way back is stated.
@@ -484,6 +492,8 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
           className="w-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
         />
       )}
+        <FoilOverlay finish={soleFinish(card.finishes)} />
+      </span>
       {sides === 2 && (
         <button
           type="button"
@@ -813,12 +823,11 @@ function PrintingRow({
         {printing.lang !== "en" && <LangBadge lang={printing.lang} />}
         {/* Per finish, from the blob — never one number standing for both. */}
         {parseFinishes(printing.finishes).map((f) => (
-          <span key={f} className="shrink-0 font-mono tabular-nums">
-            {FINISH_MARK[f] && (
-              <abbr title={FINISH_LABEL[f]} className="mr-0.5 text-[0.65rem] text-dim no-underline">
-                {FINISH_MARK[f]}
-              </abbr>
-            )}
+          <span key={f} className="flex shrink-0 items-center gap-0.5 font-mono tabular-nums">
+            {/* A glyph rather than the letters `F` and `E` this used to draw. Nonfoil is
+                still unmarked — it is the finish a price is assumed to be — and the full
+                word rides in the accessible name, as the `<abbr>`'s title did. */}
+            <FinishMark finish={f} />
             {usdPrice(finishPrice(printing.prices, f))}
           </span>
         ))}

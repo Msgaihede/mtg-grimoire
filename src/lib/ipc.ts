@@ -742,6 +742,16 @@ export interface DeckCard {
    *  Tiny Leaders' per-face MV cap and DFC commander fronts both read them. */
   faces: string | null;
   gameChanger: boolean | null;
+  /**
+   * JSON: the finishes this printing exists in (`["nonfoil","foil"]`), or `null` for an
+   * orphan.
+   *
+   * A deck names a *printing* and never a finish, so this is **not** "which finish is in the
+   * deck" — the model has no such concept, and `deck_cards` stores none. It answers the
+   * narrower question a row's art can honestly carry: whether the printing itself leaves no
+   * choice. Read it with `soleFinish` from `@/lib/finish`.
+   */
+  finishes: string | null;
   /** Printed at uncommon on **any** printing of this oracle card, which is what makes a
    *  Pauper Commander commander eligible. Computed, not read: the `paupercommander` legality
    *  key answers a different question (the 99). `false` for an orphan — nothing is known

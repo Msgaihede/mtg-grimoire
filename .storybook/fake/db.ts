@@ -1143,6 +1143,9 @@ function toDeckCard(db: FakeDb, dc: FakeDeckCard, ownedQuantity: number): DeckCa
     rarity: card?.rarity ?? null,
     faces: card?.faces ?? null,
     gameChanger: card?.gameChanger ?? null,
+    // A **printing** fact, not a deck fact: `deck_cards` stores no finish, and the LEFT JOIN
+    // to `cards` is where this comes from — so an orphan's is `null`, exactly as the SQL's is.
+    finishes: card?.finishes ?? null,
     // Printed at uncommon on **any** printing of this oracle card, which is Pauper Commander
     // eligibility. Read off the column, never recomputed over `db.cards`: the generator took
     // it from the full 116 k-row corpus, and re-deriving it would make a fact about the
