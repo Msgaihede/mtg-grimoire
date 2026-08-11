@@ -2466,13 +2466,16 @@ mod tests {
         )
         .unwrap();
         let deck = conn.last_insert_rowid();
+        // A deck card is filed under a category since schema v7, and `category_id` is
+        // `NOT NULL` — so the pile has to exist before anything can be in it.
+        let main = crate::schema::tests::category(&conn, deck, "main", "Main deck");
         conn.execute(
             "INSERT INTO deck_cards
-                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
                  created_at,updated_at)
-             VALUES (?1,'ab000000-0000-0000-0000-000000000001','isd','51','en','Delver',
-                     'main',4,unixepoch(),unixepoch())",
-            [deck],
+             VALUES (?1,?2,'ab000000-0000-0000-0000-000000000001','isd','51','en','Delver',
+                     4,unixepoch(),unixepoch())",
+            [deck, main],
         )
         .unwrap();
 
@@ -2487,11 +2490,11 @@ mod tests {
         // edge one: a deck is built out of the binder, so most deck cards are owned cards.
         conn.execute(
             "INSERT INTO deck_cards
-                (deck_id,card_id,set_code,collector_number,lang,name,zone,quantity,
+                (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
                  created_at,updated_at)
-             VALUES (?1,'0000419b-0bba-4488-8f7a-6194544ce91d','lea','161','en',
-                     'Lightning Bolt','main',4,unixepoch(),unixepoch())",
-            [deck],
+             VALUES (?1,?2,'0000419b-0bba-4488-8f7a-6194544ce91d','lea','161','en',
+                     'Lightning Bolt',4,unixepoch(),unixepoch())",
+            [deck, main],
         )
         .unwrap();
         assert_eq!(

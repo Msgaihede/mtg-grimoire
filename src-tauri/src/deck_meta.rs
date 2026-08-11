@@ -17,13 +17,15 @@
 //!   and records nothing in `deck_audit` (which is `deck_id NOT NULL` — a folder edit has no
 //!   deck to name).
 //!
-//! **This module does not call [`crate::deck::allocate_deck`].** Moving a card's category can
-//! change whether it counts toward anything (an `is_active` flag decides that now, the way a
-//! fixed zone word used to), which the allocator would need to know about — but the allocator
-//! is still reading `deck_cards.zone`, a column schema v7 removed, and re-pointing it onto
-//! categories is Task 3's job. Wiring these writes to reallocate is Task 3's to add once that
-//! landing exists to call into; until then a card that changes which category it is filed
-//! under does not change what any deck has reserved.
+//! **Two of these writes reallocate, and the rest deliberately do not.** `is_active` is what
+//! decides whether a card is allocated for at all ([`crate::deck::allocate_deck`]'s own doc),
+//! so [`set_category_active`] changes what this deck has reserved without touching a single
+//! card — and [`delete_category`] does too, by taking cards away or moving them somewhere with
+//! a different flag. Both call the allocator inside their own transaction, the way every card
+//! write in [`crate::deck`] does. A rename, a reorder and every tag write change what a pile
+//! is *called* and nothing about what is in it, so they claim exactly what they claimed
+//! before; running the allocator there would be a rebuild of every claim over a write that
+//! changed none of them.
 
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -44,7 +46,11 @@ pub const CATEGORY_NAME_TAKEN: &str = "This deck already has a category with tha
 /// deck. Nothing in the DDL stops that INSERT — `deck_cards.category_id` only requires the
 /// category to exist, not that it belongs to the same deck as the row being moved — so this
 /// is the fence, not a CHECK.
-const CATEGORY_WRONG_DECK: &str = "That category belongs to a different deck.";
+///
+/// `pub`, not private: [`crate::deck::category_of_deck`] draws the same distinction for every
+/// card write, and two spellings of one refusal is two sentences a reader could meet for one
+/// mistake.
+pub const CATEGORY_WRONG_DECK: &str = "That category belongs to a different deck.";
 
 /// What [`delete_category`] says when asked to move a category's cards into itself. Nothing
 /// downstream would fail loudly: the fold's `INSERT … SELECT … WHERE category_id = ?1` would
@@ -177,9 +183,14 @@ fn valid_color(color: &str) -> Result<&str, String> {
         .ok_or_else(|| "A tag needs a colour.".to_owned())
 }
 
-/// A deck variant the schema knows, refused in words — [`crate::deck::valid_zone`]'s
-/// discipline over [`crate::schema::DECK_VARIANTS`] instead of `CATEGORY_KINDS`.
-fn valid_variant(variant: &str) -> Result<&str, String> {
+/// A deck variant the schema knows, refused in words rather than as a CHECK failure — the
+/// same discipline `collection::valid_finish` applies to the finish enum, over
+/// [`crate::schema::DECK_VARIANTS`].
+///
+/// `pub(crate)`: every card command in [`crate::deck`] opens with it too. It lives here
+/// because `deck_categories` and `deck_tags` are this module's, and one definition of "is
+/// that a variant" is what keeps the two modules' refusals identical.
+pub(crate) fn valid_variant(variant: &str) -> Result<&str, String> {
     crate::schema::DECK_VARIANTS
         .contains(&variant)
         .then_some(variant)
@@ -462,6 +473,11 @@ pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCat
 
 /// Flip `is_active`. Every category answers to this, `commander` included — see
 /// [`DeckCategoryRow::is_active`]'s doc for why there is no kind check here at all.
+///
+/// **Reallocates.** This is the one write in this module that changes what the deck has
+/// reserved without touching a card: `is_active` is the whole of what
+/// [`crate::deck::allocate_deck`] allocates *for*, so switching a category off hands its
+/// copies back to every other deck and switching one on claims them.
 pub fn set_category_active(
     conn: &Connection,
     id: i64,
@@ -483,6 +499,7 @@ pub fn set_category_active(
         params![id, is_active],
     )
     .map_err(|e| e.to_string())?;
+    crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
@@ -575,6 +592,11 @@ pub fn delete_category(
     }
     tx.execute("DELETE FROM deck_categories WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
+    // Reallocates for [`set_category_active`]'s reason at one remove: the cards either left
+    // the deck with the category (the CASCADE) or landed under one whose `is_active` may
+    // differ from the one they came from. Either way this deck wants something different
+    // than it did a statement ago.
+    crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
