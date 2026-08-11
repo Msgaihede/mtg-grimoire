@@ -924,8 +924,13 @@ use bitset::BitSet;
 use rusqlite::Connection;
 
 pub struct CardIndex {
-    /// Rowid ceiling every bitset here was built against.
+    /// Rowid ceiling every bitset here was built against, **rounded up to a whole word** —
+    /// see `build`. Every sibling array indexed by a doc id is this long.
     pub capacity: usize,
+    /// Every printing in the corpus. Not the same as "all bits below `capacity`": rowid 0
+    /// is never issued and the padding above the last row is not a card, so this is what a
+    /// request with `paperOnly: false` narrows from.
+    pub all: BitSet,
     pub paper: BitSet,
     /// WUBRG then C, indexed by [`CardIndex::color_index`].
     pub colors: [BitSet; 6],
@@ -959,14 +964,25 @@ impl CardIndex {
     /// `AppState.db_read` for it would stall every search behind it at launch, which is the
     /// exact failure that second connection exists to prevent.
     pub fn build(conn: &Connection) -> rusqlite::Result<CardIndex> {
-        let capacity = conn
+        let highest = conn
             .query_row("SELECT coalesce(max(rowid), 0) + 1 FROM cards", [], |r| {
                 r.get::<_, i64>(0)
             })? as usize;
 
+        // **`capacity` is the bitset's rounded figure, never the row count.** `BitSet::new`
+        // rounds up to a whole word, so a set asked for 116 695 docs holds 116 736 — and
+        // `set` *accepts* a doc in that padding window rather than dropping it, which is
+        // exactly the leniency that lets a sync grow the corpus under a live index. Size
+        // every sibling array indexed by the same doc ids from this number, or
+        // `paper.for_each` can hand `set_ord` an index up to 63 past its end. The reachable
+        // path is `rebuild_owned` re-reading a grown `cards` against a stale capacity.
+        let paper = BitSet::new(highest);
+        let capacity = paper.capacity();
+
         let mut ix = CardIndex {
             capacity,
-            paper: BitSet::new(capacity),
+            all: BitSet::new(capacity),
+            paper,
             colors: std::array::from_fn(|_| BitSet::new(capacity)),
             mana: std::array::from_fn(|_| BitSet::new(capacity)),
             formats: (0..crate::legalities::LEGALITY_KEYS.len())
@@ -991,6 +1007,7 @@ impl CardIndex {
             let mask: Option<i64> = row.get(4)?;
             let paper: bool = row.get(5)?;
 
+            ix.all.set(doc);
             if paper {
                 ix.paper.set(doc);
             }
@@ -1326,14 +1343,16 @@ enum Skip {
 
 fn base(ix: &CardIndex, req: &crate::search::SearchRequest, text: Option<&BitSet>, skip: Skip) -> BitSet {
     // `paperOnly` defaults ON and is not a facet, so it is in every base.
+    //
+    // **`ix.all`, not a filled bitset.** Setting every bit up to `capacity` would include
+    // rowid 0, which SQLite never issues, and every doc in the word-rounded padding above
+    // the last real row — so `total` would read high by up to 64 on the one request that
+    // asks for digital printings too. `all` is set per row during the build, so it holds
+    // exactly the docs that exist.
     let mut b = if req.paper_only.unwrap_or(true) {
         ix.paper.clone()
     } else {
-        let mut all = BitSet::new(ix.capacity);
-        for d in 0..ix.capacity as u32 {
-            all.set(d);
-        }
-        all
+        ix.all.clone()
     };
     if let Some(t) = text {
         b = b.and(t);
