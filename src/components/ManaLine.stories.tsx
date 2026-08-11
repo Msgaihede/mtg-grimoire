@@ -14,7 +14,7 @@ const meta = {
           "ribbon, present on every screen. During a sync the rule dims and a full-strength " +
           "copy of itself fills across it behind a gold cap — the one place where the " +
           "identity element and a functional one are the same element. Every `label` below is " +
-          "a string `manaLineSync` can actually return — a value of `PHASE_LABEL`, or the " +
+          "a string `syncActivity` can actually return — a value of `PHASE_LABEL`, or the " +
           '`"Syncing card data"` it falls back to while busy with no event in hand.',
       },
     },
@@ -60,7 +60,7 @@ export const Indeterminate: Story = {
  * Not an edge case: `busy` decides what the line shows and an event is evidence of progress
  * rather than of running, so a sync whose early events Tauri dropped (emitted before the
  * webview registered its listener) shows this and nothing else until the next one lands. It is
- * the state a reader is most likely to catch the line in, and `manaLineSync` has a literal of
+ * the state a reader is most likely to catch the line in, and `syncActivity` has a literal of
  * its own for it.
  */
 export const BeforeAnyEvent: Story = {

@@ -119,7 +119,8 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
           upToDate={upToDate}
           hasError={error !== null}
           onRefresh={refresh}
-          sync={syncActivity(progress, busy)}
+          activity={syncActivity(progress, busy)}
+          activityVisible={busy}
           updateVersion={update.status?.available?.version ?? null}
           updateInstallable={update.action !== "unavailable"}
           onOpenUpdate={() => setActiveView("settings")}
