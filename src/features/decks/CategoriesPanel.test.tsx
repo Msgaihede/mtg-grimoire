@@ -297,6 +297,33 @@ describe("categories", () => {
     await waitFor(() => expect(field).toHaveValue(""));
   });
 
+  /**
+   * The caret, asserted rather than assumed — and the assertion is `toHaveFocus` plus a bare
+   * keystroke, because neither half alone would have caught the bug this test was written for.
+   *
+   * `HTMLInputElement.select()` sets a selection and, per spec, **does not move focus**.
+   * Chromium focuses anyway, so a `play` running in a real browser sees a working field; jsdom
+   * follows the spec, so the caret stayed on `<body>` and the reader's first keystroke went to
+   * the page. Every other rename test here missed it too, for a reason worth naming: `user.type`
+   * and `user.clear` **focus the element they are given**, so a test that reaches for the field
+   * by hand repairs the very thing it was meant to check. `user.keyboard` types wherever the
+   * caret already is, which is the only honest way to ask this question.
+   */
+  it("puts the caret in the rename field, so the first keystroke lands in it", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    await user.click(within(row("Ramp")).getByRole("button", { name: "Rename" }));
+    const field = await screen.findByLabelText("Rename Ramp");
+    expect(field).toHaveFocus();
+
+    // Selected, not merely focused: the commonest rename replaces the word rather than editing
+    // inside it, so typing has to overwrite what is there.
+    await user.keyboard("Acceleration");
+    expect(field).toHaveValue("Acceleration");
+  });
+
   it("renames a pile the reader made", async () => {
     mount();
     await screen.findByText("Ramp");
@@ -478,6 +505,9 @@ describe("tags", () => {
 
     await user.click(within(li).getByRole("button", { name: "Rename" }));
     const field = await within(li).findByLabelText("Rename Cut candidate");
+    // Both rows share one `RenameField`; asserted on both anyway, because "shared today" is not
+    // a guarantee about tomorrow and this is the caret's only test on this row.
+    expect(field).toHaveFocus();
     await user.clear(field);
     await user.type(field, "On the block");
     await user.click(within(li).getByRole("button", { name: "Save" }));
@@ -493,6 +523,11 @@ describe("tags", () => {
 
     await user.click(within(li).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
+    // The trigger and the control inside what it opens must not share an accessible name: the
+    // decks page had to rename three of its heading triggers for exactly that collision. Here
+    // the inner controls are named for the *object* — "Delete tag", "Delete “Ramp”" — so the
+    // trigger stays uniquely addressable, and `getByRole` throwing on two matches is the proof.
+    expect(within(li).getByRole("button", { name: "Delete" })).toBeDisabled();
     // `deck_cards.tag_id` is `ON DELETE SET NULL`: the cards are untagged, never deleted.
     expect(within(dialog).getByText(/cards stay in the deck and lose the label/)).toBeInTheDocument();
 
