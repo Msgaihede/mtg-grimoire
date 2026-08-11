@@ -93,9 +93,14 @@ export function TableView({
     () => [
       {
         key: "quantity",
-        // Wide enough for the stepper when there is one, and no wider when there is not — a
-        // read-only deck table should not carry an empty 8rem gutter.
-        width: editable ? "8.5rem" : "3rem",
+        // Wide enough for the stepper *and* the move control when there is one, and no wider
+        // when there is not — a read-only deck table should not carry an empty gutter.
+        //
+        // 11rem measured rather than guessed, in three passes: at 8.5rem the cell's own content
+        // was **154px in a 136px column** in the shipped window, so the move select was clipped
+        // by 18px; 10rem left 6px over and 10.5rem left 2. 176 clears the stepper, the gap and
+        // the select outright.
+        width: editable ? "11rem" : "3rem",
         header: "Qty",
         // `interactive` is the whole of what keeps a press on `−` from also opening the card
         // and a typed `12` from scrolling the list a screenful — `VirtualTable` applies
@@ -111,7 +116,22 @@ export function TableView({
       },
       {
         key: "name",
-        width: "minmax(0,2fr)",
+        /**
+         * **The column this table exists for, and the one that was starving.**
+         *
+         * Measured in the shipped window: seven fixed columns took 696px of an 843px grid, so
+         * the two flexible ones split 147px in a 2:1.5 ratio and the card name got **84px** —
+         * about ten characters — while the usually-empty Tags column held 112px. A deck list
+         * whose card names are unreadable is not a deck list.
+         *
+         * Two changes, and they work together. The fixed columns lost 72px between them (every
+         * one still fits its own content, checked below), and the name now carries a **floor**
+         * and the larger share. The floor is what makes it hold when the table is squeezed by
+         * the stats block and the docked panel; `minmax(0,1fr)` on Type is what absorbs it, so
+         * the name reaches its floor by taking from the column next to it rather than by
+         * pushing the grid into a horizontal scroll.
+         */
+        width: "minmax(12rem,3fr)",
         header: "Card name",
         cell: (row) =>
           row.kind === "card" ? (
@@ -141,13 +161,15 @@ export function TableView({
       },
       {
         key: "manaCost",
-        width: "6rem",
+        width: "5rem",
         header: "Mana cost",
         cell: (row) => (row.kind === "card" ? <ManaText source={row.card.manaCost} /> : null),
       },
       {
         key: "type",
-        width: "minmax(0,1.5fr)",
+        // Yields to the name: `minmax(0,1fr)` can shrink to nothing, which is how the name reaches
+        // its floor without the grid overflowing.
+        width: "minmax(0,1fr)",
         header: "Type",
         cellClassName: "truncate text-xs text-dim",
         // The front face, like everywhere else: a modal DFC's back is routinely a land while
@@ -178,7 +200,9 @@ export function TableView({
       },
       {
         key: "tag",
-        width: "7rem",
+        // A dot and a truncated label; empty in most decks, and it was holding 112px while the
+        // card name held 84.
+        width: "5rem",
         header: "Tags",
         cell: (row) =>
           row.kind === "card" && row.card.tagName !== null ? (
@@ -190,14 +214,16 @@ export function TableView({
       },
       {
         key: "rarity",
-        width: "6rem",
+        // Gem plus the word: "uncommon" measures ~62px with the gem, so 80 clears it.
+        width: "5rem",
         header: "Rarity",
         cell: (row) =>
           row.kind === "card" ? <RarityGem rarity={row.card.rarity} withLabel /> : null,
       },
       {
         key: "printing",
-        width: "7rem",
+        // "MH2 · 123" in the data face measures ~59px.
+        width: "5rem",
         header: "Printing",
         cellClassName: "truncate font-mono text-xs text-dim",
         cell: (row) =>

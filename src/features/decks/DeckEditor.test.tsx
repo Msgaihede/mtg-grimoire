@@ -302,6 +302,45 @@ describe("DeckEditor", () => {
     );
   });
 
+  /**
+   * **The title row, pinned by the three things that let it collapse.**
+   *
+   * jsdom lays nothing out, so no test here can see a width — this is the same bargain
+   * `CardStack.test.tsx` strikes over its Tailwind literals. What a test *can* see is the three
+   * decisions, each of which was a bug on its own in the shipped window (measured over CDP with
+   * the Theory switch on, at 1100/1200/1280):
+   *
+   * * the field had `min-w-0` and no floor, so it collapsed to **18px**;
+   * * the field had no `size`, so its intrinsic 20-character width — over 240px at `text-xl` —
+   *   was what the row's line-breaking read, and the deck's controls wrapped to a second line
+   *   even when the name had room;
+   * * the controls beside it were `shrink-0`, which pins a `flex-wrap` container at its
+   *   max-content width (**692px at every window size**), so every pixel of the squeeze fell on
+   *   the name and the switch beside it spilled 180px over the controls — at 1200 the last
+   *   pixels of "N cards differ" hit-tested to the format select.
+   *
+   * Reverting any one of the three brings the collapse back, so all three are asserted.
+   */
+  it("keeps the deck name from collapsing between the controls beside it", async () => {
+    await open();
+
+    const name = screen.getByLabelText("Deck name");
+    // A floor, and not `min-w-0` — the class Tailwind emits is the whole of the fix.
+    expect(name.className).toContain("min-w-40");
+    expect(name.className).not.toContain("min-w-0");
+    // …and an intrinsic width small enough that the floor is the only floor.
+    expect(name).toHaveAttribute("size", "1");
+
+    const identity = name.parentElement!;
+    expect(identity.className).toContain("flex-wrap");
+    expect(identity.className).not.toContain("min-w-0");
+
+    // The controls: shrinkable, so they fold rather than pushing the name out of the window.
+    const controls = identity.parentElement!.lastElementChild!;
+    expect(controls.className).toContain("flex-wrap");
+    expect(controls.className).not.toContain("shrink-0");
+  });
+
   /** The way back, and the only thing that closes the editor. */
   it("returns to the gallery from the back control", async () => {
     await open();
