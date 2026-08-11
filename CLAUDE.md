@@ -172,6 +172,19 @@ real window over CDP.
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
+
+- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
+  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
+  index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
+  the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
+  "live" **twice** against a binary that did not contain it, and the tell is cheap —
+  `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
+  `ls dist/assets/*.js`, or just the exe's own mtime. `touch src-tauri/src/main.rs` first,
+  which is the same rule this file already gives for `tauri.conf.json` and for the same reason.
+  **`npm run tauri dev` does not have this problem** (Vite serves the frontend), which is
+  exactly why it is the command above — a worktree pass that builds instead inherits the trap.
+  And stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
+
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
 `drag <source css> <target css>` · `hover <css> [--rest ms] [--probe expr]` ·
@@ -262,8 +275,12 @@ the user's, and it is never committed. Seed **user tables only**: `cards` and `s
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
 ## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-11)
-`npm run storybook` · `npm run build-storybook`. **326 stories across 43 story files, 42 docs
-pages** — counted off `storybook-static/index.json`, which is the only place the three agree.
+`npm run storybook` · `npm run build-storybook`. **332 stories across 43 story files, 42 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree
+(`Object.values(index.entries)`, grouped by `type`; the 44th `importPath` is the `.mdx`).
+**Re-count them in the same commit that adds a story.** This line read 326 for three stories'
+worth of drift and then took three more without noticing, because a prose-only edit routes to
+neither CI job — the same rot that left the fault list below saying four.
 **41 of the 43 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
@@ -344,7 +361,8 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (236 plays today, in a file of 239 tests — the other three are its own), which is what puts a
+  (**242** plays today, in a file of **245** tests — the other three are its own; `grep -rE
+  "^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
@@ -432,20 +450,43 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   forcing a Refresh; an orphan flag needs the day's ingest.
 - Searches keep answering through every second of a sync — 20 timed searches across one,
   every one correct, none stalled (that is what `db_read` bought).
-- **A header press costs tens of milliseconds more than doing nothing, not hundreds.** The
-  2026-08-09 table behind that (`set` 313 · `rarity` 325 · `rarity+price` 339 · `price` 345
-  against **277 ms** for the default name order) was measured before `idx_cards_collapse`
-  existed and **its absolute numbers are superseded** — see the two paragraphs below. The
-  ratio is what survived: a sort costs a fraction more than the browse it replaces, and
-  **with any text filter every one of them is single-digit-to-low-teens milliseconds**,
-  because FTS narrows the set first. No index was added *for sorting*: a multi-term sort
-  cannot use one past its leading column, and `schema::swap_staging` drops and replays every
-  index on `cards` on each ~93 s sync.
+- **A header press now costs *hundreds* of milliseconds more than doing nothing, and
+  `idx_cards_collapse` is why the gap grew.** Re-measured 2026-08-11 end to end through
+  `invoke` on a **release** build over the live 107 346-row paper corpus, medians of five,
+  collapsed (the app's own default) — with the uncollapsed figure beside it:
+
+  | order | collapsed | uncollapsed |
+  |---|---|---|
+  | **name** (the default browse) | **134.6 ms** | 32.3 ms |
+  | **price** | 134.8 ms | 26.0 ms |
+  | `set` | **524.2 ms** | 609.0 ms |
+  | `rarity` | **489.7 ms** | 570.2 ms |
+  | `rarity+price` | **512.4 ms** | 529.8 ms |
+
+  **The split is whether the sort's column is in the index.** `name` and `price_usd` are, and
+  cost the browse and nothing more; `set_code` and `rarity` are not, and cost ~490–610 ms —
+  which is `schema.rs`'s own note that widening the index with those two "left the sorts it
+  was meant to help unchanged, because those cost row lookups rather than index reads".
+  The 2026-08-09 table (`set` 313 · `rarity` 325 · `rarity+price` 339 · `price` 345 against
+  **277 ms**) predates the index and **every number in it is superseded**, in both directions:
+  the browse got ~2× cheaper and the two uncovered sorts got ~1.6× dearer, so a press that
+  used to cost +36 ms now costs +390 ms. The earlier claim that this was a "fraction more"
+  survived one rewrite of this bullet on nothing but plausibility; it was false when written.
+- **"A text filter makes every sort cheap" is only true of a *narrow* term**, and the old
+  12–15 ms figure named none. Measured the same way, collapsed, over three breadths:
+  `bolt` (45 matches) **4.4–4.5 ms** and the three orders indistinguishable; `dragon` (722)
+  **68.7–77.6 ms**; `a` (capped at 5 000) **2 077–2 432 ms**. FTS narrowing first is real, but
+  what it buys scales with how much it narrowed. No index was added *for sorting*: a
+  multi-term sort cannot use one past its leading column, and `schema::swap_staging` drops and
+  replays every index on `cards` on each ~93 s sync.
 - **The browse today: 27.4 ms uncollapsed, 131.8 ms collapsed.** Measured 2026-08-11 end to
   end through the shipped window over the live 107 346-row paper corpus — a **release** build,
   `invoke("search_cards")` from the webview, medians of nine after two warm-ups — which puts
   the IPC hop and the DTO serialisation inside the figure, unlike the `run_search` numbers
-  below (25 ms / 145 ms), with which they agree. `idx_cards_collapse` is why both are what
+  below (25 ms / 145 ms). The two **corroborate** each other rather than decompose into each
+  other: they are different sessions on different corpus days, and the pair straddles the
+  `run_search` figures in *both* directions (27.4 > 25, 131.8 < 145), so no per-call overhead
+  can be read out of the difference. `idx_cards_collapse` is why both are what
   they are, and the stale 277 ms is what the uncollapsed one replaces.
   **Name the build**: the identical measurement on a *debug* build is 38.4 ms / 181.6 ms.
   The gap is only ~1.4× because the work is inside SQLite, which is C compiled with
@@ -601,8 +642,11 @@ to guess.
   **2 238 ms** against `cards` as it stands, 62 ms with a covering index and the mask, 106–167
   ms over a rowid-aligned shadow table — and **0.31 ms in memory**, worst case 57 ms of which
   25 ms is an FTS scan nothing avoids. **Low cardinality gets a bitset, high cardinality an
-  ordinal array**: giving each of the 986 set codes its own bitset was the first design and
-  was wrong by 18× on memory and 35× on speed (14.3 MB / 11 ms against 0.78 MB / 0.12 ms).
+  ordinal array**: giving each of the 986 **paper** set codes its own bitset was the first
+  design and was wrong by 18× on memory and 35× on speed (14.3 MB / 11 ms against
+  0.78 MB / 0.12 ms). **986 and 1 047 are both right and mean different things** — 986 paper
+  sets against 1 047 codes over every printing, because `set_ord` covers the whole corpus and
+  a digital-only set still needs an ordinal (`index/mod.rs`). The picker's counts use 1 047.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it
@@ -615,10 +659,27 @@ to guess.
   zeroed, and `facetsOrUndefined` collapses that to `undefined` so all five controls stay
   live. Nothing here is fatal either — if the index cannot be built the app runs exactly as it
   did before the feature existed.
-- **The warm-up is ~767 ms** (median of five, 761–783, release build, warm page cache), so a
+- **The warm-up is ~767 ms** (median of five, 762–783, release build, warm page cache), so a
   launch answers not-ready for about that long. On this machine the webview does not reach
   first paint until ~2.6 s, so **the cold path is not reachable through the UI on a warm
   start** — which is why the Storybook fake carries an `indexCold` fault at all.
+- **A not-ready answer corrects itself, and nothing else in the app would ever correct it.**
+  `useCardFacets` carries `refetchInterval: (q) => q.state.data?.ready === false ? 500 : false`
+  — polling only while cold, and switched off by the first ready answer. It is there because
+  `sync.rs` calls `lifecycle::spawn_build` and `emit_done` on consecutive lines, and
+  `spawn_build` runs its `clear` **synchronously on the caller's thread**, so `done` is
+  emitted over a cold index *by construction*. `useSyncInvalidation` invalidates `["cards"]`,
+  which prefix-matches the facet key, so the one refetch a finished sync produces lands inside
+  the ~767 ms build and caches `ready: false`: a success (no retry), same filters (no new key),
+  inside `staleTime` (not stale). **Found in the shipped window 2026-08-11** — after a sync the
+  unfiltered row showed no counts while `facet_cards` called directly answered `ready: true`.
+  Touching any filter healed it instantly, which is what bounds the damage to the unfiltered
+  row. Gated on the *meaning* rather than on one cause, so it also covers the launch build, the
+  empty corpus, and a build that failed and will never announce anything.
+  **Verified on a real first run, untouched**: chips plain through the whole opening sync, then
+  captioned ("White — 30,223 printings") the moment the index published — and the query's
+  `dataUpdateCount` stopped dead at 40 (≈40 × 500 ms over a ~20 s cold window) rather than
+  climbing, which is the half of the claim that says it does not poll a healthy index forever.
 - **An index over an *empty* corpus answers `ready: false` too**, and that is the state a new
   user is in for the whole of the ~93 s opening sync. Counted honestly every option is zero,
   the greying rule dims the entire row, and with no filter on there is no `Reset all` drawn to
@@ -628,9 +689,13 @@ to guess.
 - **Greying on the real corpus, measured in the shipped window 2026-08-11.** A `Lightning
   Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing in this
   search", opacity 0.45); a `standard` format filter greys **26 of the 50 set rows on screen**
-  out of 384–592 of the 1 047 the picker knows. A facet pass costs **4.4–47.6 ms** end to end
-  through `invoke` (medians of five; worst is a colour dimension at 47.6 ms), inside the
-  design's 57 ms budget.
+  out of 384–592 of the 1 047 codes the picker knows. (1 047 against the 986 quoted in
+  `index/mod.rs`: that one is the **paper** corpus the index is built over, this one is every
+  code `list_sets` returns.) A facet pass costs **4.4–47.6 ms** end to end through `invoke` on
+  a **debug** build (medians of five; worst is a colour dimension at 47.6 ms) and
+  **4.7–6.0 ms** on a **release** one — so the design's 57 ms budget is cleared with the
+  pessimistic figure. Name the build: the ~8× between those two lines is the whole reason
+  this sentence carries both.
 - **`aria-disabled`, never the `disabled` attribute** — a `disabled` button leaves the tab
   order, and a filter row that greys as the reader types would shrink and grow under a
   keyboard caret. Verified live: a greyed chip has `tabIndex 0`, no `disabled` attribute, is
@@ -640,13 +705,17 @@ to guess.
   `disabled` is right is the format `<option>` — a native listbox option is not a tab stop
   there is anything to lose.
 - **A chip greyed by the previous search swallows a press for ~300–330 ms after the box is
-  cleared, and the cause is the search box's debounce rather than the faceting.** Measured
-  live: pressing "Mana value 7" 5, 167 and 288 ms after clearing `Lightning Bolt` did nothing;
-  at 336 ms and beyond it acted. `DEBOUNCE_MS` is 300, so for that window the *whole view* is
-  still the old search — the result count still reads "7 cards" — and the chip agrees with
-  everything else on screen. The undebounced path has no such window: a format change swaps
-  the counts within **6 ms** when the new filter set is already in React Query's cache. Worth
-  knowing before blaming `keepPreviousData`, whose own contribution is the ~32 ms of flight.
+  cleared — and this is faceting's debt, not the search box's.** Measured live: pressing
+  "Mana value 7" 5, 167 and 288 ms after clearing `Lightning Bolt` did nothing; at 336 ms and
+  beyond it acted. The *trigger* is `DEBOUNCE_MS` (300), and the undebounced path has no such
+  window — a format change swaps the counts within **6 ms** when the new filter set is already
+  in React Query's cache, so `keepPreviousData` contributes only the ~32 ms of flight. But the
+  **defect** is this feature's own invariant running backwards: for those 300 ms the row is
+  greying against text the counts do not describe, which is *greying while not knowing*, and
+  the whole rule is that not-knowing fails open. It is shipped deliberately — the result
+  caption still reads "7 cards", so the chip agrees with everything visible beside it — and
+  the fix, when it is wanted, is one line **inside faceting**: fail open while
+  `text !== debouncedText`. Not a change to the search box.
 
 ## Image cache (measured 2026-08-04, live)
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`

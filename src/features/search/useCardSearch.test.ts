@@ -11,6 +11,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { searchCards, facetCards },
 }));
 
+import { COLD_POLL_MS } from "./useCardFacets";
 import {
   activeFilterCount,
   cycleTriState,
@@ -253,5 +254,48 @@ describe("the facet request useCardSearch builds", () => {
     });
 
     expect(result.current.facets).toEqual(READY);
+  });
+
+  /**
+   * **A not-ready answer corrects itself, and nothing else in the app would ever correct it.**
+   *
+   * This is the one defect the live pass found (2026-08-11, shipped window): after a sync the
+   * filter row showed no counts at all while `facet_cards`, called directly, answered
+   * `ready: true`. `sync.rs` calls `lifecycle::spawn_build` and then `emit_done` on the very
+   * next line, and `spawn_build` runs `clear` **synchronously on the caller's thread** — so
+   * `done` is emitted over a cold index by construction. `useSyncInvalidation` invalidates
+   * `["cards"]`, which prefix-matches the facet key, and the single refetch that produces
+   * lands inside the ~767 ms build and caches `ready: false`. Success, so no retry; same
+   * filters, so no new key; `staleTime` 30 s, so not stale. The row sits there.
+   *
+   * The sequence below is that exact one, minus the timers: an answer arrives not-ready, the
+   * backend then becomes ready, and **nothing touches the hook** — no filter change, no
+   * remount, no refetch driven from the test. Against the ordering as it shipped this fails,
+   * because the second call never happens.
+   */
+  it("asks again on its own while the index is cold, and stops once it is ready", async () => {
+    const COLD: FacetResponse = { ...READY, ready: false };
+    facetCards.mockReset().mockResolvedValue(COLD);
+
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    // A cold answer is collapsed to `undefined` at the door, which is what leaves every
+    // control live — so the row is failing open here, not merely empty.
+    await waitFor(() => expect(facetCards).toHaveBeenCalledTimes(1));
+    expect(result.current.facets).toBeUndefined();
+
+    // The index finishes building. Real time rather than fake timers, because the hook is
+    // one of several driving this render and `vi.useFakeTimers` here would also freeze the
+    // debounce and React Query's own scheduling.
+    facetCards.mockResolvedValue(READY);
+
+    await waitFor(() => expect(result.current.facets).toEqual(READY), { timeout: 5000 });
+
+    // …and then it stops. The interval is a function of the answer, so a ready one turns it
+    // off — without that this hook would poll a healthy index every 500 ms forever.
+    const settled = facetCards.mock.calls.length;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, COLD_POLL_MS * 3));
+    });
+    expect(facetCards.mock.calls.length).toBe(settled);
   });
 });
