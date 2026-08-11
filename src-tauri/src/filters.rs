@@ -190,14 +190,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // OR within, AND without. Blank entries are dropped rather than matched: a picker's
     // cleared state sends `[]`, and some send `[""]`.
     if let Some(sets) = f.sets.as_deref() {
-        let mut picked: Vec<String> = sets
-            .iter()
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        picked.sort();
-        picked.dedup();
-        picked.truncate(MAX_SET_FILTER);
+        let picked = picked_sets(sets);
         if !picked.is_empty() {
             let holes = vec!["?"; picked.len()].join(",");
             p.wheres.push(format!("{set_code} IN ({holes})"));
@@ -251,6 +244,29 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     if f.paper_only.unwrap_or(true) {
         p.wheres.push(format!("{alias}.is_paper = 1"));
     }
+}
+
+/// The set codes a request really filters on: trimmed, lower-cased, blanks dropped, sorted,
+/// deduplicated and capped at [`MAX_SET_FILTER`].
+///
+/// **An empty answer means "no set filter", never "match nothing".** A picker's cleared
+/// state sends `[]` and some send `[""]`, and either taken literally would be `IN ()` — a
+/// syntax error in SQLite and an empty result set anywhere else.
+///
+/// A function rather than eight lines inside [`push_card_filters`], because
+/// [`crate::index::facets`] has to narrow by *exactly* this list: a facet counted over 70
+/// picked sets while the search returns the 64 this cap leaves would report options as live
+/// that the search cannot reach. Two copies of a normalisation that must agree will not.
+pub fn picked_sets(sets: &[String]) -> Vec<String> {
+    let mut picked: Vec<String> = sets
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    picked.sort();
+    picked.dedup();
+    picked.truncate(MAX_SET_FILTER);
+    picked
 }
 
 /// A filter the user actually set: trimmed, and `None` when blank.

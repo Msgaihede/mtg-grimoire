@@ -224,15 +224,20 @@ impl CardIndex {
     }
 }
 
+/// The corpus every test in this module tree counts against.
+///
+/// Its own module rather than `tests`', because [`facets`] counts over exactly this fixture
+/// and a second copy of it would be a second corpus: the numbers those tests assert (2 in
+/// `lea`, 1 in `rav`, 3 paper) are properties of *these four rows*, so the two files must
+/// read the same ones or the assertions stop meaning what they say.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod fixtures {
     use rusqlite::Connection;
 
     /// `(id, name, set_code, cmc, color_identity, is_paper, legal_mask)` — the five columns
-    /// [`CardIndex::build`] reads plus the two `cards` will not take a row without. Named
-    /// because `clippy::type_complexity` will not take a seven-element tuple written out,
-    /// and a `type` definition is the remedy the lint itself asks for.
+    /// [`super::CardIndex::build`] reads plus the two `cards` will not take a row without.
+    /// Named because `clippy::type_complexity` will not take a seven-element tuple written
+    /// out, and a `type` definition is the remedy the lint itself asks for.
     type Printing = (
         &'static str,
         &'static str,
@@ -250,7 +255,7 @@ mod tests {
     /// fixture that omits it inserts happily and answers *empty* for every format assertion
     /// over it — a green test that proves nothing, which is why `search.rs` grew
     /// `fill_legal_mask` for its own fixtures.
-    fn seeded() -> Connection {
+    pub(crate) fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
         let modern = crate::legalities::bit("modern").unwrap() as i64;
@@ -275,7 +280,7 @@ mod tests {
     /// A collection entry for one printing. `set_code`/`collector_number` are denormalized
     /// migration insurance rather than part of [`crate::schema::COLLECTION_GRAIN`], so they
     /// are filler here — the `card_id` is what makes two entries distinct.
-    fn own(conn: &Connection, card_id: &str, quantity: i64) {
+    pub(crate) fn own(conn: &Connection, card_id: &str, quantity: i64) {
         conn.execute(
             "INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
                 quantity,created_at,updated_at)
@@ -286,12 +291,18 @@ mod tests {
     }
 
     /// One printing's rowid — the doc id every bitset here is keyed by.
-    fn doc(conn: &Connection, id: &str) -> u32 {
+    pub(crate) fn doc(conn: &Connection, id: &str) -> u32 {
         conn.query_row("SELECT rowid FROM cards WHERE id=?1", [id], |r| {
             r.get::<_, i64>(0)
         })
         .unwrap() as u32
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::{doc, own, seeded};
+    use super::*;
 
     #[test]
     fn the_paper_set_holds_paper_printings_and_nothing_else() {
