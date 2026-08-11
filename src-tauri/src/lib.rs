@@ -205,6 +205,7 @@ pub fn run() {
             deck::deck_update,
             deck::deck_delete,
             deck::deck_duplicate,
+            deck::deck_set_cover_image,
             deck::deck_list,
             deck::deck_get,
             deck::deck_add_card,

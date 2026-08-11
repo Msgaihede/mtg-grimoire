@@ -1063,7 +1063,7 @@ mod tests {
         crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
         assert!(rows(&conn, id) > 0);
 
-        crate::deck::delete_deck(&conn, id).unwrap();
+        crate::deck::delete_deck(&conn, id, None).unwrap();
 
         let left: i64 = conn
             .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))

@@ -45,6 +45,18 @@ sha2 = "0.10"
 # `deflate` only: `Compress-Archive` writes plain deflate, and the default feature set
 # drags in bzip2, zstd, lzma and AES for formats this will never see.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Decoding whatever a user picks as a custom deck cover and re-encoding it to WEBP at the
+# `art` crop's 626x457, so a cover and a card's art are interchangeable in every tile.
+# `default-features = false` drops rayon and eleven formats nobody will hand a file-picker;
+# what is left is the five a person actually has on disk plus `webp`, which is both the
+# decoder for a WEBP they picked and — through `image-webp` — the only encoder in the tree.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+] }
 
 # Waiting for the process an update replaced to actually terminate, which is the one thing
 # std cannot express: there is no portable "is this PID alive". `0.61` is already in the
