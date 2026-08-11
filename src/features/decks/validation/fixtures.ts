@@ -271,7 +271,7 @@ export function resetRowIds(): void {
  *
  * The four fixed names are `schema::PREDEFINED_CATEGORIES` verbatim. `main` has no predefined
  * row — a deck may own any number of `main` categories and the seed names none — so the name
- * here is `"Main deck"`, which is what the v7 migration calls the category it files every
+ * here is `"Main deck"`, which is what the v8 migration calls the category it files every
  * legacy `main` row into. The ids are this file's own and mean nothing beyond "two kinds are
  * two categories"; no rule in this folder reads {@link CardFacts.categoryId}, and a test that
  * cares about a *particular* category passes one.
@@ -295,7 +295,7 @@ const CATEGORIES: Record<CategoryKind, { id: number; name: string }> = {
  * **`categoryActive` defaults to `categoryKind !== "maybe"`**, mirroring
  * `schema::PREDEFINED_CATEGORIES`: the Maybeboard is the one predefined category seeded off,
  * and every other pile a deck is born with is on. That default is what keeps this the *only*
- * place schema v7 is visible to a test that was written against the old zones — a fixture
+ * place schema v8 is visible to a test that was written against the old zones — a fixture
  * saying `categoryKind: "maybe"` still means what `zone: "maybe"` meant, with no second edit.
  *
  * A test about the switch itself says so: `categoryActive: true` on a `maybe` kind is a
@@ -338,6 +338,8 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
     rarity: "common",
     faces: null,
     gameChanger: false,
+    // A printing fact the engine never reads -- it is here so the row is a whole DeckCard.
+    finishes: null,
     everUncommon: false,
     unitPriceUsd: null,
     ownedQuantity: 0,

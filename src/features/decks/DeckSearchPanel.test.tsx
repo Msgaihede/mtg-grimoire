@@ -38,6 +38,9 @@ const BOLT: CardSummary = {
   finishes: `["nonfoil","foil"]`,
   ownedQuantity: 3,
   wishlisted: false,
+  printings: 1,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 const page = (items: CardSummary[]): SearchResponse => ({

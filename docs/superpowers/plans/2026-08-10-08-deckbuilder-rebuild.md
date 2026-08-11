@@ -43,7 +43,7 @@ are the rules it states that this plan touches most.
   the *argument*, never as a `WHERE` term. This plan reads it nowhere.
 - **A migration that renumbers `cards` rowids or touches `name`/`type_line`/`search_text` owes
   `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');`.** This plan touches only user tables, so it
-  owes none — and each new step must carry the test that proves it (`the_v7_step_leaves_the_search_index_answering`).
+  owes none — and each new step must carry the test that proves it (`the_v8_step_leaves_the_search_index_answering`).
 - **Writes take `AppState.db` through `db::lock_for(…, WRITE_LOCK_WAIT)` and answer
   `collection::BUSY`; reads go through `AppState.db_read`.**
 - **Dim text is `text-dim`, never `text-muted`.** Z-indexes come from `LAYER` in `src/lib/layers.ts`
@@ -86,7 +86,7 @@ are the rules it states that this plan touches most.
 
 | File | Responsibility |
 |---|---|
-| `schema.rs` *(modify)* | v7 migration: the four new tables, the `deck_cards` rebuild, new grain/kind constants. |
+| `schema.rs` *(modify)* | v8 migration: the four new tables, the `deck_cards` rebuild, new grain/kind constants. |
 | `deck.rs` *(modify)* | Deck CRUD, card writes, allocator, `deck_get` — re-pointed from `zone` to `category_id`, threaded with `variant`. |
 | `deck_meta.rs` *(create)* | Categories, tags and folders: rows, CRUD, `ensure_predefined_categories`. Split out because `deck.rs` is already 3 048 lines. |
 | `deck_audit.rs` *(create)* | The audit row, `record()` (called inside every deck write's transaction) and `list()`. |
@@ -131,7 +131,7 @@ mechanical re-point of the existing UI so that the contract change never leaves 
 
 ---
 
-### Task 1: Schema v7
+### Task 1: Schema v8
 
 **Files:**
 - Modify: `src-tauri/src/schema.rs` (constants near `:151`–`:208`; new `if v < 7` step after `:692`)
@@ -158,7 +158,7 @@ Add to `schema.rs`'s test module. Four tests, each pinning one thing the step mu
 
 ```rust
 #[test]
-fn the_v7_step_replaces_the_zone_with_a_category() {
+fn the_v8_step_replaces_the_zone_with_a_category() {
     let mut conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     migrate(&mut conn).unwrap();
@@ -178,7 +178,7 @@ fn the_v7_step_replaces_the_zone_with_a_category() {
 }
 
 #[test]
-fn the_v7_step_carries_a_v6_deck_across_into_categories() {
+fn the_v8_step_carries_a_v6_deck_across_into_categories() {
     // Build a v6 database by hand, put one card in each zone, migrate, and assert every
     // card kept its quantity and landed in a category of the matching kind. This is the
     // test that fails in the field and nowhere else if the backfill is wrong.
@@ -186,7 +186,7 @@ fn the_v7_step_carries_a_v6_deck_across_into_categories() {
 }
 
 #[test]
-fn the_v7_step_leaves_the_search_index_answering() {
+fn the_v8_step_leaves_the_search_index_answering() {
     // The twin of the v2/v3/v5 tests: this step touches only user tables, so it owes no
     // `cards_fts` rebuild — and this is what proves the claim rather than assuming it.
 }
@@ -329,7 +329,7 @@ if v < 7 {
     // The rebuild. `category_id` is NOT NULL from the first row, which is only possible
     // because the categories above already exist.
     tx.execute_batch(&format!(
-        "CREATE TABLE deck_cards_v7 (
+        "CREATE TABLE deck_cards_v8 (
             id INTEGER PRIMARY KEY,
             deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
             -- CASCADE: deleting a category deletes the cards filed under it, which is
@@ -352,7 +352,7 @@ if v < 7 {
             updated_at INTEGER NOT NULL
          );
 
-         INSERT INTO deck_cards_v7
+         INSERT INTO deck_cards_v8
             (id, deck_id, category_id, variant, card_id, set_code, collector_number,
              lang, name, tag_id, quantity, needs_review, created_at, updated_at)
          SELECT dc.id, dc.deck_id, cat.id, 'live', dc.card_id, dc.set_code,
@@ -363,7 +363,7 @@ if v < 7 {
              ON cat.deck_id = dc.deck_id AND cat.kind = dc.zone;
 
          DROP TABLE deck_cards;
-         ALTER TABLE deck_cards_v7 RENAME TO deck_cards;
+         ALTER TABLE deck_cards_v8 RENAME TO deck_cards;
 
          CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_cards_grain
             ON deck_cards ({deck_grain});
@@ -401,7 +401,7 @@ Expected: PASS, all four.
 
 ```bash
 git add src-tauri/src/schema.rs
-git commit -m "feat(schema): v7 replaces the deck zone with user-owned categories"
+git commit -m "feat(schema): v8 replaces the deck zone with user-owned categories"
 ```
 
 ---
@@ -1042,7 +1042,7 @@ variants, a deactivated user category, a tagged card and a violation.
   Audit log, grouped by date → 4, 9, 15. Four views → 12. Stack sorting → 9, 13. Folders → 1, 2, 18.
   Live/Theory + enable/disable + diff → 1, 5, 16. Deck picture from card art or upload → 6, 17.
   Description + notes → 1, 7, 17.
-- **Known hand-off, stated rather than hidden:** the v7 migration files every legacy `main` card
+- **Known hand-off, stated rather than hidden:** the v8 migration files every legacy `main` card
   into one **"Main deck"** category rather than splitting it by type. Splitting is
   `autoCategoryFor`, which lives in TypeScript because it is domain logic, and a second copy in the
   migration would be two rules to keep in step. The categories panel's **"Auto-categorise from card

@@ -106,7 +106,7 @@ describe("the deck row a card was opened from", () => {
   /**
    * One slot, as the deck editor's category columns write it.
    *
-   * Both halves of the category are here because the store keeps both: schema v7 made a
+   * Both halves of the category are here because the store keeps both: schema v8 made a
    * category a row the *user* names, so the word is no longer derivable from the id by a lookup
    * table, and the pane that reads this context is a sibling of the editor with no category list
    * of its own. `PaneDeckContext` is where that pairing is argued.

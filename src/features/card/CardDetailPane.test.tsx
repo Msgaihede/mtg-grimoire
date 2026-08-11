@@ -87,11 +87,11 @@ const printings = [printing()];
  * The deck slot the pane is opened from in the swap tests — one deck, one category, one
  * printing.
  *
- * Schema v7 made a category a `deck_categories` row the user names, so a context carries the
+ * Schema v8 made a category a `deck_categories` row the user names, so a context carries the
  * **id** the write is addressed by *and* the **name** the pane spells out (the fold sentence,
  * and every "Use this printing" label). The pane is a sibling of the deck editor and has no
  * category list to translate one through, which is why both travel — `PaneDeckContext` is where
- * that is argued. `1` and `"Main deck"` mirror the v7 migration's own pile.
+ * that is argued. `1` and `"Main deck"` mirror the v8 migration's own pile.
  */
 const MAIN: PaneDeckContext = {
   deckId: 4,

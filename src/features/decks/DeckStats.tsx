@@ -43,7 +43,7 @@ export interface TypeCount {
 /**
  * One category's copies.
  *
- * Named by the row rather than by a fixed word, which is the whole of schema v7 in this file: a
+ * Named by the row rather than by a fixed word, which is the whole of schema v8 in this file: a
  * category is a pile the reader made, named and ordered, so `Removal` and `Sideboard` arrive
  * here the same way and nothing below knows which is which.
  */

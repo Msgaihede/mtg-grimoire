@@ -355,7 +355,7 @@ describe("the sidebar's drop targets", () => {
    * What a drop on the Decks entry sends, spelled out once.
    *
    * A sidebar entry has no column to point at, so it names **no category id** and lets the
-   * command find or create one by name — `useDeck`'s `DEFAULT_CATEGORY_NAME`, which is the v7
+   * command find or create one by name — `useDeck`'s `DEFAULT_CATEGORY_NAME`, which is the v8
    * migration's own word for the pile it filed every legacy main-deck row into. The name is
    * written out here rather than imported because the hook keeps it private, and a test that
    * spells it is a test that notices the day it changes (which is the day `autoCategoryFor`
@@ -469,7 +469,7 @@ describe("the sidebar's drop targets", () => {
       kind: "deck-card",
       cardId: "c-bolt",
       name: "Lightning Bolt",
-      // A `deck_categories.id`, which is what a deck row carries since schema v7 — and it has
+      // A `deck_categories.id`, which is what a deck row carries since schema v8 — and it has
       // to be a positive safe integer or `readDragData` refuses the payload outright.
       fromCategoryId: 1,
     });

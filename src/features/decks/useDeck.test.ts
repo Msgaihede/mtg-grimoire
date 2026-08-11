@@ -44,7 +44,7 @@ const DECK: DeckRow = {
  * be full.
  *
  * Two of the categories a deck is born with (`schema::PREDEFINED_CATEGORIES`) plus the pile the
- * v7 migration files every legacy main-deck row into. The Maybeboard is the one of the four
+ * v8 migration files every legacy main-deck row into. The Maybeboard is the one of the four
  * seeded switched off, and that flag is the whole of "counts toward nothing" — nothing in the
  * app reads its *kind* for that question, which is why a test that wants a pile counted in
  * nothing can equally switch off a `main` one.
@@ -113,6 +113,7 @@ const BOLT: DeckCard = {
   rarity: "common",
   faces: null,
   gameChanger: false,
+  finishes: null,
   everUncommon: false,
   unitPriceUsd: 4.5,
   ownedQuantity: 2,
@@ -236,7 +237,7 @@ describe("useDeck", () => {
    * The add with no column to point at — the docked panel's button and the sidebar's Decks
    * drop target, neither of which has a category under the cursor.
    *
-   * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is the v7
+   * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is the v8
    * migration's own word for the pile it filed every legacy main-deck row into: a deck that
    * predates categories and one made since agree about where a plain add goes. A placeholder
    * until `autoCategoryFor` exists, and one pile rather than a guess this hook invents.

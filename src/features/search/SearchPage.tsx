@@ -1,13 +1,15 @@
 import { useEffect } from "react";
+import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
-import { parseFinishes } from "@/lib/finish";
+import { parseFinishes, soleFinish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { PRICES_AS_OF } from "@/lib/prices";
+import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
@@ -47,6 +49,15 @@ const COLUMNS: TableColumn<CardSummary>[] = [
             because they are facts about the *card*, and the table's other five columns are
             about the printing. One truth, stated the same way in both layouts. */}
         <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
+        {/* The table shows no art, so the glyph carries the whole of what the wall's sheen
+            says: this printing exists in one finish and it is not the assumed one. */}
+        {tileFinish(card) && <FinishMark finish={tileFinish(card)!} />}
+        {/* What a collapsed row stands for. Drawn only past one, because "×1 printings" on
+            the 17 588 cards that have a single printing — and on *every* row once All
+            printings is on — would be a column of noise saying nothing. */}
+        {card.printings > 1 && (
+          <span className="shrink-0 text-xs text-dim">×{card.printings} printings</span>
+        )}
       </>
     ),
   },
@@ -97,7 +108,9 @@ const COLUMNS: TableColumn<CardSummary>[] = [
     headerLabel: `Price. ${PRICES_AS_OF}`,
     headerClassName: "text-right",
     cellClassName: "text-right font-mono tabular-nums",
-    cell: (card) => usdPrice(card.priceUsd),
+    // The spread across the printings the row stands for. Uncollapsed both ends are the
+    // row's own price, so this renders exactly what `usdPrice(card.priceUsd)` used to.
+    cell: (card) => priceRange(card.priceLow, card.priceHigh),
   },
   {
     key: "actions",
@@ -146,6 +159,14 @@ const tileDrag = (card: CardSummary): DragPayload => ({
   cardId: card.id,
   name: card.name,
 });
+
+/**
+ * The finish a result row's printing *is*, for the sheen over its art.
+ *
+ * Only the printings that leave no choice — foil-only and etched-only. Module scope for
+ * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes.
+ */
+const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
 
 /**
  * Card search: a filter bar, and every match in one scroll.
@@ -324,6 +345,12 @@ function Results({ search }: { search: CardSearch }) {
             // unconditionally because the badge is its own guard — on a browse of the whole
             // database almost every tile has nothing to say, and says nothing.
             badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
+            // How many printings this tile stands for, opposite the owned badge. Past one
+            // only: on a wall where every tile said "×1" the mark would be chrome.
+            topLeft={(card) => (card.printings > 1 ? <>×{card.printings}</> : null)}
+            // The 12 366 foil-only and 892 etched-only printings, which Scryfall's art has
+            // no way to show — see `soleFinish`.
+            finish={tileFinish}
             // The tile's one control, built from the row it is about: the popup offers the
             // finishes this printing exists in — a foil-only card must not take a nonfoil
             // entry — and a wish made here can be for the card rather than for this piece of

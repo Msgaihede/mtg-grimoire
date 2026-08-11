@@ -124,7 +124,7 @@ function categoriesOf(decks: FakeDeck[]): FakeDeckCategory[] {
 /**
  * `makeDb` with those five rows per deck already in it.
  *
- * A deck without its categories is a state neither `create_deck` nor the v7 migration can
+ * A deck without its categories is a state neither `create_deck` nor the v8 migration can
  * leave behind — and every card write refuses one, so a fixture missing them would fail with
  * "That category is not there any more" rather than testing what it meant to.
  */

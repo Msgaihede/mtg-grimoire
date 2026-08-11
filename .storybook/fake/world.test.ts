@@ -533,7 +533,7 @@ describe("the seeded rows agree with the cards they name", () => {
     }
   });
 
-  it("every deck owns the five categories the v7 migration leaves it, and no more", () => {
+  it("every deck owns the five categories the v8 migration leaves it, and no more", () => {
     for (const name of names) {
       const db = seed(name);
       for (const deck of db.decks) {

@@ -70,10 +70,10 @@ let nextId = 1;
  * The five categories every deck in these fixtures owns, as `(kind, name, isActive,
  * sortOrder)`.
  *
- * Four of them are `schema::PREDEFINED_CATEGORIES` and the fifth is the one schema v7's
+ * Four of them are `schema::PREDEFINED_CATEGORIES` and the fifth is the one schema v8's
  * migration builds out of a deck's old `main` zone, which it names **"Main deck"**. The sort
  * orders are that migration's own — commander 0, main 1, side 2, companion 3, maybe 4 — so a
- * deck that predates v7 reads with its Commander column first and its Maybeboard last, and
+ * deck that predates v8 reads with its Commander column first and its Maybeboard last, and
  * that is the shape every *seeded* deck here is in.
  *
  * **A kind is not a name, and this table is where that distinction is made concrete.** A
@@ -188,6 +188,7 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     rarity: card.rarity,
     faces: card.faces,
     gameChanger: card.gameChanger,
+    finishes: card.finishes,
     everUncommon: card.everUncommon,
     unitPriceUsd: finishPrice(card.prices, "nonfoil"),
     // An **allocation**, never a decrement — how many copies this deck has reserved out of the
@@ -267,6 +268,7 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     rarity: null,
     faces: null,
     gameChanger: null,
+    finishes: null,
     // `false` for an orphan, because nothing is known about a card that is not there.
     everUncommon: false,
     unitPriceUsd: null,

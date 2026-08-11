@@ -155,7 +155,7 @@ function anyPrintingWish(
 }
 
 /**
- * Five `deck_categories` rows per deck, which is what schema v7's migration leaves every deck
+ * Five `deck_categories` rows per deck, which is what schema v8's migration leaves every deck
  * that predates it: one built out of each zone that held cards, plus whichever of the four
  * predefined ones that first pass missed.
  *
@@ -196,7 +196,7 @@ function categoryOf(
   return found[0];
 }
 
-/** A deck row, filed under one of its own deck's categories — which is what schema v7 replaced
+/** A deck row, filed under one of its own deck's categories — which is what schema v8 replaced
  *  the zone with. `name` is denormalised alongside the printing: it is the one thing an
  *  orphaned deck card still has to show. */
 function deckCard(

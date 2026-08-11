@@ -18,7 +18,7 @@ export interface PaneDeckContext {
   /**
    * The `deck_categories.id` the row is filed under — what the swap is addressed by.
    *
-   * **Paired with {@link categoryName} on purpose, and the pair is not redundant.** Schema v7
+   * **Paired with {@link categoryName} on purpose, and the pair is not redundant.** Schema v8
    * made a category a row the user names, so the word is no longer derivable from the id by a
    * lookup table the way `ZONE_LABEL` was: it lives in the deck's own `categories` list, and
    * the pane is a *sibling* of the deck editor with nothing between them but this store. The

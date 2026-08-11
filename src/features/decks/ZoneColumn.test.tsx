@@ -260,7 +260,7 @@ describe("ZoneColumn", () => {
   });
 
   /**
-   * And the other half of what schema v7 changed: the **switch** decides this, never the kind.
+   * And the other half of what schema v8 changed: the **switch** decides this, never the kind.
    *
    * A Maybeboard the reader turned on counts like any other pile — the allocator claims copies
    * for it and a shortage in it is a real shortage — so a column that read

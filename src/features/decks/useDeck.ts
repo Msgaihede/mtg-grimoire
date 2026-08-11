@@ -21,7 +21,7 @@ const NO_TAGS: readonly DeckTag[] = [];
 /**
  * The variant this hook reads and writes.
  *
- * Schema v7 gave every deck two lists — `live`, what is sleeved up, and `theory`, what it is
+ * Schema v8 gave every deck two lists — `live`, what is sleeved up, and `theory`, what it is
  * being built toward — but **nothing in the app switches between them yet**: there is no
  * control for it, and adding one is a design decision this re-point deliberately does not
  * make. Every read and every write here therefore names `live`, which is what the app meant by
@@ -36,7 +36,7 @@ const VARIANT: DeckVariant = "live";
  * `deck_add_card` takes either an explicit `categoryId` — a drop onto a column the reader
  * pointed at — or a **name** to find-or-create. The surfaces that have no column to point at
  * (the docked panel's Add button, the sidebar's Decks drop target) send a name, and this is
- * that name: the v7 migration's own word for the pile it put every legacy main-deck row in, so
+ * that name: the v8 migration's own word for the pile it put every legacy main-deck row in, so
  * a deck that predates categories and one made since agree about where a plain add goes.
  *
  * **A placeholder, and named as one.** The spec's answer is `autoCategoryFor` — one rule, in

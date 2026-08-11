@@ -21,7 +21,7 @@ import { dragData, dropWrite, readDragData, type DragPayload } from "./dnd";
 /**
  * Two of the deck's categories, as ids.
  *
- * Any two positive integers would do — schema v7 made a category a row the user owns, so there
+ * Any two positive integers would do — schema v8 made a category a row the user owns, so there
  * is no fixed vocabulary left to name one by — but these are `schema::PREDEFINED_CATEGORIES`'
  * own order applied to a deck's seeded rows, which is what a reader will picture.
  */
@@ -82,7 +82,7 @@ describe("dragData / readDragData", () => {
    * takes a `from` and a `to`, and a `from` that is not a usable category id is a move the
    * backend refuses in words after the row has already left the screen.
    *
-   * **This is the fence that replaced an exhaustive check.** Before schema v7 the field was
+   * **This is the fence that replaced an exhaustive check.** Before schema v8 the field was
    * one of five words and `readDragData` could hold the whole vocabulary; a category id has no
    * closed list to check against, so what is left is `isCategoryId`'s shape check — and every
    * case below is a value that would address *every* row or *no* row rather than one. `"1"` is

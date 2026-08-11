@@ -117,6 +117,9 @@ const BOLT: CardSummary = {
   finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
+  printings: 1,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 /**

@@ -2466,7 +2466,7 @@ mod tests {
         )
         .unwrap();
         let deck = conn.last_insert_rowid();
-        // A deck card is filed under a category since schema v7, and `category_id` is
+        // A deck card is filed under a category since schema v8, and `category_id` is
         // `NOT NULL` — so the pile has to exist before anything can be in it.
         let main = crate::schema::tests::category(&conn, deck, "main", "Main deck");
         conn.execute(

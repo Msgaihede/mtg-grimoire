@@ -93,9 +93,9 @@ function category(
 
 /**
  * The categories every deck in this file has, in `sortOrder` — and therefore the columns the
- * editor draws, since schema v7 made the two the same list.
+ * editor draws, since schema v8 made the two the same list.
  *
- * `schema::PREDEFINED_CATEGORIES`' four, plus the `Main deck` the v7 migration files every
+ * `schema::PREDEFINED_CATEGORIES`' four, plus the `Main deck` the v8 migration files every
  * legacy main-deck row into. The **ids are `validation/fixtures`' own**: `card()` files a row
  * under one category per kind, and a detail whose categories did not include the one its cards
  * name would draw a column with nothing in it beside a pile of rows with no column.
@@ -149,6 +149,9 @@ function found(name: string): CardSummary {
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,
+    printings: 1,
+    priceLow: 1.5,
+    priceHigh: 1.5,
   };
 }
 
@@ -337,7 +340,7 @@ describe("DeckEditor", () => {
    *
    * There used to be a filter here: Modern got a sideboard and no commander column, because
    * `sideboard_max` and `requires_commander` decided which of the five fixed zones were slots
-   * this format had. Schema v7 makes a category a row the *user* named, ordered and switched on
+   * this format had. Schema v8 makes a category a row the *user* named, ordered and switched on
    * or off, so hiding one would hide a pile they built. This deck is Modern and its Commander
    * column is drawn — which is the whole of what changed.
    */
@@ -868,7 +871,7 @@ describe("DeckEditor", () => {
    * The Maybeboard is a column like the rest — **no drawer, and nothing to open.**
    *
    * It used to be a disclosure under the deck, shut by default, because `maybe` was the one
-   * zone that counted toward nothing. Schema v7 moves that fact onto `is_active`, which any
+   * zone that counted toward nothing. Schema v8 moves that fact onto `is_active`, which any
    * category can carry, so the Maybeboard is one seeded row that starts switched off and there
    * is no word left for a drawer to be attached to. Its rows are on screen from the first
    * paint.

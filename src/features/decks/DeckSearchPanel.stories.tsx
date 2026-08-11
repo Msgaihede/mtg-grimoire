@@ -12,7 +12,7 @@ import { useDeck } from "./useDeck";
  * second observer of `["decks","detail",id]` is an extra `deck_get` every time a deck is opened.
  * So the wrapper is where the hook goes, exactly as `DeckEditor.tsx` is.
  *
- * **`categories` comes off that same hook**, which is new since schema v7 and is the whole
+ * **`categories` comes off that same hook**, which is new since schema v8 and is the whole
  * simplification: the list this panel offers used to be `moveTargets`, derived from the seeded
  * `format_specs` row, and a story had to hand-copy that derivation or repeat it. A category is
  * not derived from anything — it is a row of the deck the reader owns — so `deck_get` answers
@@ -65,7 +65,7 @@ const meta = {
           "column beside the deck, with the wall's two slots pointed at this job: the badge " +
           "keeps telling the collection story, and the action becomes **Add to deck**.\n\n" +
           "Driven end to end by `.storybook/fake/`: the wall is `search_cards` over the seeded " +
-          "corpus (**41 cards** on the `starter` seed's default browse, measured 2026-08-10 — " +
+          "corpus (**36 cards** on the `starter` seed's default browse, measured 2026-08-10 — " +
           "43 printings less the two the fake's `paperOnly` default excludes), and the Add " +
           "button writes through `deck_add_card`.\n\n" +
           "**The category choice sits above the results rather than on each of them.** It is " +
@@ -123,7 +123,7 @@ export const Docked: Story = {
       "aria-expanded",
       "true",
     );
-    await expect(await within(panel).findByText("41 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
     // The category is in every Add button's name, and it is the only part of the press a
     // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
@@ -174,7 +174,7 @@ export const Collapsed: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
-    await expect(await within(panel).findByText("41 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
     await userEvent.click(toggle);
 
@@ -182,7 +182,7 @@ export const Collapsed: Story = {
     // The same button, not a new one in the same place.
     await expect(within(panel).getByRole("button", { name: "Search cards" })).toBe(toggle);
     // Everything below the rail is gone with it: the filters, the count and the wall.
-    await expect(within(panel).queryByText("41 cards")).toBeNull();
+    await expect(within(panel).queryByText("36 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox")).toBeNull();
     await expect(within(panel).queryByLabelText("Add to")).toBeNull();
   },
@@ -264,7 +264,7 @@ export const NoMatch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    await expect(await within(panel).findByText("41 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("36 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
     // label, "Search cards".
@@ -302,7 +302,7 @@ export const Busy: Story = {
     // Matched by prefix, where the click-to-add story above spells the category out.
     //
     // The name's tail is the category the picker is on, which is the deck's **first** in
-    // `sortOrder` — the Commander pile, on a v7-seeded deck, not the main deck — and it
+    // `sortOrder` — the Commander pile, on a v8-seeded deck, not the main deck — and it
     // arrives on the deck read rather than on the search this story is really about. Naming it
     // would make a story about a *refused write* wait on, and fail over, a list it does not
     // care about; `findByRole` with a prefix waits for the button and says nothing about which
@@ -316,6 +316,6 @@ export const Busy: Story = {
       "Could not add that card — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
-    await expect(within(panel).getByText("41 cards")).toBeInTheDocument();
+    await expect(within(panel).getByText("36 cards")).toBeInTheDocument();
   },
 };

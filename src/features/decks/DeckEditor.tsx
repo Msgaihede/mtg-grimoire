@@ -32,7 +32,7 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  *
  * **One width for every column, where there used to be a map keyed by zone.** That map gave the
  * main deck two shares of the spare width against one each for the sideboard, the commander and
- * the companion, and it cannot survive schema v7: a column is now a `deck_categories` row the
+ * the companion, and it cannot survive schema v8: a column is now a `deck_categories` row the
  * user named, so there is no closed set of keys to write widths against and no way to know from
  * a category which of them it is. The main deck's own `flex-[2_1_24rem]` is what every column
  * gets — the widest of the five, chosen because a user's category is as likely to be a
@@ -291,7 +291,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * rule made sense while a zone was a slot the *format* implied: hiding one hid nothing the
    * reader had made, and the exception kept a re-format from leaving copies invisible.
    *
-   * Schema v7 makes it wrong. A category is a row the user named, ordered and switched on or
+   * Schema v8 makes it wrong. A category is a row the user named, ordered and switched on or
    * off, so hiding one would hide a pile they built — and a deck may own any number of `main`
    * ones, which no spec cell has anything to say about. The format still judges the deck (see
    * the check chip in the header); it no longer decides what is drawn.
@@ -444,7 +444,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             // The row this menu belongs to is about to leave the column, so the caret goes to
             // where the card landed — which announces the category and its new count. The
             // editor itself is the fallback for a column that is not on screen, which since
-            // schema v7 means one the deck no longer has rather than a drawer that is shut. A
+            // schema v8 means one the deck no longer has rather than a drawer that is shut. A
             // dropped card is handed on the same way: it is the row that unmounts either way,
             // and focus follows the card.
             (categoryRefs.current.get(to) ?? editorRef.current)?.focus();
@@ -795,7 +795,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               hand-offs that opened it (a move into the pile, and picking it as the add target).
               It was a disclosure under the deck because `maybe` was the one zone that counted
               toward nothing — so it was kept out of the way and out of the arithmetic. Schema
-              v7 moves that fact onto `deck_categories.is_active`, where any category can carry
+              v8 moves that fact onto `deck_categories.is_active`, where any category can carry
               it: the Maybeboard is one seeded row that happens to start switched off, a pile
               the user switches off behaves identically, and a Maybeboard they switch on counts
               like anything else. A drawer for one of them would be chrome attached to a word

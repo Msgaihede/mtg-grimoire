@@ -99,6 +99,19 @@ const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
     "CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)",
+    // The collapsed search's whole cost model. Its group step reads `oracle_id` in group
+    // order and finds every other column it needs inside the index, so the scan is
+    // *covering*: 108 ms for the default collapsed browse against 767 ms without it,
+    // measured 2026-08-11 over the live 107 337-row paper corpus. 14 MB, and 0.7 s added to
+    // a 92–99 s sync.
+    //
+    // The column order is load-bearing and the trailing four are not decoration — drop one
+    // and the scan stops covering. Widening it further with `rarity`/`set_code`/`type_line`
+    // was built and measured, and is a straight loss: it made the name sort 38 → 61 ms and
+    // left the sorts it was meant to help unchanged, because those cost row lookups rather
+    // than index reads.
+    "CREATE INDEX IF NOT EXISTS idx_cards_collapse \
+     ON cards(oracle_id, is_paper, released_at, id, name, price_usd)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch.
@@ -159,7 +172,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -192,10 +205,10 @@ pub const WISHLIST_GRAIN: &str =
     "coalesce(oracle_id, ''), coalesce(card_id, ''), coalesce(preferred_finish, '')";
 
 /// The five rules roles a deck category can carry, spec §6 verbatim — the same five words
-/// `deck_cards.zone` held before schema v7 replaced the zone with a category the user owns.
+/// `deck_cards.zone` held before schema v8 replaced the zone with a category the user owns.
 /// CHECK-constrained on `deck_categories.kind` and mirrored in TS.
 ///
-/// The v7 DDL spells the five words out rather than interpolating this constant, for the
+/// The v8 DDL spells the five words out rather than interpolating this constant, for the
 /// reason [`CARDS_COLUMNS`] is frozen: a migration step is history. Editing this list would
 /// silently rewrite the CHECK a *fresh* install creates while every upgraded database kept
 /// the old one, and the two would then disagree about what a category's kind can be. A
@@ -216,7 +229,7 @@ pub const CATEGORY_KINDS: [&str; 5] = ["main", "side", "commander", "companion",
 /// case scattered across five files — it is now one seeded row like any other, and every
 /// reader that used to ask "is this the maybe zone?" asks "is this category active?" instead.
 ///
-/// Nothing in the v7 migration reads this constant: the backfill below is history, frozen
+/// Nothing in the v8 migration reads this constant: the backfill below is history, frozen
 /// like [`CATEGORY_KINDS`]'s DDL, and points at its own literal strings rather than at
 /// something later code could change out from under it. This constant is for
 /// `deck_meta::ensure_predefined_categories`, which creates these four rows for every deck
@@ -239,7 +252,7 @@ pub const PREDEFINED_CATEGORIES: [(&str, &str, bool); 4] = [
 /// `category_id` is *in* the grain for exactly `zone`'s old reason: the same printing filed
 /// under the main deck and under the Maybeboard is two intentions, not one row that moved —
 /// only now that is read off a category the user can rename rather than off a fixed word.
-/// `variant` is new in v7 and widens the grain again: the same printing can sit in the
+/// `variant` is new in v8 and widens the grain again: the same printing can sit in the
 /// `live` deck and the `theory` one at once, and an edit made while trying out a change must
 /// never fold into the row the deck is actually sleeved as.
 pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id";
@@ -601,7 +614,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //   denormalised beside `card_id`, exactly as the collection and wishlist do.
         // * Everything that names USER DATA is an enforced reference — `deck_cards.deck_id`,
         //   `deck_allocations.deck_id` and `deck_allocations.collection_entry_id`, all ON
-        //   DELETE CASCADE here. (v7 adds several more elsewhere, two of them SET NULL —
+        //   DELETE CASCADE here. (v8 adds several more elsewhere, two of them SET NULL —
         //   see the module doc at the top of this file for the current, checkable list;
         //   this step is history and only ever spoke for what it itself created.) CASCADE
         //   is chosen per delete-site: right for the two user-initiated deletes (deck
@@ -650,7 +663,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              );
-             -- Frozen as a literal, not `{{deck_grain}}`: schema v7 changes what
+             -- Frozen as a literal, not `{{deck_grain}}`: schema v8 changes what
              -- `DECK_CARD_GRAIN` *means* (category and variant replace the zone), and this
              -- step is history — it must keep building the v5-era index over the v5-era
              -- table it actually created above, not whatever the constant says today. The
@@ -770,6 +783,23 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     if v < 7 {
+        let tx = conn.unchecked_transaction()?;
+        // One index on `cards`, for the collapsed search. This re-runs the whole
+        // [`CARDS_INDEXES`] batch rather than naming the new one: every statement in it is
+        // `IF NOT EXISTS`, so the step means "bring the index list up to date" and the
+        // other three are untouched. A fresh install already has it from the v1 block and
+        // arrives here with nothing to do.
+        //
+        // Nothing here reads `raw`, so [`json_raw`] has no part to play. Nothing here
+        // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
+        // renumbered, so no `cards_fts` rebuild is owed — the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(&cards_indexes_sql())?;
+        // Literal `7`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 7;")?;
+        tx.commit()?;
+    }
+    if v < 8 {
         let tx = conn.unchecked_transaction()?;
         // Plan 8. The deck's grouping stops being a fixed five-word enum and becomes rows the
         // user owns — so `deck_cards.zone` is replaced by `deck_cards.category_id`, and the
@@ -922,7 +952,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // The rebuild. `category_id` is NOT NULL from the first row, which is only possible
         // because the categories above already exist.
         tx.execute_batch(&format!(
-            "CREATE TABLE deck_cards_v7 (
+            "CREATE TABLE deck_cards_v8 (
                 id INTEGER PRIMARY KEY,
                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
                 -- CASCADE: deleting a category deletes the cards filed under it, which is
@@ -945,7 +975,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 updated_at INTEGER NOT NULL
              );
 
-             INSERT INTO deck_cards_v7
+             INSERT INTO deck_cards_v8
                 (id, deck_id, category_id, variant, card_id, set_code, collector_number,
                  lang, name, tag_id, quantity, needs_review, created_at, updated_at)
              SELECT dc.id, dc.deck_id, cat.id, 'live', dc.card_id, dc.set_code,
@@ -959,11 +989,11 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              -- are none) under `PRAGMA foreign_keys=ON`, same as any other statement — but
              -- that pragma is a documented no-op *inside a transaction*, and `migrate` always
              -- runs inside one. It must be left exactly as it already was; there is nothing
-             -- to toggle here. The rename is what keeps `deck_cards_v7`'s row ids — copied
+             -- to toggle here. The rename is what keeps `deck_cards_v8`'s row ids — copied
              -- verbatim above — as `deck_cards.id`, which is what lets `deck_allocations` and
              -- anything else holding one stay correct without a repoint of its own.
              DROP TABLE deck_cards;
-             ALTER TABLE deck_cards_v7 RENAME TO deck_cards;
+             ALTER TABLE deck_cards_v8 RENAME TO deck_cards;
 
              CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_cards_grain
                 ON deck_cards ({deck_grain});
@@ -972,8 +1002,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             deck_grain = DECK_CARD_GRAIN,
         ))?;
 
-        // Literal `7`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA user_version = 7;")?;
+        // Literal `8`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 8;")?;
         tx.commit()?;
     }
     Ok(())
@@ -1339,6 +1369,89 @@ pub(crate) mod tests {
         assert_eq!(still, 1, "the debt stays where a later run will find it");
     }
 
+    /// The collapsed search reads this index and nothing else; without it the default
+    /// browse costs 767 ms instead of 108 ms. It lives in [`CARDS_INDEXES`] because
+    /// [`swap_staging`] drops `cards` with its indexes on every sync and replays only that
+    /// list — an index created anywhere else is gone at the next sync, on every machine
+    /// that has already migrated.
+    #[test]
+    fn the_collapse_index_exists_after_migrate_and_survives_a_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("migrate must create idx_cards_collapse");
+        // The column order is the whole point: `oracle_id` leads so the GROUP BY reads it
+        // in group order, and the rest are there so the scan is covering.
+        assert!(
+            sql.contains("oracle_id, is_paper, released_at, id, name, price_usd"),
+            "index column order decides whether the scan is covering: {sql}"
+        );
+
+        create_staging(&conn).unwrap();
+        swap_staging(&conn).unwrap();
+        let after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type='index' AND tbl_name='cards' AND name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 1, "the swap must replay the collapse index");
+    }
+
+    /// A database that migrated before the collapse index existed must gain it, and running
+    /// the step twice must be a no-op — every statement in [`CARDS_INDEXES`] is
+    /// `IF NOT EXISTS`, which is what lets the v7 step re-run the whole list rather than
+    /// naming one index.
+    ///
+    /// The fixture is [`v6_deck_database`] — a database genuinely *at* version 6, with
+    /// `cards` in its v1 shape and the three indexes v1 created — rather than a head
+    /// database with `DROP INDEX` and `PRAGMA user_version = 6` behind it. Rewinding the
+    /// pragma stopped being a stand-in for a v6 database the moment the v8 step joined the
+    /// ladder *below* this one: `migrate` reads `user_version` once and walks every step
+    /// above it, so a rewind to 6 tells v8 to rebuild `decks` and `deck_cards` while they
+    /// are already in their v8 shape, and the run dies on a duplicate `folder_id` column —
+    /// a failure no real upgrade could produce. It is the same trap [`v6_deck_database`]'s
+    /// own doc names, arriving at a second test.
+    #[test]
+    fn the_v7_step_is_idempotent_and_adds_the_index_to_an_existing_database() {
+        let conn = v6_deck_database();
+        let before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            before, 0,
+            "a v6 database has not got the collapse index yet"
+        );
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='idx_cards_collapse'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
     #[test]
     fn staging_swap_replaces_cards_and_fts_finds_new_rows() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1365,13 +1478,14 @@ pub(crate) mod tests {
         let idx: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='cards'
-                 AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name')",
+                 AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name',
+                              'idx_cards_collapse')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
         assert_eq!(
-            idx, 3,
+            idx, 4,
             "indexes must be recreated under their original names"
         );
 
@@ -2340,7 +2454,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    /// One category of one deck — the v7 stand-in for what `deck_meta::
+    /// One category of one deck — the v8 stand-in for what `deck_meta::
     /// ensure_predefined_categories` will create once Task 2 lands. `is_active` follows
     /// [`PREDEFINED_CATEGORIES`]'s own rule (`maybe` inactive, everything else active)
     /// rather than taking a parameter, because no test below has a reason to want otherwise
@@ -2546,7 +2660,7 @@ pub(crate) mod tests {
     /// and the quantity CHECK is enforced where it cannot be argued with. `category_id` is
     /// in the grain for exactly `zone`'s old reason: the same printing filed under Main and
     /// under the Maybeboard is two different intentions, not one row with two homes.
-    /// `variant` is new in v7 and in the grain again for the same shape of reason — the
+    /// `variant` is new in v8 and in the grain again for the same shape of reason — the
     /// same printing can sit in the Live deck and the Theory one at once, and an edit tried
     /// out in Theory must never fold into the Live row it is being tried against.
     ///
@@ -2611,13 +2725,13 @@ pub(crate) mod tests {
         }
     }
 
-    // ---- v7: categories replace the zone --------------------------------------------
+    // ---- v8: categories replace the zone --------------------------------------------
 
     /// `zone` is gone from `deck_cards` entirely, `category_id` is `NOT NULL`, and the two
     /// columns the wider grain needs (`variant`, `tag_id`) exist. This is the shape check;
-    /// `the_v7_step_carries_a_v6_deck_across_into_categories` is the behaviour it enables.
+    /// `the_v8_step_carries_a_v6_deck_across_into_categories` is the behaviour it enables.
     #[test]
-    fn the_v7_step_replaces_the_zone_with_a_category() {
+    fn the_v8_step_replaces_the_zone_with_a_category() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         migrate(&conn).unwrap();
@@ -2639,17 +2753,17 @@ pub(crate) mod tests {
         assert!(cols.iter().any(|(n, _)| n == "tag_id"));
     }
 
-    /// The gap the second `deck_categories` insert in the v7 step closes: a deck that
+    /// The gap the second `deck_categories` insert in the v8 step closes: a deck that
     /// predates categories and has never held a card — no `deck_cards` row in any zone —
     /// is invisible to the first insert, which is driven entirely off `deck_cards`.
     /// Without the second pass this deck would come out of `migrate` owning zero
-    /// categories, exactly as every deck made between v7 shipping and
+    /// categories, exactly as every deck made between v8 shipping and
     /// `deck_meta::ensure_predefined_categories` landing would have, not only the ones a
     /// human would call "legacy". Built on [`v6_deck_database`] the way
-    /// [`the_v7_step_carries_a_v6_deck_across_into_categories`] is, minus every
+    /// [`the_v8_step_carries_a_v6_deck_across_into_categories`] is, minus every
     /// `deck_cards` row.
     #[test]
-    fn the_v7_step_seeds_predefined_categories_for_a_deck_with_no_cards() {
+    fn the_v8_step_seeds_predefined_categories_for_a_deck_with_no_cards() {
         let conn = v6_deck_database();
         conn.execute(
             "INSERT INTO decks (name, created_at, updated_at)
@@ -2689,20 +2803,20 @@ pub(crate) mod tests {
     /// A database that stopped at version 6 — decks and their cards in the pre-category
     /// shape, which is what every machine that has synced since Plan 4 has on disk today.
     /// Built by hand rather than by calling [`migrate`] and rewinding `PRAGMA user_version`
-    /// backward: rewinding the pragma would still leave `deck_cards` in its *v7* shape,
+    /// backward: rewinding the pragma would still leave `deck_cards` in its *v8* shape,
     /// which is exactly the state this fixture must not be in — `migrate` never runs a step
-    /// twice, so a v7-shaped table with `user_version` forced back to 6 would hit the `if
-    /// v < 7` block over a table it does not match and fail in a way no real upgrade ever
+    /// twice, so a v8-shaped table with `user_version` forced back to 6 would hit the `if
+    /// v < 8` block over a table it does not match and fail in a way no real upgrade ever
     /// could.
     ///
-    /// The two tables the v7 step actually reads or writes are built in the v5 shape,
+    /// The two tables the v8 step actually reads or writes are built in the v5 shape,
     /// unchanged through v6 (the only thing v6 added was `app_meta`, which this step never
     /// touches): `decks` and `deck_cards`. Alongside them, in reduced but real shape:
     /// `collection_entries` and `deck_allocations`.
     ///
-    /// **Neither is touched by the v7 step, and neither proves anything about the
+    /// **Neither is touched by the v8 step, and neither proves anything about the
     /// `DROP TABLE deck_cards` / rebuild sequence itself** — `deck_allocations` references
-    /// `decks(id)` and `collection_entries(id)`, and the v7 step only does an additive
+    /// `decks(id)` and `collection_entries(id)`, and the v8 step only does an additive
     /// `ALTER TABLE decks ADD COLUMN` (renumbers nothing) and never touches
     /// `collection_entries` at all, so that chain is causally disconnected from the rebuild
     /// by construction. What they *are* here for: proving the whole migration still
@@ -2716,11 +2830,32 @@ pub(crate) mod tests {
     /// for whatever that immediate check cannot see: a dangling reference this transaction's
     /// own writes never touch.
     ///
-    /// `migrate`'s `if v < 7` branch is the only one that can run once `user_version` already
-    /// says 6, so nothing earlier is needed — the same reasoning `v1_database` uses one step
-    /// down.
+    /// **`cards` is here for the v7 step, which also runs.** [`migrate`] reads
+    /// `user_version` once and then walks *every* step above it, so a database that says 6
+    /// runs the v7 index step and the v8 rebuild both — and v7's whole body is
+    /// `CREATE INDEX … ON cards(…)`, a hard error against a database with no `cards` table.
+    /// It is built from [`CARDS_COLUMNS`], which is frozen to exactly the v1 shape and so is
+    /// exactly what a v6 database has, and it carries the three indexes v1 created and *not*
+    /// the fourth: not having `idx_cards_collapse` yet is precisely what makes this a pre-v7
+    /// database, which is what
+    /// [`the_v7_step_is_idempotent_and_adds_the_index_to_an_existing_database`] reads it as.
+    /// Those three are spelled out as literals rather than interpolated from
+    /// [`CARDS_INDEXES`] for that constant's own reason — this fixture is a description of
+    /// history, and a later addition to the list must not silently rewrite what a v6
+    /// database had.
+    ///
+    /// `migrate`'s `if v < 7` and `if v < 8` branches are the only two that can run once
+    /// `user_version` already says 6, so nothing earlier is needed — the same reasoning
+    /// `v1_database` uses further down the ladder.
     fn v6_deck_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE cards ({CARDS_COLUMNS});
+             CREATE INDEX idx_cards_oracle ON cards(oracle_id);
+             CREATE INDEX idx_cards_set_cn ON cards(set_code, collector_number);
+             CREATE INDEX idx_cards_name ON cards(name);"
+        ))
+        .unwrap();
         conn.execute_batch(
             "CREATE TABLE decks (
                 id INTEGER PRIMARY KEY,
@@ -2806,7 +2941,7 @@ pub(crate) mod tests {
     /// clear a user's claims, not that the rebuild "cannot" disturb them, since that FK chain
     /// does not run through `deck_cards` at all.
     #[test]
-    fn the_v7_step_carries_a_v6_deck_across_into_categories() {
+    fn the_v8_step_carries_a_v6_deck_across_into_categories() {
         let conn = v6_deck_database();
         conn.execute(
             "INSERT INTO decks (name, created_at, updated_at)
@@ -2865,11 +3000,11 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION);
 
         // A whole-database dangling-reference sweep, for less than it first looks like it
-        // buys. Measured directly (temporarily changing the v7 rebuild's `SELECT`
+        // buys. Measured directly (temporarily changing the v8 rebuild's `SELECT`
         // to `cat.id + 100000` and running this test): a *dangling* `category_id` never
         // reaches this line at all — `migrate(&conn).unwrap()` above already panics on
         // "FOREIGN KEY constraint failed", because every FK here is checked immediately
-        // under `foreign_keys=ON`, and `INSERT INTO deck_cards_v7 … SELECT` fails outright
+        // under `foreign_keys=ON`, and `INSERT INTO deck_cards_v8 … SELECT` fails outright
         // rather than committing a bad row. So this assertion is not what would catch that
         // bug; the pragma being on before `migrate` runs already is. What this line still
         // covers, and `migrate(&conn).unwrap()` does not: a dangling reference on a row this
@@ -2936,12 +3071,12 @@ pub(crate) mod tests {
     }
 
     /// The twin of `the_v2_backfill_leaves_the_search_index_answering` and its v3/v5
-    /// siblings, one step further down the ladder: v7 touches only the deck tables, never
+    /// siblings, one step further down the ladder: v8 touches only the deck tables, never
     /// `cards`, so it owes `cards_fts` no rebuild — and this is what proves that claim
-    /// rather than assuming it. Run from `v1_database` so the whole ladder is walked, v7
+    /// rather than assuming it. Run from `v1_database` so the whole ladder is walked, v8
     /// included, exactly as the v3 gzip-guard test does one step up.
     #[test]
-    fn the_v7_step_leaves_the_search_index_answering() {
+    fn the_v8_step_leaves_the_search_index_answering() {
         let conn = v1_database();
         insert_raw(&conn, "bolt", "Lightning Bolt", r#"{"object":"card"}"#);
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
@@ -2956,7 +3091,7 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(hits, 1, "the FTS index must survive the v7 step");
+        assert_eq!(hits, 1, "the FTS index must survive the v8 step");
     }
 
     /// Walks [`CATEGORY_KINDS`] against the live CHECK on `deck_categories.kind`, the way

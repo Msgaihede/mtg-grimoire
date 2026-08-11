@@ -225,7 +225,7 @@ describe("ipc argument names match the Rust command signatures", () => {
    *
    * Every card write addresses a slot by **deck, card and category**, never by the
    * `deck_cards.id` it answers with: a stale row id is the difference between emptying the
-   * slot the reader pressed and emptying somebody else's. Since schema v7 the slot carries a
+   * slot the reader pressed and emptying somebody else's. Since schema v8 the slot carries a
    * `variant` too, and it is a *fourth* part of the grain rather than a mode — the same
    * printing in the same category is two rows, one `live` and one `theory`, so a write that
    * dropped it would edit whichever the backend defaulted to. And `deck_missing_to_wishlist`

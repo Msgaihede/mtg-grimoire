@@ -100,6 +100,14 @@ export interface SearchRequest {
    * order when it is not.
    */
   sort?: SortSpec<SearchSortKey>;
+  /**
+   * Fold every printing of one card into a single row, represented by the newest printing.
+   *
+   * Absent means false, which is what this command has always answered. A **view mode**
+   * rather than a filter — see `useCardSearch`, where it is deliberately outside
+   * `activeFilterCount` and `resetAll`.
+   */
+  collapse?: boolean;
   /** Clamped to 200 by the backend; 0 means "use the default page size". */
   limit: number;
   offset: number;
@@ -152,6 +160,21 @@ export interface CardSummary {
   ownedQuantity: number;
   /** Whether a wish covers this printing — pinned to it, or unpinned on its oracle card. */
   wishlisted: boolean;
+  /**
+   * How many printings this row stands for — `1` when the search is not collapsed, because
+   * a row is a printing then.
+   *
+   * Collapsed, it counts the printings that **matched the filters** rather than every
+   * printing that exists: a search narrowed to one set reports the printings in that set.
+   */
+  printings: number;
+  /**
+   * Cheapest and dearest {@link CardSummary.priceUsd} among the printings this row stands
+   * for; both equal it when the search is not collapsed. Render a range only when the two
+   * differ — most cards have one printing, and `$2.15–$2.15` is noise.
+   */
+  priceLow: number | null;
+  priceHigh: number | null;
 }
 
 /** A page of results plus the size of the whole match set, for the pager. */
@@ -588,7 +611,7 @@ export type DeckVariant = "live" | "theory";
 /**
  * One category of one deck: a named pile the user owns.
  *
- * Schema v7 replaced the fixed five-word zone with these. The four predefined ones
+ * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
  * (`schema::PREDEFINED_CATEGORIES`) are seeded with every deck and cannot be renamed or
  * deleted; everything else is the user's, and `kind` is `main`.
  */
@@ -799,6 +822,16 @@ export interface DeckCard {
    *  Tiny Leaders' per-face MV cap and DFC commander fronts both read them. */
   faces: string | null;
   gameChanger: boolean | null;
+  /**
+   * JSON: the finishes this printing exists in (`["nonfoil","foil"]`), or `null` for an
+   * orphan.
+   *
+   * A deck names a *printing* and never a finish, so this is **not** "which finish is in the
+   * deck" — the model has no such concept, and `deck_cards` stores none. It answers the
+   * narrower question a row's art can honestly carry: whether the printing itself leaves no
+   * choice. Read it with `soleFinish` from `@/lib/finish`.
+   */
+  finishes: string | null;
   /** Printed at uncommon on **any** printing of this oracle card, which is what makes a
    *  Pauper Commander commander eligible. Computed, not read: the `paupercommander` legality
    *  key answers a different question (the 99). `false` for an orphan — nothing is known

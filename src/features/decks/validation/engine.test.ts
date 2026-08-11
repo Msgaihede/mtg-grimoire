@@ -111,7 +111,7 @@ describe("deck size", () => {
 });
 
 /**
- * The two tests below are a pair, and they are the whole of what schema v7 changed in this
+ * The two tests below are a pair, and they are the whole of what schema v8 changed in this
  * engine. "Counts toward nothing" used to be the word `maybe` on a card; it is now a switch on
  * the *category* the card is filed in, which the user owns. So the rule reaches a pile the old
  * one could never have reached, and lets go of one it always caught.

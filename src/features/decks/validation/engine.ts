@@ -14,7 +14,7 @@
  * Two things behave unlike the rest, both by design and both handled once, at the top:
  *
  * * **A card in an inactive category counts toward nothing at all** — not size, not copies,
- *   not legality. Schema v7 made that a switch on the *category* rather than a fixed word on
+ *   not legality. Schema v8 made that a switch on the *category* rather than a fixed word on
  *   the card: the Maybeboard is simply the predefined category seeded off, a category of the
  *   user's own that they switch off behaves identically, and a Maybeboard they switch on
  *   counts like anything else. The Rust allocator makes the same read (`cat.is_active = 1`),
@@ -86,7 +86,7 @@ export const SIZE_KINDS: readonly CategoryKind[] = ["main", "commander", "maybe"
 export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
   // Everything that counts toward nothing is dropped once, here, so no rule below has to
   // remember it exists. One flag rather than the old `zone !== "maybe"`, and that is the whole
-  // of schema v7 in this file: the Maybeboard is the predefined category seeded off, and a
+  // of schema v8 in this file: the Maybeboard is the predefined category seeded off, and a
   // pile of the user's own that they switched off leaves by the same line.
   const deck = cards.filter((card) => card.categoryActive);
   const legalities = readLegalities(deck);
@@ -292,7 +292,7 @@ interface CopyGroup {
  * Grouped by `oracleId`, falling back to the row's denormalized `name` — which is what an
  * orphaned row still has, and the only way two orphans of the same card are one card.
  *
- * **It counts every row it is handed, and there is no list here on purpose.** Until schema v7
+ * **It counts every row it is handed, and there is no list here on purpose.** Until schema v8
  * this filtered a `COPY_ZONES` constant whose entire content was "every zone but the
  * scratchpad", and that exclusion is now {@link validateDeck}'s first line — one step earlier
  * and asked of the *category*. Writing the four kinds out again here would put the special

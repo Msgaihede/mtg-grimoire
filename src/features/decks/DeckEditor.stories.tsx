@@ -83,7 +83,7 @@ const meta = {
           "of its own. **There is no Save**: every control writes through one of Task 4's " +
           "commands and the list redraws from what the database answered, which is what " +
           "“autosave drafts” honestly means for a deck — the row *is* the draft.\n\n" +
-          "**The columns are the deck's own categories** (schema v7), in `sortOrder`, empty and " +
+          "**The columns are the deck's own categories** (schema v8), in `sortOrder`, empty and " +
           "switched-off ones included — never a fixed set of zones, and never filtered by the " +
           "format. A category is a row the user names, orders and switches on or off, so hiding " +
           "one would hide a pile they built; the format still *judges* the deck through the " +
@@ -93,7 +93,7 @@ const meta = {
           "rows — 60 main, 15 sideboard, 2 on the Maybeboard — and validates **clean**; " +
           "**deck 2 `Kenrith Two-Drops`** is 99 main + 1 commander + 1 companion and produces " +
           "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards. All " +
-          "three came through the v7 migration, so their five columns read Commander, Main " +
+          "three came through the v8 migration, so their five columns read Commander, Main " +
           "deck, Sideboard, Companion, Maybeboard — a deck made *today* has only the four " +
           "predefined ones ({@link EmptyDeck}).\n\n" +
           "**Zero removes a deck row.** A category slot holds an intention and nothing else, so " +
@@ -140,11 +140,11 @@ type Story = StoryObj<typeof meta>;
  * **Five columns, because the deck has five categories** — and Modern's rules have nothing to say
  * about which of them are drawn. The editor used to filter the four fixed zones by the format's
  * seeded spec (no commander column unless `requiresCommander`, no sideboard unless
- * `sideboardMax`); schema v7 makes a category a row the *user* named, ordered and switched on or
+ * `sideboardMax`); schema v8 makes a category a row the *user* named, ordered and switched on or
  * off, so hiding one would hide a pile they built. This deck is Modern and its Commander column
  * is drawn, empty.
  *
- * The order is the v7 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
+ * The order is the v8 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
  * — because a *seeded* deck comes out of that migration rather than out of `deck_create`
  * (`fixtures.ts`' `DECK_CATEGORIES`).
  *
@@ -189,7 +189,7 @@ export const Modern60: Story = {
  * "Commander", of kind `commander`.)
  *
  * The Sideboard column is drawn even though every singleton commander format has
- * `sideboardMax: 0`, and that is the point of the v7 model: the format judges the deck (the chip
+ * `sideboardMax: 0`, and that is the point of the v8 model: the format judges the deck (the chip
  * below still counts its one issue) and no longer decides which piles exist. A category is data
  * the user made.
  *
@@ -228,7 +228,7 @@ export const CommanderDeck: Story = {
  *
  * **`isActive` is the whole of "counts toward nothing", and it is not the Maybeboard's alone.**
  * The old editor drew `maybe` as a collapsed drawer under the deck because it was the one zone
- * the arithmetic skipped; schema v7 moves that fact onto `deck_categories.is_active`, which any
+ * the arithmetic skipped; schema v8 moves that fact onto `deck_categories.is_active`, which any
  * category can carry — so the Maybeboard is one seeded row that happens to start switched off,
  * it is a column in the same row as the rest, and the drawer is gone. A pile the reader switches
  * off behaves identically; a Maybeboard they switch on counts like anything else.
@@ -247,7 +247,7 @@ export const MaybePile: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // No disclosure to press: the pile is a column, drawn from the first paint in its own
-    // `sortOrder` position (last, for a deck that came through the v7 migration).
+    // `sortOrder` position (last, for a deck that came through the v8 migration).
     const pile = await canvas.findByRole("region", { name: "Maybeboard, 2 cards" });
     await expect(within(pile).getByRole("button", { name: "Ancient Tomb" })).toBeInTheDocument();
     // No shortage mark, on a row the collection covers none of — the one place in the editor
@@ -350,7 +350,7 @@ export const BuiltToggle: Story = {
  * deliberately no `main` row in that list: a deck may own any number of `main` categories and
  * the seed names none, so the pile a plain add goes to is *found or created by name* on the
  * first add rather than born with the deck. That is the difference between a deck made today and
- * one the v7 migration converted, which is why the seeded decks above have five.
+ * one the v8 migration converted, which is why the seeded decks above have five.
  */
 export const EmptyDeck: Story = {
   args: { deckId: null },
@@ -502,7 +502,7 @@ export const SwapFolds: Story = {
     const canvas = within(canvasElement);
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `src/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
-    // of 41 cards that its tile is not mounted. The searchbox is addressed by role because the
+    // of 36 cards that its tile is not mounted. The searchbox is addressed by role because the
     // panel's disclosure carries the same name, "Search cards", as this field's `sr-only` label.
     await userEvent.type(
       await canvas.findByRole("searchbox", { name: "Search cards" }),
@@ -510,7 +510,7 @@ export const SwapFolds: Story = {
     );
 
     // **The add target is chosen, not assumed.** The picker opens on the deck's *first* category
-    // — which for a deck the v7 migration converted is its Commander column, `sortOrder` 0 — and
+    // — which for a deck the v8 migration converted is its Commander column, `sortOrder` 0 — and
     // this fold is about the printing sitting in the main deck. Picked by the option's own text,
     // because a category's id is the fake's own row numbering and not something a story writes
     // down.
@@ -519,6 +519,12 @@ export const SwapFolds: Story = {
       target,
       within(target).getByRole("option", { name: "Main deck" }),
     );
+
+    // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
+    // Ring is one tile — its newest printing — which is the right default for building a deck
+    // and the wrong one for a story about choosing between two printings. The toggle is on the
+    // panel's own filter bar precisely so this is one press away.
+    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),
     // which is `search::ORDER_NAME`: the card, then its newest printing.
@@ -541,7 +547,7 @@ export const SwapFolds: Story = {
     // Sol Ring, and the slot attribute is the only thing that tells them apart.
     //
     // Matched on the **suffix** of the slot, because a slot is `"<category id>:<card id>"` since
-    // schema v7 and the category's id is minted by the fake's own row numbering — not something a
+    // schema v8 and the category's id is minted by the fake's own row numbering — not something a
     // story may write down. Both rows are in one category, so the printing alone identifies this
     // one.
     const row = canvasElement.querySelector<HTMLButtonElement>(

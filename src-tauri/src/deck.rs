@@ -7,7 +7,7 @@
 //!
 //! Four rules run through the whole module and are worth stating once:
 //!
-//! * **A card is addressed by its category, never by a fixed word.** Schema v7 replaced
+//! * **A card is addressed by its category, never by a fixed word.** Schema v8 replaced
 //!   `deck_cards.zone` with `category_id` — a row in [`crate::deck_meta`]'s `deck_categories`
 //!   that the user names, orders, deactivates and deletes. What used to be a five-word enum
 //!   is now data, and the only thing the rules still read off it is its `kind`.
@@ -26,7 +26,7 @@
 //!   no purchase price, no acquisition story, just an intention the user withdrew.
 //!
 //! Every card command takes a `variant` ([`crate::schema::DECK_VARIANTS`]) as well, because
-//! v7 widened the grain: `live` is what is sleeved up, `theory` is what the deck is being
+//! v8 widened the grain: `live` is what is sleeved up, `theory` is what the deck is being
 //! built toward, and an edit tried out in one must never fold into the other's row.
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
@@ -340,7 +340,7 @@ pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, S
 
 /// Make a deck, and give it its four predefined categories in the same transaction — a deck
 /// that exists but cannot be filed into anything is a state nothing downstream expects, and
-/// the v7 migration only ever seeded these for decks that existed *at* the migration; a deck
+/// the v8 migration only ever seeded these for decks that existed *at* the migration; a deck
 /// made afterwards needs the same four rows made for it here. `deck_meta::
 /// ensure_predefined_categories` says on its own doc why it takes no transaction of its
 /// own — this is the call that supplies one.
@@ -471,7 +471,7 @@ struct CopiedCard {
 /// happen (a card's tag is a tag of its own deck) but is the honest answer if it ever does.
 ///
 /// The copy is **not** handed [`crate::deck_meta::ensure_predefined_categories`]: it inherits
-/// the source's four, because every deck has them — the v7 migration backfilled every deck
+/// the source's four, because every deck has them — the v8 migration backfilled every deck
 /// that predates it and [`create_deck`] seeds every one made since. Topping up afterwards
 /// would be a second write with a failure mode of its own (a user category named "Sideboard"
 /// collides with the seeded one on `DECK_CATEGORY_GRAIN`) in exchange for an invariant that
@@ -1092,6 +1092,13 @@ pub struct DeckCardRow {
     /// Tiny Leaders' per-face MV cap and DFC commander fronts both read them.
     pub faces: Option<String>,
     pub game_changer: Option<bool>,
+    /// The finishes this printing exists in, as the JSON array `cards.finishes` stores.
+    ///
+    /// A deck names a *printing* and never a finish — the model has no opinion on whether a
+    /// copy is foil. What this answers is the narrower question the art can carry: whether
+    /// the printing itself leaves no choice, which is true of 12 366 foil-only and 892
+    /// etched-only paper printings. `None` for an orphan, whose card has left `cards`.
+    pub finishes: Option<String>,
     /// Printed at uncommon on **any** printing of this oracle card. Computed, not read: a
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
@@ -1171,7 +1178,7 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
             dc.set_code, dc.collector_number, dc.lang, dc.needs_review,
             c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
             c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
-            c.faces, c.game_changer,
+            c.faces, c.game_changer, c.finishes,
             CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
             EXISTS(SELECT 1 FROM cards u
                     WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
@@ -1264,8 +1271,9 @@ fn read_deck_cards(
                 rarity: r.get(27)?,
                 faces: r.get(28)?,
                 game_changer: r.get(29)?,
-                unit_price_usd: r.get(30)?,
-                ever_uncommon: r.get(31)?,
+                finishes: r.get(30)?,
+                unit_price_usd: r.get(31)?,
+                ever_uncommon: r.get(32)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -3101,7 +3109,7 @@ mod tests {
     }
 
     /// A new deck is born with the four predefined categories, because a deck that exists but
-    /// cannot be filed into anything is a state nothing downstream expects — the v7 migration
+    /// cannot be filed into anything is a state nothing downstream expects — the v8 migration
     /// only ever seeded these for decks that existed *at* the migration.
     #[test]
     fn a_new_deck_is_born_with_its_predefined_categories() {
@@ -4153,6 +4161,7 @@ mod tests {
             rarity: Some("common".to_owned()),
             faces: None,
             game_changer: Some(false),
+            finishes: Some(r#"["nonfoil","foil"]"#.to_owned()),
             ever_uncommon: false,
             unit_price_usd: Some(400.0),
             owned_quantity: 3,
@@ -4170,7 +4179,8 @@ mod tests {
                 "colors": "R", "colorIdentity": "R",
                 "legalities": "{\"modern\":\"legal\"}", "power": null, "toughness": null,
                 "layout": "normal", "rarity": "common", "faces": null,
-                "gameChanger": false, "everUncommon": false, "unitPriceUsd": 400.0,
+                "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
+                "everUncommon": false, "unitPriceUsd": 400.0,
                 "ownedQuantity": 3
             })
         );

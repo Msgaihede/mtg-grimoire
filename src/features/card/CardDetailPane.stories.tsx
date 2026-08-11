@@ -32,7 +32,7 @@ const ORPHAN_CARD_ID = "0c62f9b1-4a7d-4e83-8f15-2b90d4c6e737";
 /**
  * The category a deck holds a printing in — **read out of the seed rather than written down.**
  *
- * Schema v7 replaced the fixed five-word zone with a `deck_categories` row, so a
+ * Schema v8 replaced the fixed five-word zone with a `deck_categories` row, so a
  * `PaneDeckContext` names an **id** (what the swap is addressed by) and a **name** (what every
  * "Use this printing" label reads back). The id is minted by the seed's own row numbering and is
  * not a constant this file may assume; the name is the seed's too. Looking the pair up through
@@ -61,7 +61,7 @@ function slotOf(deckId: number, cardId: string) {
  * `openCardFromDeck` is the only writer of `paneDeckContext`; `setSelectedCardId` clears it. One
  * host, two openers, and the difference between {@link FromDeckRow} and {@link FromSearch} is
  * which of the two branches below ran. The slot itself comes from {@link slotOf}, because since
- * schema v7 a context names a category row rather than one of five words.
+ * schema v8 a context names a category row rather than one of five words.
  *
  * `useState`'s lazy initializer rather than an effect, which is `AppShell.stories.tsx`'s
  * answer and for its reason: an effect runs after the first paint, so a deck-context story

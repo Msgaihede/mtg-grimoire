@@ -14,6 +14,8 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
+import { FinishMark } from "@/components/FinishMark";
+import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -172,7 +174,7 @@ export interface ZoneColumnProps {
    * The category this column *is*: its `id` addresses every write made here, its `name` is the
    * heading, and its `isActive` decides whether a row can be short of copies at all.
    *
-   * One prop rather than the zone-plus-title pair it replaces, because after schema v7 the
+   * One prop rather than the zone-plus-title pair it replaces, because after schema v8 the
    * heading is not a word the editor looks up — it is the row's own `name`, and the id beside
    * it is what `deck_add_card`, `deck_move_card` and `deck_set_card_quantity` are addressed by.
    * Splitting them would be two props that must never disagree.
@@ -436,7 +438,7 @@ function CardRow({
   // The allocator claims no copy for an **inactive** category, so every row in one reads 0
   // owned by construction. A mark there would report a shortage the reader does not have.
   //
-  // The switch, never the kind: schema v7 made "counts toward nothing" a property the user
+  // The switch, never the kind: schema v8 made "counts toward nothing" a property the user
   // sets on any category, so a Maybeboard they turned *on* is short of copies like any other
   // pile and a category of their own they turned off is not. Reading `categoryKind === "maybe"`
   // here would answer both of those backwards.
@@ -563,6 +565,11 @@ function CardRow({
         >
           {card.name}
         </button>
+        {/* The finish the printing leaves no choice about, as a glyph rather than as the
+            sheen the search wall draws. The row's picture is a 48×36 art crop, where a 12 %
+            gradient is a smudge and not a signal — and this row is a line of text, where a
+            12px glyph beside the name is legible and says the same thing. */}
+        {soleFinish(card.finishes) && <FinishMark finish={soleFinish(card.finishes)!} />}
         <ManaText source={card.manaCost} className="shrink-0 text-xs" />
       </span>
 

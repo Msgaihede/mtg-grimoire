@@ -1,4 +1,4 @@
-//! Deck categories, tags and folders: everything schema v7 (Plan 8, Task 1) carved out of a
+//! Deck categories, tags and folders: everything schema v8 (Plan 8, Task 1) carved out of a
 //! deck's fixed five-word zone and its bare gallery listing.
 //!
 //! Shaped like [`crate::deck`] and [`crate::collection`]: pure functions over a `Connection`,
@@ -231,7 +231,7 @@ fn owning_deck(conn: &Connection, table: &str, id: i64) -> Result<Option<i64>, S
 /// Create the four non-`main` predefined categories a deck is missing, and leave the ones it
 /// already has untouched. Safe to call on any deck, as many times as asked.
 ///
-/// **Why a deck can be missing them at all**: the v7 migration's own backfill seeds these for
+/// **Why a deck can be missing them at all**: the v8 migration's own backfill seeds these for
 /// every deck that existed *at* the migration (including one with no cards — a second pass
 /// added there for exactly that legacy shape), but a deck made afterwards needs the same four
 /// rows made for it too. [`crate::deck::create_deck`] is that call site.
@@ -339,7 +339,7 @@ fn read_category(
 /// Every category of one deck, in display order, in the variant asked for.
 ///
 /// **A pure read** — it does not call [`ensure_predefined_categories`], and never has since
-/// the write it would need is [`crate::deck::create_deck`]'s job now (via the v7 migration for
+/// the write it would need is [`crate::deck::create_deck`]'s job now (via the v8 migration for
 /// every deck that predates it, and via `create_deck` for every one made since). That is what
 /// lets [`deck_category_list`] answer off `db_read` like every other list in this app, rather
 /// than contending for the write mutex — CLAUDE.md's two-connection split — on every deck open.
@@ -1346,7 +1346,7 @@ mod tests {
     fn ensure_predefined_categories_leaves_an_already_seeded_kind_alone() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        // A category that already exists for `commander`, under a name a user chose — the v7
+        // A category that already exists for `commander`, under a name a user chose — the v8
         // migration's own backfill would have named it "Commander", but nothing here should
         // assume that and overwrite a name (or an is_active) the row already carries.
         let existing = category(&conn, deck_id, "commander", "General");

@@ -27,11 +27,11 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
 
 /**
  * The four piles a deck is born with, named and flagged as `schema::PREDEFINED_CATEGORIES`
- * names and flags them — plus the `main` one the v7 migration files every legacy main-deck row
+ * names and flags them — plus the `main` one the v8 migration files every legacy main-deck row
  * into, which the seed does not name because a deck may own any number of `main` categories.
  *
  * The Maybeboard is the one whose seeded default says something: `isActive: false`, which after
- * v7 is the **whole** of what the old `maybe` zone meant.
+ * v8 is the **whole** of what the old `maybe` zone meant.
  */
 const MAIN = category();
 const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
@@ -228,7 +228,7 @@ export const Commander: Story = {
  * the switch rather than the counts — `short` is `category.isActive && ownedQuantity < quantity`
  * — and a mark here would report a shortage the reader does not have.
  *
- * **The switch, never the kind.** Schema v7 made "counts toward nothing" a property of the
+ * **The switch, never the kind.** Schema v8 made "counts toward nothing" a property of the
  * category rather than a fixed word, so this is the seeded Maybeboard only because that is the
  * one pile a deck is born with switched off. A category of the reader's own that they switch off
  * draws exactly this, and a Maybeboard they switch *on* is short of copies like any other pile.

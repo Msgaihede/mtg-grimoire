@@ -73,7 +73,7 @@ const MARK_KEY = "dragSource";
 /**
  * Whether a value could be a `deck_categories.id`.
  *
- * Schema v7 turned the fixed five-word zone into a row the user owns, so the fence that used
+ * Schema v8 turned the fixed five-word zone into a row the user owns, so the fence that used
  * to be an exhaustive `Record<DeckZone, true>` is now a shape check and nothing more — there
  * is no closed list of category ids to check against, and the payload is written by this
  * app's own draggables rather than by anything a reader can type. What is still worth

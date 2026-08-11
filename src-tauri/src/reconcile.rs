@@ -322,7 +322,7 @@ fn merge(
     // A deck list is user data by the same argument as the collection: the user typed it,
     // and an upstream id change is not a reason for a card to leave a deck. Same three
     // arms, this table's grain (`schema::DECK_CARD_GRAIN` — `deck_id, variant, category_id,
-    // card_id` since schema v7 replaced the fixed zone word with a category the user owns).
+    // card_id` since schema v8 replaced the fixed zone word with a category the user owns).
     //
     // `name` is **not** refreshed, and it is the one column the collection loop does not
     // have to decide about. It is the oracle name, and a merge says two ids are one
@@ -681,7 +681,7 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
 mod tests {
     use super::*;
     // The deck fixtures' one shared piece: a category is what a deck card is filed under
-    // since schema v7, and `schema::tests` already owns the insert.
+    // since schema v8, and `schema::tests` already owns the insert.
     use crate::schema::tests::category;
 
     fn migration(id: &str, strategy: &str, old: &str, new: Option<&str>) -> Migration {

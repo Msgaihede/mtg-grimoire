@@ -134,7 +134,7 @@ export function useSidebarDrops() {
         // reader to have pointed at, and the deck's own columns are where somebody who means
         // the sideboard drops a card. Omitting `categoryId` is what says that — `deck_add_card`
         // then takes a *name* to find or create, and `useDeck`'s `DEFAULT_CATEGORY_NAME` is the
-        // one it sends: the v7 migration's own word for the pile it filed every legacy main-deck
+        // one it sends: the v8 migration's own word for the pile it filed every legacy main-deck
         // row into, so a deck that predates categories and one made since agree about where a
         // plain add goes.
         //
