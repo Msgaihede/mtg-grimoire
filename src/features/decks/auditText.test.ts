@@ -87,6 +87,19 @@ describe("auditSentence", () => {
     });
   });
 
+  /**
+   * Set codes are stored lowercase, as `cards.set_code` holds them. Upper-casing is the
+   * renderer's job, because a set code is printed on a card in capitals and this app writes
+   * it that way everywhere it shows one.
+   */
+  it("prints a swap's set codes the way they are printed on a card", () => {
+    expect(
+      auditSentence(
+        entry("swap", { category: "Ramp", fromSet: "cmm", toSet: "3ed", folded: false }),
+      ).detail,
+    ).toBe("CMM → 3ED");
+  });
+
   it("says what a card was tagged, and what it was wearing before", () => {
     expect(auditSentence(entry("tag", { tag: "Cut candidate", previous: null }))).toEqual({
       text: "Tagged Sol Ring",
@@ -99,6 +112,40 @@ describe("auditSentence", () => {
     expect(auditSentence(entry("tag", { tag: null, previous: "Wincon" }))).toEqual({
       text: "Untagged Sol Ring",
       detail: "was Wincon",
+    });
+  });
+
+  /**
+   * The same kind wears two different events, and `action` is what tells them apart. Without
+   * this branch, deleting the "Cut candidate" label renders as "Tagged a card" — a sentence
+   * about a card the row does not have, since a tag CRUD row names none.
+   */
+  it("says what happened to a tag itself, not to a card wearing it", () => {
+    const label = (payload: Record<string, unknown>) =>
+      auditSentence(entry("tag", payload, { cardId: null, cardName: null }));
+
+    expect(label({ action: "create", tag: "Cut candidate" })).toEqual({
+      text: "Created tag Cut candidate",
+      detail: null,
+    });
+    expect(label({ action: "rename", tag: "Wincon", previous: "Win", cards: 4 })).toEqual({
+      text: "Renamed tag Win to Wincon",
+      detail: "4 cards carry it",
+    });
+    expect(label({ action: "recolour", tag: "Wincon", color: "moss" })).toEqual({
+      text: "Recoloured tag Wincon",
+      detail: "moss",
+    });
+    // Deleting a tag untags its cards rather than deleting them, which is the half of the
+    // sentence a reader would otherwise have to go and check.
+    expect(label({ action: "delete", tag: "Wincon", cards: 1 })).toEqual({
+      text: "Deleted tag Wincon",
+      detail: "1 card untagged",
+    });
+    // An action this build has never heard of still reads as a line of history.
+    expect(label({ action: "reticulate", tag: "Wincon" })).toEqual({
+      text: "Changed tag Wincon",
+      detail: null,
     });
   });
 
@@ -171,8 +218,27 @@ describe("auditSentence", () => {
       text: "Set the deck cover",
       detail: null,
     });
+    // `"custom"` is the literal the backend writes for an uploaded image, and it is the
+    // difference between a cover the reader chose off a card and one they made.
+    expect(deck({ field: "cover", from: "abc", to: "custom" })).toEqual({
+      text: "Set a custom deck cover",
+      detail: null,
+    });
     expect(deck({ field: "notes", from: null, to: null })).toEqual({
       text: "Edited the deck notes",
+      detail: null,
+    });
+    expect(deck({ field: "description", from: null, to: "A toolbox." })).toEqual({
+      text: "Edited the deck description",
+      detail: null,
+    });
+    // Filed away, never deleted — `DeckPatch.archived`'s own words.
+    expect(deck({ field: "archived", from: false, to: true })).toEqual({
+      text: "Filed the deck away",
+      detail: null,
+    });
+    expect(deck({ field: "archived", from: true, to: false })).toEqual({
+      text: "Took the deck out of the archive",
       detail: null,
     });
     expect(deck({ field: "built", from: "false", to: "true" })).toEqual({
@@ -212,6 +278,38 @@ describe("auditSentence", () => {
       text: "Changed the deck",
       detail: null,
     });
+    // A payload whose fields are all the wrong type, which is what "untrusted-shaped" means
+    // in practice: an object where a string was promised, a string where a number was.
+    expect(auditSentence(entry("add", { category: { nested: true }, quantity: "lots" }))).toEqual({
+      text: "Added Sol Ring",
+      detail: null,
+    });
+  });
+});
+
+/**
+ * **This contract is still growing**, and a database outlives the app that wrote it — so a
+ * row written by a newer build, or by an older one, has to render as a line of history rather
+ * than as a blank or a throw. Every discriminator this file switches on has a fallback, and
+ * every fallback has a case here.
+ */
+describe("auditSentence over a contract it does not fully know", () => {
+  it("renders a plain line for a field it has never heard of", () => {
+    expect(
+      auditSentence(entry("deck", { field: "sleeves", from: "a", to: "b" }, { cardId: null })),
+    ).toEqual({ text: "Changed the deck", detail: null });
+  });
+
+  it("renders a plain line for a category action it has never heard of", () => {
+    expect(
+      auditSentence(entry("category", { action: "invert", name: "Ramp" }, { cardId: null })),
+    ).toEqual({ text: "Changed category Ramp", detail: null });
+  });
+
+  it("renders a plain line for a folder action it has never heard of", () => {
+    expect(
+      auditSentence(entry("folder", { action: "invert" }, { cardId: null, cardName: null })),
+    ).toEqual({ text: "Moved the deck out of its folder", detail: null });
   });
 });
 

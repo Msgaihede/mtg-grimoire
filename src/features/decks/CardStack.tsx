@@ -9,7 +9,7 @@ import { LAYER } from "@/lib/layers";
 import { usdPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { tagColorCss } from "./tagColors";
+import { GameChangerBadge, RuleBreakMark, TagDot } from "./CardMarks";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -78,7 +78,7 @@ const PIE: Record<string, string> = {
  * grey. `colorIdentity` is **concatenated letters** (`"WU"`), never JSON — reading it a
  * character at a time is the documented way.
  */
-function identityTint(colorIdentity: string | null): string {
+export function identityTint(colorIdentity: string | null): string {
   const letters = [...(colorIdentity ?? "")].filter((letter) => letter in PIE);
   const base =
     letters.length === 0
@@ -246,32 +246,10 @@ function StackedCard({
             {card.quantity}
           </span>
           <span className="min-w-0 flex-1 truncate text-[0.6875rem] font-medium">{card.name}</span>
-          {/* The tag, as an 8px chip in its own colour with its name one hover away. A dot
-              rather than a word: a tag is a mark the reader put there and already knows, and
-              a 224px column has no room for a second label beside a card's name. */}
-          {card.tagName !== null && (
-            <span
-              title={card.tagName}
-              style={{ backgroundColor: tagColorCss(card.tagColor) }}
-              className="size-2 shrink-0 rounded-[2px] shadow-[0_0_0_1px_var(--color-bg)]"
-            >
-              <span className="sr-only">Tagged {card.tagName}</span>
-            </span>
-          )}
+          {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
           {/* Gold, two letters, in the title bar. The `RULE BREAK` mark below is red, spelled
-              out, and over the art — the spec's own requirement is that these two never be
-              confusable, because one is a fact about a powerful card and the other is a
-              problem. Four things separate them: the colour, the words, the place, and the
-              card's own edge, which only a rule break changes. */}
-          {card.gameChanger === true && (
-            <span
-              title="Game changer"
-              className="shrink-0 rounded-[2px] border border-pie-gold px-0.5 font-mono text-[0.5625rem] leading-3 text-pie-gold"
-            >
-              <span aria-hidden="true">GC</span>
-              <span className="sr-only">Game changer</span>
-            </span>
-          )}
+              out, and over the art — see `CardMarks.tsx` for why the pair is drawn once. */}
+          {card.gameChanger === true && <GameChangerBadge />}
           <ManaText source={card.manaCost} className="shrink-0 text-[0.5625rem]" />
         </span>
 
@@ -301,16 +279,7 @@ function StackedCard({
           <FoilOverlay finish={finish} />
 
           {ruleBreakText !== null && (
-            <span
-              title={ruleBreakText}
-              className={cn(
-                "absolute bottom-1.5 left-1.5 rounded-[3px] border border-destructive/50",
-                "bg-bg/85 px-1 py-px font-mono text-[0.5625rem] text-destructive",
-              )}
-            >
-              <span aria-hidden="true">RULE BREAK</span>
-              <span className="sr-only">Rule break: {ruleBreakText}</span>
-            </span>
+            <RuleBreakMark text={ruleBreakText} className="absolute bottom-1.5 left-1.5" />
           )}
         </span>
 

@@ -28,6 +28,9 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
+import { buildGroups, type GroupBy } from "@/features/decks/grouping";
+import type { SortBy } from "@/features/decks/sorting";
+import type { ValidationIssue } from "@/features/decks/validation/types";
 import type { CategoryKind, DeckCard, DeckCategory, ReleaseInfo, UpdateAsset } from "@/lib/ipc";
 
 /**
@@ -275,6 +278,94 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     ownedQuantity: 0,
     ...over,
   };
+}
+
+/* --------------------------------------------------------------------- deck views ------ */
+
+/**
+ * A deck the four views can be judged by, as the groups they take.
+ *
+ * Built through the app's own {@link buildGroups} rather than written out as `CardGroup`
+ * literals, and that is the point: the four view story files are then drawing what
+ * `grouping.ts` actually answers — the counts, the sums, the empty categories that still
+ * draw, and the inactive pile appended last — rather than four hand-written agreements about
+ * what it ought to answer.
+ *
+ * Five piles, chosen so every branch of a header has something to show: a Commander (the
+ * `RULE` marker), two categories of the reader's own, an **empty** Sideboard (a place as much
+ * as a heading), and a Maybeboard (`INACTIVE`, and the pile whose cards are never called
+ * short of copies).
+ */
+export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alphabetical") {
+  const commander = deckCategory("commander");
+  // The seeded Sideboard sorts at 2 and the reader's own two piles are ahead of it here, so
+  // it is moved rather than left to tie with `Removal` and be ordered by row id.
+  const side: DeckCategory = { ...deckCategory("side"), sortOrder: 3 };
+  const maybe = deckCategory("maybe");
+  const ramp: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp", sortOrder: 1 };
+  const removal: DeckCategory = { ...deckCategory("main"), id: 11, name: "Removal", sortOrder: 2 };
+
+  const inPile = (pile: DeckCategory, row: DeckCard): DeckCard => ({
+    ...row,
+    categoryId: pile.id,
+    categoryName: pile.name,
+    categoryKind: pile.kind,
+    categoryActive: pile.isActive,
+  });
+
+  const cards: DeckCard[] = [
+    inPile(commander, deckCard(printing("dom", "168"), { ownedQuantity: 1 })),
+    inPile(ramp, deckCard(printing("lea", "288"), { quantity: 2, ownedQuantity: 1 })),
+    inPile(
+      ramp,
+      deckCard(printing("mh2", "138"), {
+        ownedQuantity: 1,
+        tagId: 1,
+        tagName: "Wincon",
+        tagColor: "gold",
+      }),
+    ),
+    inPile(ramp, deckCard(printing("lea", "161"), { ownedQuantity: 1, gameChanger: true })),
+    inPile(
+      removal,
+      deckCard(printing("isd", "51"), {
+        ownedQuantity: 1,
+        tagId: 2,
+        tagName: "Cut candidate",
+        tagColor: "ember",
+      }),
+    ),
+    inPile(removal, deckCard(printing("gtc", "148"), { quantity: 2, ownedQuantity: 2 })),
+    inPile(removal, deckCard(printing("nph", "57"), { ownedQuantity: 0 })),
+    inPile(maybe, deckCard(printing("mh2", "267"), { quantity: 3 })),
+    inPile(maybe, deckCard(printing("wwk", "31"))),
+  ];
+
+  return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy);
+}
+
+/**
+ * One finding about one of the cards above, so a view story can draw the `RULE BREAK` mark
+ * beside the game-changer badge it must never be confusable with.
+ */
+export function deckViolations(): Map<string, ValidationIssue[]> {
+  // The sentence names the fixture's own card rather than a pasted one: `CARDS` is generated
+  // and may be regenerated against a newer sync, and a hardcoded name would go on reading as
+  // true while pointing at whatever printing that slot had become.
+  const card = printing("lea", "288");
+  return new Map([
+    [
+      card.id,
+      [
+        {
+          severity: "error" as const,
+          code: "singleton",
+          message: `Commander decks are singleton: max 1 copy of ${card.name}; you have 2.`,
+          cardIds: [card.id],
+        },
+      ],
+    ],
+  ]);
 }
 
 /* ------------------------------------------------------------------- the updater ------- */

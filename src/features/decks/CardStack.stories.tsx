@@ -97,7 +97,7 @@ export const RuleBreakAndGameChanger: Story = {
           {
             severity: "error",
             code: "singleton",
-            message: "Commander decks are singleton: max 1 copy of Black Lotus; you have 2.",
+            message: `Commander decks are singleton: max 1 copy of ${printing("lea", "288").name}; you have 2.`,
             cardIds: [printing("lea", "288").id],
           },
         ],

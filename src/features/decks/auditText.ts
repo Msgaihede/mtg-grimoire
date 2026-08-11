@@ -110,8 +110,11 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
       };
     }
     case "swap": {
-      const from = text(p.fromSet);
-      const to = text(p.toSet);
+      // Set codes are stored lowercase, as `cards.set_code` holds them. Upper-casing is the
+      // renderer's job — a set code is printed on a card in capitals, and this app writes it
+      // that way everywhere it shows one.
+      const from = text(p.fromSet)?.toUpperCase() ?? null;
+      const to = text(p.toSet)?.toUpperCase() ?? null;
       return {
         text: `Swapped printing of ${name}`,
         // The fold is the half that must be said: two rows became one, and a list that
@@ -122,12 +125,13 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
         ),
       };
     }
-    case "tag": {
-      const tag = text(p.tag);
-      const previous = text(p.previous);
-      if (tag === null) return { text: `Untagged ${name}`, detail: previous && `was ${previous}` };
-      return { text: `Tagged ${name}`, detail: previous ? `${previous} → ${tag}` : tag };
-    }
+    // Two different events wear this one kind, and `action` is what tells them apart: a
+    // change to the **label itself** (created, renamed, recoloured, deleted) carries one and
+    // names no card, while putting a label **on a card** carries none. Reading only the
+    // second would render "deleted the Cut candidate tag" as "Tagged a card" — a sentence
+    // about a card the row does not have.
+    case "tag":
+      return text(p.action) !== null || entry.cardId === null ? tagLine(p) : cardTagLine(p, name);
     case "category":
       return categoryLine(p);
     case "folder": {
@@ -143,6 +147,48 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
     // it, with a date and a delta, which is more useful than a hole in the history.
     default:
       return { text: "Changed the deck", detail: null };
+  }
+}
+
+/** A label put on a card, taken off it, or swapped for another one. */
+function cardTagLine(p: Record<string, unknown>, name: string): AuditLine {
+  const tag = text(p.tag);
+  const previous = text(p.previous);
+  if (tag === null) return { text: `Untagged ${name}`, detail: previous && `was ${previous}` };
+  return { text: `Tagged ${name}`, detail: previous ? `${previous} → ${tag}` : tag };
+}
+
+/**
+ * What happened to a tag itself — the label, not a card wearing it.
+ *
+ * The name is read from either spelling the backend might use, because this half of the
+ * contract arrived after the payload table was written and a renderer that insisted on one
+ * key would render half of them as "a tag".
+ */
+function tagLine(p: Record<string, unknown>): AuditLine {
+  const name = text(p.tag) ?? text(p.name) ?? "a tag";
+  const previous = text(p.previous) ?? text(p.previousName);
+  const cards = count(p.cards);
+  const moved = (suffix: string) =>
+    cards > 0 ? `${cards} ${cards === 1 ? "card" : "cards"} ${suffix}` : null;
+
+  switch (text(p.action)) {
+    case "create":
+      return { text: `Created tag ${name}`, detail: null };
+    case "rename":
+      return {
+        text: previous ? `Renamed tag ${previous} to ${name}` : `Renamed a tag to ${name}`,
+        detail: moved("carry it"),
+      };
+    case "recolour":
+    case "recolor":
+      return { text: `Recoloured tag ${name}`, detail: text(p.color) };
+    case "delete":
+      // Deleting a tag untags its cards rather than deleting them, which is the half of this
+      // sentence a reader would otherwise have to go and check.
+      return { text: `Deleted tag ${name}`, detail: moved("untagged") };
+    default:
+      return { text: `Changed tag ${name}`, detail: null };
   }
 }
 
@@ -192,9 +238,16 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     case "format":
       return { text: to ? `Changed the format to ${to}` : "Changed the format", detail: was };
     case "cover":
-      return { text: "Set the deck cover", detail: null };
+      // `"custom"` is the literal the backend writes for an uploaded image; anything else is
+      // a card id, which is not a thing to print at a reader.
+      return {
+        text: to === "custom" ? "Set a custom deck cover" : "Set the deck cover",
+        detail: null,
+      };
     case "notes":
       return { text: "Edited the deck notes", detail: null };
+    case "description":
+      return { text: "Edited the deck description", detail: null };
     case "built":
       return {
         text: flag(p.to) ? "Marked the deck built" : "Marked the deck not built",
@@ -205,6 +258,16 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         text: flag(p.to) ? "Turned the theory list on" : "Turned the theory list off",
         detail: null,
       };
+    case "archived":
+      // Filed away, never deleted — `DeckPatch.archived`'s own words, which is why neither
+      // half of this says "removed".
+      return {
+        text: flag(p.to) ? "Filed the deck away" : "Took the deck out of the archive",
+        detail: null,
+      };
+    // A field this build has never heard of, written by a newer one — or by an older one,
+    // since a database outlives the app that wrote it. A plain line with a date and a delta
+    // beats a blank one, and beats a throw by a good deal more.
     default:
       return { text: "Changed the deck", detail: null };
   }
