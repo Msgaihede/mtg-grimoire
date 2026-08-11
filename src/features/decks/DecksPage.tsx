@@ -11,7 +11,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
-import { ART_ASPECT, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl, imageOrigin } from "@/lib/images";
 import { ipcError, type DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
@@ -719,6 +719,38 @@ export function DecksPage() {
   );
 }
 
+/**
+ * Which of a deck's two covers is showing, as a URL — or `null` when it has neither.
+ *
+ * **`coverKind` is the one answer, and reading either id instead is the bug this exists to
+ * close.** A deck usually carries both at once: `deckSetCoverImage` leaves `coverCardId` alone
+ * and picking a card leaves the file on disk, so "has a custom cover" and "is showing one" are
+ * different questions. The gallery used to ask only for `coverCardId`, which meant a custom
+ * cover was never drawn *anywhere* on this screen — measured in the live window, where the tile
+ * said "No cover" while the route answered the file 626×457 in 2 ms.
+ *
+ * **The artist rule belongs to the card-art arm and must never be moved onto the custom one.**
+ * Scryfall's policy is about *Scryfall's* pictures: an `art` crop has no printed frame, so
+ * wherever one is shown the illustrator is credited. A file the reader uploaded is theirs,
+ * carries no Scryfall artist, and needs no credit — so a `coverArtist === null` test on this
+ * arm would hide every custom cover for a second, quieter reason than the first. It reads like
+ * a missing guard and is not one.
+ *
+ * No cache-busting on the custom URL, deliberately. It names the **deck**, not the picture
+ * (`/cover/<deckId>`), and the route answers `no-store` precisely so that a stable URL can
+ * carry changing bytes — `images.rs`'s `cover_response`. A `?v=` here would be a second
+ * mechanism for something already solved one floor down.
+ *
+ * Spelled the way `DeckSettingsDialog`'s `CoverPreview` spells it, verbatim, because the two
+ * draw the same picture. One `deckCoverUrl` in `@/lib/images` would be better than two literals
+ * and is the right follow-up; it is not this fix, which must not touch a shared file while
+ * three agents are live.
+ */
+function coverUrl(deck: DeckRow): string | null {
+  if (deck.coverKind === "custom") return `${imageOrigin(navigator.userAgent)}/cover/${deck.id}`;
+  return deck.coverCardId === null ? null : cardImageUrl(deck.coverCardId, 0, "art");
+}
+
 /** Every live deck filed in a folder **or in anything under it** — what a folder card draws
  *  its strip of art from, in `deck_list`'s own order (most recently touched first). */
 function decksUnder(
@@ -912,7 +944,7 @@ function DeckTile({
         data-deck-id={deck.id}
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
-        <Cover cardId={deck.coverCardId} />
+        <Cover deck={deck} />
         <span className="mt-2 block truncate text-sm">{deck.name}</span>
         <span className="mt-0.5 block truncate text-xs text-dim">
           {deck.formatName ?? deck.formatKey} ·{" "}
@@ -937,8 +969,15 @@ function DeckTile({
 
       {/* Scryfall's image policy, per tile — and the plan's ruling: a cover whose artist is
           unknown draws no line at all, never the word "null" and never a placeholder. An
-          orphaned cover heals itself on the next sync. */}
-      {deck.coverArtist && (
+          orphaned cover heals itself on the next sync.
+
+          `coverKind` is in the condition because `coverArtist` is a lookup on `coverCardId`
+          and nothing else — the backend's `LEFT JOIN cards c ON c.id = d.cover_card_id`, which
+          does not know or care which cover is showing. A deck carrying both (the ordinary case
+          after an upload) therefore answers an artist while wearing the reader's own picture,
+          and crediting an illustrator whose work is *not on screen* is the one thing this line
+          must never do. `DeckSettingsDialog`'s `CoverPreview` guards the same way. */}
+      {deck.coverKind === "card_art" && deck.coverArtist && (
         <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={deck.coverArtist}>
           Art by {deck.coverArtist}
         </p>
@@ -1042,10 +1081,17 @@ function DeckTile({
  * a third thing to say, "No cover", which is not a failure at all. What is shared is
  * {@link useImageRetry}: the schedule, and the reason for it. A deck that changes its cover
  * hands this component a different id without remounting it, which is exactly the reset the
- * hook does.
+ * hook does — and that reset is what lets one frame serve **both** kinds of cover
+ * ({@link coverUrl}), because switching a deck from card art to its own picture changes the URL
+ * and nothing else.
+ *
+ * A missing custom file is a **404**, never a placeholder — `images.rs` chose that deliberately
+ * so the fault is visible rather than hidden behind a grey rectangle that looks like a picture.
+ * It arrives here as an `<img>` error like any other, so it lands in the same three sentences
+ * below and never as a broken-image glyph.
  */
-function Cover({ cardId }: { cardId: string | null }) {
-  const url = cardId ? cardImageUrl(cardId, 0, "art") : null;
+function Cover({ deck }: { deck: DeckRow }) {
+  const url = coverUrl(deck);
   const image = useImageRetry(url);
 
   return (
