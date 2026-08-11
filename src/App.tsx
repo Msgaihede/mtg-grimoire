@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CollectionPage } from "@/features/collection/CollectionPage";
@@ -42,6 +43,29 @@ function ActiveView({ update }: { update: Update }) {
  * The card pane is docked *beside* the view rather than drawn over it: the list it came
  * from stays live, scrollable and clickable, so opening a second card is one click rather
  * than a dismiss and a hunt.
+ *
+ * ## `MotionConfig` is here for the same reason `QueryClientProvider` is
+ *
+ * Outermost, and in `App.tsx` rather than `main.tsx`, so that **every** `motion` component in
+ * the app is under it and so that a test rendering `<App />` gets the real behaviour. Nothing
+ * in the suite and nothing in Storybook ever loads `main.tsx`; a provider put there is a
+ * provider only the shipped window has.
+ *
+ * **It is load-bearing, not decorative.** `motion` does not honour `prefers-reduced-motion` on
+ * its own — `MotionConfigContext` ships `reducedMotion: "never"` — so without this line every
+ * animation in the app runs at full travel for a reader who asked their OS for less.
+ *
+ * **What it does is deliberately weaker than the app's CSS rule, and both now coexist.**
+ * `reducedMotion: "user"` makes transforms and `width`/`height`/`top`/`left` **instant** while
+ * **opacity, colour and filter still animate** — that is WCAG 2.3.3's actual intent, where the
+ * hazard is movement rather than a cross-fade. `motion-reduce:transition-none`, which
+ * `lib/tokens.test.ts` requires beside every CSS transition class in the app, stops the lot.
+ * Neither is wrong; they are two rules, and this file is where to find out that there are two.
+ *
+ * **Not `useReducedMotion()`.** That hook reads the media query once through `useState` and
+ * never updates when it changes under a running app, so as an app-wide switch it is a bug that
+ * only shows up for the reader who changes the setting. It is fine inside one component that
+ * wants to swap a slide for a fade; it is wrong here.
  */
 export default function App() {
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -58,24 +82,26 @@ export default function App() {
   const update = useUpdate();
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <AppShell update={update}>
-        <div className="flex h-full min-h-0 gap-4">
-          <div className="min-w-0 flex-1">
-            <ActiveView update={update} />
+    <MotionConfig reducedMotion="user">
+      <QueryClientProvider client={queryClient}>
+        <AppShell update={update}>
+          <div className="flex h-full min-h-0 gap-4">
+            <div className="min-w-0 flex-1">
+              <ActiveView update={update} />
+            </div>
+            {selectedCardId && (
+              <CardDetailPane
+                // Remounted per card, which is what makes the pane's opening behaviour —
+                // focus, scroll, the front face — belong to the card in it rather than to
+                // the first card that was ever opened.
+                key={selectedCardId}
+                cardId={selectedCardId}
+                onClose={closeCard}
+              />
+            )}
           </div>
-          {selectedCardId && (
-            <CardDetailPane
-              // Remounted per card, which is what makes the pane's opening behaviour —
-              // focus, scroll, the front face — belong to the card in it rather than to
-              // the first card that was ever opened.
-              key={selectedCardId}
-              cardId={selectedCardId}
-              onClose={closeCard}
-            />
-          )}
-        </div>
-      </AppShell>
-    </QueryClientProvider>
+        </AppShell>
+      </QueryClientProvider>
+    </MotionConfig>
   );
 }

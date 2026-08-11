@@ -1,6 +1,31 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
+import { MotionGlobalConfig } from "motion/react";
 import { afterEach } from "vitest";
+
+/**
+ * Every `motion` animation lands on its final value in one frame, for the whole suite.
+ *
+ * **jsdom animates for real without this**, which is the thing worth knowing: it has no
+ * `Element.prototype.animate` — measured, `typeof` is `undefined` — so `motion` never takes its
+ * WAAPI path, and falls back to its own main-thread driver on `requestAnimationFrame`, which
+ * jsdom does have. Probed 2026-08-12 with a 180ms fade: `opacity: 0.08` at mount, `0.50` at
+ * 60ms, `1` at 360ms. Nothing throws and nothing needs shimming; the animations are simply
+ * *real*, and therefore timing-dependent.
+ *
+ * That is fine for a component test that awaits a `findBy*` and fatal for the ~242 story `play`
+ * functions `src/stories.test.tsx` composes: a `play` asserts on the DOM the moment it renders,
+ * and half a fade is an element that is present, focusable, and at `opacity: 0.08`. This is a
+ * setup file rather than something `stories.test.tsx` does for itself because
+ * `MotionGlobalConfig` is a module-level object read at animation time — one assignment before
+ * any test file loads covers every file, the composed stories included. `motion.test.ts`
+ * asserts the flag is set, which is what fails if this line is ever dropped or if the module
+ * graph ever hands a test a second copy of `motion`.
+ *
+ * Deliberately **not** done in `.storybook/preview.tsx`: that file is also the real Storybook
+ * browser, where the whole point is that a reader can watch the motion.
+ */
+MotionGlobalConfig.skipAnimations = true;
 
 // Testing Library only registers its own `afterEach(cleanup)` when Vitest runs with
 // `globals: true`, which this project does not. Without it every render stacks up in the
