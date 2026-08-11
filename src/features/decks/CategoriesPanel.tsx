@@ -1057,7 +1057,16 @@ function RenameField({
 
   // The caret starts in the field the reader opened, with the current name selected: the
   // commonest rename replaces the word rather than editing inside it.
+  //
+  // **Both calls, in this order, and `focus()` is not the redundant one.** Per spec
+  // `HTMLInputElement.select()` sets a selection and does *not* move focus; Chromium focuses
+  // anyway, which is exactly what makes the bug invisible where a person would meet it. Without
+  // the `focus()` the caret stays on the Rename trigger — which this component has just
+  // **disabled**, so it is parked on a dead control — and the reader's first keystroke goes to
+  // the page. Found from outside by the agent building the decks page, which had the identical
+  // line; `puts the caret in the rename field` is the test that holds it.
   useEffect(() => {
+    ref.current?.focus();
     ref.current?.select();
   }, []);
 
