@@ -59,6 +59,7 @@ import {
   type TagColor,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { writeFailure, type Write } from "@/lib/writes";
@@ -185,7 +186,17 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
         tabIndex={-1}
         role="dialog"
         aria-label="Categories and tags"
-        // Not `aria-modal`, and not portalled: the shipped CSP is `style-src 'self'` and every
+        // **Modal, and the scrim above is the whole argument.** This drawer used to claim the
+        // opposite — "the editor behind stays live and reachable" — which was true of a keyboard
+        // and false of a pointer, because that `bg-black/60` covers the whole window. A scrim is
+        // not decoration: it is a statement that what is behind it is not available right now.
+        // Tabbing back into an editor the pointer cannot touch does not preserve a capability,
+        // it contradicts what the surface says, for one input method only. So the claim is made
+        // to assistive tech and `trapTab` makes it true for the caret as well — and if either
+        // half is ever removed, the other goes with it.
+        aria-modal="true"
+        onKeyDown={trapTab}
+        // Not portalled, whatever the modality: the shipped CSP is `style-src 'self'` and every
         // overlay primitive in reach injects a runtime `<style>` the moment it opens
         // (`SetCombobox`'s decision, for its reason).
         className={cn(
