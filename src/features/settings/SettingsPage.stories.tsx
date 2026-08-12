@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { UpdateStatus } from "@/lib/ipc";
 import { nextAction, type Update } from "@/lib/useUpdate";
 import { pickAsset } from "../../../.storybook/fake/db";
@@ -73,7 +73,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Settings, which is one real section and an honest note about the rest.\n\n" +
+          "Settings, which is three real sections and an honest note about the rest.\n\n" +
           "**`update` is a prop, and that is the design rather than a convenience.** " +
           "`App.tsx` calls `useUpdate` once and hands the answer to both `AppShell` — for the " +
           "ribbon's gold button — and to this page, for the panel. Two calls would be two " +
@@ -83,6 +83,12 @@ const meta = {
           "`Chrome/AppShell`'s `Settings` and `UpdateAvailable` are the same page driven by a " +
           "**seeded world** instead, through the real hook — which is where the ribbon button " +
           "and this panel are shown agreeing with each other.\n\n" +
+          "The other two panels are the opposite and are hooked up *here*. The error log is, " +
+          "because nothing else in the window reads it; the marketplace is, because half the " +
+          "window does — every price surface asks `useMarketplace()` for its currency, and one " +
+          "TanStack Query entry with `staleTime: Infinity` means they are all reading the same " +
+          "cached answer rather than opening a second channel. So both reach the fake, and " +
+          "`SwitchingMarketplace` below is a real write to the fake's `app_meta` row.\n\n" +
           "The blurb this view used to be is now a section of it. What is genuinely still " +
           "missing — the data folder, sync behaviour, import and export — says so under its " +
           "own dim heading rather than standing in for a panel that exists.",
@@ -109,13 +115,51 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Two labelled sections, each named by its own heading through `aria-labelledby` — which
-    // is what makes them regions a screen reader can jump between rather than two `div`s.
+    // Labelled sections, each named by its own heading through `aria-labelledby` — which is
+    // what makes them regions a screen reader can jump between rather than three `div`s.
     await expect(canvas.getByRole("heading", { name: "Updates", level: 2 })).toBeInTheDocument();
+    await expect(canvas.getByRole("heading", { name: "Prices", level: 2 })).toBeInTheDocument();
     await expect(
       canvas.getByRole("heading", { name: "Not here yet", level: 2 }),
     ).toBeInTheDocument();
     await expect(canvas.getByText(/You’re on the latest version\./)).toBeInTheDocument();
+    // The setting an install starts on, read through the real hook rather than passed in.
+    await expect(await canvas.findByRole("button", { name: "TCGplayer USD" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  },
+};
+
+/**
+ * The one story on this page that *writes* the setting.
+ *
+ * `useMarketplace` is hooked up here rather than passed in, so this goes all the way down:
+ * the press calls `set_marketplace`, the fake validates the id and writes its `app_meta` row,
+ * and the mutation puts the answer straight into the cache — no refetch, because the command
+ * has already committed it and a refetch would only ask the database to repeat itself.
+ *
+ * The mark moves and **nothing else on the page does**, which is the point of watching it
+ * here rather than on the panel alone: every price surface in the real window re-renders off
+ * the cache it already has, with no sync, no spinner and no gap.
+ */
+export const SwitchingMarketplace: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Cardmarket EUR" }));
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("button", { name: "Cardmarket EUR" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    await expect(canvas.getByRole("button", { name: "TCGplayer USD" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // The three with no feed are still offered, still in the tab order, and still refuse.
+    await expect(canvas.getByRole("button", { name: "Mana Pool USD" })).not.toBeDisabled();
   },
 };
 

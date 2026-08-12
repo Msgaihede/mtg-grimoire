@@ -6,6 +6,8 @@
  * stores one per row. It is an enum and never a boolean — `etched` is a third thing, and
  * flattening it into `foil: true` is the single most common way an importer loses data.
  */
+import type { Currency } from "./marketplace";
+
 export const FINISHES = ["nonfoil", "foil", "etched"] as const;
 export type Finish = (typeof FINISHES)[number];
 
@@ -21,11 +23,24 @@ export const FINISH_LABEL: Record<Finish, string> = {
 // the table encoded survives it — nonfoil draws nothing, because it is the finish a price is
 // assumed to be.
 
-/** The `prices` key each finish is worth. `eur_etched` does not exist in the data. */
-const PRICE_KEY: Record<Finish, string> = {
-  nonfoil: "usd",
-  foil: "usd_foil",
-  etched: "usd_etched",
+/**
+ * The `prices` key each finish is worth, in each currency — and the **hole** in the euro
+ * column, which is a fact about Scryfall's data rather than an omission here.
+ *
+ * The blob has exactly six keys: `usd`, `usd_foil`, `usd_etched`, `eur`, `eur_foil`, `tix`.
+ * There is **no `eur_etched`**, verified across 4 513 real card objects, so an etched
+ * printing has no euro price at all. `null` says so, and {@link finishPrice} answers `null`
+ * for it — which {@link formatPrice} draws as an em dash.
+ *
+ * **Never fall back from a null euro price to the dollar one.** A card quoted at the nonfoil
+ * euro rate because its etched rate is missing is a price nobody quoted, in a currency the
+ * reader chose precisely so they would be told this marketplace's number. `collection.rs` and
+ * `wishlist.rs` already assert the same hole on the Rust side; this is the same rule where TS
+ * reads the blob directly.
+ */
+const PRICE_KEY: Record<Currency, Record<Finish, string | null>> = {
+  usd: { nonfoil: "usd", foil: "usd_foil", etched: "usd_etched" },
+  eur: { nonfoil: "eur", foil: "eur_foil", etched: null },
 };
 
 export function isFinish(value: string): value is Finish {
@@ -70,17 +85,26 @@ export function parseFinishes(json: string | null): Finish[] {
 }
 
 /**
- * What one finish of a printing costs in USD, or `null`.
+ * What one finish of a printing costs in the currency asked for, or `null`.
  *
- * A lookup by finish, with **no fallback of any kind**. `price_usd` — the derived column —
- * is a nonfoil→foil→etched chain built for sorting, and using it here would price a plain
- * copy at foil rates. Values arrive as decimal strings because money is not a float on the
- * wire; `Number` is the last possible moment to make one.
+ * A lookup by finish, with **no fallback of any kind** — not across finishes, and not across
+ * currencies. `price_usd` — the derived column — is a nonfoil→foil→etched chain built for
+ * sorting, and using it here would price a plain copy at foil rates; reaching for `usd` when
+ * `eur_etched` turns out not to exist would be the same mistake one axis over. Values arrive
+ * as decimal strings because money is not a float on the wire; `Number` is the last possible
+ * moment to make one.
  */
-export function finishPrice(pricesJson: string | null, finish: Finish): number | null {
+export function finishPrice(
+  pricesJson: string | null,
+  finish: Finish,
+  currency: Currency,
+): number | null {
+  const key = PRICE_KEY[currency][finish];
+  // Etched in euros: the key does not exist, so neither does the price.
+  if (key === null) return null;
   const prices = safeParse(pricesJson);
   if (typeof prices !== "object" || prices === null) return null;
-  const raw = (prices as Record<string, unknown>)[PRICE_KEY[finish]];
+  const raw = (prices as Record<string, unknown>)[key];
   if (typeof raw !== "string") return null;
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;

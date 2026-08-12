@@ -6,6 +6,8 @@ import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/ad
 import type { ReactElement } from "react";
 import { readDragData } from "@/features/decks/dnd";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
 
 const searchCards = vi.hoisted(() => vi.fn());
@@ -16,10 +18,17 @@ const prefetchImages = vi.hoisted(() => vi.fn());
 // Every row and every tile carries a quick-add, and what it writes is a real `invoke`.
 const collectionAdd = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+/**
+ * Which marketplace the Price column quotes. Answered on every render — `useMarketplace` is a
+ * query like any other, and an unmocked command is a rejected query that falls back to the
+ * default, which would make every currency assertion below pass for the wrong reason.
+ */
+const getMarketplace = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     searchCards,
+    getMarketplace,
     // The filter row asks for facet counts beside every page. Answered **cold** — `ready:
     // false`, every map empty — which leaves every control live and every accessible name
     // plain, so this file's queries say what they always said. The greying itself is
@@ -57,14 +66,20 @@ const BOLT: CardSummary = {
   typeLine: "Instant",
   manaCost: "{R}",
   priceUsd: 400.5,
+  // Not a conversion of the dollar figure: nothing in this app converts, and a euro price that
+  // happened to be `usd × rate` would make a currency mix-up read as arithmetic rather than as
+  // the wrong field being drawn.
+  priceEur: 320.25,
   layout: "normal",
   oracleId: "o-bolt",
   finishes: `["nonfoil","foil"]`,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLow: 400.5,
-  priceHigh: 400.5,
+  priceLowUsd: 400.5,
+  priceHighUsd: 400.5,
+  priceLowEur: 320.25,
+  priceHighEur: 320.25,
 };
 
 /** Every nullable column at once — the shape a token or an unpriced printing arrives in. */
@@ -78,14 +93,17 @@ const SPARSE: CardSummary = {
   typeLine: null,
   manaCost: null,
   priceUsd: null,
+  priceEur: null,
   layout: "normal",
   oracleId: null,
   finishes: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLow: null,
-  priceHigh: null,
+  priceLowUsd: null,
+  priceHighUsd: null,
+  priceLowEur: null,
+  priceHighEur: null,
 };
 
 const page = (
@@ -158,6 +176,8 @@ beforeEach(() => {
   prefetchImages.mockReset().mockResolvedValue(undefined);
   collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
+  getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   // The view opens on the art grid, which has no columns to assert on. Everything below
   // except the layout toggle's own describe is about the table, so it says so.
   useAppStore.setState({ searchView: "table", selectedCardId: null });
@@ -278,8 +298,8 @@ describe("SearchPage", () => {
           name: "Sol Ring",
           printings: 132,
           priceUsd: 2.15,
-          priceLow: 0.75,
-          priceHigh: 4200,
+          priceLowUsd: 0.75,
+          priceHighUsd: 4200,
         },
       ]),
     );
@@ -299,6 +319,75 @@ describe("SearchPage", () => {
     expect(screen.queryByText(/×\d+ printings/)).not.toBeInTheDocument();
     // Both ends are the row's own price, so the range renders as the single price it is.
     expect(screen.getByText("$400.50")).toBeInTheDocument();
+  });
+
+  /**
+   * **The Price column follows the marketplace, and the euro span is its own pair.**
+   *
+   * `CardSummary` carries four span fields rather than two because a group's euro span can be
+   * narrower than its dollar one — each spans the printings that have a price *in that
+   * currency* — so this asserts the euro pair is read rather than the dollar one relabelled.
+   */
+  it("prices in the selected marketplace's currency", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    searchCards.mockResolvedValue(
+      page([
+        { ...BOLT, priceLowUsd: 0.75, priceHighUsd: 4200, priceLowEur: 1.5, priceHighEur: 900 },
+      ]),
+    );
+    wrap(<SearchPage />);
+
+    await screen.findByText(BOLT.name);
+    await waitFor(() => expect(screen.getByText("€1.50–€900.00")).toBeInTheDocument());
+    expect(screen.queryByText("$0.75–$4,200.00")).not.toBeInTheDocument();
+  });
+
+  /**
+   * A row priced in dollars and unpriced in euros — an etched-only printing, which has no
+   * `eur_etched` key to be priced by. It is an em dash on Cardmarket, never the dollar figure
+   * wearing a euro sign.
+   */
+  it("shows an em dash for a row with no price in the selected currency", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    searchCards.mockResolvedValue(
+      page([
+        {
+          ...BOLT,
+          priceUsd: 71.5,
+          priceEur: null,
+          priceLowUsd: 71.5,
+          priceHighUsd: 71.5,
+          priceLowEur: null,
+          priceHighEur: null,
+        },
+      ]),
+    );
+    wrap(<SearchPage />);
+
+    await screen.findByText(BOLT.name);
+    await waitFor(() => expect(screen.getByText("—")).toBeInTheDocument());
+    expect(screen.queryByText("$71.50")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The one place the marketplace crosses the wire.** Ordering happens inside SQLite, so a
+   * Price header sorted by dollars while the cells print euros is the exact bug
+   * `SearchRequest.currency` exists to prevent.
+   *
+   * The first half is the other half of the same rule and is what keeps a marketplace switch
+   * off the network: an unsorted search sends no `currency` at all, so its cached pages stand
+   * and the cells simply read the other field.
+   */
+  it("sends the currency only when a money column is deciding the order", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    wrap(<SearchPage />);
+
+    await screen.findByText(BOLT.name);
+    await waitFor(() => expect(lastRequest().currency).toBeUndefined());
+
+    await userEvent.click(screen.getByRole("button", { name: /^Price/ }));
+    await waitFor(() => expect(lastRequest().currency).toBe("eur"));
+    expect(lastRequest().sort).toEqual([{ key: "price", dir: "desc" }]);
   });
 
   it("passes the format filter", async () => {
@@ -461,12 +550,15 @@ describe("SearchPage", () => {
     // sortable price column has two things to say and may drop neither.
     expect(screen.getByRole("button", { name: /^Price/ })).toHaveAttribute(
       "title",
-      "Prices as of the last card-data sync.\nSort by Price — Shift-click to add to the sort",
+      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price — Shift-click to add to the sort`,
     );
     // And in the accessible name, because a tooltip is not an answer for anyone who is not
     // holding a mouse over the right four pixels. It still *starts* with "Price", so the
     // column is still addressable by the word on screen.
-    expect(header).toHaveAccessibleName("Price. Prices as of the last card-data sync.");
+    expect(header).toHaveAccessibleName(`Price. ${pricesAsOf(MARKETPLACES.tcgplayer)}`);
+    // And it names the marketplace, which is the half that stopped being a constant: with five
+    // in the picker, "prices as of the last sync" leaves the reader guessing whose these are.
+    expect(header).toHaveAccessibleName(/TCGplayer/);
   });
 
   it("sends nothing about sorting until a header is pressed", async () => {

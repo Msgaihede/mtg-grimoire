@@ -1,6 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
+
+/** The default marketplace’s as-of sentence — this file is about the component, not about
+ *  which shop the number came from, so it names one and holds it still. */
+const PRICES_AS_OF = pricesAsOf(MARKETPLACES.tcgplayer);
 import { Figure, FigureRow } from "./Figure";
 
 const meta = {

@@ -8,7 +8,8 @@
  */
 import type { ReactNode } from "react";
 import type { CategoryKind } from "@/lib/ipc";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import type { Marketplace } from "@/lib/marketplace";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import type { CardGroup } from "../grouping";
 
@@ -56,12 +57,23 @@ function Marker({ label, title }: { label: string; title: string }) {
 
 export function GroupHeader({
   group,
+  marketplace,
   layout = "spread",
   id,
   actions,
   className,
 }: {
   group: CardGroup;
+  /**
+   * Which marketplace {@link CardGroup.totalPrice} was summed in — its currency formats the
+   * figure, its label is the as-of sentence.
+   *
+   * Passed rather than read here, and required rather than defaulted, because this heading is
+   * the one place four views state the same three facts: a default would let a view that
+   * forgot to thread it print dollars beside cards priced in euros, and nothing on screen
+   * would say which was wrong.
+   */
+  marketplace: Marketplace;
   /**
    * Where the counts go, and it is a question about the width of the box rather than about
    * taste.
@@ -129,8 +141,11 @@ export function GroupHeader({
         </span>
         {layout !== "stacked" && <span aria-hidden="true">·</span>}
         {/* The as-of sentence rides here, as it does on every other price in the app: a price
-            is never shown without saying when it was true. */}
-        <span title={PRICES_AS_OF}>{usdPrice(group.totalPriceUsd)}</span>
+            is never shown without saying when it was true — and, now that a reader can pick,
+            whose price it is. */}
+        <span title={pricesAsOf(marketplace)}>
+          {formatPrice(group.totalPrice, marketplace.currency)}
+        </span>
       </div>
     </div>
   );

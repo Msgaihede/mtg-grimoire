@@ -251,10 +251,13 @@ function Drawer({
 
   const total = useMemo(() => days.reduce((n, day) => n + day.entries.length, 0), [days]);
   const oldest = useMemo(
-    () => days.flatMap((day) => day.entries).reduce<number | null>(
-        (min, entry) => (min === null || entry.at < min ? entry.at : min),
-        null,
-      ),
+    () =>
+      days
+        .flatMap((day) => day.entries)
+        .reduce<number | null>(
+          (min, entry) => (min === null || entry.at < min ? entry.at : min),
+          null,
+        ),
     [days],
   );
   // The chip exists only when a row needs it, so a reader never sees a filter for a thing this
@@ -357,7 +360,11 @@ function Drawer({
         {/* The chips ride above the list rather than inside it, so a filter that empties the
             list is still on screen to be undone. */}
         <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-5 py-3">
-          <div role="group" aria-label="Filter the history by kind" className="flex flex-wrap gap-2">
+          <div
+            role="group"
+            aria-label="Filter the history by kind"
+            className="flex flex-wrap gap-2"
+          >
             {chips.map((band) => (
               <ToggleChip
                 key={band.id}

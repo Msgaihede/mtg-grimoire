@@ -229,9 +229,7 @@ export function DecksPage() {
    *  filed. `null` while the query is out, and for a deck deleted from inside its own editor. */
   const returningDeck = useMemo(
     () =>
-      returnToDeckId === null
-        ? null
-        : (decks.decks.find((d) => d.id === returnToDeckId) ?? null),
+      returnToDeckId === null ? null : (decks.decks.find((d) => d.id === returnToDeckId) ?? null),
     [returnToDeckId, decks.decks],
   );
 
@@ -330,7 +328,8 @@ export function DecksPage() {
   );
 
   const askMove = useCallback(
-    (deck: DeckRow, opener: HTMLButtonElement) => open({ kind: "moveDeck", deckId: deck.id }, opener),
+    (deck: DeckRow, opener: HTMLButtonElement) =>
+      open({ kind: "moveDeck", deckId: deck.id }, opener),
     [open],
   );
 
@@ -544,7 +543,10 @@ export function DecksPage() {
                       onClick={(e) =>
                         panel?.kind === "moveFolder"
                           ? dismiss()
-                          : open({ kind: "moveFolder", folderId: openNode.folder.id }, e.currentTarget)
+                          : open(
+                              { kind: "moveFolder", folderId: openNode.folder.id },
+                              e.currentTarget,
+                            )
                       }
                       className={HEADING_BUTTON}
                     >
@@ -651,8 +653,8 @@ export function DecksPage() {
           {!status && decks.decks.length === 0 && (
             <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
               A deck is a list you build for a format. Start one and the app checks it as you go —
-              deck size, copy limits, the commander's colours — and tells you which of the cards
-              you already own.
+              deck size, copy limits, the commander's colours — and tells you which of the cards you
+              already own.
             </p>
           )}
 

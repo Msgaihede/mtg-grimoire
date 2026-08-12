@@ -1,41 +1,59 @@
 import { Figure, FigureRow } from "@/components/Figure";
 import type { CollectionSummary as Summary } from "@/lib/ipc";
-import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import type { Marketplace } from "@/lib/marketplace";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 
 /**
  * What the collection adds up to.
  *
- * Four figures, in the data face, with no colour and no chrome: the direction spends its
- * boldness on card art, and a row of tinted stat cards above a wall of Magic art is two
+ * Three or four figures, in the data face, with no colour and no chrome: the direction spends
+ * its boldness on card art, and a row of tinted stat cards above a wall of Magic art is two
  * things shouting. The value carries its as-of sentence because spec §5 requires every price
  * on screen to say how old it is — and the unpriced count sits beside it because a total
  * that silently omits 200 cards is a number that lies by rounding down.
+ *
+ * ## One Value figure, not two
+ *
+ * This header drew `Value (USD)` and `Value (EUR)` side by side while there was no way to
+ * *say* which one you wanted. The marketplace setting is that way, so the pair collapses into
+ * the one the reader picked: two totals for one collection is two answers to the question
+ * this row exists to answer, and the second one is now a currency they have declared they are
+ * not shopping in. The label still names the currency, because a bare "Value" over a figure
+ * that changes denomination in Settings would be a number with no units.
+ *
+ * **The unpriced count moves with it, and it has to.** The two currencies do not have the same
+ * holes: `eur_etched` does not exist in Scryfall's data at all, so an etched printing is
+ * priced in dollars and unpriced in euros at the same time. Rust counts both
+ * (`unpricedUsd`/`unpricedEur`) precisely so this note can be about the figure beside it
+ * rather than about the other one.
  *
  * `undefined` while the first answer is in flight, and an em dash rather than a zero: a
  * collection that briefly claims to be worth nothing is a worse sentence than one that has
  * not said yet.
  */
-export function CollectionSummaryHeader({ summary }: { summary: Summary | undefined }) {
+export function CollectionSummaryHeader({
+  summary,
+  marketplace,
+}: {
+  summary: Summary | undefined;
+  /** Which marketplace's prices this row totals. Its currency picks the twin field; its label
+   *  is the as-of sentence. */
+  marketplace: Marketplace;
+}) {
   const n = (value: number) => value.toLocaleString("en-US");
+  const eur = marketplace.currency === "eur";
+  const value = summary ? (eur ? summary.valueEur : summary.valueUsd) : null;
+  const unpriced = summary ? (eur ? summary.unpricedEur : summary.unpricedUsd) : 0;
   return (
     <FigureRow>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}
       <Figure label="Cards" value={summary ? n(summary.totalCards) : "—"} />
       <Figure label="Unique" value={summary ? n(summary.uniqueCards) : "—"} />
       <Figure
-        label="Value (USD)"
-        value={summary ? usdPrice(summary.valueUsd) : "—"}
-        note={summary && summary.unpricedUsd > 0 ? `${n(summary.unpricedUsd)} unpriced` : undefined}
-        title={PRICES_AS_OF}
-      />
-      <Figure
-        label="Value (EUR)"
-        value={summary ? eurPrice(summary.valueEur) : "—"}
-        // Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
-        // documented and absent — so they are unpriced here rather than valued at the
-        // nonfoil rate, and this is where that shows.
-        note={summary && summary.unpricedEur > 0 ? `${n(summary.unpricedEur)} unpriced` : undefined}
-        title={PRICES_AS_OF}
+        label={`Value (${marketplace.currency.toUpperCase()})`}
+        value={summary ? formatPrice(value, marketplace.currency) : "—"}
+        note={unpriced > 0 ? `${n(unpriced)} unpriced` : undefined}
+        title={pricesAsOf(marketplace)}
       />
       {/* Only when there is one: a permanent "For trade — 0" is a column of chrome that has
           never once been the answer to anything. */}

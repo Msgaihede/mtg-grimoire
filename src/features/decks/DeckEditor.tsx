@@ -16,17 +16,13 @@ import {
 import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { pricesAsOf } from "@/lib/prices";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import { AuditDrawer } from "./AuditDrawer";
-import {
-  DECK_CARD_VARIANT,
-  focusDeckGroup,
-  FOCUS,
-  type DeckCardActions,
-} from "./cardControl";
+import { DECK_CARD_VARIANT, focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
 import { CategoriesPanel } from "./CategoriesPanel";
 import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -201,6 +197,10 @@ type Layer =
  */
 export function DeckEditor({ deckId }: { deckId: number }) {
   const [variant, setVariant] = useState<DeckVariant>("live");
+  // Every price on this screen — four views, every heading, the stats strip and the line under
+  // the deck — is quoted from here. Read once at the top of the editor and threaded, so no two
+  // surfaces of one deck can name two marketplaces.
+  const { marketplace } = useMarketplace();
   const deck = useDeck(deckId, variant);
   const { specs, formatSpecFor } = useFormatSpecs();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
@@ -458,17 +458,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /** Open one of the five, from the control that was pressed — and never a second one, because
    *  there is one slot. */
-  const openLayer = useCallback(
-    (next: NonNullable<Layer>, trigger: HTMLButtonElement | null) => {
-      openerRef.current = trigger;
-      setLayer((open) => (open?.kind === next.kind ? null : next));
-    },
-    [],
-  );
-  const openCheck = useCallback(
-    () => openLayer({ kind: "check" }, chipRef.current),
-    [openLayer],
-  );
+  const openLayer = useCallback((next: NonNullable<Layer>, trigger: HTMLButtonElement | null) => {
+    openerRef.current = trigger;
+    setLayer((open) => (open?.kind === next.kind ? null : next));
+  }, []);
+  const openCheck = useCallback(() => openLayer({ kind: "check" }, chipRef.current), [openLayer]);
 
   // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
   // that is all a *drop* carries, and a drag and a control press must not be two ways of
@@ -742,8 +736,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [deck.cards, filter, tagIds]);
 
   const groups = useMemo(
-    () => buildGroups(shown, categories, groupBy, sortBy),
-    [shown, categories, groupBy, sortBy],
+    // The currency is a grouping input because it decides two of the answers: what every
+    // heading's total is summed from, and how a `price` sort ranks the rows under it. Both
+    // change on a marketplace switch, and neither costs a refetch — the twin fields are
+    // already on the rows this recomputes over.
+    () => buildGroups(shown, categories, groupBy, sortBy, marketplace.currency),
+    [shown, categories, groupBy, sortBy, marketplace],
   );
 
   /**
@@ -791,8 +789,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * next card.
    */
   const quickAdd = useMutation({
-    mutationFn: (text: string) =>
-      ipc.searchCards({ text, collapse: true, limit: 1, offset: 0 }),
+    mutationFn: (text: string) => ipc.searchCards({ text, collapse: true, limit: 1, offset: 0 }),
     onSuccess: (found, text) => {
       const card = found.items[0];
       if (!card) {
@@ -821,6 +818,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   const viewProps = {
     groups,
+    marketplace,
     violations,
     onSelect: openCard,
     actions,
@@ -1078,7 +1076,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               // Named for where the card will land, and under `Auto` that is per card — so the
               // name says only what it can promise. "Quick add a card to Auto (by card type)"
               // would be a control named after a setting rather than after what pressing it does.
-              aria-label={targetName === null ? "Quick add a card" : `Quick add a card to ${targetName}`}
+              aria-label={
+                targetName === null ? "Quick add a card" : `Quick add a card to ${targetName}`
+              }
               placeholder="Sol Ring…"
               value={quickText}
               onChange={(e) => setQuickText(e.target.value)}
@@ -1122,7 +1122,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   className={cn(
                     "h-8 border-r border-border px-3 text-xs last:border-r-0",
                     "transition-colors duration-150 motion-reduce:transition-none",
-                    view === id ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+                    view === id
+                      ? "bg-accent font-medium text-accent-fg"
+                      : "text-dim hover:text-text",
                     FOCUS,
                   )}
                 >
@@ -1175,10 +1177,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               placeholder="Filter this deck…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className={cn(
-                "h-8 w-44 rounded-md border border-border bg-bg px-2.5 text-xs",
-                FOCUS,
-              )}
+              className={cn("h-8 w-44 rounded-md border border-border bg-bg px-2.5 text-xs", FOCUS)}
             />
 
             {/* The deck's own labels, as filters. Nothing at all for a deck with no tags — an
@@ -1199,7 +1198,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                             : [...held, tag.id],
                         )
                       }
-                      className={cn(FILTER_CONTROL, FILTER_FOCUS, "h-8 px-2.5 text-xs", filterChipState(on))}
+                      className={cn(
+                        FILTER_CONTROL,
+                        FILTER_FOCUS,
+                        "h-8 px-2.5 text-xs",
+                        filterChipState(on),
+                      )}
                     >
                       {tag.name}
                     </button>
@@ -1304,7 +1308,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   and a legality panel can never disagree. Unfiltered on purpose: the toolbar's
                   filter narrows what is *shown*, and a deck's mana curve is a fact about the
                   deck rather than about what is on screen. */}
-              <DeckStats cards={deck.cards} send={deck.missingToWishlist} />
+              <DeckStats
+                cards={deck.cards}
+                marketplace={marketplace}
+                send={deck.missingToWishlist}
+              />
             </section>
           )}
 
@@ -1322,7 +1330,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           is — once, here, rather than as a tooltip on every one of sixty cards. And, while a
           card is in the air, the way out of the deck, drawn over it. */}
       <div className="relative shrink-0">
-        <p className="text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+        <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
 
         {dragging && (
           // The way out of a deck, for a hand that is already holding the card. It exists only

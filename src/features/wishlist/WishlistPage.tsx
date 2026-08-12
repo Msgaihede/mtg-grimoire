@@ -18,8 +18,9 @@ import {
   type WishlistSortKey,
   type WishRow,
 } from "@/lib/ipc";
+import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
-import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -115,7 +116,7 @@ function DraggableRow({
  */
 export function WishlistPage() {
   const wishlist = useWishlist();
-  const { query, rows, total } = wishlist;
+  const { query, rows, total, marketplace } = wishlist;
   const queryClient = useQueryClient();
 
   /**
@@ -228,34 +229,36 @@ export function WishlistPage() {
   }, [query]);
 
   /**
-   * What is left to buy, in both currencies, and how much of the list each figure could not
-   * price.
+   * What is left to buy in the selected marketplace's currency, and how many wishes that
+   * figure could not price.
    *
    * Counted over what is *missing* rather than over what is wanted: a total that charged the
    * reader for cards already in the binder is a number nobody can act on. Computed here
    * rather than asked of the backend because a wishlist fits in one page — this is arithmetic
    * over the rows already on screen, not a second round trip.
    *
-   * Two unpriced counters and not one, because the two currencies do not have the same holes:
-   * `eur_etched` does not exist in Scryfall's data at all, so a wish for the etched printing
-   * is priced in dollars and unpriced in euros at the same time. One shared count would have
-   * to be wrong about whichever figure it was not describing.
+   * **One figure, not the pair this used to draw.** Two totals over one shopping list was two
+   * answers to the question the header exists to answer, and the setting is now the way to
+   * say which one is wanted. The unpriced counter moves with it and is not shared, because
+   * the two currencies do not have the same holes: `eur_etched` does not exist in Scryfall's
+   * data at all, so a wish for the etched printing is priced in dollars and unpriced in euros
+   * at the same time — and a count borrowed from the other currency would be wrong about
+   * exactly the rows this note is for. Nothing falls back: an unpriced wish is left out of
+   * the sum and counted, never quoted at the nonfoil rate.
    */
+  const currency = marketplace.currency;
   const cost = useMemo(() => {
-    let usd = 0;
-    let eur = 0;
-    let unpricedUsd = 0;
-    let unpricedEur = 0;
+    let total = 0;
+    let unpriced = 0;
     for (const row of rows) {
       const missing = missingOf(row);
       if (missing === 0) continue;
-      if (row.unitPriceUsd === null) unpricedUsd += 1;
-      else usd += row.unitPriceUsd * missing;
-      if (row.unitPriceEur === null) unpricedEur += 1;
-      else eur += row.unitPriceEur * missing;
+      const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
+      if (unit === null) unpriced += 1;
+      else total += unit * missing;
     }
-    return { usd, eur, unpricedUsd, unpricedEur };
-  }, [rows]);
+    return { total, unpriced };
+  }, [rows, currency]);
 
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write, not either of them: with `isError` on both, a refused stepper press
@@ -267,13 +270,13 @@ export function WishlistPage() {
   const status = statusOf(wishlist, failure);
 
   // The notes a total needs to stay honest, in one string because they are one qualification
-  // of one figure. The second is the rare one, and it is the same sentence about both
-  // figures: the backend pages at 100 and a shopping list is tens of rows, so a sum taken
-  // over part of the list is a case that has to be *said* rather than a case that has to be
-  // common. The first is per currency, because the unpriced rows are not the same rows.
+  // of one figure. The second is the rare one: the backend pages at 100 and a shopping list
+  // is tens of rows, so a sum taken over part of the list is a case that has to be *said*
+  // rather than a case that has to be common. The first is about the currency on screen —
+  // the unpriced rows are not the same rows in dollars and in euros.
   const counted = rows.length < total ? `${rows.length} of ${total} counted` : null;
-  const noteFor = (unpriced: number) =>
-    [unpriced > 0 ? `${unpriced} unpriced` : null, counted].filter(Boolean).join(" · ") ||
+  const note =
+    [cost.unpriced > 0 ? `${cost.unpriced} unpriced` : null, counted].filter(Boolean).join(" · ") ||
     undefined;
 
   return (
@@ -284,23 +287,18 @@ export function WishlistPage() {
 
       <FigureRow>
         <Figure label="Wishes" value={query.isPending ? "—" : total.toLocaleString("en-US")} />
-        {/* The one number this view exists for, in both currencies — spec §7 says this header
-            mirrors the collection's, and that one prices in both. Spec §5: each says how old
-            the prices are. */}
+        {/* The one number this view exists for, in the currency the reader picked — spec §7
+            says this header mirrors the collection's, and that one now prices in one
+            currency too. Spec §5: it says how old the prices are, and whose they are.
+
+            Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
+            documented and absent — so on Cardmarket a wish for one is left out of this sum
+            and counted in the note rather than quoted at the nonfoil rate. */}
         <Figure
-          label="Still to buy (USD)"
-          value={query.isPending || empty ? "—" : usdPrice(cost.usd)}
-          note={noteFor(cost.unpricedUsd)}
-          title={PRICES_AS_OF}
-        />
-        <Figure
-          label="Still to buy (EUR)"
-          value={query.isPending || empty ? "—" : eurPrice(cost.eur)}
-          // Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
-          // documented and absent — so a wish for one is unpriced here rather than quoted at
-          // the nonfoil rate, and this is where that shows.
-          note={noteFor(cost.unpricedEur)}
-          title={PRICES_AS_OF}
+          label={`Still to buy (${currency.toUpperCase()})`}
+          value={query.isPending || empty ? "—" : formatPrice(cost.total, currency)}
+          note={note}
+          title={pricesAsOf(marketplace)}
         />
       </FigureRow>
 
@@ -352,6 +350,7 @@ export function WishlistPage() {
             onNeedNextPage={onNeedNextPage}
             onSetQuantity={onSetQuantity}
             onRemove={onRemove}
+            marketplace={marketplace}
           />
         )}
       </div>
@@ -496,7 +495,10 @@ function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
 function columnsFor(
   onSetQuantity: (row: WishRow, quantity: number) => void,
   onRemove: (row: WishRow) => void,
+  marketplace: Marketplace,
 ): TableColumn<WishRow>[] {
+  const asOf = pricesAsOf(marketplace);
+  const currency = marketplace.currency;
   return [
     {
       key: "name",
@@ -604,28 +606,32 @@ function columnsFor(
       // no space for the sentence, so it rides as the column's tooltip and inside its
       // accessible name — which *begins* with the visible word, so the column is still
       // addressable by what is written on it (WCAG 2.5.3, label in name).
-      headerTitle: PRICES_AS_OF,
-      headerLabel: `Cost. ${PRICES_AS_OF}`,
+      headerTitle: asOf,
+      headerLabel: `Cost. ${asOf}`,
       headerClassName: "text-right",
       cellClassName: "text-right font-mono tabular-nums",
       // What finishing this wish costs, over the copies still missing — arithmetic over the
       // number the stepper moves, so the two can never disagree on screen. A wish with no
-      // price for its finish has no cost either: that is a hole in the data, not a zero.
-      // The header sorts by *this*, which is why a fulfilled wish sorts to the bottom of a
-      // cost order however dear the card is.
+      // price for its finish has no cost either: that is a hole in the data, not a zero, and
+      // an etched wish on Cardmarket is exactly that hole (`eur_etched` does not exist), so
+      // it is an em dash rather than the nonfoil rate wearing a euro sign.
+      //
+      // The header sorts by *this*, in *this* currency — which is why the query carries one —
+      // and why a fulfilled wish sorts to the bottom of a cost order however dear the card is.
       cell: (row) => {
         const missing = missingOf(row);
+        const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
         return (
           <>
-            {usdPrice(row.unitPriceUsd === null ? null : row.unitPriceUsd * missing)}
+            {formatPrice(unit === null ? null : unit * missing, currency)}
             {/* What one of them costs, under what all of them cost — and only where the two
                 are different numbers. On the single-copy rows that are most of a wishlist it
                 would be the same price written twice, and on a fulfilled one it was a unit
                 price under a total of nothing: a line quoting $105.18 each beside the word
                 "Fulfilled" reads as a bill for a card already in the binder. Seen live. */}
-            {row.unitPriceUsd !== null && missing > 1 && (
+            {unit !== null && missing > 1 && (
               <span className="block text-[0.7rem] leading-tight text-dim">
-                {usdPrice(row.unitPriceUsd)} ea
+                {formatPrice(unit, currency)} ea
               </span>
             )}
           </>
@@ -680,6 +686,7 @@ function WishlistTable({
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  marketplace,
 }: {
   rows: WishRow[];
   /** Wishes matching the filters, not wishes loaded — what assistive tech is told. */
@@ -693,6 +700,9 @@ function WishlistTable({
   onNeedNextPage: () => void;
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
+  /** Which marketplace the Cost column quotes. Passed rather than read here so the list and
+   *  the header above it cannot disagree about what they are pricing in. */
+  marketplace: Marketplace;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list never
   // has to know whether one is open, only which card is in it.
@@ -702,7 +712,7 @@ function WishlistTable({
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove)}
+      columns={columnsFor(onSetQuantity, onRemove, marketplace)}
       label="Your wishlist"
       // A wishlist total is counted in full, so there is no unknown-count case here.
       total={total}

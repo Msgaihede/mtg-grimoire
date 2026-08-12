@@ -57,14 +57,17 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
   typeLine: "Instant",
   manaCost: "{R}",
   priceUsd: 400.5,
+  priceEur: 320.25,
   layout: "normal",
   oracleId: "o-bolt",
   finishes,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLow: 400.5,
-  priceHigh: 400.5,
+  priceLowUsd: 400.5,
+  priceHighUsd: 400.5,
+  priceLowEur: 320.25,
+  priceHighEur: 320.25,
 });
 
 /**

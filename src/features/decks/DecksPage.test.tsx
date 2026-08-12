@@ -684,9 +684,9 @@ describe("DecksPage folders", () => {
 
     wrap(<DecksPage />);
 
-    const card = (
-      await screen.findByRole("button", { name: "Commander folder, 2 decks" })
-    ).closest("li")!;
+    const card = (await screen.findByRole("button", { name: "Commander folder, 2 decks" })).closest(
+      "li",
+    )!;
     // `Sunday draft` has no cover and contributes nothing; Kenrith, one level down, does.
     expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
     expect(card.querySelectorAll("img")).toHaveLength(1);

@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
+import { MARKETPLACES } from "@/lib/marketplace";
 import { deckGroups, deckViolations, printing } from "../../../../.storybook/fake/fixtures";
 import { TextView } from "./TextView";
 
@@ -10,7 +11,15 @@ const meta = {
   title: "Decks/Views/TextView",
   component: TextView,
   tags: ["autodocs"],
-  args: { groups: deckGroups(), violations: deckViolations(), onSelect: fn() },
+  args: {
+    groups: deckGroups(),
+    // The default, and what every dollar figure in this file is a claim about. The setting
+    // itself is `Settings/MarketplacePanel`; what a view owes it is one currency for the whole
+    // screen, so a heading and the cards under it cannot name two.
+    marketplace: MARKETPLACES.tcgplayer,
+    violations: deckViolations(),
+    onSelect: fn(),
+  },
   decorators: [
     (Story) => (
       <div className="flex h-[32rem]">

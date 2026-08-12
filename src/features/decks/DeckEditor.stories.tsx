@@ -90,7 +90,7 @@ const meta = {
           "check chip and no longer decides what is drawn.\n\n" +
           "**Five layers, one piece of state.** The format check, the categories drawer, the " +
           "history drawer, the theory difference dialog and the deck settings dialog each " +
-          "register the `\"inner\"` Escape rung, and `useDismissOnEscape` orders exactly two " +
+          'register the `"inner"` Escape rung, and `useDismissOnEscape` orders exactly two ' +
           "rungs — so two of them open at once would both close on one press. A union rather " +
           "than five booleans is what makes “never two” structural; {@link NeverTwoLayers} is " +
           "that, pressed.\n\n" +
@@ -117,7 +117,7 @@ const meta = {
           "spends them as a column, the other three draw them over the card, revealed by the " +
           "same hover and focus that lift a stacked card.\n\n" +
           "**The move control is a native `<select>`, deliberately.** The row menu it replaces " +
-          "was an anchored popup, which made it a sixth `\"inner\"` peer in the Escape union " +
+          'was an anchored popup, which made it a sixth `"inner"` peer in the Escape union ' +
           "with a z-index, a focus hand-back and a click-away boundary to get right. A select " +
           "is none of those: the browser draws it in its own layer, and it is reachable by " +
           "keyboard, pointer and voice without this app writing a line of it.\n\n" +
@@ -449,7 +449,10 @@ export const MoveBetweenPiles: Story = {
     const select = await canvas.findByLabelText("Move Black Lotus out of Main deck");
     await expect(within(select).queryByRole("option", { name: "Main deck" })).toBeNull();
 
-    await userEvent.selectOptions(select, within(select).getByRole("option", { name: "Sideboard" }));
+    await userEvent.selectOptions(
+      select,
+      within(select).getByRole("option", { name: "Sideboard" }),
+    );
 
     await waitFor(async () => {
       await expect(

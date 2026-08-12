@@ -9,7 +9,8 @@ import { cardDraggable } from "@/features/decks/dnd";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { finishLabel } from "@/lib/finish";
 import type { CollectionRow, CollectionSortKey } from "@/lib/ipc";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import type { Marketplace } from "@/lib/marketplace";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,10 @@ function conditionLabel(raw: string): string {
 function columnsFor(
   onSetQuantity: (row: CollectionRow, quantity: number) => void,
   onRemove: (row: CollectionRow) => void,
+  marketplace: Marketplace,
 ): TableColumn<CollectionRow>[] {
+  const asOf = pricesAsOf(marketplace);
+  const currency = marketplace.currency;
   return [
     {
       key: "name",
@@ -160,28 +164,37 @@ function columnsFor(
       // no space for the sentence, so it rides as the column's tooltip and inside its
       // accessible name — which *begins* with the visible word, so the column is still
       // addressable by what is written on it (WCAG 2.5.3, label in name).
-      headerTitle: PRICES_AS_OF,
-      headerLabel: `Value. ${PRICES_AS_OF}`,
+      headerTitle: asOf,
+      headerLabel: `Value. ${asOf}`,
       headerClassName: "text-right",
       cellClassName: "text-right font-mono tabular-nums",
       // Arithmetic over the number the stepper moves, so the two can never disagree on
       // screen. A row with no price for its finish has no value either — that is a hole in
       // the data, not a zero. The header sorts by *this* number, not by the unit price
       // underneath it: a column that reorders by something other than the figure printed in
-      // it is a column that lies.
-      cell: (row) => (
-        <>
-          {usdPrice(row.unitPriceUsd === null ? null : row.unitPriceUsd * row.quantity)}
-          {/* What one of them is worth, under what all of them are worth — and only where the
-            two are different numbers. On the single-copy rows that are most of a collection
-            it would be the same price written twice. */}
-          {row.unitPriceUsd !== null && row.quantity !== 1 && (
-            <span className="block text-[0.7rem] leading-tight text-dim">
-              {usdPrice(row.unitPriceUsd)} ea
-            </span>
-          )}
-        </>
-      ),
+      // it is a column that lies — and, since schema-less prices come in two currencies, not
+      // by the *other* currency's number either, which is what `CollectionQuery.currency`
+      // exists to prevent.
+      //
+      // **The euro column is emptier than the dollar one, and that is the data.** An etched
+      // row has no `eur_etched` key to read, so it is an em dash here on Cardmarket while
+      // showing a figure on TCGplayer. The nonfoil rate is *not* borrowed for it.
+      cell: (row) => {
+        const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
+        return (
+          <>
+            {formatPrice(unit === null ? null : unit * row.quantity, currency)}
+            {/* What one of them is worth, under what all of them are worth — and only where the
+              two are different numbers. On the single-copy rows that are most of a collection
+              it would be the same price written twice. */}
+            {unit !== null && row.quantity !== 1 && (
+              <span className="block text-[0.7rem] leading-tight text-dim">
+                {formatPrice(unit, currency)} ea
+              </span>
+            )}
+          </>
+        );
+      },
     },
     {
       key: "actions",
@@ -283,6 +296,7 @@ export function CollectionTable({
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  marketplace,
 }: {
   rows: CollectionRow[];
   /** Rows matching the filters, not rows loaded — what assistive tech is told the list is. */
@@ -296,6 +310,9 @@ export function CollectionTable({
   onNeedNextPage: () => void;
   onSetQuantity: (row: CollectionRow, quantity: number) => void;
   onRemove: (row: CollectionRow) => void;
+  /** Which marketplace the Value column quotes. Passed rather than read here so the table and
+   *  the header above it cannot disagree about what they are pricing in. */
+  marketplace: Marketplace;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list
   // never has to know whether one is open, only which card is in it.
@@ -305,7 +322,7 @@ export function CollectionTable({
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove)}
+      columns={columnsFor(onSetQuantity, onRemove, marketplace)}
       label="Your collection"
       // A collection total is counted in full, so there is no unknown-count case here.
       total={total}

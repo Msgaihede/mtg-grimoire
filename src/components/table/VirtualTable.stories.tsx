@@ -1,7 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
+
+/** The default marketplace’s as-of sentence — this file is about the table, not about which
+ *  shop the number came from, so it names one and holds it still. */
+const PRICES_AS_OF = pricesAsOf(MARKETPLACES.tcgplayer);
+const usdPrice = (value: number | null) => formatPrice(value, "usd");
 import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
 import { RarityGem } from "../RarityGem";
 

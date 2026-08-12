@@ -12,6 +12,7 @@
  * down over a card the last sync could not keep.
  */
 import type { DeckCard } from "@/lib/ipc";
+import type { Currency } from "@/lib/marketplace";
 import { autoCategoryDisplayOrder, autoCategoryFor } from "./autoCategory";
 
 export type SortBy = "alphabetical" | "manaCost" | "price" | "type";
@@ -47,14 +48,29 @@ function nullsLast(a: number | null, b: number | null, descending = false): numb
   return descending ? b - a : a - b;
 }
 
+/** The unit price the selected marketplace quotes for a row — the twin field, never a chain
+ *  across the two. `null` in euros for an etched printing, because `eur_etched` is not a key
+ *  Scryfall has, and an unpriced card sorts to the foot rather than being valued at the other
+ *  currency's number. */
+const unitPrice = (card: DeckCard, currency: Currency) =>
+  currency === "eur" ? card.unitPriceEur : card.unitPriceUsd;
+
 /**
  * One group's cards in the order asked for — a **new** array; the input is `readonly` and
  * stays untouched, because a group's cards come straight off a React Query cache.
  *
  * `Array.prototype.sort` is stable (ES2019 and every engine this ships in), which is what
  * carries the read's own order through every tie.
+ *
+ * `currency` decides the `price` order and nothing else: a deck list sorted by dollars while
+ * every cell prints euros is the same lie a mis-sorted table column would be, one view over.
+ * The other three orders ignore it, and pass it on unread.
  */
-export function sortCards(cards: readonly DeckCard[], sortBy: SortBy): DeckCard[] {
+export function sortCards(
+  cards: readonly DeckCard[],
+  sortBy: SortBy,
+  currency: Currency,
+): DeckCard[] {
   const copy = [...cards];
   switch (sortBy) {
     case "alphabetical":
@@ -65,7 +81,9 @@ export function sortCards(cards: readonly DeckCard[], sortBy: SortBy): DeckCard[
     // (`VirtualTable`'s `firstDir` is descending on money) — and the direction does not reach
     // the unpriced rows, which stay at the foot either way.
     case "price":
-      return copy.sort((a, b) => nullsLast(a.unitPriceUsd, b.unitPriceUsd, true) || byName(a, b));
+      return copy.sort(
+        (a, b) => nullsLast(unitPrice(a, currency), unitPrice(b, currency), true) || byName(a, b),
+      );
     // One vocabulary with the add path and the type grouping, and the **reading** order of
     // it: Land last, as in every decklist. `autoCategoryFor` decides what a card is;
     // `autoCategoryDisplayOrder` decides where that answer sits — the two lists differ only

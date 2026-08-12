@@ -82,9 +82,7 @@ export const FoilOnly: Story = {
     await expect(sheen).not.toBeNull();
     await expect(sheen?.parentElement).toHaveAttribute("aria-hidden", "true");
     // The art itself is still named by the card, which is the whole point of hiding the chip.
-    await expect(within(canvasElement).getByRole("img")).toHaveAccessibleName(
-      "Consecrated Sphinx",
-    );
+    await expect(within(canvasElement).getByRole("img")).toHaveAccessibleName("Consecrated Sphinx");
   },
 };
 

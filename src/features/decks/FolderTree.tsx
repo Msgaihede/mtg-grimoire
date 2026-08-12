@@ -138,10 +138,7 @@ export function flattenFolders(nodes: readonly FolderNode[]): FolderNode[] {
  *
  * Breadth-first with a visited set, so a corrupt cycle terminates here too.
  */
-export function folderDescendants(
-  folders: readonly DeckFolder[],
-  id: number,
-): ReadonlySet<number> {
+export function folderDescendants(folders: readonly DeckFolder[], id: number): ReadonlySet<number> {
   const out = new Set<number>();
   let frontier = new Set<number>([id]);
   while (frontier.size > 0) {
@@ -308,8 +305,7 @@ export function useDeckDropTarget({
  * indent the folder *will* have; `"rename"` replaces the row the folder already has.
  */
 export type FolderNaming =
-  | { kind: "new"; parentId: number | null }
-  | { kind: "rename"; folderId: number };
+  { kind: "new"; parentId: number | null } | { kind: "rename"; folderId: number };
 
 /** How the page finds a folder's row to hand the caret back to after the field it replaced
  *  closes. An attribute for `data-deck-id`'s reason: the row the layer replaced is a *different

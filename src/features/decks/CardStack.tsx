@@ -7,8 +7,9 @@ import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import type { Currency } from "@/lib/marketplace";
 import { stackCard } from "@/lib/motion";
-import { usdPrice } from "@/lib/prices";
+import { formatPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "./CardMarks";
@@ -280,6 +281,12 @@ export interface CardStackProps {
    */
   label: string;
   /**
+   * Which of a row's two unit prices the card's data line prints — the selected marketplace's
+   * currency, passed in rather than read here so a stack and the heading above it cannot
+   * quote two different marketplaces for the same pile.
+   */
+  currency: Currency;
+  /**
    * Every finding, by `cardId` — `violationsByCard`'s answer, handed in whole rather than
    * per card so one map serves a whole view.
    */
@@ -321,6 +328,7 @@ export interface CardStackProps {
 export function CardStack({
   cards,
   label,
+  currency,
   violations,
   onSelect,
   actions,
@@ -356,6 +364,7 @@ export function CardStack({
         <StackedCard
           key={card.id}
           card={card}
+          currency={currency}
           index={index}
           open={index === openIndex}
           onArm={arm}
@@ -397,6 +406,7 @@ export function CardStack({
  */
 function StackedCard({
   card,
+  currency,
   index,
   open,
   onArm,
@@ -408,6 +418,8 @@ function StackedCard({
   actions,
 }: {
   card: DeckCard;
+  /** Which of the row's two unit prices the data line prints. */
+  currency: Currency;
   /** Its place in the stack, which is the whole of its identity to {@link useFlipThrough}. */
   index: number;
   open: boolean;
@@ -567,7 +579,9 @@ function StackedCard({
             <span className="min-w-0 flex-1 truncate">
               {card.setCode.toUpperCase()} · {card.collectorNumber}
             </span>
-            <span className="shrink-0 tabular-nums text-text">{usdPrice(card.unitPriceUsd)}</span>
+            <span className="shrink-0 tabular-nums text-text">
+              {formatPrice(currency === "eur" ? card.unitPriceEur : card.unitPriceUsd, currency)}
+            </span>
             {/* Drawn only where it says something: a fully covered card prints nothing at all,
                 because sixty ticks are sixty things to read past on the way to the three that
                 matter. Decoration, like every other mark on this card — the words are in the

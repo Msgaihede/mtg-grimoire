@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-} from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
@@ -678,10 +670,7 @@ function Fields({
   id: string;
 }) {
   const writeName = useCallback((value: string) => update({ name: value }), [update]);
-  const writeDescription = useCallback(
-    (value: string) => update({ description: value }),
-    [update],
-  );
+  const writeDescription = useCallback((value: string) => update({ description: value }), [update]);
   const writeNotes = useCallback((value: string) => update({ notes: value }), [update]);
 
   const name = useDeckField(deck.name, writeName, { blankIsNoop: true });
@@ -805,9 +794,9 @@ function TheorySwitch({
           Theory deck
         </p>
         <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">
-          A second list you are building towards. Turning it on copies the live deck into an
-          empty plan; turning it off hides the Live/Theory switch and the difference list and
-          keeps every row.
+          A second list you are building towards. Turning it on copies the live deck into an empty
+          plan; turning it off hides the Live/Theory switch and the difference list and keeps every
+          row.
         </p>
       </div>
       <button
