@@ -1,8 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { ToggleChip } from "@/components/FilterChips";
 import type { DeckAuditEntry } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { drawerRight, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
@@ -163,23 +165,80 @@ export interface AuditDrawerProps {
  * An `"inner"` Escape rung — capture phase, `preventDefault()` — so one press closes the drawer
  * and leaves the card pane behind the view holding its own. Nothing else on this screen may be
  * an `"inner"` peer at the same time; `useDismissOnEscape`'s own doc has why.
+ *
+ * **This half is always mounted and the drawer below it is not, and the split is what keeps the
+ * Escape rung honest.** The editor renders all four of its overlays unconditionally, so the
+ * only thing that says "this one is up" is the flag — and with an exit animation the *element*
+ * outlives the flag by the length of the fade. A rung registered on the element's mount would
+ * therefore still be consuming Escape while the next overlay is opening, and two `"inner"`
+ * peers are not ordered by this protocol at all (`useDismissOnEscape`'s own doc). Registered
+ * out here on `enabled: open`, it is dead on the render that starts the exit.
+ *
+ * The filter chips' state lives out here too, and for an unrelated reason: it is the reader's,
+ * and a drawer they filtered, closed and reopened should not have forgotten.
  */
 export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerProps) {
-  // **Gated on `open`, not on the deck.** The editor keeps this mounted alongside everything
-  // else it draws, and a closed drawer that read anyway would spend a query on every deck the
-  // reader opens to look at. Re-opening is free: the answer is cached under the deck's own key.
-  const { query, days } = useDeckAudit(open ? deckId : null);
   const [hidden, setHidden] = useState<readonly AuditBand[]>([]);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
 
   useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
+
+  const toggle = useCallback(
+    (band: AuditBand) =>
+      setHidden((was) => (was.includes(band) ? was.filter((b) => b !== band) : [...was, band])),
+    [],
+  );
+  const showEverything = useCallback(() => setHidden([]), []);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <Drawer
+          key="history"
+          deckId={deckId}
+          hidden={hidden}
+          onToggle={toggle}
+          onShowEverything={showEverything}
+          onDismiss={onDismiss}
+          onClose={onClose}
+        />
+      )}
+    </AnimatePresence>
+  );
+}
+
+/**
+ * The drawer proper — mounted only while it is up, plus the length of its exit.
+ *
+ * **Gated by being mounted, not by a flag.** The read is the whole of what a closed drawer
+ * would otherwise cost, and unmounting says "do not ask" more plainly than `enabled` does — it
+ * is also what keeps the list on screen while the drawer slides out, where a query switched off
+ * at the flag would answer `isPending` again and print "Reading this deck's history…" over a
+ * fading panel.
+ */
+function Drawer({
+  deckId,
+  hidden,
+  onToggle,
+  onShowEverything,
+  onDismiss,
+  onClose,
+}: {
+  deckId: number;
+  hidden: readonly AuditBand[];
+  onToggle: (band: AuditBand) => void;
+  onShowEverything: () => void;
+} & Pick<AuditDrawerProps, "onDismiss" | "onClose">) {
+  const { query, days } = useDeckAudit(deckId);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  /** False from the render that starts the slide out. */
+  const present = useIsPresent();
 
   // The caret moves into the layer, as it does for every other one in the app: the drawer's own
   // controls are then the next thing Tab reaches, and Escape has something to hand back.
   useEffect(() => {
-    if (open) panelRef.current?.focus({ preventScroll: true });
-  }, [open]);
+    panelRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const shown = useMemo<ShownDay[]>(
     () =>
@@ -207,11 +266,6 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
   const chips = hasOther ? BANDS : NAMED_BANDS;
   const listed = shown.reduce((n, day) => n + day.entries.length, 0);
 
-  if (!open) return null;
-
-  const toggle = (band: AuditBand) =>
-    setHidden((was) => (was.includes(band) ? was.filter((b) => b !== band) : [...was, band]));
-
   return (
     // The scrim is the outside click, and the whole window is outside: a drawer that dimmed
     // only the view it opened over would leave the ribbon and the sidebar looking pressable
@@ -219,7 +273,13 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
     // because this component is mounted by the editor and cannot know that anything above it
     // is positioned — an `absolute` inset with no positioned ancestor lands somewhere nobody
     // chose.
-    <div
+    //
+    // The scrim and the panel are one `AnimatePresence` and two tweens: the ground darkens at
+    // the interaction tier and the panel arrives more slowly over it, so the drawer is never
+    // seen sliding across an undimmed window. Both register with the presence, so the drawer is
+    // unmounted when the *later* of the two has finished.
+    <motion.div
+      {...scrim}
       // `onMouseDown`, not `onClick`, for the reason both dialogs write out: a click fires on
       // the nearest common ancestor of press and release, so a selection that starts on a
       // history line and ends past the drawer's edge would be a "click" on the scrim and would
@@ -227,13 +287,23 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
+      // On the way out the whole layer is a picture: nothing in it can be pressed, and none of
+      // it is in the accessibility tree — where a second `role="dialog"` would otherwise sit
+      // beside whichever overlay the reader opened next. Focus left with the flag, either
+      // handed back by `onDismiss` or dropped by the press that landed elsewhere.
+      aria-hidden={present ? undefined : true}
       // `LAYER.overlay`: the rung the editor's four full-window surfaces share. Above every
       // anchored popup and above the drag tray — nothing is being dragged, since the tray only
       // exists during a drag this layer makes impossible — and below `gate`, which is
       // `SyncProgress` taking the window over.
-      className={cn("fixed inset-0 flex justify-end bg-black/60", LAYER.overlay)}
+      className={cn(
+        "fixed inset-0 flex justify-end bg-black/60",
+        !present && "pointer-events-none",
+        LAYER.overlay,
+      )}
     >
-      <div
+      <motion.div
+        {...drawerRight}
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
@@ -294,7 +364,7 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
                 label={band.label}
                 hint={band.hint}
                 pressed={!hidden.includes(band.id)}
-                onClick={() => toggle(band.id)}
+                onClick={() => onToggle(band.id)}
               />
             ))}
           </div>
@@ -311,11 +381,11 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
             pending={query.isPending}
             error={query.isError ? query.error : null}
             empty={total === 0}
-            onShowEverything={() => setHidden([])}
+            onShowEverything={onShowEverything}
           />
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

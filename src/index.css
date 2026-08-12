@@ -225,9 +225,51 @@
   --color-rarity-rare: #bfa35a;
   --color-rarity-mythic: #e86a33;
 
-  /* The one animation in the app: the mana line's sweep while a sync has no denominator.
-     Held to 150ms elsewhere per the direction's motion budget. */
+  /* The mana line's sweep while a sync has no denominator — the app's one *keyframed* loop,
+     and the only animation that runs without a reader having done anything. It used to be
+     described here as "the one animation in the app", which stopped being true the day
+     `src/lib/motion.ts` landed: enter and exit animations now run on drawers, dialogs,
+     popups, status lines and the deck stack. What is still true is that this is the only
+     `@keyframes` in the file and the only thing that repeats. */
   --animate-mana-sweep: mana-sweep 1.6s ease-in-out infinite;
+}
+
+/* Motion, as tokens — the same three durations and three curves `src/lib/motion.ts` hands to
+   `motion`, written here so a CSS-only transition and a JS one cannot drift apart.
+   `src/lib/motion.test.ts` compares this block against that module and fails if they do.
+
+   **`@theme static`, and the keyword is load-bearing.** A plain `@theme` emits only the
+   variables something references, so a token read *only* through `var()` is tree-shaken out
+   and never reaches `:root` at all. Measured 2026-08-12 against tailwindcss 4.3.3 by
+   compiling this block both ways: under `@theme` the three `--duration-*` lines are absent
+   from the output entirely, under `@theme static` they are in `:root`. It is a separate block
+   from the palette above for the same reason in reverse — the palette *should* keep being
+   shaken, and a colour nothing uses should not ship.
+
+   **What each half actually emits, also measured rather than assumed:**
+
+   * `--ease-*` **is** a Tailwind v4 theme namespace, so this block generates real utilities:
+     `ease-standard`, `ease-enter`, `ease-exit`. Use those. They do not collide with
+     Tailwind's own `ease-in` / `ease-out` / `ease-in-out`, which keep their default curves.
+   * `--duration-*` is **not** a namespace. Tailwind knows `duration-<number>` and
+     `duration-[…]` and nothing else, so there is no `duration-base` utility and there cannot
+     be one without a config file this project deliberately does not have. Write
+     `duration-[var(--duration-base)]`, or `var(--duration-base)` in a rule.
+
+   (Naming those classes here emits three of them, because Tailwind scans this comment exactly
+   as it scans a component — the trap the header of this file is about. Checked against the
+   built bundle 2026-08-12: `.ease-standard`, `.ease-enter` and `.ease-exit` are in it and the
+   bracketed `duration-` form above is not. It is the right trade and not a slip — those three
+   are the classes this vocabulary exists to have used, so the comment is a few hundred bytes
+   early rather than wrong.) */
+@theme static {
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 260ms;
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 @keyframes mana-sweep {

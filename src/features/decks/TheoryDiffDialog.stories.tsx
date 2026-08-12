@@ -16,6 +16,10 @@ import { TheoryDiffDialog } from "./TheoryDiffDialog";
  * because a card live has more of is a cut the reader already made and this list runs one
  * direction only. Deck 3's plan is a copy of the deck, which is the other answer.
  */
+/** How long a `waitFor` will wait for one animation frame. See `Shopping`'s play for why that
+ *  is measured in seconds rather than milliseconds. */
+const FRAME_WAIT = 5_000;
+
 const meta = {
   title: "Decks/TheoryDiffDialog",
   component: TheoryDiffDialog,
@@ -46,7 +50,20 @@ type Story = StoryObj<typeof meta>;
  */
 export const Shopping: Story = {
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText("Smuggler's Copter")).toBeVisible();
+    // **`waitFor`, and every `toBeVisible` on this page needs the same first step.** The dialog
+    // fades and scales in, so its first painted frame is at `opacity: 0` — and `toBeVisible`
+    // walks the ancestors, so *nothing* inside it is visible until that lands. Under the
+    // suite's `MotionGlobalConfig.skipAnimations` that is one frame away rather than 260ms, but
+    // it is still a frame, and `findBy*` resolves on the render before it. One wait per play:
+    // once the surface has arrived, everything under it is visible in the same tick.
+    //
+    // The timeout is generous on purpose. What is being waited for is a `requestAnimationFrame`
+    // — jsdom has no compositor, so `motion` drives its own loop off one — and the whole suite
+    // is 91 files of jsdom in parallel. The default second is a wait on the *scheduler*, and it
+    // flaked once at that length while passing the same play in isolation every time.
+    await waitFor(async () => expect(await canvas.findByText("Smuggler's Copter")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
 
     // Five copies over four cards, and the footer offers the four — one wish per oracle card,
     // which is what the backend answers with.
@@ -118,7 +135,10 @@ export const SendAll: Story = {
 export const Agreed: Story = {
   args: { deckId: 3 },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText(/The two lists agree/)).toBeVisible();
+    // The dialog's arrival, waited out once — see `Shopping`.
+    await waitFor(async () => expect(await canvas.findByText(/The two lists agree/)).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
     await expect(canvas.getByRole("button", { name: "Send all 0 to wishlist" })).toBeDisabled();
   },
 };
@@ -136,7 +156,10 @@ export const Unpriced: Story = {
     await canvas.findByText("Black Lotus");
 
     const cost = canvas.getByText("Cost to build").closest("div")!;
-    await expect(within(cost).getByText("1 unpriced")).toBeVisible();
+    // The dialog's arrival, waited out once — see `Shopping`.
+    await waitFor(() => expect(within(cost).getByText("1 unpriced")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
   },
 };
 
@@ -151,9 +174,14 @@ export const Unpriced: Story = {
 export const Refused: Story = {
   parameters: { fake: { fault: "deckMeta" } },
   play: async ({ canvas }) => {
-    await expect(
-      await canvas.findByText("the theory list could not be read: database is locked"),
-    ).toBeVisible();
+    // The dialog's arrival, waited out once — see `Shopping`.
+    await waitFor(
+      async () =>
+        expect(
+          await canvas.findByText("the theory list could not be read: database is locked"),
+        ).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
     // The footer still says what the list is and is not. A refusal is not a reason to stop
     // explaining the surface.
     await expect(canvas.getByText(/are cuts you have already made/)).toBeVisible();
