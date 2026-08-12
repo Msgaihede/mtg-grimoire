@@ -273,14 +273,18 @@ Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug
 the user's, and it is never committed. Seed **user tables only**: `cards` and `sync_meta`
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
-## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-11)
-`npm run storybook` · `npm run build-storybook`. **332 stories across 43 story files, 42 docs
+## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-12)
+`npm run storybook` · `npm run build-storybook`. **337 stories across 44 story files, 43 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 44th `importPath` is the `.mdx`).
+(`Object.values(index.entries)`, grouped by `type`; the 45th `importPath` is the `.mdx`).
 **Re-count them in the same commit that adds a story.** This line read 326 for three stories'
 worth of drift and then took three more without noticing, because a prose-only edit routes to
-neither CI job — the same rot that left the fault list below saying four.
-**41 of the 43 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+neither CI job — the same rot that left the fault list below saying four. **It had rotted
+again by 2026-08-12**: it read 43 story files when 44 were on disk, and the motion branch that
+found it added *no* story file, so the drift predates that branch entirely. Count the files
+too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
+can go missing from the prose while the story total still looks plausible.
+**42 of the 44 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -360,7 +364,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**242** plays today, in a file of **245** tests — the other three are its own; `grep -rE
+  (**247** plays today, in a file of **250** tests — the other three are its own; `grep -rE
   "^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
@@ -1073,6 +1077,73 @@ to guess.
   somewhere it has no option for. The wishlist's Printing column is deliberately not
   sortable at all — an any-printing wish names no set.
 
+## Motion (`motion@13.1.0`, added and driven live 2026-08-12)
+- **Timings live in `src/lib/motion.ts` and nowhere else.** `DURATION` is `fast` 120 · `base`
+  180 · `slow` 260 ms, `EASE` is `standard`/`enter`/`exit`, and consumers import a **preset**
+  (`scrim`, `drawerRight`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
+  number. The 150 ms budget it replaces existed only as a prose comment and ~100 hand-copied
+  `duration-150` literals. `src/index.css` carries the same scale so CSS-only sites agree.
+- **`@theme static` is load-bearing for `--duration-*`.** Measured against tailwindcss 4.3.3 by
+  compiling the block both ways: under plain `@theme` the three lines are **absent from the
+  output entirely** (tree-shaken, because nothing references them), under `@theme static` they
+  land in `:root`. `--ease-*` **is** a v4 namespace, so `ease-standard` is a real utility;
+  `--duration-*` is **not**, so there is no `duration-base` and it is read as
+  `duration-[var(--duration-fast)]`.
+- **`<MotionConfig reducedMotion="user">` is mounted once, in `App.tsx`** — not `main.tsx`,
+  which nothing in the suite or in Storybook ever loads, so a provider there is one only the
+  shipped window would have. Motion ships `reducedMotion: "never"` by default, so this line is
+  load-bearing rather than decorative.
+- **It only reduces `positionalKeys`, and that is a trap with a live example.** The set is
+  `width, height, top, left, right, bottom` plus the transform props — read out of
+  `motion-dom/.../keys-position.mjs`. **`marginBottom` is not in it**, so the deck stack's 286px
+  reflow would have travelled at full speed under `reducedMotion="user"` — a straight regression
+  against the `motion-reduce:transition-none` it replaced. `CardStack` therefore carries its own
+  `useReducedMotion()` opt-out. **Any `motion` animation of a non-positional property needs
+  one.** Opacity, colour and filter animating on is deliberate (WCAG 2.3.3's hazard is
+  movement), but it is a weaker rule than the CSS one and both now coexist.
+- `useReducedMotion()` is a per-component branch only: it reads its value once with `useState`
+  and **never updates on a live media-query change**. It is the wrong thing to reach for as an
+  app-wide switch.
+- **Two public APIs are forbidden: `AnimatePresence mode="popLayout"` and `animateView()`.**
+  Both append a `<style>` element to `document.head` (`PopChild.mjs:89-95`,
+  `motion-dom/.../view/utils/css.mjs:9,22`), which `style-src 'self'` blocks. The failure is
+  **silent** — `style.sheet` comes back null and `PopChild` already guards on it, so popLayout
+  simply does nothing and siblings jump. `MotionConfig nonce` is not an escape; it needs a
+  nonce-based `style-src`. `mode="sync"` and `"wait"` are fine.
+- **`devCsp` has `style-src 'self' 'unsafe-inline'` and the shipped `csp` does not**, so dev,
+  Storybook and jsdom are all green on that violation and only the packaged exe breaks. A source
+  sweep is the only thing that can catch it, and `src/lib/tokens.test.ts` now carries it, beside
+  a second guard asserting exactly one `MotionConfig reducedMotion="user"` exists in `src/`.
+  Both were proven red before being trusted. The old `\btransition-(?!none)` sweep is **blind to
+  JS motion** — a file animated entirely through `motion` matches nothing and passes trivially.
+- **Measured in the shipped window 2026-08-12, on a `--debug` build, which enforces the
+  production CSP**: appending a `<style>` gives `sheet === null` (so the policy is genuinely the
+  shipped one, not `devCsp`), the document holds **0 `<style>` elements**, and the console is
+  clean of CSP violations, JS errors and React warnings across a full pass. `motion` injects
+  nothing.
+- **Under jsdom `motion` needs no shim**: `Element.prototype.animate` is undefined, so it falls
+  back to its own rAF driver, which jsdom has. The animations are therefore **real and
+  timing-dependent**, which is why `MotionGlobalConfig.skipAnimations = true` is set in
+  `src/test-setup.ts` — one assignment before any test file loads, covering the composed story
+  plays too.
+- **A `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false
+  for everything inside an animated surface until the next frame** — even with `skipAnimations`,
+  because `toBeVisible` walks ancestors and `opacity: 0` fails it. Story plays that assert on
+  content inside a new overlay need `waitFor`, and under 91 parallel jsdom files the default 1s
+  timeout is not always enough for a `requestAnimationFrame`.
+- **Tailwind v4's `scale-*` writes the `scale` longhand, not `transform`** —
+  `.active\:scale-\[0\.97\]:active{scale:.97}` — so a `transition-[…,transform]` list does not
+  tween it and the press snaps. Tailwind's own `transition-transform` reads
+  `transform,translate,scale,rotate` for exactly this reason. The shared press recipe is
+  `transition-[color,background-color,border-color,opacity,transform,scale]` +
+  `duration-[var(--duration-fast)] ease-standard` + `active:scale-[0.97]`, verified in the built
+  CSS rather than in source.
+- **Cost: +41.4 kB gzip** for the full `motion.*` surface against the app's 176 kB (esbuild
+  `--bundle --minify`, `NODE_ENV=production`, gzip -9). `m` + `LazyMotion(domAnimation)` measures
+  +29.3 kB and code-splits; it was **not** taken, because the app loads from local disk in a
+  Tauri window and `m` throws if its wrapper is ever forgotten. An unused dep costs 0 — dist was
+  byte-identical after `npm install motion` and before the first import.
+
 ## Architecture (read the spec first)
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
 - Research (live-verified facts, incl. Scryfall breaking changes): `docs/superpowers/research/`
@@ -1319,13 +1390,40 @@ to guess.
 - **`CardStack` is the signature interaction, and it is arithmetic, not taste.** A card is
   **312px** (30px title bar + 256px art + 24px data line + 2 hairlines); collapsed it carries
   `mb-[-278px]`, so each card advances the stack by exactly **34px** — its title bar. The list is
-  given a **fixed** `stackHeight(n) = 34(n−1) + 312 + 8`, and the lifted card's `hover:mb-2`
+  given a **fixed** `stackHeight(n) = 34(n−1) + 312 + 8`, and the open card's margin
   turns −278 into +8: **a 286px push-down of every card after it, out of the box and over what is
   below, without the box changing size.** Measured in the shipped window 2026-08-11 (see the live
   pass below) — heights matched the formula exactly for stacks of 1, 2, 5, 6, 8 and 10, and the
-  push-down measured 286px with the list's height unchanged. **The lift is pure CSS**
-  (`hover:` + `focus-within:`, `LAYER.raisedOnHover`/`raisedOnFocus`), so nothing in JavaScript
-  knows which card is up and the caret gets the interaction for free. The 2026-08-06 removal of
+  push-down measured 286px with the list's height unchanged.
+- **Exactly one card moves per step, and that is the whole reason the interaction works.** With
+  card *N* open, card *k*'s top is `k·34` for `k ≤ N` and `N·34 + 320 + (k−N−1)·34` for `k > N`;
+  open card *N+1* instead and every top is unchanged **except card N+1's**, which travels 286px
+  up from `N·34 + 320` to `N·34 + 34`. So the reflow is one card sliding out of the stack, not a
+  list resettling — and the pointer that armed it stays inside it for every frame, because the
+  card is 312px tall and slides up *underneath* a stationary pointer.
+- **The lift used to be pure CSS and is now state, because pure CSS could not be given hover
+  intent** (changed 2026-08-12). The same arithmetic that makes one card move is what broke
+  selection: after the first step the *next* card's strip sits only ~34px below the pointer, so
+  one continuous downward sweep crossed four or five strips in ~60ms, armed every one, and left
+  the reader several cards below the one they aimed at. `CardStack` now holds `openIndex`, armed
+  by `pointerenter` on the `<li>` after a **70ms dwell** (`STACK_OPEN_DWELL_MS`) and closed after
+  **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card cancels the pending close so
+  switching never shows a closed frame. **No new hit target was needed**: a closed card is
+  overlapped 278px by its successor, which is later in DOM order and therefore paints over it,
+  so the only hittable part of a closed card already *is* its 34px strip.
+  `LAYER.raisedOnHover`/`raisedOnFocus` are **gone** — the open card takes `LAYER.raised` from
+  state — and `data-stack-open` exists so a test or a `cdp.mjs --probe` can *count* open cards,
+  which the CSS lift was observable from neither.
+- **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
+  and is load-bearing: `DeckCardControls` is a *sibling* of the button, so a caret stepping into
+  the stepper would otherwise collapse the card out from under itself. The keyboard opens with
+  **no dwell** — a caret is a deliberate act and a dwell would just be lag.
+- **React never listens for `pointerenter`.** It synthesises enter/leave from `pointerover`/
+  `pointerout`, so `fireEvent.pointerEnter` fires an event the component cannot hear and the test
+  passes having called nothing. Drive these with `fireEvent.pointerOver`/`pointerOut`. And
+  `userEvent` cannot be driven under Vitest fake timers at all — RTL's `asyncWrapper` waits on a
+  real `setTimeout` it only knows how to advance through *Jest*, so such a test hangs to its
+  5s timeout rather than failing. The 2026-08-06 removal of
   the *old* stacked mode is not contradicted: that one drew full card faces at column width, and
   this one draws a column of 34px title bars.
 - **A printings row in the card pane is clickable to view that printing** —
@@ -1355,9 +1453,28 @@ are all things no suite could have seen.
   the topmost card is the last one whose top is above it, and `hover`'s default approach (from
   directly above the element) lands on the *first* card of the stack and lifts that instead. Aim
   at `li > button > span:first-child`, and approach sideways with `--from`.
-- **Reduced motion holds**: `transitionProperty` is `none` on the stack card and on the view
-  buttons under `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
+- **Re-driven 2026-08-12 after the flip-through rebuild, on a 7-card stack** (`stackHeight(7)`
+  = `34·6 + 320` = **524px**, matched exactly, and unchanged through every gesture below). Tops
+  at rest advanced by exactly 34px. The measurements that matter, all in the shipped window:
+  **opening from all-closed pushes every later card down 286px** (the original claim, intact);
+  but **stepping from one open card to the next moves exactly one card** — card 3 travelled
+  464 → 178 while cards 0–2 *and* cards 4–6 held their pixel positions to the unit, and the
+  next bar stayed put at 499. **`[data-stack-open]` counted exactly 1 at every sample**,
+  including mid-transition, so switching never shows a closed frame. **A 438px continuous sweep
+  down the whole stack landed on the card it aimed at** — the defect this rebuild existed to
+  fix. And leaving the stack read `margin-bottom: 8px` still on the open card at arrival,
+  collapsing to all `-278px` only after the rest: the close delay, visible.
+- **`data-stack-open` exists so a probe can *count* open cards.** The CSS lift was observable
+  from neither a test nor `cdp.mjs` — `userEvent.hover` never engaged `:hover`, and nothing in
+  the DOM said which card was up. Count activations, never whether one happened.
+- **Reduced motion holds**: `transitionProperty` is `none` on the view buttons under
+  `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
   — the exact false failure the harness section warns about, reproduced here on purpose.
+  **The stack card is no longer part of that claim**: its lift is `motion`-driven, so there is
+  no CSS transition to probe, and its opt-out is the `useReducedMotion()` described under
+  Motion. That hook reads its value **once at mount**, so `media prefers-reduced-motion reduce`
+  emulated *after* the component mounted proves nothing about it — the surface has to be
+  remounted under the override, which is a live check nobody has run.
 - **Both drags work with a real Chromium drag**, carrying pdnd's `application/vnd.pdnd`: a card
   from one category to another (the target lit `border-accent` mid-flight; "Vampiric Tutor" moved
   Main deck 10→9, Ramp 6→7 and survived the re-read) and a **deck tile onto a sidebar folder**
