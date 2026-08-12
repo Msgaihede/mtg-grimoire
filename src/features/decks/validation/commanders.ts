@@ -27,7 +27,7 @@
  * them.
  */
 import type { FormatSpec } from "@/lib/ipc";
-import type { CardFacts, ValidationIssue } from "./types";
+import type { CardFacts, CardIdentity, ValidationIssue } from "./types";
 
 /** The rule names `format_specs.commander_rule` takes, minus the NULL. */
 type CommanderRule = NonNullable<FormatSpec["commanderRule"]>;
@@ -69,7 +69,7 @@ interface FrontFace {
  * Exported so Task 10's companion conditions can read the same face rather than growing a
  * second answer to "what is the front of this card".
  */
-export function frontFace(card: CardFacts): FrontFace {
+export function frontFace(card: CardIdentity): FrontFace {
   const own: FrontFace = {
     // `"A // B"` is a joined type line, not a face; the front is the left half.
     typeLine: card.typeLine === null ? null : card.typeLine.split("//")[0].trim(),
@@ -175,7 +175,7 @@ function isTheDoctor(typeLine: string): boolean {
  * `card_row` joins Scryfall's array and the letters are what comes back. Anything that is not
  * one of the five is dropped, so a stray token can never widen an identity.
  */
-export function identityOf(card: CardFacts): ReadonlySet<string> {
+export function identityOf(card: CardIdentity): ReadonlySet<string> {
   const letters = card.colorIdentity;
   if (!letters) return new Set();
   const identity = new Set<string>();
@@ -397,7 +397,7 @@ const CAN_BE_YOUR_COMMANDER = "can be your commander";
  * already carries the reconciler's warning.
  */
 export function commanderIneligibility(
-  card: CardFacts,
+  card: CardIdentity,
   rule: CommanderRule,
   spec: FormatSpec,
 ): string | null {
