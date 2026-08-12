@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.6.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.5.0...v0.6.0) (2026-08-12)
+
+
+### Features
+
+* add the marketplace model and currency-aware price formatting ([6afcfd0](https://github.com/Msgaihede/mtg-grimoire/commit/6afcfd0eaf873cac3fabe8ea09d285936374576d))
+* choose the card marketplace prices are quoted from ([cf5802f](https://github.com/Msgaihede/mtg-grimoire/commit/cf5802fb3f80912ef66e0a21182906432fe186dd))
+* commit a whole decklist in one transaction and one allocation ([caac69a](https://github.com/Msgaihede/mtg-grimoire/commit/caac69adfba305ed0e97f524c6f340123f55f523))
+* create a deck in a modal ([47be282](https://github.com/Msgaihede/mtg-grimoire/commit/47be282a89814a01e4203112bf2679c141814cb7))
+* draw a deck card as the whole card, not the art crop ([c4e3647](https://github.com/Msgaihede/mtg-grimoire/commit/c4e36476fccab170158e096786abc34d6e91d2e6))
+* draw every price in the selected marketplace currency ([0b58514](https://github.com/Msgaihede/mtg-grimoire/commit/0b5851474f8e3dee668150de50b631b811b5fd19))
+* file an uncategorised deck add by its card type ([5a1dbe3](https://github.com/Msgaihede/mtg-grimoire/commit/5a1dbe3cf28a60eb9653bbdf19215097069df381))
+* give every overlay, popup and the card pane an enter and an exit ([c66e74a](https://github.com/Msgaihede/mtg-grimoire/commit/c66e74a9c16b9be36f2e2a611fd0a5ca2f5f2a59))
+* give the app a motion vocabulary ([600fc77](https://github.com/Msgaihede/mtg-grimoire/commit/600fc77bc43372c393328a4c7151f68fec30b700))
+* import a deck from the gallery or from the open deck ([d4d4b68](https://github.com/Msgaihede/mtg-grimoire/commit/d4d4b6892f753941ba6fbacb06b828fd327aa010))
+* import decklists into new and existing decks ([9d6a408](https://github.com/Msgaihede/mtg-grimoire/commit/9d6a4085d8c8636cd7f635ba3e4e06affda5af32))
+* mirror the three deck-import commands in ipc.ts ([6bdd220](https://github.com/Msgaihede/mtg-grimoire/commit/6bdd220637cb193d5cb9f36c414ff7a29249e665))
+* one price per row, and the two feeds in the UI ([a5108ab](https://github.com/Msgaihede/mtg-grimoire/commit/a5108ab1993fb277bb3e0bfda0aa808c58932f2a))
+* parse decklists into lines, sections and issues ([901b9fd](https://github.com/Msgaihede/mtg-grimoire/commit/901b9fdf918d38cfc3bd36c2f87f1bd320eed701))
+* paste or load a decklist, preview it, and import it ([adf77ae](https://github.com/Msgaihede/mtg-grimoire/commit/adf77ae6f14f7a59d149558a6fee76d15f4158db))
+* plan a decklist into categories and a commander choice ([d6a75f7](https://github.com/Msgaihede/mtg-grimoire/commit/d6a75f72d20d57b6c0908ae937fcf50a60535f8a))
+* press feedback, a rotating sort arrow and status lines that grow ([68e7433](https://github.com/Msgaihede/mtg-grimoire/commit/68e7433d5ad2d05450b8a3e43a9feac3c292a0c7))
+* price from the Card Kingdom and Mana Pool bulk feeds ([9cff624](https://github.com/Msgaihede/mtg-grimoire/commit/9cff6249201caaa47af7c30576bf70e7972b4796))
+* price from the Card Kingdom and Mana Pool bulk feeds ([85d6f65](https://github.com/Msgaihede/mtg-grimoire/commit/85d6f653739c5367e1dc2d190bd7aa2c5c5ac9d6))
+* price the card pane per finish at the selected marketplace ([6ed6ad2](https://github.com/Msgaihede/mtg-grimoire/commit/6ed6ad298e63a19cceff95ce01b6d2790edbf1dc))
+* quote prices in the selected marketplace currency ([b5c836b](https://github.com/Msgaihede/mtg-grimoire/commit/b5c836b9994ac95ae95db4251f1808f98b132103))
+* read a decklist file by path, capped and lossy ([c9328e8](https://github.com/Msgaihede/mtg-grimoire/commit/c9328e81f7431c9ee607cd015f3adada9bef9d6f))
+* resolve decklist names to printings, preferring ones you own ([39542ae](https://github.com/Msgaihede/mtg-grimoire/commit/39542ae3fd05344f27c6df1f378270d0f8ea245c))
+* **skills:** exclusive app and storybook locks for parallel worktrees ([aa9763b](https://github.com/Msgaihede/mtg-grimoire/commit/aa9763b08355d5c2c27903655457ec4f972d061f))
+* word an import in the deck's history ([0586b42](https://github.com/Msgaihede/mtg-grimoire/commit/0586b42cce975e70772b383bcbf3713bee86d360))
+
+
+### Bug Fixes
+
+* a resolved printing hint must still name the card the line named ([270725c](https://github.com/Msgaihede/mtg-grimoire/commit/270725c733d036d58904270470b0ef2da69de9f7))
+* bound the run-loop deadlines in running-the-app skill ([37d5558](https://github.com/Msgaihede/mtg-grimoire/commit/37d55589d46fa34dac18ef4aa0ddee8ef447beb5))
+* count the import preview's piles over what will actually be written ([93fb575](https://github.com/Msgaihede/mtg-grimoire/commit/93fb5759ab9c2ae32f5603f6d45884cbf7ef87a6))
+* **decks:** hover intent for the card stack, and motion across the app ([7927eb8](https://github.com/Msgaihede/mtg-grimoire/commit/7927eb80b6cd278b663cb33571737d600f67ab76))
+* drop unit_price_usd from ImportMatch rather than pair it ([a0134ad](https://github.com/Msgaihede/mtg-grimoire/commit/a0134ad2375123b6b1359a6f86c01c32df327186))
+* give MOXFIELD_LIST real printing hints ([c697b56](https://github.com/Msgaihede/mtg-grimoire/commit/c697b56cb70ed28a5c0b5aaa0c9329c25de3b138))
+* give the deck stack hover intent, so a sweep lands on the card it aimed at ([9eda78d](https://github.com/Msgaihede/mtg-grimoire/commit/9eda78dc8c84054f360ed6beb532265e8ad4d948))
+* hide console windows from spawned dev-server processes ([0997798](https://github.com/Msgaihede/mtg-grimoire/commit/0997798134ea35ddf285ef6201980be3b86548a2))
+* keep the deck stack stacked while a card opens ([67a4175](https://github.com/Msgaihede/mtg-grimoire/commit/67a417517b41946b4aaed73d7aefb5302b1b0748))
+* keep the deck stack stacked while a card opens ([a7ea6a4](https://github.com/Msgaihede/mtg-grimoire/commit/a7ea6a4e86022459df64442628b800a1fe3ecba9))
+* make every decklist-resolution arm an indexed lookup ([6aa0a97](https://github.com/Msgaihede/mtg-grimoire/commit/6aa0a97783d2583d19b30cc62896cf70f14266b2))
+* make the FTS escaping test discriminate, and correct two counts ([255a0c7](https://github.com/Msgaihede/mtg-grimoire/commit/255a0c7bc90c5f1eaa66ef1923d252ef1512d346))
+* prefer an English printing when a decklist line names no set ([91daef1](https://github.com/Msgaihede/mtg-grimoire/commit/91daef1b5eb88f74c40b4751d55ebc8afdc5232c))
+* say only what the flip-through story can see ([6828396](https://github.com/Msgaihede/mtg-grimoire/commit/6828396f27ae11990f018f9664705df9e80f85d0))
+* **skills:** close eight review findings on the worktree lock ([1569df3](https://github.com/Msgaihede/mtg-grimoire/commit/1569df3d7cd1d581ccb3838d941fe335344dfcd9))
+* **skills:** close the "I'll offer to release it" loophole ([c8b19b3](https://github.com/Msgaihede/mtg-grimoire/commit/c8b19b333dded9eeb52dcb536ebc3779ef84dfd8))
+* **skills:** make the lock race test deterministic instead of scheduler luck ([88e7f21](https://github.com/Msgaihede/mtg-grimoire/commit/88e7f217fb8ab45fbd7b43075f6752b23d757949))
+* **skills:** make the Storybook recipe actually run on this machine ([1c42863](https://github.com/Msgaihede/mtg-grimoire/commit/1c4286376b729b0bd0fa824253ade20f265305be))
+* split a decklist on a lone carriage return, and pin the marker loop ([8d9fc55](https://github.com/Msgaihede/mtg-grimoire/commit/8d9fc558762617e20c9538a8b7d5072b224ba43d))
+* stop the quantity field drawing its own spinner steps ([bed2ca5](https://github.com/Msgaihede/mtg-grimoire/commit/bed2ca53b889c43c8146cc5710d49d9cf0c12efb))
+* tween the press feedback, which Tailwind v4 was snapping ([9b3359f](https://github.com/Msgaihede/mtg-grimoire/commit/9b3359f459f851f31fadbdca3043c35904670f35))
+
 ## [0.5.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.4.0...v0.5.0) (2026-08-11)
 
 
