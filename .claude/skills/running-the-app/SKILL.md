@@ -82,16 +82,17 @@ avoid `$`, which PowerShell interpolates before node sees it.
 
 ```powershell
 pwsh -NoProfile -File $L acquire storybook -What "component work"
-$sb = Start-Process npm -ArgumentList "run","storybook" -PassThru
-pwsh -NoProfile -File $L adopt storybook -ProcessId $sb.Id
+Start-Process npm.cmd -ArgumentList "run","storybook"
+do { Start-Sleep 2; $c = Get-NetTCPConnection -LocalPort 6006 -State Listen -ErrorAction SilentlyContinue } until ($c)
+pwsh -NoProfile -File $L adopt storybook -ProcessId $c.OwningProcess
 # ... use the mtg-grimoire-sb-mcp tools ...
 pwsh -NoProfile -File $L release storybook
 ```
 
-`Start-Process npm` here can spawn Storybook as a **child** process rather than run it
-directly, so `$sb.Id` may not be the pid actually listening on 6006 — confirm with
-`Get-NetTCPConnection -LocalPort 6006` and adopt that pid instead if they differ, or
-`release` stops the wrapper and leaves Storybook itself running.
+`npm` resolves to a `.ps1` wrapper on this machine that `Start-Process` cannot launch —
+use `npm.cmd`. It also spawns Storybook as a **child** process, so adopt the pid actually
+listening on 6006 (the loop above), never `Start-Process`'s own pid, or `release` stops
+the wrapper and leaves node holding the port.
 
 ## You are not done until you have released
 
