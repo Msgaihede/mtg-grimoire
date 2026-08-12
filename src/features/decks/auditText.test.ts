@@ -286,6 +286,86 @@ describe("auditSentence", () => {
   });
 
   /**
+   * An import is the one `add` that names no card, because it is a hundred of them — the
+   * payload carries counts instead, and this file is the only thing that words them.
+   */
+  it("words a merge import", () => {
+    expect(
+      auditSentence(
+        entry(
+          "add",
+          { import: { mode: "merge", lines: 105, cards: 117, categories: 9 } },
+          { cardId: null, cardName: null, delta: 117 },
+        ),
+      ),
+    ).toEqual({ text: "Imported 117 cards into 9 categories", detail: null });
+  });
+
+  /**
+   * A replace writes two rows and each says its own half. The add row deliberately does not
+   * name the mode: a replace that cleared nothing writes no remove row, and by then it did
+   * exactly what a merge into an empty list would have done.
+   */
+  it("words a replace import's two rows", () => {
+    const cleared = auditSentence(
+      entry(
+        "remove",
+        { import: { mode: "replace", cleared: 42 } },
+        { cardId: null, cardName: null, delta: -42 },
+      ),
+    );
+    expect(cleared).toEqual({ text: "Cleared 42 cards before importing", detail: null });
+
+    const added = auditSentence(
+      entry(
+        "add",
+        { import: { mode: "replace", lines: 105, cards: 117, categories: 9 } },
+        { cardId: null, cardName: null, delta: 117 },
+      ),
+    );
+    expect(added).toEqual({ text: "Imported 117 cards into 9 categories", detail: null });
+  });
+
+  it("says one card, not 1 cards", () => {
+    const imported = (payload: Record<string, unknown>) =>
+      auditSentence(entry("add", { import: payload }, { cardId: null, cardName: null })).text;
+
+    expect(imported({ mode: "merge", lines: 1, cards: 1, categories: 1 })).toBe(
+      "Imported 1 card into 1 category",
+    );
+    expect(
+      auditSentence(entry("remove", { import: { mode: "replace", cleared: 1 } }, { cardId: null }))
+        .text,
+    ).toBe("Cleared 1 card before importing");
+  });
+
+  /** The import branch is keyed on the payload, so an ordinary add — which carries none — is
+   *  untouched by it. */
+  it("still words an ordinary add with a card name", () => {
+    expect(auditSentence(entry("add", { category: "Ramp", quantity: 2 }))).toEqual({
+      text: "Added 2 × Sol Ring",
+      detail: "to Ramp",
+    });
+  });
+
+  /** A kind this build has no import sentence for falls through to its own branch rather than
+   *  being claimed as an import — the payload is a shape a newer build may put anywhere. */
+  it("leaves a kind it has no import sentence for to its own branch", () => {
+    expect(
+      auditSentence(
+        entry(
+          "category",
+          { action: "create", name: "Ramp", import: { mode: "merge" } },
+          {
+            cardId: null,
+            cardName: null,
+          },
+        ),
+      ),
+    ).toEqual({ text: "Created category Ramp", detail: null });
+  });
+
+  /**
    * Total, and that is the point of storing facts rather than sentences: this table outlives
    * every wording, so a row written by a newer build — or one whose payload lost a field —
    * still reads as a line of history rather than taking the drawer down.
