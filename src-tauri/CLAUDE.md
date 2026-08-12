@@ -80,6 +80,14 @@ both plus the frontend.
 - **A finish's price is a lookup in the `prices` blob** (`usd`/`usd_foil`/`usd_etched`;
   `eur_etched` does not exist, so etched is unpriced in EUR). `cards.price_usd` is a
   sort/display fallback chain and must never be summed. `tix` is never summed with fiat.
+- **Every price field ships a EUR twin beside its USD one, and Rust never picks between
+  them** — the marketplace setting is the frontend's to read, so a query that returned one
+  currency would make switching a refetch instead of a re-render. The one exception is
+  `ORDER BY`, which happens inside SQLite: `SearchRequest`/`CollectionQuery`/`WishlistQuery`
+  carry a `currency`, and **anything that is not exactly `"eur"` is USD** — absent, null, a
+  number, `"EUR"` — because a future marketplace id must not fail the whole request.
+  `sorting::sorts_for` splits each whitelist into shared and priced halves so a new money
+  sort cannot be added to dollars and silently forgotten in euros.
 - **Wishlist fulfillment is finish-aware.** A foil wish is not filled by a nonfoil copy; a
   wish naming no finish is filled by any. `wishlist::OWNED_SQL` sums `quantity`, so a
   collection row stepped to zero contributes nothing.

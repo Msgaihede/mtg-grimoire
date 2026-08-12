@@ -55,6 +55,17 @@ Every one of these has its measurement and its story in
   outside-click deliberately does not.
 - **An anchored popup near the right of a row is pinned to its trigger's _right_ edge** —
   nothing clips these popups, so one that overflows scrolls the whole app sideways.
+- **Money is drawn with `formatPrice(value, currency)` and the currency comes from
+  `useMarketplace()`** — never a bare `Intl.NumberFormat`, and never a hardcoded `priceUsd`.
+  A marketplace is a label; **`Currency` is the axis every price function turns on**, so
+  nothing downstream of `src/lib/marketplace.ts` branches on a marketplace id. Rust ships both
+  currencies on every priced row, so switching is a re-render off the cache — sending
+  `currency` on a query that is not sorted by money would turn that back into a refetch.
+- **A null euro price is the answer, never a reason to reach for the dollar one.**
+  `eur_etched` does not exist in Scryfall's data, so an etched card on a euro marketplace
+  renders an em dash. `unpriced` counts stay per-currency and travel with their own figure —
+  the same card is priced in dollars and unpriced in euros at once. The collection's stored
+  `purchase_price` never converts and never moves with this setting: it is what was paid.
 - **Dim text is `text-dim`, never `text-muted`** — the latter still compiles and now paints text
   in the surface colour, i.e. very nearly invisible. `src/lib/tokens.test.ts` guards it.
 - **Tailwind scans source text for whole class names**, so a class built by interpolation emits
