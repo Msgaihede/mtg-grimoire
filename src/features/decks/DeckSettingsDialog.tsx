@@ -486,7 +486,8 @@ function CoverPreview({ deck }: { deck: DeckRow }) {
  *
  * **A known gap against the art-credit rule, recorded here rather than quietly inherited.**
  * The rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
- * illustrator must be credited — and it lives in **CLAUDE.md's decks section** and on
+ * illustrator must be credited — and it lives in **`src/CLAUDE.md`'s binding rules**, in full in
+ * **`docs/reference/frontend-design.md`**, and on
  * {@link DeckRow.coverArtist}'s own doc, with the original statement in
  * `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md`. These tiles do not credit
  * one. Nor do `CardStack` (the stacked card), `views/GridView` (the wall tile) or
