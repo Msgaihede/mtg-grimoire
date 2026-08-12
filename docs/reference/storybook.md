@@ -4,8 +4,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
 `npm run storybook` · `npm run build-storybook`. **353 stories across 47 story files,
 46 docs pages** — counted off `storybook-static/index.json`, which is the only place the
-three agree (`Object.values(index.entries)`, grouped by `type`; the 48`th`
-`importPath` is the `.mdx`). **Measured 2026-08-12** off a fresh `build-storybook` on the
+three agree (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the
+`.mdx`). **Measured 2026-08-12** off a fresh `build-storybook` on the
 deck-import branch merged with the marketplace one: 399 entries, 353 `story`,
 46 `docs`, 48 distinct `importPath`s.
 
