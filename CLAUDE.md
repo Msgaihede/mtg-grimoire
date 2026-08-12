@@ -1519,7 +1519,28 @@ are all things no suite could have seen.
   at `li > button > span:first-child` — **which the whole-card rewrite moved**: a card is one
   `<span>` holding the image now, so the strip to aim at is the card's own top ~34px rather than a
   first-child band. Approach sideways with `--from`.
-- **Re-driven 2026-08-12 after the flip-through rebuild, on a 7-card stack.** RE-MEASURE PENDING.
+- **Re-driven 2026-08-12 on a 7-card stack, after both the whole-card rewrite and the
+  flip-through rebuild** — `stackHeight(7)` = `34·6 + 303` = **507px**, matched exactly and
+  **unchanged through every gesture below**; cards measured 295px with every collapsed margin
+  −261px, and tops at rest advanced by exactly 34px. Then, all in the shipped window:
+  **opening from all-closed pushes every later card down 269px** (375 → 644); but **stepping
+  from one open card to the next moves exactly one card** — card 3 travelled 467 → 198 while
+  cards 0–2 *and* cards 4–6 held their pixel positions to the unit, and the next strip stayed
+  put at 502. **`[data-stack-open]` counted exactly 1 at every sample**, including
+  mid-transition, so switching never shows a closed frame. **A 384px continuous sweep down the
+  whole stack landed on the card it aimed at** — the defect the rebuild existed to fix. And
+  leaving the stack still read an `8px` margin on the open card at arrival, collapsing to all
+  `-261px` only after the rest: the close delay, visible.
+  **The pre-merge run of this same pass measured 524px and 269→286px and is superseded** — it
+  was driven against the 312px card, before main's geometry landed. A live number belongs to a
+  geometry, and merging one branch into another can invalidate a measurement without touching
+  the code that took it.
+- **Do not aim `hover` at the card's `<li>` — aim at its marks strip.** `cdp.mjs hover` targets
+  an element's box **centre**, and a card is 295px tall in a stack that advances 34px, so the
+  centre of card 2 is painted over by card 6. The strip to aim at is the `absolute inset-x-0
+  top-0` span (25px, inside the 34px reveal); tag it per card and approach sideways with
+  `--from`. This is the same trap as the old `span:first-child` note, one rewrite later, and it
+  gets worse as the card gets taller.
 - **`data-stack-open` exists so a probe can *count* open cards.** The CSS lift was observable
   from neither a test nor `cdp.mjs` — `userEvent.hover` never engaged `:hover`, and nothing in
   the DOM said which card was up. Count activations, never whether one happened.
