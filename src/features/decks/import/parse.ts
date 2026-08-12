@@ -100,8 +100,14 @@ const SECTIONS = new Map<string, Section>([
  * **The `x` must touch the digits, and that is load-bearing.** `4x Shock` is a count and
  * `2 X Marks the Spot` is a card. Allowing whitespace between `\d{1,4}` and `[xX]?` eats that
  * card's first word as a multiplier and imports a card called "Marks the Spot" — silently,
- * because the line still parses and the count still reads 2. So `4 x Shock` is deliberately
- * *not* read as a count: that is the losing side of the trade, and it loses to a real card.
+ * because the line still parses and the count still reads 2.
+ *
+ * What that costs, stated as measured rather than as intended: `4 x Shock` gives
+ * `{ quantity: 4, name: "x Shock" }`. The **count is still taken** — only the stray `x`
+ * migrates into the name — so the reader gets four copies of a name nothing will resolve,
+ * not one copy of `"4 x Shock"`. That is the losing side of the trade and it is a loud
+ * failure: an unresolvable name is a row the preview asks about, where "Marks the Spot"
+ * would have imported quietly and correctly-looking.
  */
 const LINE =
   /^(?:(?<qty>\d{1,4})[xX]?\s+)?(?<name>.+?)(?:\s+\((?<set>\w{1,10})\)(?:\s+(?<cn>\S+))?)?$/;
@@ -115,6 +121,22 @@ const LINE =
  * matched anywhere would cut one out of the middle of one.
  */
 const MARKERS = [/\s+\*[A-Z]\*$/, /\s+\[[^\]]+\]$/, /\s+#\S+$/];
+
+/**
+ * What ends a line. CRLF first so a Windows paste splits once and not twice.
+ *
+ * The lone `\r` arm is not decoration: `/\r?\n/` — the obvious spelling — does not treat a
+ * carriage return on its own as anything, and `.` inside {@link LINE} does not cross one
+ * either. So a CR-only paste used to arrive as **one** row that matched nothing, and the whole
+ * decklist came back as a single issue reading "No card name on this line." Measured on
+ * `"1 Sol Ring\r2 Shock"`: 0 lines, 1 issue.
+ *
+ * U+2028 and U+2029 are deliberately **not** here. A decklist comes from a text editor, a
+ * site's copy button or a `.txt` file and none of them emit one; handling a separator nobody
+ * produces is grammar nobody can check. A paste containing one is still not swallowed — it
+ * lands in the empty-name fence below and is quoted back.
+ */
+const LINE_BREAK = /\r\n|\r|\n/;
 
 /**
  * The section a line announces, or `null` if it announces nothing.
@@ -165,7 +187,7 @@ export function parseDecklist(text: string): ParsedList {
   // Stripped from the whole text rather than per line, because that is where a pasted BOM
   // actually is — a file has one, at the front. A per-line strip would be a rule about every
   // line for the sake of the first.
-  const rows = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const rows = text.replace(/^\uFEFF/, "").split(LINE_BREAK);
 
   for (const [index, raw] of rows.entries()) {
     const lineNumber = index + 1;
@@ -225,9 +247,17 @@ export function parseDecklist(text: string): ParsedList {
     const groups: Record<string, string | undefined> = LINE.exec(body)?.groups ?? {};
     const name = groups.name?.trim() ?? "";
     if (name === "") {
-      // A fence rather than a path anyone has walked: `name` is `.+?` over an already
-      // non-empty string, so nothing reaches this today. It stays because "never silently
-      // dropped" has to hold for whatever the grammar becomes, not only for what it is.
+      // Reachable, and this is the one thing that reaches it: a line terminator `LINE_BREAK`
+      // does not split on. `.` never crosses U+2028 or U+2029, so a paste using one arrives
+      // as a single row that `LINE` cannot match at all — and this is what quotes the whole
+      // text back rather than dropping it. Measured: `"1 Sol Ring\u20282 Shock"` is 0 lines
+      // and 1 issue.
+      //
+      // What does **not** reach it, having been checked rather than assumed: a line of only
+      // markers. Every {@link MARKERS} pattern needs `\s+` in front of it and `body` is
+      // already trimmed, so `stripMarkers` cannot empty a string — `*F*` alone parses as a
+      // card named `*F*`, which resolution refuses. There is no path here through an empty
+      // name after a strip.
       issues.push({ lineNumber, raw, reason: "No card name on this line." });
       continue;
     }

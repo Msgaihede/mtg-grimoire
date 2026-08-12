@@ -106,12 +106,33 @@ describe("parseDecklist", () => {
     expect(out.lines.map((l) => l.name)).toEqual(["Sol Ring", "Shock", "Bolt"]);
   });
 
+  it("strips every marker on a line, not just the last one", () => {
+    // The marker patterns are all anchored to the end, so `*F*` is only reachable once
+    // `#Ramp` has gone — which makes the strip a loop rather than a pass. One pass leaves
+    // `Sol Ring *F*`, a name nothing resolves, and the test above cannot see it because each
+    // of its lines carries exactly one marker.
+    const out = parseDecklist("1 Sol Ring *F* #Ramp\n2 Shock *E* [Foil]");
+    expect(out.lines.map((l) => l.name)).toEqual(["Sol Ring", "Shock"]);
+  });
+
   it("survives CRLF and a byte-order mark", () => {
     // `\uFEFF` rather than a pasted BOM. The character is the same either way; the escape is
     // the only form the next reader can see, and a literal one is exactly the kind of
     // invisible thing a reformat or a copy-paste silently eats — taking the test with it.
     const out = parseDecklist("\uFEFF1 Sol Ring\r\n2 Shock\r\n");
     expect(out.lines.map((l) => l.name)).toEqual(["Sol Ring", "Shock"]);
+  });
+
+  it("splits on a lone carriage return", () => {
+    // `/\r?\n/` \u2014 the obvious splitter \u2014 reads a CR-only paste as one enormous line that
+    // matches nothing, so the entire decklist comes back as a single issue. Measured before
+    // the fix: 0 lines, 1 issue quoting the whole text.
+    const out = parseDecklist("1 Sol Ring\r2 Shock");
+    expect(out.issues).toEqual([]);
+    expect(out.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [1, "Sol Ring"],
+      [2, "Shock"],
+    ]);
   });
 
   it("quotes a line it cannot read instead of dropping it", () => {
