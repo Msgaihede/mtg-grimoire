@@ -71,12 +71,15 @@ Every one of these has its measurement and its story in
   there. `unpriced` counts are summed at the same marketplace as the figure they sit beside and
   never travel across a switch. The collection's stored `purchase_price` never converts and
   never moves with this setting: it is what was paid.
-- **The card pane is the one price surface the marketplace does not reach**, and it says so.
-  `card_detail` and `card_printings` answer a card rather than a priced list, so they take no
-  marketplace — the per-finish prices there come out of Scryfall's blob, and on a feed-backed
-  marketplace every one of them is an em dash with a line saying why. Quoting TCGplayer's
-  dollars under a "Card Kingdom prices" heading would be the cross-marketplace fallback this
-  whole feature refuses, and it would be invisible.
+- **A card is a priced answer too, and `finishPrices` is the whole of what a pane draws.**
+  `card_detail` and `card_printings` take a `marketplace` like every list query and answer
+  `{ nonfoil, foil, etched }` per printing, each nullable, built by `sorting::price_expr`. The
+  raw `prices` blob is **gone from both DTOs** on purpose: it is TCGplayer's six keys and
+  Cardmarket's, and it is structurally blind to the two marketplaces whose prices live in
+  `marketplace_prices` — a pane reading it could only ever draw em dashes on half the picker.
+  `src/lib/finish.ts`'s `finishPrice` survives for the **workbench alone** (the fake's fixtures
+  and `CollectionTable.stories.tsx` derive story figures from the generated `cards` rows); no
+  surface may price with it.
 - **Dim text is `text-dim`, never `text-muted`** — the latter still compiles and now paints text
   in the surface colour, i.e. very nearly invisible. `src/lib/tokens.test.ts` guards it.
 - **Tailwind scans source text for whole class names**, so a class built by interpolation emits

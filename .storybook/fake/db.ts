@@ -115,6 +115,7 @@ import type {
   EntryInput,
   EntryPatch,
   FacetResponse,
+  FinishPrices,
   InstallKind,
   MarketplaceFeedStatus,
   Printing,
@@ -713,6 +714,22 @@ function finishPriceAt(
 }
 
 /**
+ * `card.rs`'s `FinishPrices` — all three finishes of one printing at one marketplace.
+ *
+ * The card pane's figures. It is {@link finishPriceAt} three times and deliberately nothing more:
+ * a card detail prices exactly what the collection prices, so the two surfaces cannot disagree
+ * about what an etched card costs on Cardmarket (nothing — there is no `eur_etched` key) or about
+ * a printing a feed has never listed.
+ */
+function finishPricesAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): FinishPrices {
+  return {
+    nonfoil: finishPriceAt(db, card, "nonfoil", mp),
+    foil: finishPriceAt(db, card, "foil", mp),
+    etched: finishPriceAt(db, card, "etched", mp),
+  };
+}
+
+/**
  * `price_expr(marketplace)` at the **nonfoil** grain — a deck card's and a theory row's figure.
  *
  * A deck names a printing and not a finish, so there is no chain here and never has been:
@@ -1298,7 +1315,7 @@ function parseFaces(json: string | null): CardFace[] {
   });
 }
 
-function toCardDetail(c: FakeCard): CardDetail {
+function toCardDetail(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardDetail {
   return {
     id: c.id,
     oracleId: c.oracleId,
@@ -1317,14 +1334,16 @@ function toCardDetail(c: FakeCard): CardDetail {
     artist: c.artist,
     releasedAt: c.releasedAt,
     legalities: c.legalities,
-    prices: c.prices,
+    // Priced here rather than handed over as a blob, because two of the four marketplaces have
+    // no blob to hand over — `card_detail` takes a marketplace like every other priced read.
+    finishPrices: finishPricesAt(db, c, mp),
     finishes: c.finishes,
     imageStatus: c.imageStatus,
     faces: parseFaces(c.faces),
   };
 }
 
-function toPrinting(c: FakeCard): Printing {
+function toPrinting(db: FakeDb, c: FakeCard, mp: MarketplaceId): Printing {
   return {
     id: c.id,
     setCode: c.setCode,
@@ -1336,7 +1355,7 @@ function toPrinting(c: FakeCard): Printing {
     artist: c.artist,
     lang: c.lang,
     finishes: c.finishes,
-    prices: c.prices,
+    finishPrices: finishPricesAt(db, c, mp),
     promo: c.promo,
     fullArt: c.fullArt,
     frameEffects: c.frameEffects,
@@ -2536,17 +2555,25 @@ export function readHandlers(db: FakeDb) {
       );
     },
 
-    /** `card::get_card` — **not** filtered to paper, unlike the printings list: an id asked
-     *  for by name has to resolve, and a digital printing is reachable from a search with
-     *  `paperOnly` off. */
-    card_detail: (args: { id: string }): CardDetail | null => {
+    /**
+     * `card::get_card` — **not** filtered to paper, unlike the printings list: an id asked for
+     * by name has to resolve, and a digital printing is reachable from a search with `paperOnly`
+     * off.
+     *
+     * It takes a marketplace like every other priced read: the per-finish prices on the answer
+     * are `price_expr(marketplace)`'s, not a blob for the frontend to look a key up in. Absent
+     * is `tcgplayer`, which is what this command answered before the parameter existed.
+     */
+    card_detail: (args: { id: string; marketplace?: string }): CardDetail | null => {
       const card = cardById(db, args.id);
-      return card ? toCardDetail(card) : null;
+      return card ? toCardDetail(db, card, marketplaceOf(args.marketplace)) : null;
     },
 
     /** `card::list_printings`: every **paper** printing of one oracle card, newest first,
-     *  capped with an uncapped count so a truncated list can say what it truncates. */
-    card_printings: (args: { oracleId: string }) => {
+     *  capped with an uncapped count so a truncated list can say what it truncates. Every row
+     *  is priced per finish at the marketplace asked for, like the card above. */
+    card_printings: (args: { oracleId: string; marketplace?: string }) => {
+      const mp = marketplaceOf(args.marketplace);
       if (args.oracleId.trim() === "") return { items: [], total: 0 };
       const all = db.cards
         .filter((c) => c.oracleId === args.oracleId && c.isPaper)
@@ -2557,7 +2584,10 @@ export function readHandlers(db: FakeDb) {
             cmp(a.collectorNumber, b.collectorNumber) ||
             cmp(a.id, b.id),
         );
-      return { items: all.slice(0, MAX_PRINTINGS).map(toPrinting), total: all.length };
+      return {
+        items: all.slice(0, MAX_PRINTINGS).map((c) => toPrinting(db, c, mp)),
+        total: all.length,
+      };
     },
 
     /** `collection::list_entries`. */

@@ -928,6 +928,89 @@ describe("card detail", () => {
   });
 });
 
+/**
+ * **A card is a priced answer too**, since `card_detail` and `card_printings` gained a
+ * marketplace — which is the whole of what the card pane draws in its finish table and down its
+ * printings list.
+ *
+ * The fixture is `sta 105`, the corpus's Japanese Lightning Bolt and one of its two rows priced
+ * in all three finishes: `usd 17.85 / usd_foil 23.85 / usd_etched 18.68`, `eur 15.45 /
+ * eur_foil 21.45` and **no `eur_etched`, because Scryfall has no such key**.
+ */
+describe("a card's per-finish prices", () => {
+  const sta = CARDS.find((c) => c.setCode === "sta" && c.name === "Lightning Bolt")!;
+
+  /** `marketplace_prices` for that one printing at one feed — what a fetch would have landed. */
+  const feed = (marketplace: MarketplaceId, nonfoil: number, foil: number, etched: number) => [
+    { marketplace, cardId: sta.id, finish: "nonfoil", price: nonfoil },
+    { marketplace, cardId: sta.id, finish: "foil", price: foil },
+    { marketplace, cardId: sta.id, finish: "etched", price: etched },
+  ];
+
+  const pricesAt = (db: FakeDb, marketplace?: MarketplaceId) =>
+    readHandlers(db).card_detail({ id: sta.id, marketplace })!.finishPrices;
+
+  it("answers all three finishes from each marketplace's own source", () => {
+    const db = makeDb({
+      marketplacePrices: [
+        ...feed("cardkingdom", 19.64, 26.24, 20.55),
+        ...feed("manapool", 16.42, 21.94, 17.19),
+      ],
+    });
+
+    expect(pricesAt(db, "tcgplayer")).toEqual({ nonfoil: 17.85, foil: 23.85, etched: 18.68 });
+    expect(pricesAt(db, "cardkingdom")).toEqual({ nonfoil: 19.64, foil: 26.24, etched: 20.55 });
+    expect(pricesAt(db, "manapool")).toEqual({ nonfoil: 16.42, foil: 21.94, etched: 17.19 });
+  });
+
+  /**
+   * **The etched contrast**, which is the one thing four marketplaces disagree about in kind
+   * rather than in number: the same card in the same finish is priced on TCGplayer and on Mana
+   * Pool — which publishes a real `price_cents_nm_etched` column — and *unpriceable* on
+   * Cardmarket, because there is no `eur_etched` key in Scryfall's data at all.
+   */
+  it("prices etched where the source has it and answers null on Cardmarket, which cannot", () => {
+    const db = makeDb({ marketplacePrices: feed("manapool", 16.42, 21.94, 17.19) });
+
+    expect(pricesAt(db, "tcgplayer").etched).toBe(18.68);
+    expect(pricesAt(db, "manapool").etched).toBe(17.19);
+    expect(pricesAt(db, "cardmarket").etched).toBeNull();
+    // And the euro nonfoil price sits right there unused: the hole is the answer, not a reason
+    // to reach one key over.
+    expect(pricesAt(db, "cardmarket").nonfoil).not.toBeNull();
+  });
+
+  it("answers null for a card a feed has never listed rather than another marketplace's price", () => {
+    const db = makeDb({ marketplacePrices: feed("cardkingdom", 19.64, 26.24, 20.55) });
+
+    expect(pricesAt(db, "manapool")).toEqual({ nonfoil: null, foil: null, etched: null });
+    expect(pricesAt(db, "cardkingdom").nonfoil).toBe(19.64);
+  });
+
+  it("prices at tcgplayer when the read names no marketplace or names an unknown one", () => {
+    const db = makeDb({ marketplacePrices: feed("cardkingdom", 19.64, 26.24, 20.55) });
+
+    expect(pricesAt(db)).toEqual({ nonfoil: 17.85, foil: 23.85, etched: 18.68 });
+    expect(pricesAt(db, "ebay" as MarketplaceId)).toEqual(pricesAt(db, "tcgplayer"));
+    // `cardtrader` is in the picker and has no feed, so it prices as the default too.
+    expect(pricesAt(db, "cardtrader")).toEqual(pricesAt(db, "tcgplayer"));
+  });
+
+  /** The printings list carries the same figures per row — the half a reader compares
+   *  printings *by*, and the one the pane draws forty of. */
+  it("prices every printings row at the marketplace the list was read at", () => {
+    const db = makeDb({ marketplacePrices: feed("cardkingdom", 19.64, 26.24, 20.55) });
+    const rowFor = (marketplace: MarketplaceId) =>
+      readHandlers(db)
+        .card_printings({ oracleId: sta.oracleId!, marketplace })
+        .items.find((p) => p.id === sta.id)!.finishPrices;
+
+    expect(rowFor("tcgplayer").foil).toBe(23.85);
+    expect(rowFor("cardkingdom").foil).toBe(26.24);
+    expect(rowFor("manapool").foil).toBeNull();
+  });
+});
+
 describe("the allocator", () => {
   it("prefers the exact printing, then falls back to any printing of the same card", () => {
     const db = makeDeckDb({

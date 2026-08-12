@@ -81,7 +81,9 @@ const DETAIL: CardDetail = {
   artist: "Christopher Rush",
   releasedAt: "1993-08-05",
   legalities: null,
-  prices: null,
+  // Unpriced everywhere, and irrelevant here: this dialog reads the detail for its `oracleId`
+  // alone — the wish it makes is any-printing.
+  finishPrices: { nonfoil: null, foil: null, etched: null },
   finishes: null,
   imageStatus: null,
   faces: [],
@@ -260,7 +262,9 @@ describe("the theory difference dialog", () => {
     await user.click(within(sol).getByRole("button", { name: /Wishlist 3 more Sol Ring/ }));
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(1));
-    expect(cardDetail).toHaveBeenCalledWith("ring-c21");
+    // `card_detail` takes a marketplace like every priced read; this call wants only the
+    // oracle id off the answer, so it passes the surface's own rather than inventing one.
+    expect(cardDetail).toHaveBeenCalledWith("ring-c21", "tcgplayer");
     expect(wishlistAdd).toHaveBeenCalledWith({
       oracleId: "oracle-bolt",
       name: "Sol Ring",

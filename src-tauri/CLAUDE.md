@@ -94,6 +94,12 @@ both plus the frontend.
   no `Usd`/`Eur` twin fields: they were right while both prices were keys of one blob, and a
   third source in its own table would have meant four numbers per row that four of five renders
   ignore.
+- **`card_detail`/`card_printings` carry one too, and answer `FinishPrices` rather than the
+  blob.** They resolve it through the same `Marketplace::from_opt`, and each returns
+  `{ nonfoil, foil, etched }` per printing, every field nullable and every one built by
+  `price_expr`. **`cards.prices` is not on either DTO** — the card pane is where a reader
+  compares what each finish costs, and a blob carrying two of the four marketplaces could only
+  ever have answered em dashes for the other two.
 - **Every price in the crate is built by `sorting::price_expr` / `printing_price_expr`**, never
   by hand. Blob-backed marketplaces keep the `json_extract` text verbatim — **including the
   etched hole**, `CASE finish WHEN 'etched' THEN NULL` — and feed-backed ones emit a correlated

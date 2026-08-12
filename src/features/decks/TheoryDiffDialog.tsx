@@ -116,7 +116,10 @@ function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
    */
   const wishRow = useMutation({
     mutationFn: async (row: TheoryDiffRow) => {
-      const detail = await ipc.cardDetail(row.cardId);
+      // The marketplace is this hook's own. Nothing here reads a price — only `oracleId` — but
+      // the argument is not optional, and passing the surface's own is the one answer that
+      // cannot be wrong.
+      const detail = await ipc.cardDetail(row.cardId, marketplace);
       const oracleId = detail?.oracleId ?? null;
       // The same row the backend's loop skips — `let Some(oracle_id) = … else { continue }` —
       // said out loud instead of silently, because a button that reports success and wrote

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { readDragData } from "@/features/decks/dnd";
 import type { CardDetail, CardFace, DeckVariant, Printing, PrintingsResponse } from "@/lib/ipc";
+import type { MarketplaceId } from "@/lib/marketplace";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock with `CardDetailPane`'s, where the hoisting order needs it.
 import type { PaneDeckContext } from "@/lib/store";
@@ -29,8 +30,9 @@ const detail: CardDetail = {
   artist: "Nils Hamm",
   releasedAt: "2011-09-30",
   legalities: '{"modern":"legal","standard":"not_legal"}',
-  prices:
-    '{"usd":"0.50","usd_foil":"3.00","usd_etched":null,"eur":null,"eur_foil":null,"tix":null}',
+  // What the backend answered for the marketplace the pane asked at: one figure per finish,
+  // `null` where that marketplace does not price it. Nothing on this side looks a key up.
+  finishPrices: { nonfoil: 0.5, foil: 3.0, etched: null },
   finishes: '["nonfoil","foil"]',
   imageStatus: "highres_scan",
   faces: [
@@ -62,8 +64,7 @@ const printing = (over: Partial<Printing> = {}): Printing => ({
   artist: "Nils Hamm",
   lang: "en",
   finishes: '["nonfoil","foil"]',
-  prices:
-    '{"usd":"0.50","usd_foil":"3.00","usd_etched":null,"eur":null,"eur_foil":null,"tix":null}',
+  finishPrices: { nonfoil: 0.5, foil: 3.0, etched: null },
   promo: false,
   fullArt: false,
   frameEffects: null,
@@ -104,6 +105,19 @@ const MAIN: PaneDeckContext = {
 const cardDetail = vi.fn();
 const cardPrintings = vi.fn();
 /**
+ * What the pane reads the selected marketplace with. Its own `vi.fn()` because two tests below
+ * change what it answers — the pane's prices arrive priced, so the marketplace is a *request*
+ * parameter here rather than a formatting choice, and a test about Mana Pool's numbers has to
+ * be able to say so before the read happens.
+ */
+const getMarketplace = vi.fn();
+/**
+ * Both feeds' rows, which `useMarketplace` reads beside the setting. Answered empty: the pane
+ * says nothing about a feed's state, so this exists only so the hook's query resolves rather
+ * than rejecting on a `vi.fn()` that is not there.
+ */
+const marketplaceFeedStatus = vi.fn();
+/**
  * The two deck commands the pane can reach, and it reaches them only when the card was opened
  * from a deck row: the swap its printings rows offer, and the deck read that comes with the
  * hook the swap is mounted from (`useSwapFromPane` takes the whole of `useDeck`, whose query
@@ -114,8 +128,10 @@ const deckSwapPrinting = vi.fn();
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
-    cardDetail: (id: string) => cardDetail(id),
-    cardPrintings: (o: string) => cardPrintings(o),
+    cardDetail: (id: string, marketplace: MarketplaceId) => cardDetail(id, marketplace),
+    cardPrintings: (o: string, marketplace: MarketplaceId) => cardPrintings(o, marketplace),
+    getMarketplace: () => getMarketplace(),
+    marketplaceFeedStatus: () => marketplaceFeedStatus(),
     deckGet: (id: number, variant: DeckVariant) => deckGet(id, variant),
     deckSwapPrinting: (
       deckId: number,
@@ -185,6 +201,10 @@ const face = (over: Partial<CardFace>): CardFace => ({
 beforeEach(() => {
   cardDetail.mockReset();
   cardPrintings.mockReset();
+  // Nobody has chosen one, which is what a fresh install reads — and what every test here but
+  // the two feed ones is about.
+  getMarketplace.mockReset().mockResolvedValue("tcgplayer");
+  marketplaceFeedStatus.mockReset().mockResolvedValue([]);
   // A deck the read can find: a `deck_get` that answers nothing means the deck was deleted,
   // and the pane stops offering swaps it could only have refused (see the `gone` test).
   deckGet.mockReset().mockResolvedValue(DECK_DETAIL);
@@ -282,7 +302,7 @@ describe("CardDetailPane", () => {
     expect(boltArt).not.toBeInTheDocument();
   });
 
-  it("prices each finish from its own key", async () => {
+  it("prices each finish from its own field", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(printings));
 
@@ -293,6 +313,77 @@ describe("CardDetailPane", () => {
     const [nonfoil, foil] = await screen.findAllByRole("definition");
     expect(nonfoil).toHaveTextContent("$0.50");
     expect(foil).toHaveTextContent("$3.00");
+    // TCGplayer, and it says so: a price is never shown without saying how old it is and whose
+    // it is (spec §5).
+    expect(
+      screen.getByText("TCGplayer prices as of the last card-data sync."),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The gap this pane used to have, closed.**
+   *
+   * Card Kingdom's and Mana Pool's prices live in `marketplace_prices` and are unreachable from
+   * the webview, so while `card_detail` answered Scryfall's blob every finish here was an em
+   * dash on half the picker — with a line explaining why. Both commands take a marketplace now
+   * and answer per-finish figures, so this is a column of real numbers.
+   *
+   * The claim is made from both ends: the reads carry the marketplace, and what comes back is
+   * drawn. A pane that dropped the argument would quote TCGplayer under a Mana Pool heading,
+   * which is exactly the cross-marketplace fallback the feature refuses — and it would look
+   * right.
+   */
+  it("draws real per-finish numbers on a feed-backed marketplace", async () => {
+    getMarketplace.mockResolvedValue("manapool");
+    cardDetail.mockResolvedValue(
+      card({ finishPrices: { nonfoil: 0.44, foil: 2.71, etched: null } }),
+    );
+    cardPrintings.mockResolvedValue(
+      page([printing({ finishPrices: { nonfoil: 0.44, foil: 2.71, etched: null } })]),
+    );
+
+    wrap("p1");
+
+    const [nonfoil, foil] = await screen.findAllByRole("definition");
+    expect(nonfoil).toHaveTextContent("$0.44");
+    expect(foil).toHaveTextContent("$2.71");
+    // Both reads carried it — the printings list is priced too, and it is the half a reader
+    // compares printings by.
+    await waitFor(() => expect(cardDetail).toHaveBeenCalledWith("p1", "manapool"));
+    expect(cardPrintings).toHaveBeenCalledWith("o1", "manapool");
+    // A downloaded feed has its own clock, and the as-of line is the one that says so — never
+    // the old "this marketplace does not reach here" sentence, which is no longer true.
+    expect(
+      await screen.findByText("Mana Pool prices as of the last price-feed refresh."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/are not read from/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A finish the marketplace does not price is an **em dash**, and it is still the answer.
+   *
+   * `null` arrives per finish now rather than being derived here, but the rule it stands for did
+   * not move: there is no `eur_etched` key in Scryfall's data at all, so an etched card has no
+   * Cardmarket price, and quoting its nonfoil euro figure — or its dollar one — would be a price
+   * nobody ever gave.
+   */
+  it("draws an em dash for a finish the selected marketplace does not price", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    cardDetail.mockResolvedValue(
+      card({
+        finishes: '["nonfoil","foil","etched"]',
+        finishPrices: { nonfoil: 2.1, foil: 2.6, etched: null },
+      }),
+    );
+    cardPrintings.mockResolvedValue(page([]));
+
+    wrap("p1");
+
+    const [nonfoil, foil, etched] = await screen.findAllByRole("definition");
+    expect(nonfoil).toHaveTextContent("€2.10");
+    expect(foil).toHaveTextContent("€2.60");
+    expect(etched).toHaveTextContent("—");
+    expect(etched).not.toHaveTextContent("0.00");
   });
 
   it("shows a legality chip for modern and none for standard", async () => {

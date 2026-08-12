@@ -4,14 +4,22 @@
 //! testable without a Tauri app, wrapped in `async` commands that run on the blocking
 //! pool against the **read-only** connection.
 //!
-//! What is deliberately *not* computed here: grouping printings by `illustration_id`, and
-//! turning the `prices` blob into a per-finish figure. Both are domain logic, and
-//! CLAUDE.md puts domain logic in TypeScript where the tests are fast — Rust hands over
-//! the JSON and the frontend decides what it means.
+//! What is deliberately *not* computed here: grouping printings by `illustration_id`. That is
+//! domain logic, and CLAUDE.md puts domain logic in TypeScript where the tests are fast — Rust
+//! hands over the field and the frontend decides what it means.
+//!
+//! **Prices are the exception, and they stopped being one the day a marketplace could be
+//! something other than a key of `cards.prices`.** These two commands used to answer that blob
+//! verbatim and let the pane look a finish up in it; that works for TCGplayer and Cardmarket and
+//! is simply blind to Card Kingdom and Mana Pool, whose prices live in `marketplace_prices` and
+//! which the webview cannot read. So both commands take a `marketplace` like every list query in
+//! the crate, and both answer [`FinishPrices`] — one figure per finish, from the one place the
+//! rest of the crate gets a price, [`crate::sorting::price_expr`].
 //!
 //! Nothing here reads `raw`: `artist` has had a column of its own since schema v3, which
 //! was the last thing this module took out of that blob.
 
+use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -42,6 +50,50 @@ const MAX_PRINTINGS: usize = 400;
 /// render its price as `—`. `search` already defaults to paper for the same reason, and
 /// the spec tracks a paper collection.
 const PRINTINGS_WHERE: &str = "oracle_id = ?1 AND is_paper = 1";
+
+/// What one printing costs per **finish**, at the marketplace the request named.
+///
+/// Three nullable numbers rather than a blob, because a blob only ever had two of the four
+/// marketplaces in it. `null` is *unpriced at that marketplace* and is drawn as an em dash —
+/// never a reason to reach for another marketplace's figure, and the holes are not the same at
+/// any two of them: Scryfall has no `eur_etched` key at all, so etched is NULL on Cardmarket for
+/// every card in the game, while Mana Pool publishes 1 198 real etched prices and Card Kingdom
+/// 1 162, and either feed can simply never have listed a printing this database has.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishPrices {
+    pub nonfoil: Option<f64>,
+    pub foil: Option<f64>,
+    pub etched: Option<f64>,
+}
+
+/// The three finishes, as the SQL literals [`crate::sorting::price_expr`] takes.
+///
+/// That builder's `finish` argument is the *caller's expression* for the finish being priced —
+/// `e.finish` on the collection, `coalesce(w.preferred_finish, 'nonfoil')` on the wishlist. Here
+/// a card is priced in all three at once, so each is a constant, and the order is
+/// [`FinishPrices`]' own.
+const FINISH_LITERALS: [&str; 3] = ["'nonfoil'", "'foil'", "'etched'"];
+
+/// The three price expressions as a `SELECT` list, for a query whose `cards` is aliased `c`.
+///
+/// Built by [`crate::sorting::price_expr`] and never by hand, which is the crate rule and is
+/// what keeps this pane's etched hole on Cardmarket, and its lookups into `marketplace_prices`,
+/// identical to the ones the collection and the decks already draw.
+fn finish_price_columns(market: Marketplace) -> String {
+    FINISH_LITERALS
+        .map(|finish| crate::sorting::price_expr(market, finish))
+        .join(", ")
+}
+
+/// The three columns [`finish_price_columns`] appended, read back from index `at`.
+fn read_finish_prices(row: &rusqlite::Row, at: usize) -> rusqlite::Result<FinishPrices> {
+    Ok(FinishPrices {
+        nonfoil: row.get(at)?,
+        foil: row.get(at + 1)?,
+        etched: row.get(at + 2)?,
+    })
+}
 
 /// One physical side of a card, for the flip control and the credit line.
 #[derive(Debug, Serialize)]
@@ -79,10 +131,9 @@ pub struct CardDetail {
     /// JSON, verbatim. 23 keys today and the set grows — the day this becomes columns is
     /// the day a new format needs a migration.
     pub legalities: Option<String>,
-    /// JSON, verbatim. Six keys, decimal **strings**; a finish price is a lookup in here,
-    /// never `price_usd` (which is a display fallback chain and would price a nonfoil at
-    /// foil rates).
-    pub prices: Option<String>,
+    /// Per finish, at the marketplace the request named. **Not** `cards.prices`: that blob is
+    /// two of the four marketplaces, and the pane has to be able to quote the other two.
+    pub finish_prices: FinishPrices,
     pub finishes: Option<String>,
     pub image_status: Option<String>,
     /// Empty for a single-faced card.
@@ -105,7 +156,9 @@ pub struct Printing {
     pub artist: Option<String>,
     pub lang: String,
     pub finishes: Option<String>,
-    pub prices: Option<String>,
+    /// Per finish, at the marketplace the request named — the same figures [`CardDetail`]
+    /// carries, for the printing this row is. See [`FinishPrices`].
+    pub finish_prices: FinishPrices,
     pub promo: bool,
     pub full_art: bool,
     pub frame_effects: Option<String>,
@@ -136,13 +189,24 @@ pub struct PrintingsResponse {
 /// name has to resolve. A digital printing can be reached from a search with `paperOnly`
 /// off, and answering `None` for a row that plainly exists would look like a broken
 /// database rather than a policy.
-pub fn get_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, String> {
-    let sql = "SELECT id, oracle_id, name, set_code, set_name, collector_number, rarity, layout,
-                lang, mana_cost, cmc, type_line, oracle_text, illustration_id, artist,
-                released_at, legalities, prices, finishes, image_status, faces
-         FROM cards WHERE id = ?1";
-    conn.query_row(sql, params![id], |r| {
-        let faces: Option<String> = r.get(20)?;
+pub fn get_card(
+    conn: &Connection,
+    id: &str,
+    market: Marketplace,
+) -> Result<Option<CardDetail>, String> {
+    // `cards` is aliased `c` because `price_expr` names that alias: every priced query in the
+    // crate joins the printing that way, and hard-coding it there is what keeps the join key
+    // and the price from being spelled apart.
+    let sql = format!(
+        "SELECT c.id, c.oracle_id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
+                c.layout, c.lang, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
+                c.illustration_id, c.artist, c.released_at, c.legalities, c.finishes,
+                c.image_status, c.faces, {prices}
+         FROM cards c WHERE c.id = ?1",
+        prices = finish_price_columns(market)
+    );
+    conn.query_row(&sql, params![id], |r| {
+        let faces: Option<String> = r.get(19)?;
         Ok(CardDetail {
             id: r.get(0)?,
             oracle_id: r.get(1)?,
@@ -161,9 +225,9 @@ pub fn get_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, Strin
             artist: r.get(14)?,
             released_at: r.get(15)?,
             legalities: r.get(16)?,
-            prices: r.get(17)?,
-            finishes: r.get(18)?,
-            image_status: r.get(19)?,
+            finish_prices: read_finish_prices(r, 20)?,
+            finishes: r.get(17)?,
+            image_status: r.get(18)?,
             faces: parse_faces(faces.as_deref()),
         })
     })
@@ -224,17 +288,22 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 /// [`crate::search::run_search`]'s is not — `idx_cards_oracle` narrows it to one card's
 /// printings (946 rows at the very worst) instead of scanning toward 116 k — so there is
 /// nothing here to cap and no `total_is_capped` to report.
-pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<PrintingsResponse, String> {
+pub fn list_printings(
+    conn: &Connection,
+    oracle_id: &str,
+    market: Marketplace,
+) -> Result<PrintingsResponse, String> {
     if oracle_id.trim().is_empty() {
         return Ok(PrintingsResponse::default());
     }
     let sql = format!(
-        "SELECT id, set_code, set_name, collector_number, released_at, rarity, illustration_id,
-                artist, lang, finishes, prices, promo, full_art, frame_effects,
-                border_color, layout
-         FROM cards WHERE {PRINTINGS_WHERE}
+        "SELECT c.id, c.set_code, c.set_name, c.collector_number, c.released_at, c.rarity,
+                c.illustration_id, c.artist, c.lang, c.finishes, c.promo, c.full_art,
+                c.frame_effects, c.border_color, c.layout, {prices}
+         FROM cards c WHERE {PRINTINGS_WHERE}
          ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
-         LIMIT ?2"
+         LIMIT ?2",
+        prices = finish_price_columns(market)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -250,12 +319,12 @@ pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<PrintingsRes
                 artist: r.get(7)?,
                 lang: r.get(8)?,
                 finishes: r.get(9)?,
-                prices: r.get(10)?,
-                promo: r.get(11)?,
-                full_art: r.get(12)?,
-                frame_effects: r.get(13)?,
-                border_color: r.get(14)?,
-                layout: r.get(15)?,
+                finish_prices: read_finish_prices(r, 15)?,
+                promo: r.get(10)?,
+                full_art: r.get(11)?,
+                frame_effects: r.get(12)?,
+                border_color: r.get(13)?,
+                layout: r.get(14)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -272,28 +341,40 @@ pub fn list_printings(conn: &Connection, oracle_id: &str) -> Result<PrintingsRes
     Ok(PrintingsResponse { items, total })
 }
 
-/// One printing in full. Read-only connection, blocking pool — see [`crate::search::search_cards`].
+/// One printing in full, priced at `marketplace`. Read-only connection, blocking pool — see
+/// [`crate::search::search_cards`].
+///
+/// The marketplace is resolved by [`Marketplace::from_opt`], which is the crate's one rule and
+/// never fails: absent, null, a typo, a future id and `cardtrader` all mean TCGplayer, because a
+/// card the reader asked to see must not refuse to open over a setting.
 #[tauri::command]
 pub async fn card_detail(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
+    marketplace: Option<String>,
 ) -> Result<Option<CardDetail>, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || get_card(&lock_db_read(&state), &id))
+    let market = Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || get_card(&lock_db_read(&state), &id, market))
         .await
         .map_err(|e| format!("card could not be read: {e}"))?
 }
 
-/// Every paper printing of one oracle card. Read-only connection, blocking pool.
+/// Every paper printing of one oracle card, priced at `marketplace`. Read-only connection,
+/// blocking pool.
 #[tauri::command]
 pub async fn card_printings(
     state: tauri::State<'_, Arc<AppState>>,
     oracle_id: String,
+    marketplace: Option<String>,
 ) -> Result<PrintingsResponse, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || list_printings(&lock_db_read(&state), &oracle_id))
-        .await
-        .map_err(|e| format!("printings could not be read: {e}"))?
+    let market = Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        list_printings(&lock_db_read(&state), &oracle_id, market)
+    })
+    .await
+    .map_err(|e| format!("printings could not be read: {e}"))?
 }
 
 #[cfg(test)]
@@ -358,20 +439,180 @@ mod tests {
         conn
     }
 
+    /// The default, which is what all but the marketplace tests below are asking about.
+    const TCG: Marketplace = Marketplace::Tcgplayer;
+
+    /// One printing that exists in all three finishes, with a real `usd_etched` — the shape the
+    /// etched contrast needs, and the one the three-printing seed above deliberately does not
+    /// have (its `usd_etched` is null, like most of the corpus).
+    ///
+    /// Cardmarket's half of the contrast needs nothing seeded: **there is no `eur_etched` key in
+    /// Scryfall's data at all**, so the euro price of an etched card is structurally absent
+    /// rather than missing from this fixture.
+    fn seed_etched(conn: &Connection) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                released_at, rarity, finishes, prices, search_text, raw)
+             VALUES ('etch','o-etch','Counterspell','mh2','267','en','normal','2021-06-18',
+                'common', '[\"nonfoil\",\"foil\",\"etched\"]',
+                '{\"usd\":\"2.95\",\"usd_foil\":\"3.19\",\"usd_etched\":\"3.25\",
+                  \"eur\":\"2.10\",\"eur_foil\":\"2.60\",\"tix\":\"0.03\"}',
+                'Counterspell', '{}')",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// One row of `marketplace_prices` — what `marketplace_feed.rs` writes, and the only thing
+    /// the feed-backed arms of `price_expr` read.
+    fn seed_feed(conn: &Connection, feed: &str, card_id: &str, finish: &str, price: f64) {
+        conn.execute(
+            "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![feed, card_id, finish, price],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn a_card_comes_back_with_the_blobs_the_ui_parses() {
         let conn = seeded();
-        let c = get_card(&conn, "p1").unwrap().unwrap();
+        let c = get_card(&conn, "p1", TCG).unwrap().unwrap();
 
         assert_eq!(c.name, "Lightning Bolt");
         assert_eq!(c.set_code, "lea");
         assert_eq!(c.oracle_id.as_deref(), Some("o1"));
-        // Blobs, not fields: legalities has 23 keys and grows, prices are decimal strings.
+        // Still a blob: legalities has 23 keys and grows. Prices are not one any more — a blob
+        // could only ever have carried two of the four marketplaces.
         assert!(c.legalities.as_deref().unwrap().contains("\"vintage\""));
-        assert!(c.prices.as_deref().unwrap().contains("usd_foil"));
         // Its own column since v3; the image policy needs it on this pane.
         assert_eq!(c.artist.as_deref(), Some("Christopher Rush"));
         assert!(c.faces.is_empty(), "a single-faced card has no faces");
+    }
+
+    /// Every finish, from every marketplace's own source — the whole of what this module gained.
+    ///
+    /// Two shapes behind one answer: TCGplayer and Cardmarket are keys of `cards.prices`, Card
+    /// Kingdom and Mana Pool are rows of `marketplace_prices`, and the pane cannot tell which.
+    #[test]
+    fn each_marketplace_prices_every_finish_from_its_own_source() {
+        let conn = seeded();
+        seed_etched(&conn);
+        for (feed, nonfoil, foil, etched) in [
+            ("cardkingdom", 3.49, 3.99, 4.25),
+            ("manapool", 2.71, 2.93, 2.99),
+        ] {
+            seed_feed(&conn, feed, "etch", "nonfoil", nonfoil);
+            seed_feed(&conn, feed, "etch", "foil", foil);
+            seed_feed(&conn, feed, "etch", "etched", etched);
+        }
+
+        let at = |m| get_card(&conn, "etch", m).unwrap().unwrap().finish_prices;
+
+        let tcg = at(Marketplace::Tcgplayer);
+        assert_eq!(
+            (tcg.nonfoil, tcg.foil, tcg.etched),
+            (Some(2.95), Some(3.19), Some(3.25))
+        );
+        let ck = at(Marketplace::Cardkingdom);
+        assert_eq!(
+            (ck.nonfoil, ck.foil, ck.etched),
+            (Some(3.49), Some(3.99), Some(4.25))
+        );
+        let mp = at(Marketplace::Manapool);
+        assert_eq!(
+            (mp.nonfoil, mp.foil, mp.etched),
+            (Some(2.71), Some(2.93), Some(2.99))
+        );
+        // Cardmarket prices the two finishes it has keys for, and only those.
+        let cm = at(Marketplace::Cardmarket);
+        assert_eq!((cm.nonfoil, cm.foil), (Some(2.10), Some(2.60)));
+    }
+
+    /// **The etched contrast**, which is the one place the four marketplaces visibly disagree
+    /// about what is knowable rather than about a number.
+    ///
+    /// The same card, in the same finish: TCGplayer quotes it from `usd_etched`, Mana Pool from a
+    /// real `price_cents_nm_etched` column (1 198 cards carry one live), and Cardmarket cannot
+    /// quote it at all — **`eur_etched` does not exist in Scryfall's data**, so the answer is
+    /// NULL rather than the nonfoil rate the blob does carry and which a fallback would quietly
+    /// charge.
+    #[test]
+    fn etched_is_priced_where_it_exists_and_null_on_cardmarket_because_the_key_does_not() {
+        let conn = seeded();
+        seed_etched(&conn);
+        seed_feed(&conn, "manapool", "etch", "etched", 2.99);
+
+        let etched = |m| {
+            get_card(&conn, "etch", m)
+                .unwrap()
+                .unwrap()
+                .finish_prices
+                .etched
+        };
+
+        assert_eq!(etched(Marketplace::Tcgplayer), Some(3.25));
+        assert_eq!(etched(Marketplace::Manapool), Some(2.99));
+        assert_eq!(
+            etched(Marketplace::Cardmarket),
+            None,
+            "there is no `eur_etched` key, so an etched card is unpriced in euros"
+        );
+        // And the euro nonfoil price is right there in the same blob, unused: the hole is the
+        // answer, not a reason to reach one key over.
+        assert_eq!(
+            get_card(&conn, "etch", Marketplace::Cardmarket)
+                .unwrap()
+                .unwrap()
+                .finish_prices
+                .nonfoil,
+            Some(2.10)
+        );
+    }
+
+    /// A printing a feed has never listed is **unpriced at that marketplace**, and nothing fills
+    /// it in from another one. The card is in `cards` with a full `prices` blob, so a fallback
+    /// would have plenty to reach for.
+    #[test]
+    fn a_card_a_feed_never_listed_reads_null_rather_than_another_marketplaces_number() {
+        let conn = seeded();
+        // Card Kingdom lists the nonfoil and nothing else; Mana Pool has never heard of it.
+        seed_feed(&conn, "cardkingdom", "p1", "nonfoil", 6.49);
+
+        let ck = get_card(&conn, "p1", Marketplace::Cardkingdom)
+            .unwrap()
+            .unwrap()
+            .finish_prices;
+        assert_eq!(ck.nonfoil, Some(6.49));
+        assert_eq!(
+            ck.foil, None,
+            "listed nonfoil only — never the $40 foil blob price"
+        );
+        assert_eq!(ck.etched, None);
+
+        let mp = get_card(&conn, "p1", Marketplace::Manapool)
+            .unwrap()
+            .unwrap()
+            .finish_prices;
+        assert_eq!((mp.nonfoil, mp.foil, mp.etched), (None, None, None));
+    }
+
+    /// The marketplace argument, resolved by the crate's one rule: **anything that is not one of
+    /// the three named ids is TCGplayer** — absent, a future id, `cardtrader`, a typo. A card the
+    /// reader asked to open must not refuse over a setting a newer build wrote.
+    #[test]
+    fn an_absent_or_unknown_marketplace_prices_at_tcgplayer() {
+        let conn = seeded();
+        seed_etched(&conn);
+        // Feed rows exist, so a resolution that fell through to one would be visible.
+        seed_feed(&conn, "cardkingdom", "etch", "nonfoil", 3.49);
+
+        for id in [None, Some("cardtrader"), Some("ebay"), Some("Cardmarket")] {
+            let c = get_card(&conn, "etch", Marketplace::from_opt(id))
+                .unwrap()
+                .unwrap();
+            assert_eq!(c.finish_prices.nonfoil, Some(2.95), "{id:?}");
+        }
     }
 
     /// The faces a flip control needs, in order, with the artist per face — `card_faces`
@@ -379,7 +620,7 @@ mod tests {
     #[test]
     fn a_double_faced_card_carries_both_faces_in_order() {
         let conn = seeded();
-        let c = get_card(&conn, "dfc").unwrap().unwrap();
+        let c = get_card(&conn, "dfc", TCG).unwrap().unwrap();
 
         assert_eq!(c.faces.len(), 2);
         assert_eq!(c.faces[0].name, "Delver of Secrets");
@@ -400,7 +641,7 @@ mod tests {
     #[test]
     fn an_unknown_id_is_none_not_an_error() {
         let conn = seeded();
-        assert!(get_card(&conn, "nope").unwrap().is_none());
+        assert!(get_card(&conn, "nope", TCG).unwrap().is_none());
     }
 
     /// Every printing of the oracle card, newest first — the order a "which printing do I
@@ -408,7 +649,7 @@ mod tests {
     #[test]
     fn printings_come_back_newest_first_with_their_art_identity() {
         let conn = seeded();
-        let all = list_printings(&conn, "o1").unwrap().items;
+        let all = list_printings(&conn, "o1", TCG).unwrap().items;
 
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].set_code, "m10", "newest first");
@@ -417,9 +658,59 @@ mod tests {
         // to arrive — two of these share an illustration and one does not.
         assert_eq!(all[0].illustration_id.as_deref(), Some("art-b"));
         assert_eq!(all[1].illustration_id.as_deref(), Some("art-a"));
-        // Per-finish pricing reads the blob, never `price_usd`.
-        assert!(all[0].prices.as_deref().unwrap().contains("usd_etched"));
+        // Per finish, never `price_usd` — which is a nonfoil→foil→etched display chain and
+        // would quote this plain copy at its $40 foil rate.
+        assert_eq!(all[0].finish_prices.nonfoil, Some(5.00));
+        assert_eq!(all[0].finish_prices.foil, Some(40.00));
+        assert_eq!(
+            all[0].finish_prices.etched, None,
+            "`usd_etched` is null on this row"
+        );
         assert!(all[0].finishes.as_deref().unwrap().contains("foil"));
+    }
+
+    /// The printings list prices at the marketplace it was asked for, row by row — the half of
+    /// this pane a reader compares printings *by*.
+    ///
+    /// Seeded so the two feeds disagree with the blob and with each other: a list that quoted
+    /// TCGplayer under a Card Kingdom heading would look perfectly plausible.
+    #[test]
+    fn every_printings_row_is_priced_at_the_marketplace_the_list_was_asked_for() {
+        let conn = seeded();
+        seed_feed(&conn, "cardkingdom", "p3", "nonfoil", 5.49);
+        seed_feed(&conn, "cardkingdom", "p3", "foil", 44.00);
+        // Mana Pool lists p3's foil and never its nonfoil — the hole a feed has, per finish.
+        seed_feed(&conn, "manapool", "p3", "foil", 36.80);
+
+        let newest = |m| {
+            list_printings(&conn, "o1", m)
+                .unwrap()
+                .items
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+
+        let tcg = newest(Marketplace::Tcgplayer).finish_prices;
+        assert_eq!((tcg.nonfoil, tcg.foil), (Some(5.00), Some(40.00)));
+        let cm = newest(Marketplace::Cardmarket).finish_prices;
+        assert_eq!((cm.nonfoil, cm.foil), (Some(4.20), Some(35.00)));
+        let ck = newest(Marketplace::Cardkingdom).finish_prices;
+        assert_eq!((ck.nonfoil, ck.foil), (Some(5.49), Some(44.00)));
+        let mp = newest(Marketplace::Manapool).finish_prices;
+        assert_eq!((mp.nonfoil, mp.foil), (None, Some(36.80)));
+
+        // And the printings a feed has never listed are unpriced there rather than quoted from
+        // the blob every one of them still carries.
+        let rest = list_printings(&conn, "o1", Marketplace::Cardkingdom)
+            .unwrap()
+            .items;
+        assert!(
+            rest[1..]
+                .iter()
+                .all(|p| p.finish_prices.nonfoil.is_none() && p.finish_prices.foil.is_none()),
+            "only p3 was seeded into the feed"
+        );
     }
 
     /// `oracle_id` is NULLABLE, so an id nothing answers to must give an empty list rather
@@ -430,7 +721,7 @@ mod tests {
     fn an_unknown_oracle_id_returns_nothing() {
         let conn = seeded();
         for absent in ["", "o-none"] {
-            let r = list_printings(&conn, absent).unwrap();
+            let r = list_printings(&conn, absent, TCG).unwrap();
             assert!(r.items.is_empty(), "{absent}");
             assert_eq!(r.total, 0, "{absent}");
         }
@@ -443,7 +734,7 @@ mod tests {
     #[test]
     fn digital_printings_are_not_offered_as_copies_to_own() {
         let conn = seeded();
-        let r = list_printings(&conn, "o1").unwrap();
+        let r = list_printings(&conn, "o1", TCG).unwrap();
 
         assert_eq!(r.items.len(), 3, "the MTGO printing does not belong here");
         assert!(
@@ -465,7 +756,7 @@ mod tests {
     #[test]
     fn a_digital_printing_still_opens_when_it_is_asked_for_by_id() {
         let conn = seeded();
-        let c = get_card(&conn, "p4-mtgo").unwrap().unwrap();
+        let c = get_card(&conn, "p4-mtgo", TCG).unwrap().unwrap();
         assert_eq!(c.set_code, "pmtg1");
     }
 
@@ -483,7 +774,7 @@ mod tests {
             )
             .unwrap();
         }
-        let r = list_printings(&conn, "o3").unwrap();
+        let r = list_printings(&conn, "o3", TCG).unwrap();
 
         assert_eq!(r.items.len(), MAX_PRINTINGS, "the page is capped");
         assert_eq!(r.total, MAX_PRINTINGS as i64 + 5, "the count is not");
@@ -546,7 +837,13 @@ mod tests {
             artist: Some("Nils Hamm".into()),
             released_at: Some("2011-09-30".into()),
             legalities: Some(r#"{"modern":"legal"}"#.into()),
-            prices: Some(r#"{"usd":"0.35"}"#.into()),
+            // A priced nonfoil, a priced foil and an unpriced etched — the third is the shape
+            // the em dash is drawn from, and `null` is how the pane is told.
+            finish_prices: FinishPrices {
+                nonfoil: Some(0.35),
+                foil: Some(4.10),
+                etched: None,
+            },
             finishes: Some(r#"["nonfoil","foil"]"#.into()),
             image_status: Some("highres_scan".into()),
             faces: vec![
@@ -592,7 +889,7 @@ mod tests {
                 "artist": "Nils Hamm",
                 "releasedAt": "2011-09-30",
                 "legalities": r#"{"modern":"legal"}"#,
-                "prices": r#"{"usd":"0.35"}"#,
+                "finishPrices": { "nonfoil": 0.35, "foil": 4.10, "etched": null },
                 "finishes": r#"["nonfoil","foil"]"#,
                 "imageStatus": "highres_scan",
                 "faces": [
@@ -638,7 +935,14 @@ mod tests {
                 artist: Some("Christopher Rush".into()),
                 lang: "en".into(),
                 finishes: Some(r#"["nonfoil"]"#.into()),
-                prices: Some(r#"{"usd":"400.50"}"#.into()),
+                // Alpha exists in nonfoil only, so the other two are `null` at every
+                // marketplace — a finish that does not exist and one a marketplace has no price
+                // for are the same answer here, and the pane draws neither.
+                finish_prices: FinishPrices {
+                    nonfoil: Some(400.50),
+                    foil: None,
+                    etched: None,
+                },
                 promo: false,
                 full_art: false,
                 // Absent, not empty: an Alpha printing has no frame effects at all.
@@ -665,7 +969,7 @@ mod tests {
                     "artist": "Christopher Rush",
                     "lang": "en",
                     "finishes": r#"["nonfoil"]"#,
-                    "prices": r#"{"usd":"400.50"}"#,
+                    "finishPrices": { "nonfoil": 400.50, "foil": null, "etched": null },
                     "promo": false,
                     "fullArt": false,
                     "frameEffects": null,

@@ -1,10 +1,17 @@
 /**
  * Scryfall's finish enum, and what a finish is worth.
  *
- * A module of its own because three views now need it: the card pane prices every finish a
- * printing exists in, the quick-add popup offers them as a choice, and the collection
- * stores one per row. It is an enum and never a boolean — `etched` is a third thing, and
- * flattening it into `foil: true` is the single most common way an importer loses data.
+ * A module of its own because three views need it: the card pane lists every finish a printing
+ * exists in, the quick-add popup offers them as a choice, and the collection stores one per row.
+ * It is an enum and never a boolean — `etched` is a third thing, and flattening it into
+ * `foil: true` is the single most common way an importer loses data.
+ *
+ * **{@link finishPrice} is no longer how the app prices a finish.** Every price in the window
+ * now arrives priced, from a query that carried a marketplace, because two of the four
+ * marketplaces keep their prices in `marketplace_prices` rather than in Scryfall's blob and this
+ * side cannot read that table. What is left of it is the workbench's: `.storybook/fake/`'s
+ * fixtures and `CollectionTable.stories.tsx` derive a story's `unitPrice` from the same `cards`
+ * row the backend would have read, rather than writing a literal that nothing regenerates.
  */
 import type { Currency } from "./marketplace";
 
@@ -34,9 +41,10 @@ export const FINISH_LABEL: Record<Finish, string> = {
  *
  * **Never fall back from a null euro price to the dollar one.** A card quoted at the nonfoil
  * euro rate because its etched rate is missing is a price nobody quoted, in a currency the
- * reader chose precisely so they would be told this marketplace's number. `collection.rs` and
- * `wishlist.rs` already assert the same hole on the Rust side; this is the same rule where TS
- * reads the blob directly.
+ * reader chose precisely so they would be told this marketplace's number. `sorting::price_expr`
+ * carries the identical hole in SQL — `CASE finish WHEN 'etched' THEN NULL` — which is where
+ * every price the app actually draws comes from; this is the same rule for the one remaining
+ * reader of the blob, the workbench's fixtures.
  */
 const PRICE_KEY: Record<Currency, Record<Finish, string | null>> = {
   usd: { nonfoil: "usd", foil: "usd_foil", etched: "usd_etched" },
@@ -85,7 +93,8 @@ export function parseFinishes(json: string | null): Finish[] {
 }
 
 /**
- * What one finish of a printing costs in the currency asked for, or `null`.
+ * What one finish of a printing costs in the currency asked for, according to Scryfall's
+ * `prices` blob, or `null`.
  *
  * A lookup by finish, with **no fallback of any kind** — not across finishes, and not across
  * currencies. `price_usd` — the derived column — is a nonfoil→foil→etched chain built for
@@ -93,6 +102,12 @@ export function parseFinishes(json: string | null): Finish[] {
  * `eur_etched` turns out not to exist would be the same mistake one axis over. Values arrive
  * as decimal strings because money is not a float on the wire; `Number` is the last possible
  * moment to make one.
+ *
+ * **Only the workbench calls this.** It answers about the blob, which is two of the app's four
+ * marketplaces, so no surface may price with it — every one of them renders a number the
+ * backend already chose. `.storybook/fake/fixtures.ts` and `CollectionTable.stories.tsx` use it
+ * to derive a story's figures from the generated `cards` fixture, which is exactly the reading
+ * the backend would do for those two marketplaces.
  */
 export function finishPrice(
   pricesJson: string | null,

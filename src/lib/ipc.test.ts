@@ -103,16 +103,22 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("list_sets");
   });
 
-  it("sends a card id under `id` and an oracle id under `oracleId`", async () => {
+  it("sends a card id under `id`, an oracle id under `oracleId`, and both with a marketplace", async () => {
     invoke.mockResolvedValue(null);
-    await ipc.cardDetail("p1");
-    expect(invoke).toHaveBeenCalledWith("card_detail", { id: "p1" });
+    await ipc.cardDetail("p1", "cardkingdom");
+    // The marketplace is not a formatting choice here: it decides `finishPrices` on the answer,
+    // so a wrapper that dropped it would quote TCGplayer's dollars under a Card Kingdom heading
+    // — the cross-marketplace fallback the whole feature refuses, and invisible from the page.
+    expect(invoke).toHaveBeenCalledWith("card_detail", { id: "p1", marketplace: "cardkingdom" });
 
     invoke.mockResolvedValue({ items: [], total: 0 });
-    const printings = await ipc.cardPrintings("o1");
+    const printings = await ipc.cardPrintings("o1", "manapool");
     // Tauri maps a camelCase key onto the `oracle_id` parameter; spelling it
     // `oracle_id` here would be the runtime deserialization error no type can catch.
-    expect(invoke).toHaveBeenCalledWith("card_printings", { oracleId: "o1" });
+    expect(invoke).toHaveBeenCalledWith("card_printings", {
+      oracleId: "o1",
+      marketplace: "manapool",
+    });
     // Not a bare array: `card::list_printings` caps the page at 400 and answers
     // `PrintingsResponse`, whose `total` is the only thing that says a list was truncated.
     // A mirror typed as `Printing[]` would read `.length` as the whole story and the

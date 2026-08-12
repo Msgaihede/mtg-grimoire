@@ -155,16 +155,22 @@ const meta = {
           "clickable. It is also an ordinary element in the app's tree rather than a portal — " +
           "the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects a " +
           "runtime `<style>` the moment it opens.\n\n" +
-          "Driven end to end by `.storybook/fake/`: `card_detail` (`db.ts:1316-1319`) and " +
-          "`card_printings` (`db.ts:1321-1335`), the second **paper only** and newest first.\n\n" +
-          "**A finish's price is a lookup in the `prices` blob** — `usd` / `usd_foil` / " +
-          "`usd_etched`, with no fallback of any kind (`finish.ts:65-72`). `cards.price_usd` is " +
-          "a display and sort chain and is never summed or shown here. `eur_etched` does not " +
-          "exist in the data at all (`finish.ts:27`), which is why the pane quotes USD and the " +
-          "collection is the only surface with a euro column. {@link AllFinishes} is one of the " +
-          "corpus's **two** rows priced in all three (measured 2026-08-10: Lightning Bolt " +
-          "`sta 105` and Counterspell `mh2 267`), and {@link Legalities} is a printing whose " +
-          "`usd` key is null — an **em dash**, never `$0.00` (`prices.ts:15-17`).\n\n" +
+          "Driven end to end by `.storybook/fake/`: `card_detail` and `card_printings`, the " +
+          "second **paper only** and newest first. Both take a **marketplace** like every " +
+          "priced read in the app, and both answer `finishPrices` — one nullable figure per " +
+          "finish, already chosen by the backend. Nothing on this page looks a key up in a " +
+          "blob: two of the four marketplaces keep their prices in `marketplace_prices`, which " +
+          "the webview cannot read, so the pane would have drawn em dashes on half the picker.\n\n" +
+          "**No fallback of any kind, across finishes or across marketplaces.** " +
+          "`cards.price_usd` is a display and sort chain and is never summed or shown here, and " +
+          "`null` is *unpriced at this marketplace* rather than a hole to fill from another " +
+          "one — the holes differ everywhere: there is no `eur_etched` key in Scryfall's data " +
+          "at all, and either bulk feed can simply never have listed a printing. " +
+          "{@link AllFinishes} is one of the corpus's **two** rows priced in all three " +
+          "(measured 2026-08-10: Lightning Bolt `sta 105` and Counterspell `mh2 267`), and " +
+          "{@link Legalities} is a printing with no USD price at all — an **em dash**, never " +
+          "`$0.00` (`prices.ts:26-29`). Every story here renders at the default marketplace, " +
+          "TCGplayer, because no seed writes the setting.\n\n" +
           "**Nothing here is `alt`-tested against a URL.** Under Vitest `cardImageUrl` is the " +
           "real one and answers `mtgimg://`, which jsdom never loads; under Storybook the " +
           "fake answers a synthetic SVG data URI (`.storybook/fake/images.ts:141-156`). A play " +
@@ -233,7 +239,7 @@ export const SingleFaced: Story = {
       within(pane).getByText("Lightning Bolt deals 3 damage to any target."),
     ).toBeInTheDocument();
 
-    // Two finishes, two prices, each from its own key in the blob.
+    // Two finishes, two prices, each its own field on the answer.
     //
     // **`{ selector: "dt" }`, because "Foil" is a word this pane says more than once.** The
     // finish list says it in a `<dt>`; every foil row in the printings list below says it again
@@ -433,13 +439,15 @@ export const SharedArtwork: Story = {
 };
 
 /**
- * A printing that exists in all three finishes, priced from three different keys of one blob.
+ * A printing that exists in all three finishes, priced three different ways.
  *
- * **A finish's price is a lookup and nothing else** — `usd`, `usd_foil`, `usd_etched`, with no
- * fallback (`finish.ts:65-72`). The derived `cards.price_usd` column is a nonfoil→foil→etched
- * chain built for sorting, and using it here would quote a plain copy at foil rates. Etched is a
- * third thing and never `foil: true`: flattening it is the single commonest way an importer
- * loses data.
+ * **A finish's price is its own field on the answer and nothing else** — `finishPrices.nonfoil`,
+ * `.foil`, `.etched`, each built by `sorting::price_expr` at the marketplace the read named, with
+ * no fallback. The derived `cards.price_usd` column is a nonfoil→foil→etched chain built for
+ * sorting, and using it here would quote a plain copy at foil rates. Etched is a third thing and
+ * never `foil: true`: flattening it is the single commonest way an importer loses data — and it
+ * is the finish the four marketplaces disagree about in *kind*, since Scryfall has no
+ * `eur_etched` key while Mana Pool publishes 1 198 real etched prices.
  *
  * Measured 2026-08-10 over `card_detail` for `sta 105`: `usd 17.85`, `usd_foil 23.85`,
  * `usd_etched 18.68` — so **foil is dearer than etched here**, which is the ordering a single
@@ -494,8 +502,9 @@ export const AllFinishes: Story = {
  * — the order below is `FORMAT_ORDER`'s, with unknown keys appended rather than dropped, because
  * the set grows with every new format.
  *
- * Its `usd` key is also null while its `eur` is not, so the one finish it exists in prices to an
- * **em dash**: `usdPrice` never renders `$0.00`, which is a price nobody quoted.
+ * It has no USD price at all while its `eur` key is filled, so at the default marketplace the one
+ * finish it exists in reads an **em dash**: `formatPrice` never renders `$0.00`, which is a price
+ * nobody quoted.
  */
 export const Legalities: Story = {
   args: { cardId: printingId("lea", "232") },

@@ -11,7 +11,8 @@
  * Sources, verified field by field:
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
  * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
- * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`      — `src-tauri/src/card.rs`
+ * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
+ * `FinishPrices`                                 — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
@@ -22,9 +23,10 @@
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
- * A list query carries `marketplace`; the row it answers with carries one `price` /
- * `unitPrice` / `totalPrice` / `value`, already in that marketplace's money. There is no twin
- * field to pick between and no fallback across marketplaces — see `@/lib/marketplace`.
+ * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
+ * `totalPrice` / `value`, already in that marketplace's money — or, where a *card* rather than
+ * a priced list is the answer, one {@link FinishPrices} triple in it. There is no twin field to
+ * pick between and no fallback across marketplaces — see `@/lib/marketplace`.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -290,6 +292,27 @@ export interface CardFace {
   artist: string | null;
 }
 
+/**
+ * What one printing costs per finish, **at the marketplace the request named**.
+ *
+ * Keyed by the `Finish` union's own three words, so a price cell is `finishPrices[finish]` and
+ * there is no table in between to get wrong. `null` is *unpriced at that marketplace* and draws
+ * as an em dash — never a reason to reach for another marketplace's number, and the holes are
+ * different at every one of them: Scryfall carries no `eur_etched` key at all, so etched is
+ * `null` on Cardmarket for every card in the game, while Mana Pool publishes real etched prices
+ * and either bulk feed can simply never have listed a printing.
+ *
+ * This replaced a raw `prices` blob on {@link CardDetail} and {@link Printing}. The blob is
+ * TCGplayer's six keys and Cardmarket's, and it is *structurally* blind to the two marketplaces
+ * whose prices live in `marketplace_prices` — a card pane reading it could only ever draw em
+ * dashes on half the picker.
+ */
+export interface FinishPrices {
+  nonfoil: number | null;
+  foil: number | null;
+  etched: number | null;
+}
+
 /** Everything the detail pane renders about one printing. */
 export interface CardDetail {
   id: string;
@@ -311,8 +334,8 @@ export interface CardDetail {
   releasedAt: string | null;
   /** JSON: 23 legality keys and growing. Parse it, never index fixed fields. */
   legalities: string | null;
-  /** JSON: six keys, decimal **strings**. A finish price is a lookup in here. */
-  prices: string | null;
+  /** Per finish, at the marketplace `cardDetail` was called with. See {@link FinishPrices}. */
+  finishPrices: FinishPrices;
   finishes: string | null;
   imageStatus: string | null;
   faces: CardFace[];
@@ -332,7 +355,9 @@ export interface Printing {
   /** Scryfall's two-letter code. Every language is listed; `en` is merely the common one. */
   lang: string;
   finishes: string | null;
-  prices: string | null;
+  /** Per finish, at the marketplace `cardPrintings` was called with — the figures a reader
+   *  compares printings by. See {@link FinishPrices}. */
+  finishPrices: FinishPrices;
   promo: boolean;
   fullArt: boolean;
   frameEffects: string | null;
@@ -1662,10 +1687,22 @@ export const ipc = {
   facetCards: (req: SearchRequest) => invoke<FacetResponse>("facet_cards", { req }),
   /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
   listSets: () => invoke<SetSummary[]>("list_sets"),
-  /** One printing in full, or `null` when no row has that id. */
-  cardDetail: (id: string) => invoke<CardDetail | null>("card_detail", { id }),
-  /** Every paper printing of the oracle card, newest first, capped at 400 with a full count. */
-  cardPrintings: (oracleId: string) => invoke<PrintingsResponse>("card_printings", { oracleId }),
+  /**
+   * One printing in full, or `null` when no row has that id.
+   *
+   * `marketplace` decides {@link CardDetail.finishPrices} and nothing else about the answer —
+   * but it decides them completely, so it belongs in the caller's query key like every other
+   * priced read. The backend's fallback for an unknown id is `tcgplayer`.
+   */
+  cardDetail: (id: string, marketplace: MarketplaceId) =>
+    invoke<CardDetail | null>("card_detail", { id, marketplace }),
+  /**
+   * Every paper printing of the oracle card, newest first, capped at 400 with a full count.
+   *
+   * `marketplace` prices every row per finish — the figures a reader is choosing a printing by.
+   */
+  cardPrintings: (oracleId: string, marketplace: MarketplaceId) =>
+    invoke<PrintingsResponse>("card_printings", { oracleId, marketplace }),
   /**
    * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
    * the work is queued, and an image that fails to prefetch simply fetches when it is

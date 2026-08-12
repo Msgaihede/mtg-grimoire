@@ -13,8 +13,7 @@ const printing = (over: Partial<Printing>): Printing => ({
   artist: "Christopher Rush",
   lang: "en",
   finishes: '["nonfoil"]',
-  prices:
-    '{"usd":"5.00","usd_foil":null,"usd_etched":null,"eur":"4.20","eur_foil":null,"tix":"0.03"}',
+  finishPrices: { nonfoil: 5.0, foil: null, etched: null },
   promo: false,
   fullArt: false,
   frameEffects: null,

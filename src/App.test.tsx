@@ -213,7 +213,9 @@ const ALPHA: Printing = {
   artist: "Christopher Rush",
   lang: "en",
   finishes: '["nonfoil"]',
-  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  // Priced by the backend at the marketplace the read named — nonfoil only, because that is
+  // the one finish Alpha exists in.
+  finishPrices: { nonfoil: 400.5, foil: null, etched: null },
   promo: false,
   fullArt: false,
   frameEffects: null,
@@ -228,7 +230,7 @@ const M10: Printing = {
   setName: "Magic 2010",
   collectorNumber: "146",
   releasedAt: "2009-07-17",
-  prices: '{"usd":"1.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  finishPrices: { nonfoil: 1.5, foil: null, etched: null },
 };
 
 /** The same card as a collection row, for the Escape-from-a-stepper test below. */
@@ -305,7 +307,7 @@ const BOLT_DETAIL: CardDetail = {
   artist: "Christopher Rush",
   releasedAt: "1993-08-05",
   legalities: '{"modern":"legal"}',
-  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null}',
+  finishPrices: { nonfoil: 400.5, foil: null, etched: null },
   finishes: '["nonfoil"]',
   imageStatus: "highres_scan",
   faces: [],
@@ -441,7 +443,10 @@ it("opens the detail pane for the card that was clicked, and closes it again", a
   await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
 
   const pane = await screen.findByRole("complementary", { name: /card details/i });
-  expect(cardDetail).toHaveBeenCalledWith("c1");
+  // The id **and** the marketplace: the pane's prices are the backend's, so a read that dropped
+  // the second argument would quote whatever the default happens to be under the reader's own
+  // heading. Nothing here has chosen one, so it is `tcgplayer`.
+  expect(cardDetail).toHaveBeenCalledWith("c1", "tcgplayer");
   expect(within(pane).getByText("Lightning Bolt")).toBeInTheDocument();
   // The results are still there behind it: the pane is docked, not drawn over them.
   expect(screen.getByRole("group", { name: "Search results" })).toBeInTheDocument();

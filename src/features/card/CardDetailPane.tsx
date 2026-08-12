@@ -10,7 +10,7 @@ import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dn
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
-import { FINISH_LABEL, finishPrice, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -34,36 +34,6 @@ import {
  * ring are state).
  */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
-/**
- * What one finish of a printing costs **at the selected marketplace**, or `null`.
- *
- * `finishPrice` reads Scryfall's `prices` blob, which carries TCGplayer's six keys and nobody
- * else's. Card Kingdom's and Mana Pool's prices live in `marketplace_prices`, and the two
- * commands this pane reads — `card_detail` and `card_printings` — do not join it: the
- * marketplace parameter reaches the six *list* queries, and a card detail is not one of them.
- *
- * **So on a feed-backed marketplace every finish here is an em dash**, and {@link feedPricesNote}
- * says why. That is the honest answer rather than a gap: quoting TCGplayer's dollars under a
- * line that says "Card Kingdom prices" would be precisely the cross-marketplace fallback this
- * whole feature refuses, and it would be invisible — the numbers would look right.
- *
- * Closing it properly is a backend change (a per-finish price on `card_detail` and on each
- * printing row) and is the writer's to make; until then this pane is honest about what it does
- * not know.
- */
-function finishPriceAt(
-  pricesJson: string | null,
-  finish: Finish,
-  marketplace: Marketplace,
-): number | null {
-  return marketplace.feed ? null : finishPrice(pricesJson, finish, marketplace.currency);
-}
-
-/** Why every finish reads "—" on a marketplace whose prices this app downloads. */
-function feedPricesNote(marketplace: Marketplace): string {
-  return `Per-finish prices are not read from ${marketplace.label}'s feed yet. Its prices are quoted in search, the collection and decks.`;
-}
 
 /**
  * The colour of a legality chip.
@@ -241,8 +211,9 @@ function Body({
   paneRef: RefObject<HTMLElement | null>;
 }) {
   // Which marketplace this pane quotes. Read here, at the one component that owns a card, and
-  // handed to both surfaces that print a price — the finish table and every printings row —
-  // so the pane cannot say TCGplayer at the top and euros halfway down.
+  // then **sent with both reads** — the numbers come back priced, so the pane cannot say
+  // TCGplayer at the top and euros halfway down, and it is not choosing between fields either.
+  // It is in both query keys below, so switching refetches like every other priced surface.
   const { marketplace } = useMarketplace();
   const [face, setFace] = useState(0);
   const [shown, setShown] = useState(cardId);
@@ -365,9 +336,11 @@ function Body({
   // Both halves are `usePrintingDwell`'s, and its doc has the measurement they came from.
   useDismissOnEscape({ layer: "outer", onDismiss: close });
 
+  // The marketplace is in the key because it is in the answer: `card_detail` prices every finish
+  // with it, so two marketplaces are two different cards as far as the cache is concerned.
   const card = useQuery({
-    queryKey: ["card", cardId],
-    queryFn: () => ipc.cardDetail(cardId),
+    queryKey: ["card", cardId, marketplace.id],
+    queryFn: () => ipc.cardDetail(cardId, marketplace.id),
   });
 
   const swapping = swap.isPending;
@@ -444,8 +417,8 @@ function Body({
 
   const oracleId = card.data?.oracleId ?? null;
   const printings = useQuery({
-    queryKey: ["card", "printings", oracleId],
-    queryFn: () => ipc.cardPrintings(oracleId as string),
+    queryKey: ["card", "printings", oracleId, marketplace.id],
+    queryFn: () => ipc.cardPrintings(oracleId as string, marketplace.id),
     // `oracleId` is nullable on the wire, so there is a state with nothing to ask for.
     //
     // It is *not* the reversible-card state, whatever the comment here used to say:
@@ -694,27 +667,26 @@ function Facts({
       {finishes.length > 0 && (
         <>
           <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-            {/* Per finish, at the selected marketplace, and **never across marketplaces**:
-                `eur_etched` is not a key Scryfall has, so an Etched row on Cardmarket reads
-                "—". That em dash is the honest answer — another marketplace's number is a
+            {/* Priced by the backend at the marketplace this pane asked for, and **never
+                across marketplaces**: an unpriced finish arrives as `null` and reads "—".
+                The holes are real and differ per marketplace — `eur_etched` is not a key
+                Scryfall has, so Etched on Cardmarket is always an em dash, and a printing a
+                bulk feed has never listed is one there. Another marketplace's number is a
                 different quote, and printing it here would invent one. */}
             {finishes.map((f) => (
               <div key={f} className="flex items-baseline gap-1.5">
                 <dt className="text-dim">{FINISH_LABEL[f]}</dt>
                 <dd className="font-mono tabular-nums">
-                  {formatPrice(finishPriceAt(card.prices, f, marketplace), marketplace.currency)}
+                  {formatPrice(card.finishPrices[f], marketplace.currency)}
                 </dd>
               </div>
             ))}
           </dl>
           {/* Spec §5: a price is never shown without saying how old it is — and, now that
-              there is more than one answer, whose it is. The ribbon carries the date of the
-              data these came in with; a downloaded feed's own date is in Settings. On such a
-              feed the sentence is the *reason the row is empty* instead, because an as-of line
-              over a column of em dashes answers a question nobody asked. */}
-          <p className="text-[0.7rem] text-dim">
-            {marketplace.feed ? feedPricesNote(marketplace) : pricesAsOf(marketplace)}
-          </p>
+              there is more than one answer, whose it is. `pricesAsOf` says which of the two
+              clocks this marketplace runs on: the card-data sync for the blob-backed pair, the
+              last price-feed refresh for the two this app downloads. */}
+          <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
         </>
       )}
     </div>
@@ -962,14 +934,15 @@ function PrintingRow({
           </button>
         )}
         {printing.lang !== "en" && <LangBadge lang={printing.lang} />}
-        {/* Per finish, from the blob — never one number standing for both. */}
+        {/* Per finish, priced at the marketplace the list was read at — never one number
+            standing for both, and never another marketplace's. */}
         {parseFinishes(printing.finishes).map((f) => (
           <span key={f} className="flex shrink-0 items-center gap-0.5 font-mono tabular-nums">
             {/* A glyph rather than the letters `F` and `E` this used to draw. Nonfoil is
                 still unmarked — it is the finish a price is assumed to be — and the full
                 word rides in the accessible name, as the `<abbr>`'s title did. */}
             <FinishMark finish={f} />
-            {formatPrice(finishPriceAt(printing.prices, f, marketplace), marketplace.currency)}
+            {formatPrice(printing.finishPrices[f], marketplace.currency)}
           </span>
         ))}
         {/* This row's printing, not the pane's card: the set and the collector number are the
