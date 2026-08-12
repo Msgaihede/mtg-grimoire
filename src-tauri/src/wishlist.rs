@@ -1626,7 +1626,10 @@ mod tests {
         for (id, prices) in [
             ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
             ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),
-            ("etched", r#"{"usd":"9.00","usd_etched":"9.00","eur":"7.00"}"#),
+            (
+                "etched",
+                r#"{"usd":"9.00","usd_etched":"9.00","eur":"7.00"}"#,
+            ),
         ] {
             conn.execute(
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -1698,8 +1701,14 @@ mod tests {
 
         // × the copies still missing, and nothing is owned: $10 / $50 / $18 against
         // €900 / €2 / —.
-        assert_eq!(names("cost", "asc", usd), ["cheap-usd", "etched", "dear-usd"]);
-        assert_eq!(names("cost", "asc", eur), ["dear-usd", "cheap-usd", "etched"]);
+        assert_eq!(
+            names("cost", "asc", usd),
+            ["cheap-usd", "etched", "dear-usd"]
+        );
+        assert_eq!(
+            names("cost", "asc", eur),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
         assert_eq!(
             names("cost", "desc", usd),
             ["dear-usd", "etched", "cheap-usd"]
@@ -1715,7 +1724,9 @@ mod tests {
     #[test]
     fn every_sort_key_prepares_in_euros_too() {
         let conn = seeded_currencies();
-        for key in ["name", "owned", "quantity", "cost", "price", "added", "nope"] {
+        for key in [
+            "name", "owned", "quantity", "cost", "price", "added", "nope",
+        ] {
             for dir in ["asc", "desc"] {
                 let page = list_wishes(
                     &conn,

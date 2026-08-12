@@ -267,7 +267,11 @@ mod tests {
         assert_eq!(parse(r#"{"currency":null}"#), Currency::Usd, "null");
         assert_eq!(parse(r#"{"currency":"usd"}"#), Currency::Usd);
         assert_eq!(parse(r#"{"currency":"gbp"}"#), Currency::Usd, "a future id");
-        assert_eq!(parse(r#"{"currency":"EUR"}"#), Currency::Usd, "case matters");
+        assert_eq!(
+            parse(r#"{"currency":"EUR"}"#),
+            Currency::Usd,
+            "case matters"
+        );
         assert_eq!(parse(r#"{"currency":7}"#), Currency::Usd, "a wrong type");
         assert_eq!(parse(r#"{"currency":"eur"}"#), Currency::Eur);
         assert_eq!(Currency::default(), Currency::Usd);

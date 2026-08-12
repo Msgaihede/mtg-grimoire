@@ -2347,7 +2347,10 @@ mod tests {
         for (id, prices) in [
             ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
             ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),
-            ("etched", r#"{"usd":"9.00","usd_etched":"9.00","eur":"7.00"}"#),
+            (
+                "etched",
+                r#"{"usd":"9.00","usd_etched":"9.00","eur":"7.00"}"#,
+            ),
         ] {
             conn.execute(
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -2388,9 +2391,18 @@ mod tests {
         let (usd, eur) = (crate::sorting::Currency::Usd, crate::sorting::Currency::Eur);
 
         // Per copy: $1 / $50 / $9 against €90 / €2 / —.
-        assert_eq!(ids("price", "asc", usd), ["cheap-usd", "etched", "dear-usd"]);
-        assert_eq!(ids("price", "asc", eur), ["dear-usd", "cheap-usd", "etched"]);
-        assert_eq!(ids("price", "desc", usd), ["dear-usd", "etched", "cheap-usd"]);
+        assert_eq!(
+            ids("price", "asc", usd),
+            ["cheap-usd", "etched", "dear-usd"]
+        );
+        assert_eq!(
+            ids("price", "asc", eur),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
+        assert_eq!(
+            ids("price", "desc", usd),
+            ["dear-usd", "etched", "cheap-usd"]
+        );
         assert_eq!(
             ids("price", "desc", eur),
             ["cheap-usd", "dear-usd", "etched"],
@@ -2398,10 +2410,22 @@ mod tests {
         );
 
         // × copies: $10 / $50 / $27 against €900 / €2 / —.
-        assert_eq!(ids("value", "asc", usd), ["cheap-usd", "etched", "dear-usd"]);
-        assert_eq!(ids("value", "asc", eur), ["dear-usd", "cheap-usd", "etched"]);
-        assert_eq!(ids("value", "desc", usd), ["dear-usd", "etched", "cheap-usd"]);
-        assert_eq!(ids("value", "desc", eur), ["cheap-usd", "dear-usd", "etched"]);
+        assert_eq!(
+            ids("value", "asc", usd),
+            ["cheap-usd", "etched", "dear-usd"]
+        );
+        assert_eq!(
+            ids("value", "asc", eur),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
+        assert_eq!(
+            ids("value", "desc", usd),
+            ["dear-usd", "etched", "cheap-usd"]
+        );
+        assert_eq!(
+            ids("value", "desc", eur),
+            ["cheap-usd", "dear-usd", "etched"]
+        );
     }
 
     /// The rule the euro sorts inherit, stated on the row itself: an etched entry is `NULL`
@@ -2414,7 +2438,11 @@ mod tests {
         let row = |id: &str| rows.items.iter().find(|r| r.card_id == id).unwrap();
 
         assert_eq!(row("etched").unit_price_usd, Some(9.00));
-        assert_eq!(row("etched").unit_price_eur, None, "and not the €7.00 beside it");
+        assert_eq!(
+            row("etched").unit_price_eur,
+            None,
+            "and not the €7.00 beside it"
+        );
         assert_eq!(row("cheap-usd").unit_price_eur, Some(90.00));
     }
 

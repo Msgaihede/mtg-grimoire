@@ -374,19 +374,18 @@ const SEARCH_SORTS_COLLAPSED: &[crate::sorting::SortColumn] = &[crate::sorting::
 /// The euro aggregates span only the printings that have a euro price, because `min`/`max`
 /// skip NULLs. A group whose printings are all etched therefore has no euro range at all and
 /// sorts last, which is the same statement [`CardSummary::price_low_eur`] makes.
-const SEARCH_PRICE_SORT_COLLAPSED: &[crate::sorting::PricedSort] =
-    &[crate::sorting::PricedSort {
-        usd: crate::sorting::SortColumn {
-            key: "price",
-            asc: "min(c.price_usd) ASC NULLS LAST",
-            desc: "max(c.price_usd) DESC NULLS LAST",
-        },
-        eur: crate::sorting::SortColumn {
-            key: "price",
-            asc: "min(c.price_eur) ASC NULLS LAST",
-            desc: "max(c.price_eur) DESC NULLS LAST",
-        },
-    }];
+const SEARCH_PRICE_SORT_COLLAPSED: &[crate::sorting::PricedSort] = &[crate::sorting::PricedSort {
+    usd: crate::sorting::SortColumn {
+        key: "price",
+        asc: "min(c.price_usd) ASC NULLS LAST",
+        desc: "max(c.price_usd) DESC NULLS LAST",
+    },
+    eur: crate::sorting::SortColumn {
+        key: "price",
+        asc: "min(c.price_eur) ASC NULLS LAST",
+        desc: "max(c.price_eur) DESC NULLS LAST",
+    },
+}];
 
 /// The sort keys a collapsed search must resolve **after** the join, because they belong to
 /// the representative printing rather than to the group.
@@ -2710,8 +2709,20 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
         let lines = [
-            priced_line("a", "Alpha", "o-a", "2020-01-01", r#"{"usd":"1.00","eur":"90.00"}"#),
-            priced_line("b", "Beta", "o-b", "2020-01-02", r#"{"usd":"50.00","eur":"2.00"}"#),
+            priced_line(
+                "a",
+                "Alpha",
+                "o-a",
+                "2020-01-01",
+                r#"{"usd":"1.00","eur":"90.00"}"#,
+            ),
+            priced_line(
+                "b",
+                "Beta",
+                "o-b",
+                "2020-01-02",
+                r#"{"usd":"50.00","eur":"2.00"}"#,
+            ),
             priced_line(
                 "c",
                 "Gamma",
@@ -2720,10 +2731,7 @@ mod tests {
                 r#"{"usd":null,"usd_foil":null,"usd_etched":"0.71","eur":null,"eur_foil":null}"#,
             ),
         ];
-        seed_priced(
-            &conn,
-            &lines.iter().map(String::as_str).collect::<Vec<_>>(),
-        );
+        seed_priced(&conn, &lines.iter().map(String::as_str).collect::<Vec<_>>());
         conn
     }
 
@@ -2742,15 +2750,24 @@ mod tests {
         .unwrap();
         let of = |id: &str| r.items.iter().find(|c| c.id == id).unwrap();
 
-        assert_eq!((of("a").price_usd, of("a").price_eur), (Some(1.0), Some(90.0)));
-        assert_eq!((of("b").price_usd, of("b").price_eur), (Some(50.0), Some(2.0)));
+        assert_eq!(
+            (of("a").price_usd, of("a").price_eur),
+            (Some(1.0), Some(90.0))
+        );
+        assert_eq!(
+            (of("b").price_usd, of("b").price_eur),
+            (Some(50.0), Some(2.0))
+        );
         assert_eq!(
             (of("c").price_usd, of("c").price_eur),
             (Some(0.71), None),
             "etched falls through to `usd_etched` and has no euro key to fall through to"
         );
         // Uncollapsed the range is the row's own price, in each currency separately.
-        assert_eq!((of("c").price_low_eur, of("c").price_high_eur), (None, None));
+        assert_eq!(
+            (of("c").price_low_eur, of("c").price_high_eur),
+            (None, None)
+        );
         assert_eq!(
             (of("c").price_low_usd, of("c").price_high_usd),
             (Some(0.71), Some(0.71))
@@ -2795,10 +2812,7 @@ mod tests {
                 r#"{"usd":null,"usd_etched":"0.71","eur":null}"#,
             ),
         ];
-        seed_priced(
-            &conn,
-            &lines.iter().map(String::as_str).collect::<Vec<_>>(),
-        );
+        seed_priced(&conn, &lines.iter().map(String::as_str).collect::<Vec<_>>());
 
         let r = run_search(
             &conn,
@@ -2927,6 +2941,9 @@ mod tests {
             ["c", "a", "b"],
             "and a currency this build has never heard of"
         );
-        assert_eq!(ids(&format!(r#"{{{sort},"currency":"eur"}}"#)), ["b", "a", "c"]);
+        assert_eq!(
+            ids(&format!(r#"{{{sort},"currency":"eur"}}"#)),
+            ["b", "a", "c"]
+        );
     }
 }
