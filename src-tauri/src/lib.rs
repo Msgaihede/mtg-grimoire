@@ -4,6 +4,7 @@ pub mod collection;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;
+pub mod deck_import;
 pub mod deck_meta;
 pub mod deck_theory;
 pub mod errors;
@@ -261,6 +262,7 @@ pub fn run() {
             deck::deck_move_card,
             deck::deck_swap_printing,
             deck::deck_missing_to_wishlist,
+            deck_import::deck_import_resolve,
             deck::format_specs_list,
             deck_meta::deck_category_list,
             deck_meta::deck_category_create,
