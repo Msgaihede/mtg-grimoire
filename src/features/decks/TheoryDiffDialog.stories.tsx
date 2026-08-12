@@ -75,7 +75,9 @@ export const Shopping: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeVisible();
     // The sentence this dialog exists to say.
     await expect(canvas.getByText(/are cuts you have already made/)).toBeVisible();
-    await expect(canvas.getByText("Prices as of the last card-data sync.")).toBeVisible();
+    await expect(
+      canvas.getByText("TCGplayer prices as of the last card-data sync."),
+    ).toBeVisible();
   },
 };
 
@@ -136,9 +138,12 @@ export const Agreed: Story = {
   args: { deckId: 3 },
   play: async ({ canvas }) => {
     // The dialog's arrival, waited out once — see `Shopping`.
-    await waitFor(async () => expect(await canvas.findByText(/The two lists agree/)).toBeVisible(), {
-      timeout: FRAME_WAIT,
-    });
+    await waitFor(
+      async () => expect(await canvas.findByText(/The two lists agree/)).toBeVisible(),
+      {
+        timeout: FRAME_WAIT,
+      },
+    );
     await expect(canvas.getByRole("button", { name: "Send all 0 to wishlist" })).toBeDisabled();
   },
 };
@@ -155,7 +160,7 @@ export const Unpriced: Story = {
   play: async ({ canvas }) => {
     await canvas.findByText("Black Lotus");
 
-    const cost = canvas.getByText("Cost to build").closest("div")!;
+    const cost = canvas.getByText("Cost to build (USD)").closest("div")!;
     // The dialog's arrival, waited out once — see `Shopping`.
     await waitFor(() => expect(within(cost).getByText("1 unpriced")).toBeVisible(), {
       timeout: FRAME_WAIT,

@@ -13,6 +13,7 @@ pub mod index;
 pub mod ingest;
 pub mod legalities;
 pub mod maintenance;
+pub mod marketplace;
 pub mod paths;
 pub mod reconcile;
 pub mod schema;
@@ -283,6 +284,8 @@ pub fn run() {
             deck_theory::deck_theory_diff,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
+            marketplace::get_marketplace,
+            marketplace::set_marketplace,
             error_log_list,
             error_log_clear,
             update_status,

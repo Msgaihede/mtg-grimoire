@@ -154,9 +154,10 @@ export const Reclaiming: Story = {
   args: { progress: event("reclaiming", { done: 3, total: 4 }) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(
-      canvas.getByRole("progressbar", { name: PHASE_LABEL.reclaiming }),
-    ).toHaveAttribute("aria-valuenow", "75");
+    await expect(canvas.getByRole("progressbar", { name: PHASE_LABEL.reclaiming })).toHaveAttribute(
+      "aria-valuenow",
+      "75",
+    );
     // **No digit appears anywhere on this screen**, which is the rule rather than an omission:
     // `detail()` writes a line for `downloading` and `ingesting` only, because those are the two
     // units a reader recognises. Freed database pages are not one.

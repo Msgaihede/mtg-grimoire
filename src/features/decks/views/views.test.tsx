@@ -2,7 +2,8 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { dragOnto } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
@@ -39,6 +40,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     sortOrder: 1,
     cardCount: 0,
     totalPriceUsd: null,
+    totalPriceEur: null,
     cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
@@ -85,7 +87,17 @@ const GROUPS: CardGroup[] = buildGroups(
   [COMMANDER, RAMP, MAYBE],
   "category",
   "alphabetical",
+  "usd",
 );
+
+/**
+ * The default marketplace, and every dollar figure below is a claim about it.
+ *
+ * Named rather than repeated so the currency-switching cases stand out as the ones that mean
+ * something by naming a different one — the rest of this file is about geometry, drops and
+ * markers, and would only be noisier for restating a currency it is not testing.
+ */
+const TCG = MARKETPLACES.tcgplayer;
 
 /** The four views, driven identically — every claim below is a claim about all of them. */
 const VIEWS = [
@@ -97,6 +109,7 @@ const VIEWS = [
 
 interface ViewProps {
   groups: readonly CardGroup[];
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
@@ -105,7 +118,15 @@ interface ViewProps {
 describe.each(VIEWS)("$name", ({ render: renderView }) => {
   const setup = (over: Partial<ViewProps> = {}) => {
     const onSelect = vi.fn();
-    render(renderView({ groups: GROUPS, violations: VIOLATIONS, onSelect, ...over }));
+    render(
+      renderView({
+        groups: GROUPS,
+        marketplace: TCG,
+        violations: VIOLATIONS,
+        onSelect,
+        ...over,
+      }),
+    );
     return onSelect;
   };
 
@@ -127,10 +148,37 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
-  /** A price is never shown without saying when it was true. */
+  /** A price is never shown without saying when it was true, and whose it is. */
   it("says when its prices were true", () => {
     setup();
-    expect(screen.getAllByTitle(PRICES_AS_OF).length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle(pricesAsOf(MARKETPLACES.tcgplayer)).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **Every view, one claim: switching marketplace changes what is on screen.**
+   *
+   * Written as a sweep across all four because the currency reaches each of them by a
+   * different route — a band's heading, a stacked heading, a tight one, a table column — and a
+   * view that quietly kept its own dollars would pass every other assertion in this file.
+   *
+   * The Ramp pile is the anchor: two Sol Rings at €1 and one Signet at €0.50, so the euro
+   * total is a number the dollar figures could not produce by rounding.
+   */
+  it("quotes the selected marketplace, and the previous one disappears", () => {
+    const priced: DeckCard[] = [
+      card({ name: "Sol Ring", quantity: 2, unitPriceUsd: 1.99, unitPriceEur: 1 }),
+      card({ name: "Arcane Signet", unitPriceUsd: 0.99, unitPriceEur: 0.5 }),
+    ];
+    render(
+      renderView({
+        groups: buildGroups(priced, [RAMP], "category", "alphabetical", "eur"),
+        marketplace: MARKETPLACES.cardmarket,
+      }),
+    );
+
+    expect(screen.getByText("€2.50")).toBeInTheDocument();
+    expect(screen.queryByText("$4.97")).not.toBeInTheDocument();
+    expect(screen.getAllByTitle(pricesAsOf(MARKETPLACES.cardmarket)).length).toBeGreaterThan(0);
   });
 
   it("marks the piles the rules read and the piles that count toward nothing", () => {
@@ -213,7 +261,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
 
   const draw = (over: Partial<DeckCardActions> = {}) => {
     const spies = { ...actions(), ...over };
-    render(renderView({ groups: GROUPS, actions: spies, onSelect: vi.fn() }));
+    render(renderView({ groups: GROUPS, marketplace: TCG, actions: spies, onSelect: vi.fn() }));
     return spies;
   };
 
@@ -223,10 +271,17 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     const user = userEvent.setup();
     const spies = draw();
 
-    await user.click(screen.getByRole("button", { name: "Increase Copies of Sol Ring in Main deck" }));
-    expect(spies.setQuantity).toHaveBeenCalledWith(expect.objectContaining({ name: "Sol Ring" }), 3);
+    await user.click(
+      screen.getByRole("button", { name: "Increase Copies of Sol Ring in Main deck" }),
+    );
+    expect(spies.setQuantity).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Sol Ring" }),
+      3,
+    );
 
-    await user.click(screen.getByRole("button", { name: "Decrease Copies of Arcane Signet in Main deck" }));
+    await user.click(
+      screen.getByRole("button", { name: "Decrease Copies of Arcane Signet in Main deck" }),
+    );
     expect(spies.setQuantity).toHaveBeenLastCalledWith(
       expect.objectContaining({ name: "Arcane Signet" }),
       0,
@@ -240,11 +295,11 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     const spies = draw();
 
     const select = screen.getByLabelText("Move Sol Ring out of Main deck");
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Move…",
-      "Commander",
-      "Maybeboard",
-    ]);
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Move…", "Commander", "Maybeboard"]);
 
     await user.selectOptions(select, String(MAYBE.id));
     expect(spies.move).toHaveBeenCalledWith(
@@ -273,14 +328,16 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
    *  travel takes every copy out of the deck with nothing to undo it. */
   it("keeps a press on a control from starting a drag", () => {
     draw();
-    const stepper = screen.getByRole("button", { name: "Increase Copies of Sol Ring in Main deck" });
+    const stepper = screen.getByRole("button", {
+      name: "Increase Copies of Sol Ring in Main deck",
+    });
     expect(stepper.closest("[data-no-drag]")).not.toBeNull();
   });
 
   /** The caret's way home after a printing swap. The pane is not in this tree and owns none of
    *  these elements, so the slot is a question the DOM can answer after the fact. */
   it("stamps every card with the slot it draws", () => {
-    render(renderView({ groups: GROUPS }));
+    render(renderView({ groups: GROUPS, marketplace: TCG }));
     const slots = [...document.querySelectorAll(`[${DECK_CARD_ATTR}]`)].map((n) =>
       n.getAttribute(DECK_CARD_ATTR),
     );
@@ -337,7 +394,8 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
   it("makes no drop target of a derived group", () => {
     render(
       renderView({
-        groups: buildGroups(CARDS, [COMMANDER, RAMP, MAYBE], "manaValue", "alphabetical"),
+        groups: buildGroups(CARDS, [COMMANDER, RAMP, MAYBE], "manaValue", "alphabetical", "usd"),
+        marketplace: TCG,
         actions: actions(),
       }),
     );
@@ -352,7 +410,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
   /** A view handed nothing draws exactly what it always drew — which is what lets a story or a
    *  test mount one without a deck behind it. */
   it("draws no controls at all when it is given none", () => {
-    render(renderView({ groups: GROUPS }));
+    render(renderView({ groups: GROUPS, marketplace: TCG }));
     expect(screen.queryByLabelText(/^Copies of/)).toBeNull();
     expect(screen.queryByLabelText(/^Move /)).toBeNull();
   });
@@ -368,7 +426,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
 describe.each(VIEWS.filter((v) => v.name !== "TableView"))("$name", ({ render: renderView }) => {
   const setup = () => {
     const onSelect = vi.fn();
-    render(renderView({ groups: GROUPS, violations: VIOLATIONS, onSelect }));
+    render(renderView({ groups: GROUPS, marketplace: TCG, violations: VIOLATIONS, onSelect }));
     return onSelect;
   };
 
@@ -429,7 +487,7 @@ describe.each([
   ["GridView", (props: ViewProps) => <GridView {...props} />],
 ] as const)("%s", (_name, renderView) => {
   it("keeps its focus outline inside the box that clips it", () => {
-    render(renderView({ groups: GROUPS }));
+    render(renderView({ groups: GROUPS, marketplace: TCG }));
     for (const button of screen.getAllByRole("button")) {
       expect(button.className).toContain("focus-visible:-outline-offset-2");
       expect(button.className).not.toContain("focus-visible:outline-offset-2");
@@ -446,10 +504,28 @@ describe("the views that are not the table", () => {
   it.each([
     [
       "StackView",
-      <StackView key="s" groups={buildGroups([], [RAMP], "category", "alphabetical")} />,
+      <StackView
+        key="s"
+        groups={buildGroups([], [RAMP], "category", "alphabetical", "usd")}
+        marketplace={TCG}
+      />,
     ],
-    ["TextView", <TextView key="t" groups={buildGroups([], [RAMP], "category", "alphabetical")} />],
-    ["GridView", <GridView key="g" groups={buildGroups([], [RAMP], "category", "alphabetical")} />],
+    [
+      "TextView",
+      <TextView
+        key="t"
+        groups={buildGroups([], [RAMP], "category", "alphabetical", "usd")}
+        marketplace={TCG}
+      />,
+    ],
+    [
+      "GridView",
+      <GridView
+        key="g"
+        groups={buildGroups([], [RAMP], "category", "alphabetical", "usd")}
+        marketplace={TCG}
+      />,
+    ],
   ])("%s says where the next card goes", (_name, element) => {
     render(element);
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
@@ -486,6 +562,7 @@ describe("StackView columns", () => {
           [COMMANDER, RAMP, MAYBE],
           "category",
           "alphabetical",
+          "usd",
         )}
         // Exactly two three-card groups tall, and **derived rather than typed**: a group is
         // `46 + stackHeight(n) + 20` (header and padding, the stack, the gap), and a card's height
@@ -496,6 +573,7 @@ describe("StackView columns", () => {
         //
         // At exactly two groups the empty Maybeboard's 66 does not fit, so it starts the second
         // column — which is what makes this assert a *pack* rather than a single box.
+        marketplace={TCG}
         columnHeight={2 * (66 + stackHeight(3))}
       />,
     );
@@ -515,7 +593,14 @@ describe("StackView columns", () => {
   it("uses one column when the groups all fit in one", () => {
     render(
       <StackView
-        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
+        groups={buildGroups(
+          [card({ name: "Sol Ring" })],
+          [RAMP],
+          "category",
+          "alphabetical",
+          "usd",
+        )}
+        marketplace={TCG}
         columnHeight={4000}
       />,
     );
@@ -526,7 +611,9 @@ describe("StackView columns", () => {
 
 describe("TableView", () => {
   const setup = () => {
-    render(<TableView groups={GROUPS} violations={VIOLATIONS} onSelect={vi.fn()} />);
+    render(
+      <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={vi.fn()} />,
+    );
   };
 
   it("draws the nine columns of the deck table", () => {
@@ -548,7 +635,7 @@ describe("TableView", () => {
     // The Price header carries the as-of sentence in its own name, as every money column in
     // this app does.
     expect(
-      screen.getByRole("columnheader", { name: `Price. ${PRICES_AS_OF}` }),
+      screen.getByRole("columnheader", { name: `Price. ${pricesAsOf(MARKETPLACES.tcgplayer)}` }),
     ).toBeInTheDocument();
   });
 
@@ -586,6 +673,7 @@ describe("TableView", () => {
     render(
       <TableView
         groups={GROUPS}
+        marketplace={TCG}
         actions={{ setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop: vi.fn() }}
       />,
     );
@@ -618,7 +706,9 @@ describe("TableView", () => {
   it("opens the card whose row was pressed, and says what is wrong with it", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
-    render(<TableView groups={GROUPS} violations={VIOLATIONS} onSelect={onSelect} />);
+    render(
+      <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={onSelect} />,
+    );
 
     await user.click(screen.getByText("Arcane Signet"));
     expect(onSelect).toHaveBeenCalledTimes(1);
@@ -672,7 +762,7 @@ describe("TableView", () => {
   it("bands the rows with a heading that is not itself a row you can open", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
-    render(<TableView groups={GROUPS} onSelect={onSelect} />);
+    render(<TableView groups={GROUPS} marketplace={TCG} onSelect={onSelect} />);
 
     const band = screen.getByText("Ramp").closest("[role=row]");
     expect(band).not.toBeNull();
@@ -692,7 +782,9 @@ describe("TableView", () => {
           [MAYBE],
           "category",
           "alphabetical",
+          "usd",
         )}
+        marketplace={TCG}
       />,
     );
 

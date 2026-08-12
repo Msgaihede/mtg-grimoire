@@ -2,9 +2,10 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **337 stories across 44 story files, 43 docs
-pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 45th `importPath` is the `.mdx`).
+`npm run storybook` · `npm run build-storybook`. **344 stories across 45 story files, 44 docs
+pages** — counted off `storybook-static/index.json` on 2026-08-12 after the marketplace
+branch, which is the only place the three agree (`Object.values(index.entries)`, grouped by
+`type`; the 46th `importPath` is the `.mdx`).
 **Re-count them in the same commit that adds a story.** This line read 326 for three stories'
 worth of drift and then took three more without noticing, because a prose-only edit routes to
 neither CI job — the same rot that left the fault list below saying four. **It had rotted
@@ -12,7 +13,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**42 of the 44 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**43 of the 45 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -33,9 +34,9 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **eight** faults — `busy`/`syncError`/
-  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`. Saying nothing
-  gets `starter` with no
+  seeds `empty`/`starter`/`needsReview`/`large`, **nine** faults — `busy`/`syncError`/
+  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/`errorLog`.
+  Saying nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
   refusal rather than what one mocked call returns. **`indexCold` is the one that is not a
   failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
@@ -68,7 +69,8 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckSettingsDialog` carries the same parameter
   for an unrelated reason — its scrim is `fixed inset-0`, so inline it would cover the docs page
-  rather than its own block — and the other **36 docs pages render inline**. A new story file
+  rather than its own block — and the other **38 docs pages render inline** (43 autodocs pages
+  less those five, re-counted 2026-08-12). A new story file
   that writes the store needs the same parameter or its docs page shows one story's view under
   every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
@@ -92,8 +94,8 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**247** plays today, in a file of **250** tests — the other three are its own; `grep -rE
-"^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
+  (**255** plays today, in a file of **258** tests — the other three are its own; `grep -rE
+"^\s+play:" src --include=*.stories.tsx | wc -l`, re-counted 2026-08-12), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;

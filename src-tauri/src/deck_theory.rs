@@ -52,6 +52,9 @@ pub struct TheoryDiffRow {
     /// Nonfoil `usd` from this printing's `prices` blob — `DeckCardRow::unit_price_usd`'s rule,
     /// and never `cards.price_usd`, which is a display fallback chain and must not be summed.
     pub unit_price_usd: Option<f64>,
+    /// The same in EUR, from `$.eur` — the twin that lets the shopping list be priced on
+    /// Cardmarket without a second query.
+    pub unit_price_eur: Option<f64>,
     pub set_code: String,
     pub collector_number: String,
     /// Copies of this oracle card the collection holds and **no built deck has claimed**.
@@ -108,7 +111,8 @@ fn group_key(oracle_id: Option<&str>, card_id: &str) -> String {
 /// one side and not the other is how a scratchpad would come to fill a shopping list.
 const DIFF_SELECT: &str = "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
             dc.collector_number, dc.quantity, cat.name, c.oracle_id,
-            CAST(json_extract(c.prices, '$.usd') AS REAL)
+            CAST(json_extract(c.prices, '$.usd') AS REAL),
+            CAST(json_extract(c.prices, '$.eur') AS REAL)
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN cards c ON c.id = dc.card_id
@@ -177,7 +181,8 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
                 r.get::<_, i64>(5)?,            // quantity
                 r.get::<_, String>(6)?,         // category name
                 r.get::<_, Option<String>>(7)?, // oracle_id
-                r.get::<_, Option<f64>>(8)?,    // unit price
+                r.get::<_, Option<f64>>(8)?,    // unit price, usd
+                r.get::<_, Option<f64>>(9)?,    // unit price, eur
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -188,8 +193,18 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
     let mut held: HashMap<String, i64> = HashMap::new();
     let mut order: Vec<(String, Grouped)> = Vec::new();
     for row in rows {
-        let (variant, card_id, name, set_code, collector_number, quantity, category, oracle, price) =
-            row.map_err(|e| e.to_string())?;
+        let (
+            variant,
+            card_id,
+            name,
+            set_code,
+            collector_number,
+            quantity,
+            category,
+            oracle,
+            usd,
+            eur,
+        ) = row.map_err(|e| e.to_string())?;
         let key = group_key(oracle.as_deref(), &card_id);
         if variant == THEORY {
             *wanted.entry(key.clone()).or_insert(0) += quantity;
@@ -204,7 +219,8 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
                             category_name: category,
                             // Filled below, once both sides are summed.
                             quantity: 0,
-                            unit_price_usd: price,
+                            unit_price_usd: usd,
+                            unit_price_eur: eur,
                             set_code,
                             collector_number,
                             owned_spare: 0,
@@ -920,6 +936,86 @@ mod tests {
         assert_eq!(
             missing_to_wishlist(&conn, 404).unwrap_err(),
             crate::deck::GONE
+        );
+    }
+
+    /// A shopping list has to be priced in the marketplace the reader shops at, so every line
+    /// carries both figures — the euro one under the dollar one's rule, `$.eur` out of the
+    /// printing the theory row names and never `cards.price_eur`.
+    ///
+    /// The third line is an etched-only printing: it has a dollar price through `usd_etched`
+    /// and **no euro price at all**, because Scryfall publishes no `eur_etched`. It reads
+    /// `None` here rather than being quoted at some nonfoil rate.
+    #[test]
+    fn a_diff_line_is_priced_in_both_currencies() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    prices,price_usd,price_eur,raw)
+               VALUES
+                 ('both','o3','Both','tst','1','en','normal',
+                  '{"usd":"10.00","eur":"7.50"}',10.0,7.5,'{}'),
+                 ('etched-only','o4','Etched Only','tst','2','en','normal',
+                  '{"usd":null,"usd_etched":"0.71","eur":null,"eur_foil":null}',
+                  0.71,NULL,'{}');"#,
+        )
+        .unwrap();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        set_theory(&conn, id, true);
+        add(&conn, id, "both", main, THEORY, 1);
+        add(&conn, id, "etched-only", main, THEORY, 1);
+        // `bolt-lea`'s blob is dollars only — the ordinary case for an older printing.
+        add(&conn, id, "bolt-lea", main, THEORY, 1);
+
+        let diff = theory_diff(&conn, id).unwrap();
+        let line = |card: &str| diff.iter().find(|r| r.card_id == card).unwrap();
+
+        assert_eq!(
+            (line("both").unit_price_usd, line("both").unit_price_eur),
+            (Some(10.0), Some(7.5))
+        );
+        assert_eq!(
+            (
+                line("etched-only").unit_price_usd,
+                line("etched-only").unit_price_eur
+            ),
+            (None, None),
+            "nonfoil out of the blob — `price_usd`'s 0.71 fallback chain is not this figure"
+        );
+        assert_eq!(
+            (
+                line("bolt-lea").unit_price_usd,
+                line("bolt-lea").unit_price_eur
+            ),
+            (Some(400.0), None),
+            "a blob with no `eur` is unpriced in euros, never the dollar figure"
+        );
+    }
+
+    /// The hand-mirrored wire contract, pinned so a field added here and never mirrored in
+    /// `src/lib/ipc.ts` fails the suite rather than rendering as `undefined`.
+    #[test]
+    fn theory_diff_row_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(TheoryDiffRow {
+            card_id: "bolt-lea".to_owned(),
+            name: "Lightning Bolt".to_owned(),
+            category_name: "Main deck".to_owned(),
+            quantity: 2,
+            unit_price_usd: Some(400.0),
+            unit_price_eur: Some(320.0),
+            set_code: "lea".to_owned(),
+            collector_number: "161".to_owned(),
+            owned_spare: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "cardId": "bolt-lea", "name": "Lightning Bolt", "categoryName": "Main deck",
+                "quantity": 2, "unitPriceUsd": 400.0, "unitPriceEur": 320.0,
+                "setCode": "lea", "collectorNumber": "161", "ownedSpare": 1
+            })
         );
     }
 }

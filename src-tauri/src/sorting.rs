@@ -27,10 +27,74 @@ pub struct SortTerm {
 /// half of them are not one column — `set` is three — and every nullable column states its
 /// null rule in both directions rather than inheriting SQLite's (NULLs first ascending,
 /// last descending, which reads as a different sort rather than as the same one reversed).
+#[derive(Debug, Clone, Copy)]
 pub struct SortColumn {
     pub key: &'static str,
     pub asc: &'static str,
     pub desc: &'static str,
+}
+
+/// Which currency a price order reads.
+///
+/// **The one thing about the selected marketplace that has to cross the wire.** Every other
+/// price decision in this app is made in TypeScript, over both figures Rust already returns
+/// side by side — but ordering happens inside SQLite, so a price sort has to be told.
+///
+/// Not a `Deserialize` derive, and for [`SortTerm::dir`]'s reason turned up one level: an
+/// unrecognised currency must be a *default*, not a deserialization failure. A future build
+/// that learns a third currency would otherwise make every list this one draws fail to load
+/// rather than fall back to the dollars it has always shown. So **anything at all that is
+/// not the string `eur` is `usd`** — absent, null, a typo, a number, a future id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Currency {
+    #[default]
+    Usd,
+    Eur,
+}
+
+impl<'de> Deserialize<'de> for Currency {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Through `Value` rather than `String` so that a payload sending the wrong *type*
+        // lands on the default too, instead of failing the whole request.
+        let raw = serde_json::Value::deserialize(d)?;
+        Ok(match raw.as_str() {
+            Some("eur") => Currency::Eur,
+            _ => Currency::Usd,
+        })
+    }
+}
+
+/// One sort key whose SQL depends on the currency — the same key, written twice.
+///
+/// Both halves carry the key so each is a complete [`SortColumn`]; that they agree is what
+/// `a_priced_sort_offers_the_same_key_in_both_currencies` checks, because a pair that
+/// disagreed would give the reader a header that works in dollars and does nothing in euros.
+#[derive(Debug, Clone, Copy)]
+pub struct PricedSort {
+    pub usd: SortColumn,
+    pub eur: SortColumn,
+}
+
+/// A table's sort whitelist, with its money columns written for the currency asked for.
+///
+/// Assembled rather than each table being spelled out twice, because the failure mode of the
+/// copy is silent: a new sort key added to the dollar list and forgotten in the euro one is a
+/// header that quietly stops working the day the reader picks Cardmarket, and no test that
+/// only ever asks in dollars would notice.
+///
+/// The result is still a whitelist of `&'static str` literals — nothing here is built from a
+/// request, so [`order_by`]'s safety property is untouched.
+pub fn sorts_for(
+    shared: &[SortColumn],
+    priced: &[PricedSort],
+    currency: Currency,
+) -> Vec<SortColumn> {
+    let mut out = shared.to_vec();
+    out.extend(priced.iter().map(|p| match currency {
+        Currency::Usd => p.usd,
+        Currency::Eur => p.eur,
+    }));
+    out
 }
 
 /// Build an `ORDER BY` body — no `ORDER BY` keyword, just the list.
@@ -166,5 +230,85 @@ mod tests {
         let terms = [term("name", "asc")];
         assert!(order_by(Some(&terms), COLUMNS, FALLBACK, TIEBREAK).ends_with("c.id ASC"));
         assert!(order_by(None, COLUMNS, FALLBACK, TIEBREAK).ends_with("c.id ASC"));
+    }
+
+    const SHARED: &[SortColumn] = &[SortColumn {
+        key: "name",
+        asc: "c.name ASC",
+        desc: "c.name DESC",
+    }];
+
+    const PRICED: &[PricedSort] = &[PricedSort {
+        usd: SortColumn {
+            key: "price",
+            asc: "c.price_usd ASC NULLS LAST",
+            desc: "c.price_usd DESC NULLS LAST",
+        },
+        eur: SortColumn {
+            key: "price",
+            asc: "c.price_eur ASC NULLS LAST",
+            desc: "c.price_eur DESC NULLS LAST",
+        },
+    }];
+
+    /// The whole of the currency contract in one place: absent, null, a typo and a wrong type
+    /// all mean dollars, because a marketplace this build has not heard of must not make a
+    /// list fail to load. Only the exact string `eur` moves it.
+    #[test]
+    fn anything_that_is_not_eur_is_usd() {
+        #[derive(Debug, Default, Deserialize)]
+        #[serde(default)]
+        struct Req {
+            currency: Currency,
+        }
+        let parse = |json: &str| serde_json::from_str::<Req>(json).unwrap().currency;
+
+        assert_eq!(parse("{}"), Currency::Usd, "absent");
+        assert_eq!(parse(r#"{"currency":null}"#), Currency::Usd, "null");
+        assert_eq!(parse(r#"{"currency":"usd"}"#), Currency::Usd);
+        assert_eq!(parse(r#"{"currency":"gbp"}"#), Currency::Usd, "a future id");
+        assert_eq!(
+            parse(r#"{"currency":"EUR"}"#),
+            Currency::Usd,
+            "case matters"
+        );
+        assert_eq!(parse(r#"{"currency":7}"#), Currency::Usd, "a wrong type");
+        assert_eq!(parse(r#"{"currency":"eur"}"#), Currency::Eur);
+        assert_eq!(Currency::default(), Currency::Usd);
+    }
+
+    /// The money column follows the currency and the rest of the table does not move.
+    #[test]
+    fn sorts_for_swaps_only_the_priced_columns() {
+        let usd = sorts_for(SHARED, PRICED, Currency::Usd);
+        let eur = sorts_for(SHARED, PRICED, Currency::Eur);
+        assert_eq!(usd.len(), 2);
+        assert_eq!(eur.len(), 2);
+
+        let terms = [term("price", "desc"), term("name", "asc")];
+        assert_eq!(
+            order_by(Some(&terms), &usd, FALLBACK, TIEBREAK),
+            "c.price_usd DESC NULLS LAST, c.name ASC, c.id ASC"
+        );
+        assert_eq!(
+            order_by(Some(&terms), &eur, FALLBACK, TIEBREAK),
+            "c.price_eur DESC NULLS LAST, c.name ASC, c.id ASC"
+        );
+        // The unpriced keys are the same SQL either way — a currency reorders money, not names.
+        let name = [term("name", "desc")];
+        assert_eq!(
+            order_by(Some(&name), &usd, FALLBACK, TIEBREAK),
+            order_by(Some(&name), &eur, FALLBACK, TIEBREAK)
+        );
+    }
+
+    /// A pair whose two halves answered to different keys would give the reader a header that
+    /// sorts in dollars and does nothing in euros. Every table's pairs are checked in its own
+    /// module; this is the rule itself.
+    #[test]
+    fn a_priced_sort_offers_the_same_key_in_both_currencies() {
+        for p in PRICED {
+            assert_eq!(p.usd.key, p.eur.key);
+        }
     }
 }

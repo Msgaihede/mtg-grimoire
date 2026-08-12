@@ -26,7 +26,7 @@ interface CollectionTile extends GridCard {
  */
 export function CollectionPage() {
   const collection = useCollection();
-  const { query, summary, rows, total } = collection;
+  const { query, summary, rows, total, marketplace } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -220,7 +220,7 @@ export function CollectionPage() {
           header below says what this view is far better than a title would. */}
       <h2 className="sr-only">Collection</h2>
 
-      <CollectionSummaryHeader summary={summary.data} />
+      <CollectionSummaryHeader summary={summary.data} marketplace={marketplace} />
 
       {/* The region is mounted for the life of the view and the banner is swapped into it: a
           live region that appears together with its own text announces nothing, because there
@@ -324,6 +324,7 @@ export function CollectionPage() {
                 onNeedNextPage={onNeedNextPage}
                 onSetQuantity={onSetQuantity}
                 onRemove={onRemove}
+                marketplace={marketplace}
               />
               {/* The one thing about this table a reader cannot see: removal is offered on a
                   row at zero and nowhere else, so a mis-added four-copy row would only ever

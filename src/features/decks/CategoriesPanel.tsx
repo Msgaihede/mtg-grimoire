@@ -60,9 +60,11 @@ import {
   type TagColor,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import type { Currency, Marketplace } from "@/lib/marketplace";
 import { drawerRight, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { writeFailure, type Write } from "@/lib/writes";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
@@ -150,12 +152,14 @@ export function CategoriesPanel(props: CategoriesPanelProps): JSX.Element {
 
   useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
 
-  return (
-    <AnimatePresence>{open && <Drawer key="categories" {...props} />}</AnimatePresence>
-  );
+  return <AnimatePresence>{open && <Drawer key="categories" {...props} />}</AnimatePresence>;
 }
 
 function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
+  // Each row draws a `GroupHeader`, which prints the pile's total — so this drawer quotes
+  // prices and has to say whose. Read once here and handed down, for `GroupHeader`'s reason:
+  // two rows of one list must not name two marketplaces.
+  const { marketplace } = useMarketplace();
   const meta = useDeckMeta(deckId, variant);
   // The deck's own rows, for one control: `autoCategorise` reads type lines, so it is handed
   // cards rather than ids. Free in the app — the editor behind this drawer is already holding
@@ -246,7 +250,7 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 pb-6 pt-4">
-          <Categories meta={meta} cards={cards} />
+          <Categories meta={meta} cards={cards} marketplace={marketplace} />
           <Tags meta={meta} />
         </div>
       </motion.div>
@@ -268,22 +272,32 @@ const NO_CARDS: never[] = [];
  * call a pile of their own "Sideboard" — the grain allows it, because the predefined Sideboard
  * was never named by the user — and that one is theirs to rename and delete like any other.
  */
-function groupOf(category: DeckCategory): CardGroup {
+function groupOf(category: DeckCategory, currency: Currency): CardGroup {
   return {
     key: `cat-${category.id}`,
     name: category.name,
     kind: category.kind,
     categoryId: category.id,
     isActive: category.isActive,
-    isPredefined:
-      category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
+    isPredefined: category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
     cards: NO_CARDS,
     count: category.cardCount,
-    totalPriceUsd: category.totalPriceUsd,
+    // Rust sums both currencies per category, so this is a field pick rather than a refetch —
+    // and never a chain across the two: a pile whose printings are etched has a dollar total
+    // and no euro one at all, which is an em dash rather than the dollar figure in disguise.
+    totalPrice: currency === "eur" ? category.totalPriceEur : category.totalPriceUsd,
   };
 }
 
-function Categories({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[] }) {
+function Categories({
+  meta,
+  cards,
+  marketplace,
+}: {
+  meta: DeckMeta;
+  cards: readonly DeckCard[];
+  marketplace: Marketplace;
+}) {
   const { categories, categoriesQuery, reorderCategories } = meta;
   const [name, setName] = useState("");
   const [confirming, setConfirming] = useState<number | null>(null);
@@ -347,10 +361,10 @@ function Categories({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[
         Categories
       </h3>
       <p className="mb-2.5 mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        Only active categories count toward the deck — a switched-off pile counts toward no size,
-        no copy limit and no legality check, and reserves no copy from your collection. Drag a row
-        by its handle to reorder, or press the up and down arrow keys on it. The four categories
-        every deck starts with can be switched off, but not renamed or deleted.
+        Only active categories count toward the deck — a switched-off pile counts toward no size, no
+        copy limit and no legality check, and reserves no copy from your collection. Drag a row by
+        its handle to reorder, or press the up and down arrow keys on it. The four categories every
+        deck starts with can be switched off, but not renamed or deleted.
       </p>
 
       {categoriesQuery.isPending ? (
@@ -366,6 +380,7 @@ function Categories({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[
               index={index}
               total={ordered.length}
               meta={meta}
+              marketplace={marketplace}
               onMove={move}
               renaming={renaming === category.id}
               onRename={() => setRenaming(category.id)}
@@ -435,6 +450,7 @@ function CategoryRow({
   index,
   total,
   meta,
+  marketplace,
   onMove,
   renaming,
   onRename,
@@ -447,6 +463,8 @@ function CategoryRow({
   index: number;
   total: number;
   meta: DeckMeta;
+  /** Which marketplace this row's total is quoted from. */
+  marketplace: Marketplace;
   onMove: (id: number, to: number) => void;
   renaming: boolean;
   onRename: () => void;
@@ -461,7 +479,7 @@ function CategoryRow({
   const deleteRef = useRef<HTMLButtonElement>(null);
   const owedFocus = useRef(false);
   const [over, setOver] = useState(false);
-  const group = groupOf(category);
+  const group = groupOf(category, marketplace.currency);
 
   // The other end of the hand-back, and it has to be an effect for `DecksPage`'s
   // `refocusFolderRef` reason: the trigger is **disabled** while the question is up, so
@@ -559,7 +577,7 @@ function CategoryRow({
           <GripVertical className="size-3.5" aria-hidden="true" />
         </button>
 
-        <GroupHeader group={group} className="flex-1" />
+        <GroupHeader group={group} marketplace={marketplace} className="flex-1" />
 
         {!group.isPredefined && (
           <RowAction onClick={onRename} disabled={renaming}>
@@ -826,10 +844,7 @@ function Tags({ meta }: { meta: DeckMeta }) {
 
   // A suggestion this deck already has is not an offer — it is the row above it.
   const taken = useMemo(() => new Set(tags.map((t) => t.name)), [tags]);
-  const offers = useMemo(
-    () => suggestions.filter((s) => !taken.has(s.name)),
-    [suggestions, taken],
-  );
+  const offers = useMemo(() => suggestions.filter((s) => !taken.has(s.name)), [suggestions, taken]);
 
   const failure = sectionFailure([meta.createTag, meta.updateTag, meta.deleteTag], tagsQuery);
 

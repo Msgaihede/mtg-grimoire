@@ -3,8 +3,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
+import type { Currency, Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
@@ -170,11 +171,19 @@ export interface DeckStatsSummary {
   /** Over nonlands with a mana value, weighted by copies. `null` for a deck of nothing but
    *  lands — an average of no numbers is not 0. */
   averageManaValue: number | null;
-  /** Summed from each row's own finish-correct `usd`, never `cards.price_usd` — which is a
-   *  display fallback chain and must not be added up. `null` when nothing is priced. */
-  priceUsd: number | null;
+  /**
+   * Summed from each row's own nonfoil unit price **in the currency {@link deckStats} was
+   * given**, never `cards.price_usd` — which is a display fallback chain and must not be
+   * added up. `null` when nothing is priced.
+   *
+   * Unsuffixed on purpose: it was `priceUsd` while there was one answer, and a field called
+   * `Usd` holding euros is worse than one that names no currency at all. Which currency it is
+   * belongs to the call, not to the field.
+   */
+  price: number | null;
   /** Copies the sum could not price, so a total that omits them does not lie by rounding
-   *  down. */
+   *  down. **Per currency, because the holes are not the same ones**: a deck of etched
+   *  printings is fully priced in dollars and entirely unpriced in euros. */
   unpriced: number;
   /** Copies this deck secured from the collection, and the ones it could not. */
   owned: number;
@@ -295,8 +304,11 @@ function drawable(slices: Slice[]): Slice[] {
  * Pure, exported and tested on its own: a chart is only as trustworthy as the arithmetic
  * behind it, and arithmetic that can only be checked by reading pixels is arithmetic nobody
  * checks.
+ *
+ * `currency` reaches exactly two of the numbers below — {@link DeckStatsSummary.price} and
+ * {@link DeckStatsSummary.unpriced} — and nothing else here has an opinion about money.
  */
-export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
+export function deckStats(cards: readonly DeckCard[], currency: Currency): DeckStatsSummary {
   // One flag rather than the old `zone !== "maybe"`, and it is the same line `validateDeck`
   // opens with: a pile switched off counts toward nothing whatever it is called and whatever
   // kind it is.
@@ -394,15 +406,18 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
     { key: "other", label: "Other lands", count: landCounts.get("other") ?? 0, color: COLORLESS },
   ]);
 
-  let priceUsd = 0;
+  let price = 0;
   let priced = 0;
   let unpriced = 0;
   let owned = 0;
   let missing = 0;
   for (const card of counted) {
-    if (card.unitPriceUsd === null) unpriced += card.quantity;
+    // The twin field the currency names, and no chain across the two: a copy nobody quoted a
+    // euro price for is counted as unpriced, never charged at the dollar rate.
+    const unit = currency === "eur" ? card.unitPriceEur : card.unitPriceUsd;
+    if (unit === null) unpriced += card.quantity;
     else {
-      priceUsd += card.unitPriceUsd * card.quantity;
+      price += unit * card.quantity;
       priced += card.quantity;
     }
     // The row badge's own arithmetic, added up: a claim is clamped to what the row wants, and
@@ -426,7 +441,7 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
     landDist,
     typeDist,
     averageManaValue: manaValued === 0 ? null : manaValueTotal / manaValued,
-    priceUsd: priced === 0 ? null : priceUsd,
+    price: priced === 0 ? null : price,
     unpriced,
     owned,
     missing,
@@ -463,8 +478,18 @@ export interface MissingWrite {
  * here is a chart library, and every chart carries its numbers as text — the drawing is
  * `aria-hidden` and the words beside it are the whole accessible story.
  */
-export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: MissingWrite }) {
-  const stats = useMemo(() => deckStats(cards), [cards]);
+export function DeckStats({
+  cards,
+  marketplace,
+  send,
+}: {
+  cards: readonly DeckCard[];
+  /** Which marketplace the Price figure quotes — its currency for the arithmetic, its label
+   *  for the as-of sentence on the figure's tooltip. */
+  marketplace: Marketplace;
+  send: MissingWrite;
+}) {
+  const stats = useMemo(() => deckStats(cards, marketplace.currency), [cards, marketplace]);
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**
@@ -550,11 +575,15 @@ export function DeckStats({ cards, send }: { cards: readonly DeckCard[]; send: M
           value={stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
           note="nonlands"
         />
+        {/* The currency is in the label because the figure changes denomination in Settings,
+            and a bare "Price" over a number that does is a number with no units. The unpriced
+            note is the one for *this* currency: `eur_etched` does not exist, so an etched
+            deck reads fully priced on TCGplayer and entirely unpriced on Cardmarket. */}
         <Figure
-          label="Price (USD)"
-          value={usdPrice(stats.priceUsd)}
+          label={`Price (${marketplace.currency.toUpperCase()})`}
+          value={formatPrice(stats.price, marketplace.currency)}
           note={stats.unpriced > 0 ? `${n(stats.unpriced)} unpriced` : undefined}
-          title={PRICES_AS_OF}
+          title={pricesAsOf(marketplace)}
         />
       </FigureRow>
 

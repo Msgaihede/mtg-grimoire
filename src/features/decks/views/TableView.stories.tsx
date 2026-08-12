@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { deckGroups, deckViolations } from "../../../../.storybook/fake/fixtures";
 import { TableView } from "./TableView";
 
@@ -8,7 +9,15 @@ const meta = {
   title: "Decks/Views/TableView",
   component: TableView,
   tags: ["autodocs"],
-  args: { groups: deckGroups(), violations: deckViolations(), onSelect: fn() },
+  args: {
+    groups: deckGroups(),
+    // The default, and what every dollar figure in this file is a claim about. The setting
+    // itself is `Settings/MarketplacePanel`; what a view owes it is one currency for the whole
+    // screen, so a heading and the cards under it cannot name two.
+    marketplace: MARKETPLACES.tcgplayer,
+    violations: deckViolations(),
+    onSelect: fn(),
+  },
   decorators: [
     (Story) => (
       <div className="flex h-[36rem]">
@@ -33,7 +42,7 @@ export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     expect(
-      canvas.getByRole("columnheader", { name: `Price. ${PRICES_AS_OF}` }),
+      canvas.getByRole("columnheader", { name: `Price. ${pricesAsOf(MARKETPLACES.tcgplayer)}` }),
     ).toBeInTheDocument();
     // Named rather than counted: the story runner's viewport is a number and not this app's
     // window, so how many rows a virtualiser mounts is not a fact worth asserting.

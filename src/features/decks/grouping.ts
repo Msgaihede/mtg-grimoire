@@ -15,6 +15,7 @@
  * itself, unchanged, in `sortOrder`.
  */
 import type { CategoryKind, DeckCard, DeckCategory } from "@/lib/ipc";
+import type { Currency } from "@/lib/marketplace";
 import {
   autoCategoryDisplayOrder,
   autoCategoryFor,
@@ -66,14 +67,21 @@ export interface CardGroup {
   /** **Copies**, not rows: four Bolts are four cards, and a deck is counted in cards. */
   count: number;
   /**
-   * `sum(unitPriceUsd × quantity)` over the cards that have a price, `null` when none of
-   * them does.
+   * `sum(unit price × quantity)` over the cards that have a price **in the currency
+   * {@link buildGroups} was given**, `null` when none of them does.
    *
-   * A partial total rather than nothing, because the surface that draws it also carries
-   * `PRICES_AS_OF` and a reader pricing a deck would rather know most of it. `null` rather
+   * A partial total rather than nothing, because the surface that draws it also carries the
+   * as-of sentence and a reader pricing a deck would rather know most of it. `null` rather
    * than `0` when nothing is priced, because `$0.00` is a price nobody quoted.
+   *
+   * **Unsuffixed on purpose.** It was `totalPriceUsd` while there was one answer; a name that
+   * says `Usd` over a number that may be euros is worse than no suffix at all, and the
+   * currency is a property of the whole call rather than of this field. A euro total over the
+   * same pile can legitimately be lower than its dollar twin — a category holding etched
+   * printings sums fewer cards, because `eur_etched` does not exist and those copies are
+   * unpriced rather than valued at the nonfoil rate.
    */
-  totalPriceUsd: number | null;
+  totalPrice: number | null;
 }
 
 /**
@@ -93,23 +101,29 @@ function manaValueBucket(cmc: number | null): { key: string; name: string; order
   };
 }
 
-/** Copies and money, the two sums every group carries, computed once. */
-function totals(cards: readonly DeckCard[]): { count: number; totalPriceUsd: number | null } {
+/** Copies and money, the two sums every group carries, computed once. The money is the twin
+ *  field the given currency names — never a fallback across the two, so an unpriced row is
+ *  left out of the sum rather than valued at the other currency's rate. */
+function totals(
+  cards: readonly DeckCard[],
+  currency: Currency,
+): { count: number; totalPrice: number | null } {
   let count = 0;
   let price = 0;
   let priced = false;
   for (const card of cards) {
     count += card.quantity;
-    if (card.unitPriceUsd !== null) {
-      price += card.unitPriceUsd * card.quantity;
+    const unit = currency === "eur" ? card.unitPriceEur : card.unitPriceUsd;
+    if (unit !== null) {
+      price += unit * card.quantity;
       priced = true;
     }
   }
-  return { count, totalPriceUsd: priced ? price : null };
+  return { count, totalPrice: priced ? price : null };
 }
 
 /** A category, as the group that *is* it. */
-function categoryGroup(category: DeckCategory, cards: DeckCard[]): CardGroup {
+function categoryGroup(category: DeckCategory, cards: DeckCard[], currency: Currency): CardGroup {
   return {
     key: `cat-${category.id}`,
     name: category.name,
@@ -121,7 +135,7 @@ function categoryGroup(category: DeckCategory, cards: DeckCard[]): CardGroup {
     // the user — and that one is theirs to rename and delete like any other.
     isPredefined: category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
     cards,
-    ...totals(cards),
+    ...totals(cards, currency),
   };
 }
 
@@ -133,7 +147,7 @@ function categoryGroup(category: DeckCategory, cards: DeckCard[]): CardGroup {
  * handled anyway for `sortCards`' reason: a card the editor silently dropped is worse than a
  * heading nobody expected, and this is the only branch where "drop it" was even available.
  */
-function strayGroup(cards: DeckCard[]): CardGroup {
+function strayGroup(cards: DeckCard[], currency: Currency): CardGroup {
   const first = cards[0];
   return {
     key: `cat-${first.categoryId}`,
@@ -143,7 +157,7 @@ function strayGroup(cards: DeckCard[]): CardGroup {
     isActive: first.categoryActive,
     isPredefined: false,
     cards,
-    ...totals(cards),
+    ...totals(cards, currency),
   };
 }
 
@@ -154,12 +168,16 @@ function strayGroup(cards: DeckCard[]): CardGroup {
  * @param categories every category of the deck, in `sortOrder` — including the empty ones
  * @param groupBy what the headings are
  * @param sortBy the order inside each heading
+ * @param currency which marketplace's prices a heading totals and a `price` sort orders by —
+ *   one argument for both, because a pile whose total is euros and whose rows are ranked by
+ *   dollars is a column disagreeing with its own heading
  */
 export function buildGroups(
   cards: readonly DeckCard[],
   categories: readonly DeckCategory[],
   groupBy: GroupBy,
   sortBy: SortBy,
+  currency: Currency,
 ): CardGroup[] {
   const byCategory = new Map<number, DeckCard[]>();
   for (const card of cards) {
@@ -175,14 +193,18 @@ export function buildGroups(
   // one back into. That holds for the four predefined piles and for the reader's own alike —
   // a category made and not yet filled does not disappear between two keystrokes.
   const categoryGroups = ordered.map((category) =>
-    categoryGroup(category, sortCards(byCategory.get(category.id) ?? [], sortBy)),
+    categoryGroup(
+      category,
+      sortCards(byCategory.get(category.id) ?? [], sortBy, currency),
+      currency,
+    ),
   );
 
   // Anything filed under a category the read did not answer with, after the real ones.
   const known = new Set(ordered.map((c) => c.id));
   const strays = [...byCategory.entries()]
     .filter(([id]) => !known.has(id))
-    .map(([, rows]) => strayGroup(sortCards(rows, sortBy)));
+    .map(([, rows]) => strayGroup(sortCards(rows, sortBy, currency), currency));
 
   if (groupBy === "category") return [...categoryGroups, ...strays];
 
@@ -218,7 +240,7 @@ export function buildGroups(
           isPredefined: false,
           cards: [card],
           count: 0,
-          totalPriceUsd: null,
+          totalPrice: null,
         },
       });
     }
@@ -228,8 +250,8 @@ export function buildGroups(
     .sort((a, b) => a.order - b.order)
     .map(({ group }) => ({
       ...group,
-      cards: sortCards(group.cards, sortBy),
-      ...totals(group.cards),
+      cards: sortCards(group.cards, sortBy, currency),
+      ...totals(group.cards, currency),
     }));
 
   return [...derivedGroups, ...[...categoryGroups, ...strays].filter((group) => !group.isActive)];

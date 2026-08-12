@@ -1,4 +1,5 @@
-import { usdPrice } from "./prices";
+import type { Currency } from "./marketplace";
+import { formatPrice } from "./prices";
 
 /**
  * What a collapsed row's Price cell says: the spread across the printings it stands for.
@@ -8,12 +9,16 @@ import { usdPrice } from "./prices";
  * also what an *uncollapsed* row renders, where `priceLow` and `priceHigh` are both the
  * row's own price, so one function serves both modes.
  *
- * A missing end stays missing: `usdPrice` never invents `$0.00`, and a range that quoted a
+ * A missing end stays missing: `formatPrice` never invents `$0.00`, and a range that quoted a
  * price nobody quoted would be worse than a half-open one. `—–$9.00` reads as "from
  * unknown", which is the truth about a group where only some printings are priced.
  */
-export function priceRange(low: number | null, high: number | null): string {
+export function priceRange(
+  low: number | null,
+  high: number | null,
+  currency: Currency,
+): string {
   if (low === null && high === null) return "—";
-  if (low === high) return usdPrice(low);
-  return `${usdPrice(low)}–${usdPrice(high)}`;
+  if (low === high) return formatPrice(low, currency);
+  return `${formatPrice(low, currency)}–${formatPrice(high, currency)}`;
 }

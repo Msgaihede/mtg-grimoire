@@ -622,6 +622,10 @@ pub struct CollectionQuery {
     /// breaking its ties. Empty or absent is name order. Keys outside [`COLLECTION_SORTS`]
     /// are dropped, never interpolated.
     pub sort: Option<Vec<crate::sorting::SortTerm>>,
+    /// Which currency the `value` and `price` sorts order by. Absent — or anything this build
+    /// does not recognise — means `usd`, which is what every caller had before there was a
+    /// marketplace to pick. See [`crate::sorting::Currency`].
+    pub currency: crate::sorting::Currency,
     pub limit: u32,
     pub offset: u32,
 }
@@ -805,6 +809,10 @@ fn push_in_list(
 ///
 /// `finish` ranks the condition rather than spelling it: `DMG` before `LP` is alphabetical
 /// order, not grade order.
+///
+/// `value` and `price` are not here — they are the two keys whose SQL depends on the reader's
+/// marketplace, so they live in [`COLLECTION_PRICE_SORTS`] and are appended by
+/// [`crate::sorting::sorts_for`].
 const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
     crate::sorting::SortColumn {
         key: "name",
@@ -828,16 +836,6 @@ const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
         asc: "e.quantity ASC",
         desc: "e.quantity DESC",
     },
-    crate::sorting::SortColumn {
-        key: "value",
-        asc: "unit_price_usd * e.quantity ASC NULLS LAST",
-        desc: "unit_price_usd * e.quantity DESC NULLS LAST",
-    },
-    crate::sorting::SortColumn {
-        key: "price",
-        asc: "unit_price_usd ASC NULLS LAST",
-        desc: "unit_price_usd DESC NULLS LAST",
-    },
     // The id carries the rest of the answer, and it is not the builder's tiebreak doing it:
     // `created_at` is whole seconds, so a handful of entries added in one go all share one,
     // and the appended `e.id ASC` would read them out oldest-first under a heading that
@@ -847,6 +845,42 @@ const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
         key: "added",
         asc: "e.created_at ASC, e.id ASC",
         desc: "e.created_at DESC, e.id DESC",
+    },
+];
+
+/// `value` and `price`, in each currency — the two keys that turn on the reader's
+/// marketplace.
+///
+/// Both order by the **output aliases** of the two per-finish price expressions the page
+/// already selects, `unit_price_usd` and `unit_price_eur`, and never by any column of either
+/// table. So the euro orders carry [`FINISH_PRICE_EUR`]'s hole with them: an etched row is
+/// NULL in euros and sorts last in both directions, where in dollars it has a price and does
+/// not. That is the marketplace being honest rather than the sort being wrong — Cardmarket
+/// does not quote etched.
+const COLLECTION_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
+    crate::sorting::PricedSort {
+        usd: crate::sorting::SortColumn {
+            key: "value",
+            asc: "unit_price_usd * e.quantity ASC NULLS LAST",
+            desc: "unit_price_usd * e.quantity DESC NULLS LAST",
+        },
+        eur: crate::sorting::SortColumn {
+            key: "value",
+            asc: "unit_price_eur * e.quantity ASC NULLS LAST",
+            desc: "unit_price_eur * e.quantity DESC NULLS LAST",
+        },
+    },
+    crate::sorting::PricedSort {
+        usd: crate::sorting::SortColumn {
+            key: "price",
+            asc: "unit_price_usd ASC NULLS LAST",
+            desc: "unit_price_usd DESC NULLS LAST",
+        },
+        eur: crate::sorting::SortColumn {
+            key: "price",
+            asc: "unit_price_eur ASC NULLS LAST",
+            desc: "unit_price_eur DESC NULLS LAST",
+        },
     },
 ];
 
@@ -887,7 +921,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
          FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         order = crate::sorting::order_by(
             q.sort.as_deref(),
-            COLLECTION_SORTS,
+            &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, q.currency),
             COLLECTION_DEFAULT_ORDER,
             "e.id ASC",
         )
@@ -2271,31 +2305,175 @@ mod tests {
             ),
             ("nonsense", vec![term("nonsense", "asc")]),
         ];
-        for (label, sort) in orders {
-            let mut seen: Vec<i64> = Vec::new();
-            for page in 0..2 {
-                let p = list_entries(
-                    &conn,
-                    &CollectionQuery {
-                        sort: Some(sort.clone()),
-                        limit: 2,
-                        offset: page * 2,
-                        ..Default::default()
-                    },
-                )
-                .unwrap_or_else(|e| panic!("sorting by `{label}` failed: {e}"));
-                assert_eq!(p.total, 3, "the count is the same set whatever the order");
-                seen.extend(p.items.iter().map(|r| r.id));
+        // Both currencies, because the euro orders are *different strings* over a second
+        // alias — a `value` written against a `unit_price_eur` the page did not select would
+        // fail at prepare time and only ever on Cardmarket.
+        for currency in [crate::sorting::Currency::Usd, crate::sorting::Currency::Eur] {
+            for (label, sort) in orders.clone() {
+                let mut seen: Vec<i64> = Vec::new();
+                for page in 0..2 {
+                    let p = list_entries(
+                        &conn,
+                        &CollectionQuery {
+                            sort: Some(sort.clone()),
+                            currency,
+                            limit: 2,
+                            offset: page * 2,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_else(|e| panic!("sorting by `{label}` in {currency:?} failed: {e}"));
+                    assert_eq!(p.total, 3, "the count is the same set whatever the order");
+                    seen.extend(p.items.iter().map(|r| r.id));
+                }
+                let mut unique = seen.clone();
+                unique.sort_unstable();
+                unique.dedup();
+                assert_eq!(
+                    (unique.len(), seen.len()),
+                    (3, 3),
+                    "paging by `{label}` in {currency:?} returned a row twice or lost one: {seen:?}"
+                );
             }
-            let mut unique = seen.clone();
-            unique.sort_unstable();
-            unique.dedup();
-            assert_eq!(
-                (unique.len(), seen.len()),
-                (3, 3),
-                "paging by `{label}` returned a row twice or lost one: {seen:?}"
-            );
         }
+    }
+
+    /// Three entries whose dollar order and euro order disagree on every pair, one of them
+    /// **etched** — and the etched card's blob carries a perfectly good `$.eur`, which is
+    /// exactly the number a naive fallback would charge for it.
+    fn seeded_currencies() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        for (id, prices) in [
+            ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
+            ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),
+            (
+                "etched",
+                r#"{"usd":"9.00","usd_etched":"9.00","eur":"7.00"}"#,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    finishes,prices,raw)
+                 VALUES (?1,?1,?1,'tst','1','en','normal','[\"nonfoil\",\"etched\"]',?2,'{}')",
+                rusqlite::params![id, prices],
+            )
+            .unwrap();
+        }
+        // Quantities chosen so `value` and `price` disagree as well: the cheapest card is
+        // held ten times and the dearest once.
+        add_entry(&conn, &input("cheap-usd", "nonfoil", 10)).unwrap();
+        add_entry(&conn, &input("dear-usd", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("etched", "etched", 3)).unwrap();
+        conn
+    }
+
+    /// Ordering happens inside SQLite, so the chosen marketplace is the one thing about it
+    /// that has to cross the wire. Both keys, both directions, both currencies.
+    #[test]
+    fn the_value_and_price_sorts_order_by_the_currency_they_are_asked_for() {
+        let conn = seeded_currencies();
+        let ids = |key: &str, dir: &str, currency| -> Vec<String> {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    sort: Some(vec![term(key, dir)]),
+                    currency,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|r| r.card_id)
+            .collect()
+        };
+        let (usd, eur) = (crate::sorting::Currency::Usd, crate::sorting::Currency::Eur);
+
+        // Per copy: $1 / $50 / $9 against €90 / €2 / —.
+        assert_eq!(
+            ids("price", "asc", usd),
+            ["cheap-usd", "etched", "dear-usd"]
+        );
+        assert_eq!(
+            ids("price", "asc", eur),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
+        assert_eq!(
+            ids("price", "desc", usd),
+            ["dear-usd", "etched", "cheap-usd"]
+        );
+        assert_eq!(
+            ids("price", "desc", eur),
+            ["cheap-usd", "dear-usd", "etched"],
+            "the etched row has no euro price and stays last in both directions"
+        );
+
+        // × copies: $10 / $50 / $27 against €900 / €2 / —.
+        assert_eq!(
+            ids("value", "asc", usd),
+            ["cheap-usd", "etched", "dear-usd"]
+        );
+        assert_eq!(
+            ids("value", "asc", eur),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
+        assert_eq!(
+            ids("value", "desc", usd),
+            ["dear-usd", "etched", "cheap-usd"]
+        );
+        assert_eq!(
+            ids("value", "desc", eur),
+            ["cheap-usd", "dear-usd", "etched"]
+        );
+    }
+
+    /// The rule the euro sorts inherit, stated on the row itself: an etched entry is `NULL`
+    /// in euros **even though its blob has a `$.eur`**, because `eur_etched` does not exist
+    /// and the nonfoil rate is not a stand-in for it.
+    #[test]
+    fn an_etched_row_is_unpriced_in_euros_while_its_blob_names_a_nonfoil_euro_price() {
+        let conn = seeded_currencies();
+        let rows = list_entries(&conn, &CollectionQuery::default()).unwrap();
+        let row = |id: &str| rows.items.iter().find(|r| r.card_id == id).unwrap();
+
+        assert_eq!(row("etched").unit_price_usd, Some(9.00));
+        assert_eq!(
+            row("etched").unit_price_eur,
+            None,
+            "and not the €7.00 beside it"
+        );
+        assert_eq!(row("cheap-usd").unit_price_eur, Some(90.00));
+    }
+
+    /// Absent means dollars — the order every caller had before there was a picker — and so
+    /// does a currency this build has never heard of. Deserialized from the wire, because it
+    /// is the *payload* that omits the field.
+    #[test]
+    fn a_query_with_no_currency_sorts_in_dollars() {
+        let conn = seeded_currencies();
+        let ids = |json: &str| -> Vec<String> {
+            let q: CollectionQuery = serde_json::from_str(json).unwrap();
+            list_entries(&conn, &q)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| r.card_id)
+                .collect()
+        };
+        let sort = r#""sort":[{"key":"price","dir":"asc"}]"#;
+
+        let dollars = ["cheap-usd", "etched", "dear-usd"];
+        assert_eq!(ids(&format!("{{{sort}}}")), dollars, "absent");
+        assert_eq!(
+            ids(&format!(r#"{{{sort},"currency":"gbp"}}"#)),
+            dollars,
+            "and a currency this build has never heard of"
+        );
+        assert_eq!(
+            ids(&format!(r#"{{{sort},"currency":"eur"}}"#)),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
     }
 
     /// The Value column shows unit price × copies, so its header sorts by that. A column

@@ -58,20 +58,30 @@ type Story = StoryObj<typeof meta>;
 /**
  * Five wishes, and the one number the view exists for.
  *
- * The totals are counted over what is **missing** rather than over what is wanted: a figure that
+ * The total is counted over what is **missing** rather than over what is wanted: a figure that
  * charged the reader for cards already in the binder is a number nobody can act on. So the
- * fulfilled Sol Ring contributes nothing to either currency, and $158.06 is Counterspell's two
- * missing copies plus Jace plus the foil Ragavan plus Rhystic Study.
+ * fulfilled Sol Ring contributes nothing, and $158.06 is Counterspell's two missing copies plus
+ * Jace plus the foil Ragavan plus Rhystic Study.
  *
- * Two unpriced counters and not one, because the two currencies do not have the same holes —
- * `eur_etched` does not exist in Scryfall's data. Neither counter shows here: every wish with
- * copies still to find is priced in both, so the notes would be nothing at all.
+ * **One tile, not the two this story used to assert.** The page drew `Still to buy (USD)` beside
+ * `Still to buy (EUR)` while there was no way for a reader to say which they were shopping in;
+ * the marketplace setting is that way, so the figure follows it and the label carries the
+ * currency. There is no euro node on screen here at all — this is the default world, which is
+ * TCGplayer. The euro arithmetic is covered where it can be asserted against a chosen
+ * marketplace rather than a world default: `WishlistPage.test.tsx`, and
+ * `Collection/SummaryHeader`'s `InEuros`, whose header takes its marketplace as a prop.
+ *
+ * The unpriced counters stay two fields behind it, because the two currencies do not have the
+ * same holes — `eur_etched` does not exist in Scryfall's data, so the same card can be priced in
+ * dollars and unpriced in euros. Neither counter shows here: every wish with copies still to
+ * find is priced in both.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("$158.06")).toBeInTheDocument();
-    await expect(canvas.getByText("€94.62")).toBeInTheDocument();
+    await expect(canvas.getByText("Still to buy (USD)")).toBeInTheDocument();
+    await expect(canvas.queryByText("€94.62")).not.toBeInTheDocument();
     // What assistive tech is told the list is: every matching row plus the header
     // (`VirtualTable.tsx:181`), not the rows a virtualised list keeps in the DOM. A wishlist
     // total is counted in full, so there is no unknown-count case here — unlike the search's.

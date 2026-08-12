@@ -130,14 +130,17 @@ const BOLT: CardSummary = {
   typeLine: "Instant",
   manaCost: "{R}",
   priceUsd: 400.5,
+  priceEur: 320.25,
   layout: "normal",
   oracleId: "o1",
   finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLow: 400.5,
-  priceHigh: 400.5,
+  priceLowUsd: 400.5,
+  priceHighUsd: 400.5,
+  priceLowEur: 320.25,
+  priceHighEur: 320.25,
 };
 
 /**
@@ -158,6 +161,7 @@ const MAIN: DeckCategory = {
   sortOrder: 0,
   cardCount: 0,
   totalPriceUsd: null,
+  totalPriceEur: null,
   cardCountAllVariants: 0,
 };
 
@@ -602,7 +606,10 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
   // variant in that path is `DECK_CARD_VARIANT`; what this test is about is the **id**, `c2`.
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: /^Lightning Bolt/ }).closest("li")?.querySelector("img"),
+      screen
+        .getByRole("button", { name: /^Lightning Bolt/ })
+        .closest("li")
+        ?.querySelector("img"),
     ).toHaveAttribute("src", expect.stringContaining(`/${DECK_CARD_VARIANT}/c2/0`)),
   );
   // And the pane has followed it: the mark is on the row that was pressed, and the row that
@@ -770,7 +777,9 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   // The deck's card for the printing the deck now holds — not `<body>`, and not the element the
   // press was made from, which the swap deleted along with its row.
-  await waitFor(() => expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveFocus());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveFocus(),
+  );
 });
 
 /**
@@ -810,5 +819,7 @@ it("hands the caret back to the deck's card after a swap", async () => {
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
-  await waitFor(() => expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveFocus());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveFocus(),
+  );
 });

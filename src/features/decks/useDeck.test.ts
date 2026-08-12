@@ -74,6 +74,7 @@ const MAIN: DeckCategory = {
   sortOrder: 0,
   cardCount: 4,
   totalPriceUsd: 18,
+  totalPriceEur: 14,
   cardCountAllVariants: 4,
 };
 const SIDE: DeckCategory = {
@@ -85,6 +86,7 @@ const SIDE: DeckCategory = {
   sortOrder: 1,
   cardCount: 0,
   totalPriceUsd: null,
+  totalPriceEur: null,
   cardCountAllVariants: 0,
 };
 const MAYBE: DeckCategory = {
@@ -96,6 +98,7 @@ const MAYBE: DeckCategory = {
   sortOrder: 2,
   cardCount: 0,
   totalPriceUsd: null,
+  totalPriceEur: null,
   cardCountAllVariants: 0,
 };
 
@@ -135,6 +138,7 @@ const BOLT: DeckCard = {
   finishes: null,
   everUncommon: false,
   unitPriceUsd: 4.5,
+  unitPriceEur: 3.5,
   ownedQuantity: 2,
 };
 

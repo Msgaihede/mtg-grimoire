@@ -68,6 +68,10 @@ pub struct SearchRequest {
     /// name order when it is not. Keys outside [`SEARCH_SORTS`] are dropped, never
     /// interpolated.
     pub sort: Option<Vec<crate::sorting::SortTerm>>,
+    /// Which currency a `price` sort orders by. Absent — or anything this build does not
+    /// recognise — means `usd`, which is what every caller before the marketplace picker
+    /// existed depended on. See [`crate::sorting::Currency`].
+    pub currency: crate::sorting::Currency,
     /// Fold every printing of one card into a single row, represented by the newest
     /// printing.
     ///
@@ -111,7 +115,16 @@ pub struct CardSummary {
     pub rarity: Option<String>,
     pub type_line: Option<String>,
     pub mana_cost: Option<String>,
+    /// The row's own price in each currency — `cards.price_usd`/`cards.price_eur`, each a
+    /// display/sort fallback chain (`usd → usd_foil → usd_etched`, `eur → eur_foil`) and
+    /// never a per-finish figure. TypeScript reads whichever the selected marketplace names.
+    ///
+    /// Both travel on every row rather than one being selected by the request, so switching
+    /// marketplace is a re-render and not a refetch. `price_eur` is `None` far more often
+    /// than `price_usd`: **there is no `eur_etched` key in Scryfall's data at all**, so an
+    /// etched-only printing has no euro chain to fall through to.
     pub price_usd: Option<f64>,
+    pub price_eur: Option<f64>,
     pub layout: String,
     /// The oracle card this printing is of.
     ///
@@ -153,13 +166,24 @@ pub struct CardSummary {
     /// search restricted to one set reports how many printings are in that set. The row
     /// summarises the answer, never the database.
     pub printings: i64,
-    /// Cheapest and dearest `price_usd` among the printings this row stands for. Both equal
-    /// [`Self::price_usd`] uncollapsed.
+    /// Cheapest and dearest price among the printings this row stands for, in each currency.
+    /// Both ends equal that currency's own figure uncollapsed.
     ///
-    /// [`Self::price_usd`] stays what it always was — the representative printing's own
-    /// value, itself a nonfoil→foil→etched fallback chain that must never be summed.
-    pub price_low: Option<f64>,
-    pub price_high: Option<f64>,
+    /// [`Self::price_usd`] and [`Self::price_eur`] stay what they always were — the
+    /// representative printing's own values, each a fallback chain that must never be summed.
+    ///
+    /// **Each pair spans the printings that have a price _in that currency_**, because
+    /// `min`/`max` skip NULLs: a group's euro span can be narrower than its dollar one, or
+    /// absent while the dollar one exists. That is the honest answer rather than a defect —
+    /// a card whose only printings are etched is priced on TCGplayer and unpriced on
+    /// Cardmarket, and a range that pretended otherwise would be inventing a number.
+    ///
+    /// Suffixed by currency because there are now two; a bare `price_low` was unambiguous
+    /// only while every price in the app was dollars.
+    pub price_low_usd: Option<f64>,
+    pub price_high_usd: Option<f64>,
+    pub price_low_eur: Option<f64>,
+    pub price_high_eur: Option<f64>,
 }
 
 /// A page of results plus the size of the whole match set, for the pager.
@@ -280,6 +304,9 @@ fn non_card_rank(alias: &str) -> String {
 ///
 /// There is no `released` key. The table has no Released column to press, the frontend has
 /// never sent one, and an order nothing can reach is dead code.
+///
+/// `price` is not here: it is the one key whose SQL depends on the reader's marketplace, so
+/// it lives in [`SEARCH_PRICE_SORT`] and is appended by [`crate::sorting::sorts_for`].
 const SEARCH_SORTS: &[crate::sorting::SortColumn] = &[
     crate::sorting::SortColumn {
         key: "name",
@@ -303,12 +330,26 @@ const SEARCH_SORTS: &[crate::sorting::SortColumn] = &[
         desc: "CASE c.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 \
                WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5 ELSE 6 END DESC",
     },
-    crate::sorting::SortColumn {
+];
+
+/// `price`, in each currency — the column the Price header sorts by.
+///
+/// Both are the `cards` display columns rather than a per-finish blob read, which is what the
+/// header has always sorted by: the cell shows `price_usd`, so the header orders by it, and
+/// the euro cell shows `price_eur`. A printing with no price in the chosen currency sorts
+/// last in both directions, unchanged.
+const SEARCH_PRICE_SORT: &[crate::sorting::PricedSort] = &[crate::sorting::PricedSort {
+    usd: crate::sorting::SortColumn {
         key: "price",
         asc: "c.price_usd ASC NULLS LAST",
         desc: "c.price_usd DESC NULLS LAST",
     },
-];
+    eur: crate::sorting::SortColumn {
+        key: "price",
+        asc: "c.price_eur ASC NULLS LAST",
+        desc: "c.price_eur DESC NULLS LAST",
+    },
+}];
 
 /// The sorts a **collapsed** search can answer inside its own group step.
 ///
@@ -322,18 +363,29 @@ const SEARCH_SORTS: &[crate::sorting::SortColumn] = &[
 /// printing, which the group step has not resolved yet, so they are applied after the join
 /// instead (see [`run_search`]). Listing them here would sort by an aggregate — "the best
 /// rarity this card was ever printed at" — which is not what the column shows.
-const SEARCH_SORTS_COLLAPSED: &[crate::sorting::SortColumn] = &[
-    crate::sorting::SortColumn {
-        key: "name",
-        asc: "min(c.name) ASC",
-        desc: "min(c.name) DESC",
-    },
-    crate::sorting::SortColumn {
+const SEARCH_SORTS_COLLAPSED: &[crate::sorting::SortColumn] = &[crate::sorting::SortColumn {
+    key: "name",
+    asc: "min(c.name) ASC",
+    desc: "min(c.name) DESC",
+}];
+
+/// The collapsed `price` order, in each currency — the ends of the range the row shows.
+///
+/// The euro aggregates span only the printings that have a euro price, because `min`/`max`
+/// skip NULLs. A group whose printings are all etched therefore has no euro range at all and
+/// sorts last, which is the same statement [`CardSummary::price_low_eur`] makes.
+const SEARCH_PRICE_SORT_COLLAPSED: &[crate::sorting::PricedSort] = &[crate::sorting::PricedSort {
+    usd: crate::sorting::SortColumn {
         key: "price",
         asc: "min(c.price_usd) ASC NULLS LAST",
         desc: "max(c.price_usd) DESC NULLS LAST",
     },
-];
+    eur: crate::sorting::SortColumn {
+        key: "price",
+        asc: "min(c.price_eur) ASC NULLS LAST",
+        desc: "max(c.price_eur) DESC NULLS LAST",
+    },
+}];
 
 /// The sort keys a collapsed search must resolve **after** the join, because they belong to
 /// the representative printing rather than to the group.
@@ -434,7 +486,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     } else {
         ORDER_NAME.to_owned()
     };
-    let order = crate::sorting::order_by(req.sort.as_deref(), SEARCH_SORTS, &fallback, "c.id ASC");
+    let sorts = crate::sorting::sorts_for(SEARCH_SORTS, SEARCH_PRICE_SORT, req.currency);
+    let order = crate::sorting::order_by(req.sort.as_deref(), &sorts, &fallback, "c.id ASC");
 
     let collapse = req.collapse.unwrap_or(false);
 
@@ -552,9 +605,14 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         };
 
         let group_fallback = format!("{score_term}{ORDER_NAME_COLLAPSED}");
+        let group_sorts = crate::sorting::sorts_for(
+            SEARCH_SORTS_COLLAPSED,
+            SEARCH_PRICE_SORT_COLLAPSED,
+            req.currency,
+        );
         let group_order = crate::sorting::order_by(
             req.sort.as_deref(),
-            SEARCH_SORTS_COLLAPSED,
+            &group_sorts,
             &group_fallback,
             &format!("{COLLAPSE_KEY} ASC"),
         );
@@ -576,7 +634,9 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         format!(
             "{cte} g AS (
                 SELECT {COLLAPSE_KEY} AS oid, count(*) AS printings,
-                       min(c.price_usd) AS lo, max(c.price_usd) AS hi, min(c.name) AS nm,
+                       min(c.price_usd) AS lo, max(c.price_usd) AS hi,
+                       min(c.price_eur) AS lo_eur, max(c.price_eur) AS hi_eur,
+                       min(c.name) AS nm,
                        {score_select}
                        {COLLAPSE_REP} AS rep
                 FROM {group_from} WHERE {group_where}
@@ -584,7 +644,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                 ORDER BY {group_order} {group_limit}
              )
              SELECT c.id, g.nm, c.set_code, c.set_name, c.collector_number, c.rarity,
-                    c.type_line, c.mana_cost, c.price_usd, c.layout, c.oracle_id, c.finishes,
+                    c.type_line, c.mana_cost, c.price_usd, c.price_eur, c.layout,
+                    c.oracle_id, c.finishes,
                     coalesce((SELECT sum(e.quantity) FROM collection_entries e
                                JOIN cards k ON k.id = e.card_id
                               WHERE k.oracle_id = c.oracle_id), 0),
@@ -592,14 +653,15 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                              WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
                                 OR w.card_id IN (SELECT id FROM cards
                                                   WHERE oracle_id = c.oracle_id)),
-                    g.printings, g.lo, g.hi
+                    g.printings, g.lo, g.hi, g.lo_eur, g.hi_eur
              FROM g JOIN cards c ON c.id = g.rep
              ORDER BY {final_order}"
         )
     } else {
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
-                    c.type_line, c.mana_cost, c.price_usd, c.layout, c.oracle_id, c.finishes,
+                    c.type_line, c.mana_cost, c.price_usd, c.price_eur, c.layout,
+                    c.oracle_id, c.finishes,
                     coalesce((SELECT sum(e.quantity) FROM collection_entries e
                                WHERE e.card_id = c.id), 0),
                     EXISTS (SELECT 1 FROM wishlist_entries w
@@ -632,27 +694,39 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             type_line: row.get(6).map_err(|e| e.to_string())?,
             mana_cost: row.get(7).map_err(|e| e.to_string())?,
             price_usd: row.get(8).map_err(|e| e.to_string())?,
-            layout: row.get(9).map_err(|e| e.to_string())?,
-            oracle_id: row.get(10).map_err(|e| e.to_string())?,
-            finishes: row.get(11).map_err(|e| e.to_string())?,
-            owned_quantity: row.get(12).map_err(|e| e.to_string())?,
-            wishlisted: row.get(13).map_err(|e| e.to_string())?,
-            // Uncollapsed, a row is a printing: it stands for one, and its "range" is its
-            // own price. Collapsed, the three ride on the group step's aggregates.
+            price_eur: row.get(9).map_err(|e| e.to_string())?,
+            layout: row.get(10).map_err(|e| e.to_string())?,
+            oracle_id: row.get(11).map_err(|e| e.to_string())?,
+            finishes: row.get(12).map_err(|e| e.to_string())?,
+            owned_quantity: row.get(13).map_err(|e| e.to_string())?,
+            wishlisted: row.get(14).map_err(|e| e.to_string())?,
+            // Uncollapsed, a row is a printing: it stands for one, and each "range" is its
+            // own price in that currency. Collapsed, the five ride on the group step's
+            // aggregates.
             printings: if collapse {
-                row.get(14).map_err(|e| e.to_string())?
+                row.get(15).map_err(|e| e.to_string())?
             } else {
                 1
             },
-            price_low: if collapse {
-                row.get(15).map_err(|e| e.to_string())?
-            } else {
-                row.get(8).map_err(|e| e.to_string())?
-            },
-            price_high: if collapse {
+            price_low_usd: if collapse {
                 row.get(16).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
+            },
+            price_high_usd: if collapse {
+                row.get(17).map_err(|e| e.to_string())?
+            } else {
+                row.get(8).map_err(|e| e.to_string())?
+            },
+            price_low_eur: if collapse {
+                row.get(18).map_err(|e| e.to_string())?
+            } else {
+                row.get(9).map_err(|e| e.to_string())?
+            },
+            price_high_eur: if collapse {
+                row.get(19).map_err(|e| e.to_string())?
+            } else {
+                row.get(9).map_err(|e| e.to_string())?
             },
         });
     }
@@ -1245,14 +1319,17 @@ mod tests {
                 type_line: Some("Instant".into()),
                 mana_cost: None,
                 price_usd: Some(400.5),
+                price_eur: Some(320.0),
                 layout: "normal".into(),
                 oracle_id: Some("o-bolt".into()),
                 finishes: Some(r#"["nonfoil","foil"]"#.into()),
                 owned_quantity: 0,
                 wishlisted: false,
                 printings: 1,
-                price_low: Some(400.5),
-                price_high: Some(400.5),
+                price_low_usd: Some(400.5),
+                price_high_usd: Some(400.5),
+                price_low_eur: Some(320.0),
+                price_high_eur: Some(320.0),
             }],
             total: 5000,
             total_is_capped: true,
@@ -1265,10 +1342,13 @@ mod tests {
                 "items": [{
                     "id": "1", "name": "Lightning Bolt", "setCode": "lea", "setName": null,
                     "collectorNumber": "161", "rarity": null, "typeLine": "Instant",
-                    "manaCost": null, "priceUsd": 400.5, "layout": "normal",
+                    "manaCost": null, "priceUsd": 400.5, "priceEur": 320.0,
+                    "layout": "normal",
                     "oracleId": "o-bolt", "finishes": "[\"nonfoil\",\"foil\"]",
                     "ownedQuantity": 0, "wishlisted": false,
-                    "printings": 1, "priceLow": 400.5, "priceHigh": 400.5
+                    "printings": 1,
+                    "priceLowUsd": 400.5, "priceHighUsd": 400.5,
+                    "priceLowEur": 320.0, "priceHighEur": 320.0
                 }],
                 "total": 5000,
                 "totalIsCapped": true
@@ -1292,8 +1372,10 @@ mod tests {
         .unwrap();
         let card = &r.items[0];
         assert_eq!(card.printings, 1);
-        assert_eq!(card.price_low, card.price_usd);
-        assert_eq!(card.price_high, card.price_usd);
+        assert_eq!(card.price_low_usd, card.price_usd);
+        assert_eq!(card.price_high_usd, card.price_usd);
+        assert_eq!(card.price_low_eur, card.price_eur);
+        assert_eq!(card.price_high_eur, card.price_eur);
     }
 
     /// Three printings of one card become one row, and the row says how many it stands for
@@ -1332,8 +1414,8 @@ mod tests {
             shocks[0].id, "b3",
             "the newest printing represents the card"
         );
-        assert_eq!(shocks[0].price_low, Some(3.0));
-        assert_eq!(shocks[0].price_high, Some(400.0));
+        assert_eq!(shocks[0].price_low_usd, Some(3.0));
+        assert_eq!(shocks[0].price_high_usd, Some(400.0));
     }
 
     /// `total` is a count of **cards** when the rows are cards. A caption reading "5 cards"
@@ -1435,7 +1517,7 @@ mod tests {
             "the two m10 printings, not all three"
         );
         assert_eq!(
-            r.items[0].price_high,
+            r.items[0].price_high_usd,
             Some(5.0),
             "and priced across those two"
         );
@@ -2576,5 +2658,292 @@ mod tests {
 
         assert_eq!(count_of("lea"), 2, "both Alpha printings are paper");
         assert_eq!(count_of("ymid"), 0, "its only printing is digital-only");
+    }
+
+    // -- both currencies ---------------------------------------------------------------------
+
+    /// Insert printings the way the ingest would: the bulk line is **parsed by
+    /// [`crate::card_row`]**, so `price_usd` and `price_eur` are its own fallback chains
+    /// rather than figures this fixture chose. That is what makes the etched line's euro
+    /// NULL evidence — the parser found no `eur_etched` key because Scryfall publishes none
+    /// (0 occurrences across 4 513 card objects), and no test here had to assert it by hand.
+    fn seed_priced(conn: &Connection, lines: &[&str]) {
+        for line in lines {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            let r = crate::card_row::CardRow::from_json(&v).unwrap();
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,oracle_id,
+                                    released_at,prices,price_usd,price_eur,is_paper,
+                                    search_text,raw)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,?2,'{}')",
+                rusqlite::params![
+                    r.id,
+                    r.name,
+                    r.set_code,
+                    r.collector_number,
+                    r.lang,
+                    r.layout,
+                    r.oracle_id,
+                    r.released_at,
+                    r.prices,
+                    r.price_usd,
+                    r.price_eur,
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    /// One line, spelled the way the bulk file does.
+    fn priced_line(id: &str, name: &str, oracle: &str, released: &str, prices: &str) -> String {
+        format!(
+            r#"{{"object":"card","id":"{id}","oracle_id":"{oracle}","name":"{name}","lang":"en",
+                "layout":"normal","set":"lea","collector_number":"{id}",
+                "released_at":"{released}","games":["paper"],"prices":{prices}}}"#
+        )
+    }
+
+    /// Three printings whose dollar order and euro order disagree on every pair, and one of
+    /// them etched-only — priced on TCGplayer and unpriced on Cardmarket.
+    fn seeded_currencies() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let lines = [
+            priced_line(
+                "a",
+                "Alpha",
+                "o-a",
+                "2020-01-01",
+                r#"{"usd":"1.00","eur":"90.00"}"#,
+            ),
+            priced_line(
+                "b",
+                "Beta",
+                "o-b",
+                "2020-01-02",
+                r#"{"usd":"50.00","eur":"2.00"}"#,
+            ),
+            priced_line(
+                "c",
+                "Gamma",
+                "o-c",
+                "2020-01-03",
+                r#"{"usd":null,"usd_foil":null,"usd_etched":"0.71","eur":null,"eur_foil":null}"#,
+            ),
+        ];
+        seed_priced(&conn, &lines.iter().map(String::as_str).collect::<Vec<_>>());
+        conn
+    }
+
+    /// Both figures ride on every row, so switching marketplace is a re-render rather than a
+    /// refetch — and the euro one is legitimately absent where the dollar one is not.
+    #[test]
+    fn every_row_carries_both_currencies_and_an_etched_printing_has_no_euro_price() {
+        let conn = seeded_currencies();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let of = |id: &str| r.items.iter().find(|c| c.id == id).unwrap();
+
+        assert_eq!(
+            (of("a").price_usd, of("a").price_eur),
+            (Some(1.0), Some(90.0))
+        );
+        assert_eq!(
+            (of("b").price_usd, of("b").price_eur),
+            (Some(50.0), Some(2.0))
+        );
+        assert_eq!(
+            (of("c").price_usd, of("c").price_eur),
+            (Some(0.71), None),
+            "etched falls through to `usd_etched` and has no euro key to fall through to"
+        );
+        // Uncollapsed the range is the row's own price, in each currency separately.
+        assert_eq!(
+            (of("c").price_low_eur, of("c").price_high_eur),
+            (None, None)
+        );
+        assert_eq!(
+            (of("c").price_low_usd, of("c").price_high_usd),
+            (Some(0.71), Some(0.71))
+        );
+    }
+
+    /// A collapsed row's two ranges are taken over **different populations**: `min`/`max`
+    /// skip NULLs, so the euro span covers only the printings Cardmarket prices. The middle
+    /// printing here is etched-only and drops out of the euro range while staying in the
+    /// dollar one.
+    #[test]
+    fn a_collapsed_range_spans_the_printings_priced_in_that_currency() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let lines = [
+            priced_line(
+                "s1",
+                "Shock",
+                "o-shock",
+                "2009-07-17",
+                r#"{"usd":"400.00","eur":"300.00"}"#,
+            ),
+            priced_line(
+                "s2",
+                "Shock",
+                "o-shock",
+                "2010-07-16",
+                r#"{"usd":null,"usd_etched":"5.00","eur":null}"#,
+            ),
+            priced_line(
+                "s3",
+                "Shock",
+                "o-shock",
+                "2011-07-15",
+                r#"{"usd":"3.00","eur":"4.00"}"#,
+            ),
+            priced_line(
+                "e1",
+                "Etched Only",
+                "o-etched",
+                "2021-01-01",
+                r#"{"usd":null,"usd_etched":"0.71","eur":null}"#,
+            ),
+        ];
+        seed_priced(&conn, &lines.iter().map(String::as_str).collect::<Vec<_>>());
+
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let of = |name: &str| r.items.iter().find(|c| c.name == name).unwrap();
+
+        let shock = of("Shock");
+        assert_eq!(shock.printings, 3);
+        assert_eq!(
+            (shock.price_low_usd, shock.price_high_usd),
+            (Some(3.0), Some(400.0)),
+            "all three printings have a dollar price"
+        );
+        assert_eq!(
+            (shock.price_low_eur, shock.price_high_eur),
+            (Some(4.0), Some(300.0)),
+            "the etched printing is not in the euro span at all"
+        );
+
+        let etched = of("Etched Only");
+        assert_eq!(
+            (etched.price_low_usd, etched.price_high_usd),
+            (Some(0.71), Some(0.71))
+        );
+        assert_eq!(
+            (etched.price_low_eur, etched.price_high_eur),
+            (None, None),
+            "unpriced on Cardmarket, never valued at the nonfoil rate"
+        );
+    }
+
+    /// The one price decision that cannot be made in TypeScript. Both directions, because a
+    /// currency that only took effect ascending would be half a feature.
+    #[test]
+    fn the_price_sort_orders_by_the_currency_it_is_asked_for() {
+        let conn = seeded_currencies();
+        let ids = |currency, dir: &str| -> Vec<String> {
+            run_search(
+                &conn,
+                &SearchRequest {
+                    sort: Some(vec![term("price", dir)]),
+                    currency,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+        };
+
+        assert_eq!(ids(crate::sorting::Currency::Usd, "asc"), ["c", "a", "b"]);
+        assert_eq!(ids(crate::sorting::Currency::Eur, "asc"), ["b", "a", "c"]);
+        assert_eq!(ids(crate::sorting::Currency::Usd, "desc"), ["b", "a", "c"]);
+        assert_eq!(
+            ids(crate::sorting::Currency::Eur, "desc"),
+            ["a", "b", "c"],
+            "and the unpriced printing stays last in both directions"
+        );
+    }
+
+    /// Collapsed, the order is decided in the **group step** over aggregates rather than over
+    /// a column — a separate sort table, and therefore a separate chance to have wired one
+    /// currency and not the other.
+    ///
+    /// Read through a `limit` of one rather than off the page's order, because for an
+    /// unranked collapsed browse the group step takes the `LIMIT` and the outer join then
+    /// re-orders the page by name (see `final_order`). *Which* group survives the limit is
+    /// therefore the observable that the group order actually decides — and it is the one
+    /// that matters, since it is what decides whether the dearest card is on page one.
+    #[test]
+    fn a_collapsed_price_sort_orders_by_the_currency_it_is_asked_for() {
+        let conn = seeded_currencies();
+        let leader = |currency, dir: &str| -> String {
+            run_search(
+                &conn,
+                &SearchRequest {
+                    sort: Some(vec![term("price", dir)]),
+                    currency,
+                    collapse: Some(true),
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .remove(0)
+            .id
+        };
+
+        // $0.71 / $1 / $50 against —€ / €90 / €2, so no two of these agree.
+        assert_eq!(leader(crate::sorting::Currency::Usd, "asc"), "c");
+        assert_eq!(leader(crate::sorting::Currency::Eur, "asc"), "b");
+        assert_eq!(leader(crate::sorting::Currency::Usd, "desc"), "b");
+        assert_eq!(leader(crate::sorting::Currency::Eur, "desc"), "a");
+    }
+
+    /// Every caller that existed before the marketplace picker sends no `currency` at all,
+    /// and must keep the order it has always had. Deserialized from the wire rather than
+    /// built in Rust, because it is the *payload* that omits the field.
+    #[test]
+    fn a_request_with_no_currency_sorts_in_dollars() {
+        let conn = seeded_currencies();
+        let ids = |json: &str| -> Vec<String> {
+            let req: SearchRequest = serde_json::from_str(json).unwrap();
+            run_search(&conn, &req)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|c| c.id)
+                .collect()
+        };
+        let sort = r#""sort":[{"key":"price","dir":"asc"}],"limit":50"#;
+
+        assert_eq!(ids(&format!("{{{sort}}}")), ["c", "a", "b"], "absent");
+        assert_eq!(
+            ids(&format!(r#"{{{sort},"currency":"gbp"}}"#)),
+            ["c", "a", "b"],
+            "and a currency this build has never heard of"
+        );
+        assert_eq!(
+            ids(&format!(r#"{{{sort},"currency":"eur"}}"#)),
+            ["b", "a", "c"]
+        );
     }
 }

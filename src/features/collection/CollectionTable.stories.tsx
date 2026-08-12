@@ -3,7 +3,15 @@ import { expect, fn, within } from "storybook/test";
 import { CONDITION_LABEL } from "@/lib/conditions";
 import { finishPrice, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
+
+/** The default marketplace, and the as-of sentence it prints. Most of this file is about
+ *  columns and rows rather than about which shop the number came from, so it names one and
+ *  holds it still; the one story that is about the switch names the other. */
+const TCG = MARKETPLACES.tcgplayer;
+const PRICES_AS_OF = pricesAsOf(TCG);
+const usdPrice = (value: number | null) => formatPrice(value, "usd");
 import type { FakeCard } from "../../../.storybook/fake/cards";
 import { MISSING, printing } from "../../../.storybook/fake/fixtures";
 import { CollectionTable } from "./CollectionTable";
@@ -47,13 +55,13 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     condition: "NM",
     quantity: 1,
     tradelistQuantity: 0,
-    unitPriceUsd: finishPrice(card.prices, finish),
-    // `collection::FINISH_PRICE_EUR`, hole and all: **`eur_etched` does not exist in
-    // Scryfall's data**, so an etched card is unpriced in euros rather than valued at the
-    // nonfoil rate. Set by hand because `@/lib/finish` exports no EUR twin — and because
-    // **this table has no EUR column at all**, so nothing below draws it. It is on the DTO,
-    // it is summed by `CollectionSummaryHeader`'s `unpricedEur`, and it is invisible here.
-    unitPriceEur: null,
+    unitPriceUsd: finishPrice(card.prices, finish, "usd"),
+    // `collection::FINISH_PRICE_EUR`, hole and all — and now through the same function, which
+    // takes a currency and knows the hole: **`eur_etched` does not exist in Scryfall's data**,
+    // so an etched card comes back `null` here rather than valued at the nonfoil rate. That is
+    // no longer invisible in this file: the Value column reads whichever of these two the
+    // selected marketplace names, so an etched row draws an em dash on Cardmarket.
+    unitPriceEur: finishPrice(card.prices, finish, "eur"),
     purchasePrice: null,
     purchaseCurrency: null,
     acquiredAt: null,
@@ -124,6 +132,7 @@ const meta = {
     onNeedNextPage: fn(),
     onSetQuantity: fn(),
     onRemove: fn(),
+    marketplace: TCG,
   },
   // A height, because the table is `min-h-0 flex-1` and expects a flex parent that has already
   // decided how tall the list is.
@@ -365,7 +374,7 @@ export const EveryFinish: Story = {
     // Three prices from three keys of one blob, through `finishPrice` rather than literals —
     // the claim is "each finish is priced by its own key", not "these three strings".
     for (const finish of ["nonfoil", "foil", "etched"] as const) {
-      const price = finishPrice(printing("sta", "105").prices, finish);
+      const price = finishPrice(printing("sta", "105").prices, finish, "usd");
       await expect(canvas.getByText(usdPrice(price))).toBeInTheDocument();
     }
     // The grade's word is one hover — or one screen reader — away, which is what the `<abbr>`
@@ -385,13 +394,43 @@ export const EveryFinish: Story = {
  * **etched-only** card: its `finishes` is `["etched"]`, and its `usd` and `usd_foil` are both
  * null). `eur_etched` does **not** exist in Scryfall's data at all, so `unitPriceEur` is `null`
  * for every etched row in the app.
- *
- * That hole is invisible here and this story cannot show it: **the table has no EUR column** —
- * six columns, and Value is USD. Where it does surface is `CollectionSummaryHeader`, which
- * reports `unpricedEur` beside the EUR total for exactly this reason.
  */
 export const Etched: Story = {
   args: { rows: [entry(printing("acr", "211"), "etched")], total: 1 },
+};
+
+/**
+ * The same table, quoted on Cardmarket — and **the hole above, made visible**.
+ *
+ * The Value column reads whichever of a row's two unit prices the selected marketplace names,
+ * so the etched row here is an em dash while the same row draws $2.07 on TCGplayer. That em
+ * dash is the correct answer and not a gap to be filled: `eur_etched` is not a key Scryfall
+ * has, so quoting the nonfoil euro rate — or the dollar figure with a euro sign on it — would
+ * be inventing a price nobody offered, in a currency the reader chose precisely so they would
+ * be told this marketplace's number.
+ */
+export const InEuros: Story = {
+  args: {
+    rows: [entry(printing("sta", "105"), "nonfoil"), entry(printing("acr", "211"), "etched")],
+    total: 2,
+    marketplace: MARKETPLACES.cardmarket,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const priced = finishPrice(printing("sta", "105").prices, "nonfoil", "eur");
+    await expect(canvas.getByText(formatPrice(priced, "eur"))).toBeInTheDocument();
+
+    // The etched row: unpriced in euros, and its dollar figure is nowhere on screen.
+    const etched = canvas.getByText("ACR · 211").closest('[role="row"]');
+    await expect(within(etched as HTMLElement).getByText("—")).toBeInTheDocument();
+    const usd = finishPrice(printing("acr", "211").prices, "etched", "usd");
+    await expect(canvas.queryByText(usdPrice(usd))).toBeNull();
+
+    // And the header says whose prices these are, not just how old they are.
+    await expect(
+      canvas.getByRole("columnheader", { name: `Value. ${pricesAsOf(MARKETPLACES.cardmarket)}` }),
+    ).toBeInTheDocument();
+  },
 };
 
 /**

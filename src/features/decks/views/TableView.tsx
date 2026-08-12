@@ -24,7 +24,8 @@ import {
   type TableColumn,
 } from "@/components/table/VirtualTable";
 import type { DeckCard } from "@/lib/ipc";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import type { Marketplace } from "@/lib/marketplace";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
@@ -53,6 +54,7 @@ type Row =
 
 export function TableView({
   groups,
+  marketplace,
   violations,
   onSelect,
   actions,
@@ -60,6 +62,9 @@ export function TableView({
   className,
 }: {
   groups: readonly CardGroup[];
+  /** Which marketplace the Price column and every band's total are quoted from. One value for
+   *  the whole view, so a band and the rows under it cannot name two currencies. */
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   /**
@@ -183,11 +188,20 @@ export function TableView({
         key: "price",
         width: "5rem",
         header: "Price",
-        headerTitle: PRICES_AS_OF,
-        headerLabel: `Price. ${PRICES_AS_OF}`,
+        headerTitle: pricesAsOf(marketplace),
+        headerLabel: `Price. ${pricesAsOf(marketplace)}`,
         headerClassName: "text-right",
         cellClassName: "text-right font-mono text-xs tabular-nums",
-        cell: (row) => (row.kind === "card" ? usdPrice(row.card.unitPriceUsd) : null),
+        // The twin field the selected currency names, never a chain across the two: a deck
+        // card is priced at its printing's nonfoil rate, and Scryfall has a `eur` key for
+        // that — so this is an em dash only where the printing itself is unpriced.
+        cell: (row) =>
+          row.kind === "card"
+            ? formatPrice(
+                marketplace.currency === "eur" ? row.card.unitPriceEur : row.card.unitPriceUsd,
+                marketplace.currency,
+              )
+            : null,
       },
       {
         key: "owned",
@@ -234,7 +248,7 @@ export function TableView({
             : null,
       },
     ],
-    [editable, actions],
+    [editable, actions, marketplace],
   );
 
   // Closed over the column count, because the band's one cell has to say how many columns it
@@ -251,11 +265,12 @@ export function TableView({
         props={props}
         row={row}
         columns={columns.length}
+        marketplace={marketplace}
         actions={actions}
         onDrop={drop}
       />
     ),
-    [columns.length, actions, drop],
+    [columns.length, marketplace, actions, drop],
   );
 
   return (
@@ -294,12 +309,15 @@ function DeckTableRow({
   props,
   row,
   columns,
+  marketplace,
   actions,
   onDrop,
 }: {
   props: RowRenderProps;
   row: Row;
   columns: number;
+  /** Only a band reads it — the heading it draws totals a pile. */
+  marketplace: Marketplace;
   actions?: DeckCardActions;
   onDrop?: DeckCardActions["drop"];
 }) {
@@ -323,7 +341,8 @@ function DeckTableRow({
     [dragRef, attach],
   );
 
-  if (row.kind === "group") return bandRow(props, row.group, columns, ref, over, eligible);
+  if (row.kind === "group")
+    return bandRow(props, row.group, columns, marketplace, ref, over, eligible);
 
   return (
     <div
@@ -369,6 +388,7 @@ function bandRow(
   props: RowRenderProps,
   group: CardGroup,
   columns: number,
+  marketplace: Marketplace,
   ref: (element: HTMLDivElement | null) => void,
   over: boolean,
   eligible: boolean,
@@ -396,7 +416,7 @@ function bandRow(
       )}
     >
       <span role="cell" aria-colspan={columns} className="flex min-w-0 items-center">
-        <GroupHeader group={group} className="w-full" />
+        <GroupHeader group={group} marketplace={marketplace} className="w-full" />
       </span>
       {over && <DropIndicator />}
     </div>

@@ -262,10 +262,7 @@ describe("AuditDrawer", () => {
 
       await userEvent.click(screen.getByRole("button", { name: "Show everything" }));
       expect(screen.getByText("Added 2 × Lightning Bolt")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Adds" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      expect(screen.getByRole("button", { name: "Adds" })).toHaveAttribute("aria-pressed", "true");
     });
 
     /**
@@ -279,7 +276,9 @@ describe("AuditDrawer", () => {
       ]);
       await drawn();
 
-      const other = await screen.findByRole("button", { name: "Other, changes this version of the app has no name for" });
+      const other = await screen.findByRole("button", {
+        name: "Other, changes this version of the app has no name for",
+      });
       expect(other).toHaveAttribute("aria-pressed", "true");
       // `auditText` is total over unknown kinds too, so the row still lists with a date and a
       // delta — which is more useful than a hole in the history.
@@ -407,12 +406,8 @@ describe("AuditDrawer", () => {
       deckAuditList.mockRejectedValue(new Error("BUSY: the database is being written to"));
       await drawn();
 
-      expect(
-        await screen.findByText("This deck's history could not be read."),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(/BUSY: the database is being written to/),
-      ).toBeInTheDocument();
+      expect(await screen.findByText("This deck's history could not be read.")).toBeInTheDocument();
+      expect(screen.getByText(/BUSY: the database is being written to/)).toBeInTheDocument();
       expect(screen.queryByText("No changes recorded yet.")).toBeNull();
     });
   });

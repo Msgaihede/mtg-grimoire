@@ -29,6 +29,7 @@
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
+import type { Currency } from "@/lib/marketplace";
 import type { SortBy } from "@/features/decks/sorting";
 import type { ValidationIssue } from "@/features/decks/validation/types";
 import type { CategoryKind, DeckCard, DeckCategory, ReleaseInfo, UpdateAsset } from "@/lib/ipc";
@@ -109,9 +110,11 @@ export const DECK_CATEGORIES: readonly {
  * columns). A *row* in `db.ts` mints its own from the table, because there it has to be unique
  * across every deck in the store; these are the ids of a deck that is the only deck there is.
  *
- * `cardCount`/`totalPriceUsd` default to an empty column. They are read off the world in a
- * story that has one — `deck_get` computes both over the variant it was asked for — so a story
- * building a `DeckDetail` by hand is the caller that has to say.
+ * `cardCount` and **both** price totals default to an empty column. They are read off the world
+ * in a story that has one — `deck_get` computes all three over the variant it was asked for —
+ * so a story building a `DeckDetail` by hand is the caller that has to say. The two totals are
+ * separate arguments on purpose: a category can total in dollars and be `null` in euros, and a
+ * fixture that derived one from the other could not express that.
  */
 export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {}): DeckCategory {
   const category = DECK_CATEGORIES.find((c) => c.kind === kind);
@@ -125,6 +128,7 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
     sortOrder: category.sortOrder,
     cardCount: 0,
     totalPriceUsd: null,
+    totalPriceEur: null,
     ...over,
   };
   // Both lists, defaulting to the one-list count — so a fixture that says nothing is a deck
@@ -147,11 +151,16 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
  * the deck story files are built on: a component's verdict is only worth rendering if the facts it
  * read are the ones the database holds.
  *
- * `unitPriceUsd` goes through the app's own `finishPrice`, asked for **nonfoil** — which is the
- * `usd` key of this printing's `prices` blob and never the `cards.price_usd` column, since that
- * one is a nonfoil→foil→etched fallback chain built for sorting. A deck names a printing rather
- * than a finish, and nonfoil is the cheapest way to satisfy it. Anything that *sums* these
- * (`DeckStats` does) would otherwise quote a deck at foil rates nobody was offered.
+ * Both unit prices go through the app's own `finishPrice`, asked for **nonfoil** — which is the
+ * `usd`/`eur` key of this printing's `prices` blob and never the `cards.price_usd` column, since
+ * that one is a nonfoil→foil→etched fallback chain built for sorting. A deck names a printing
+ * rather than a finish, and nonfoil is the cheapest way to satisfy it. Anything that *sums*
+ * these (`DeckStats` does) would otherwise quote a deck at foil rates nobody was offered.
+ *
+ * The euro figure is the same lookup one key over, and it is `null` far more often — a printing
+ * Cardmarket does not quote is unpriced there, and the deck total skips it rather than falling
+ * back to the dollar number. `deck.rs:1836-1837` reads the two keys flat and side by side,
+ * which is why both arrive on every row and switching marketplace redraws off the cache.
  *
  * **The category is named by its kind**, `main` unless the caller says otherwise, and the
  * three category fields on the row are then {@link deckCategory}'s — so a story that writes
@@ -198,7 +207,8 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     gameChanger: card.gameChanger,
     finishes: card.finishes,
     everUncommon: card.everUncommon,
-    unitPriceUsd: finishPrice(card.prices, "nonfoil"),
+    unitPriceUsd: finishPrice(card.prices, "nonfoil", "usd"),
+    unitPriceEur: finishPrice(card.prices, "nonfoil", "eur"),
     // An **allocation**, never a decrement — how many copies this deck has reserved out of the
     // collection. Zero until a story says otherwise, which is also what an unbuilt deck with an
     // empty collection reads.
@@ -280,7 +290,10 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     finishes: null,
     // `false` for an orphan, because nothing is known about a card that is not there.
     everUncommon: false,
+    // Both null, and for the row's reason rather than the currency's: there is no card to price
+    // at all, so neither figure exists. An orphan is the one row where the two agree.
     unitPriceUsd: null,
+    unitPriceEur: null,
     ownedQuantity: 0,
     ...over,
   };
@@ -301,8 +314,20 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
  * `RULE` marker), two categories of the reader's own, an **empty** Sideboard (a place as much
  * as a heading), and a Maybeboard (`INACTIVE`, and the pile whose cards are never called
  * short of copies).
+ *
+ * `currency` is **defaulted rather than required**, and both halves of that earn themselves.
+ * Defaulted, because every caller today is a view story about grouping, sorting or headers —
+ * none of them is about money, and making each restate `"usd"` would be nine copies of an
+ * answer none of them cares about. A parameter at all, because `buildGroups` sums
+ * `CardGroup.totalPrice` in the currency it is handed, so a euro deck-view story is one
+ * argument away instead of a fixture rewrite. Passing `"eur"` is how a story reaches a pile
+ * whose total is `null` while its dollar total is a number.
  */
-export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alphabetical") {
+export function deckGroups(
+  groupBy: GroupBy = "category",
+  sortBy: SortBy = "alphabetical",
+  currency: Currency = "usd",
+) {
   const commander = deckCategory("commander");
   // The seeded Sideboard sorts at 2 and the reader's own two piles are ahead of it here, so
   // it is moved rather than left to tie with `Removal` and be ordered by row id.
@@ -347,7 +372,7 @@ export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alph
     inPile(maybe, deckCard(printing("wwk", "31"))),
   ];
 
-  return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy);
+  return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy, currency);
 }
 
 /**

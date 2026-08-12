@@ -125,6 +125,7 @@ function category(
     // The heading counts the rows it was handed, so these three are read by nothing here.
     cardCount: 0,
     totalPriceUsd: null,
+    totalPriceEur: null,
     cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
@@ -183,14 +184,17 @@ function found(name: string): CardSummary {
     typeLine: "Creature — Goblin",
     manaCost: "{R}",
     priceUsd: 1.5,
+    priceEur: 1.2,
     layout: "normal",
     oracleId: `o-${name}`,
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,
     printings: 1,
-    priceLow: 1.5,
-    priceHigh: 1.5,
+    priceLowUsd: 1.5,
+    priceHighUsd: 1.5,
+    priceLowEur: 1.2,
+    priceHighEur: 1.2,
   };
 }
 
@@ -474,7 +478,9 @@ describe("DeckEditor", () => {
     await open();
 
     expect(
-      screen.getAllByRole("region", { name: /^(Main deck|Sideboard|Commander|Companion|Maybeboard)$/ }),
+      screen.getAllByRole("region", {
+        name: /^(Main deck|Sideboard|Commander|Companion|Maybeboard)$/,
+      }),
     ).toHaveLength(5);
     // Empty ones included: a category is a *place* as well as a heading, and a column that
     // vanished with its last card is one the reader cannot put a card back into.
@@ -673,10 +679,14 @@ describe("DeckEditor", () => {
 
     await press("Text");
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ })).toBeVisible();
+    expect(
+      within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
+    ).toBeVisible();
 
     await press("Grid");
-    expect(within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ })).toBeVisible();
+    expect(
+      within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
+    ).toBeVisible();
 
     await press("Stacks");
     expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
@@ -1166,7 +1176,9 @@ describe("DeckEditor", () => {
     // something, and here it would say something untrue.
     expect(within(pile).queryByText("0/4")).not.toBeInTheDocument();
     expect(
-      within(pile).getByRole("button", { name: /^Lightning Bolt/ }).getAttribute("aria-label"),
+      within(pile)
+        .getByRole("button", { name: /^Lightning Bolt/ })
+        .getAttribute("aria-label"),
     ).not.toMatch(/you own/i);
   });
 
@@ -1445,10 +1457,11 @@ describe("DeckEditor", () => {
   });
 
   /** Spec §5: a price is never shown without saying how old it is. */
-  it("says how old its prices are", async () => {
+  /** Spec §5 — and, since a reader can now pick, whose prices these are as well as how old. */
+  it("says how old its prices are, and whose", async () => {
     await open();
 
-    expect(screen.getByText("Prices as of the last card-data sync.")).toBeInTheDocument();
+    expect(screen.getByText("TCGplayer prices as of the last card-data sync.")).toBeInTheDocument();
   });
 
   /** A deck deleted from another view is a deck the editor is holding a ghost of. It says so
