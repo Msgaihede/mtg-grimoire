@@ -99,3 +99,15 @@ number to compare against.
 
 - Ultracode/dynamic workflows for large parallelizable work; subagents use Opus 5.
 - Superpowers flow: brainstorm → spec → plan → subagent-driven implementation.
+- **Fan a feature out to parallel subagents rather than working it one step at a time.** Split it
+  at the seams this repo already has — Rust command, TS domain logic, UI, stories, docs — and
+  dispatch the independent pieces in a single message so they run at once. Serialize only what
+  genuinely needs an earlier task's result. See `superpowers:dispatching-parallel-agents` and
+  `superpowers:subagent-driven-development`.
+- **Two subagents editing the same files in the same tree clobber each other.** Give each one
+  files no sibling touches, or its own worktree (`superpowers:using-git-worktrees`) — and note
+  that a worktree needs its own `npm install` before its suites pass.
+- **Tests run once, at the end, after fan-in — not inside each subagent.** A subagent's slice
+  compiles against a tree its siblings are still changing, so a suite run mid-fan-out fails for
+  reasons that are not its own, and `npm run verify` is too slow to pay for N times. Have each
+  one report what it changed, then run `npm run verify` yourself before the commit.
