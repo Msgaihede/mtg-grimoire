@@ -79,6 +79,7 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 /// The largest decklist file this app will read, in bytes.
@@ -836,6 +837,57 @@ pub async fn deck_import_commit(
     })
     .await
     .map_err(|e| format!("the decklist could not be imported: {e}"))?
+}
+
+/// A decklist file the reader picked, as text.
+///
+/// **It takes a path, not bytes** — the page asks the OS for a name and Rust opens the file,
+/// which is the same contract [`crate::deck::deck_set_cover_image`] uses and the whole reason
+/// `dialog:allow-open` is sufficient and **no `fs:` permission is granted anywhere**. A
+/// webview that could read a file itself would need one; a webview that can only name a file
+/// needs none.
+///
+/// Two decisions, and each is a thing that would be wrong the other way:
+///
+/// * **The size is read from the metadata, not from what was read.** [`MAX_IMPORT_BYTES`] is a
+///   fence rather than a truncation — a 200 MB file the reader pointed at by mistake is refused
+///   without ever being pulled into memory, which is the only version of the cap that costs
+///   nothing when it fires. It is the same constant the paste path uses, so the two cannot
+///   disagree about how long a decklist may be.
+/// * **Lossy UTF-8 deliberately**: a Windows-1252 apostrophe in one card name should cost that
+///   one name, not the other hundred lines. `from_utf8_lossy` turns the bad byte into `U+FFFD`,
+///   which no card name bears, so the line it damages comes back as an unmatched name in the
+///   preview, quoted — a thing the reader can act on — while every other line resolves. A
+///   `from_utf8` here would answer `Err` for the whole file and tell them nothing about which
+///   line it was.
+fn read_import_file(path: &Path) -> Result<String, String> {
+    let meta =
+        std::fs::metadata(path).map_err(|e| format!("That file could not be opened — {e}"))?;
+    if meta.len() > MAX_IMPORT_BYTES {
+        return Err(format!(
+            "That file is {} MB. A decklist is text; this reads at most 1 MB.",
+            meta.len() / 1_000_000
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("That file could not be read — {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Read a decklist file the reader picked, and hand the text to the parser.
+///
+/// **The one command in this module that takes no state**: it touches no database, so it needs
+/// neither connection and cannot be refused as [`crate::collection::BUSY`]. What comes back is
+/// text, and everything after it — the lines, the quantities, the sections — is TypeScript's,
+/// exactly as it is for a paste. That is the whole reason this is a *read* and not an import:
+/// a file and a paste become the same string here and travel the same path afterwards.
+///
+/// On the blocking pool like its two siblings, because a file on a network share or a slow
+/// stick is a disk wait, and the async runtime is not where a disk wait belongs.
+#[tauri::command]
+pub async fn deck_import_read_file(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_import_file(Path::new(&path)))
+        .await
+        .map_err(|e| format!("the decklist file could not be read: {e}"))?
 }
 
 #[cfg(test)]
@@ -1803,5 +1855,129 @@ mod tests {
             hinted_row.printing_count, 1,
             "through a printing hint it counts what the hint named, not the card's printings"
         );
+    }
+
+    // ------------------------------------------------------------------------------------
+    // read_import_file
+    // ------------------------------------------------------------------------------------
+
+    /// A file in the system temp directory, written and handed back with its path.
+    ///
+    /// **There is no `tempfile` dev-dependency and this must not add one**, so the collision
+    /// fence is the name: `maintenance.rs`'s scratch directories are `mtgtest-maint-<what>` and
+    /// have a known race between tests that share a word, so every caller here passes a word no
+    /// other test in the crate uses. `cargo test` runs a thread per test by default and the
+    /// temp directory is shared by every crate on the machine — a fixed name like
+    /// `mtgtest-import.txt` would be two tests writing one file.
+    ///
+    /// The caller cleans up with [`gone`]. A leaked file is a stale fixture the *next* run
+    /// would read, which is the one failure mode worth spending two lines on.
+    fn scratch(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("mtgtest-import-{name}.txt"));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// Undo [`scratch`]. Ignores a failure — the file is the test's, not the app's.
+    fn gone(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// The cap is a **fence**, and the half worth pinning is that it is read off the metadata.
+    ///
+    /// The refusal quotes a size, which is only possible before the bytes are in memory:
+    /// `read_import_file` calls `metadata` and returns, and never reaches `fs::read`. That
+    /// ordering is what makes the cap cost nothing when it fires — the alternative, reading
+    /// the file and measuring the `String`, pulls a 200 MB mistake into memory to tell the
+    /// reader it was too big.
+    ///
+    /// What this test can see is the message and the fact that no text came back; the ordering
+    /// itself is structural. Note the fixture is one byte over [`MAX_IMPORT_BYTES`] — the cap is
+    /// `>`, so a file of exactly the cap is allowed and this file is the smallest one that is
+    /// not.
+    #[test]
+    fn a_file_over_the_cap_is_refused_by_size_and_not_read() {
+        let oversized = vec![b'x'; usize::try_from(MAX_IMPORT_BYTES).unwrap() + 1];
+        let path = scratch("oversized", &oversized);
+
+        let refused = read_import_file(&path).unwrap_err();
+
+        assert!(refused.contains("at most 1 MB"), "{refused}");
+        assert!(
+            refused.contains("That file is"),
+            "it quotes the size, which is only knowable from the metadata: {refused}"
+        );
+        gone(&path);
+    }
+
+    /// A file that is exactly the cap is read, because the fence is `>` and a boundary nobody
+    /// asserts is a boundary that moves.
+    #[test]
+    fn a_file_at_exactly_the_cap_is_read() {
+        let full = vec![b'x'; usize::try_from(MAX_IMPORT_BYTES).unwrap()];
+        let path = scratch("at-the-cap", &full);
+
+        let text = read_import_file(&path).expect("exactly the cap is under it");
+
+        assert_eq!(u64::try_from(text.len()).unwrap(), MAX_IMPORT_BYTES);
+        gone(&path);
+    }
+
+    /// A path that names nothing is a sentence, not a panic and not an empty import.
+    ///
+    /// It is reachable in the shipped app despite the picker: the reader can delete or unmount
+    /// the file between choosing it and the read, and a portable copy moved between machines
+    /// carries no such file at all.
+    #[test]
+    fn a_missing_file_is_refused_in_words() {
+        let path = std::env::temp_dir().join("mtgtest-import-no-such-decklist.txt");
+        let _ = std::fs::remove_file(&path);
+
+        let refused = read_import_file(&path).unwrap_err();
+
+        assert!(
+            refused.starts_with("That file could not be opened"),
+            "{refused}"
+        );
+        assert!(
+            refused.len() > "That file could not be opened — ".len(),
+            "the OS's own reason is kept, because `not found` and `access denied` are \
+             different things for the reader to do something about: {refused}"
+        );
+    }
+
+    /// **The whole reason the read is lossy.** A decklist exported by a Windows tool that never
+    /// left code page 1252 carries `0x92` where a curly apostrophe belongs, and `0x92` is not
+    /// valid UTF-8. A strict read would answer `Err` for the file and the reader would be told
+    /// nothing about which line it was.
+    ///
+    /// So: 105 lines, one of them damaged. The other 104 must come back exactly as written, and
+    /// the damaged one must come back as a *line* — `U+FFFD` is a character no card name bears,
+    /// so it resolves to nothing and the preview quotes it, which is a thing a reader can fix.
+    #[test]
+    fn invalid_utf8_becomes_a_replacement_character_and_not_a_failure() {
+        let mut bytes = Vec::new();
+        for _ in 0..104 {
+            bytes.extend_from_slice(b"1 Sol Ring\n");
+        }
+        // `Yawgmoth\x92s Will` — the Windows-1252 apostrophe, raw, on one line of 105.
+        bytes.extend_from_slice(b"1 Yawgmoth\x92s Will\n");
+        let path = scratch("cp1252", &bytes);
+
+        let text = read_import_file(&path).expect("one bad byte is not a failed import");
+
+        assert_eq!(text.lines().count(), 105, "no line was lost");
+        assert_eq!(
+            text.matches("1 Sol Ring").count(),
+            104,
+            "the other 104 lines are untouched"
+        );
+        let damaged = text.lines().last().unwrap();
+        assert_eq!(
+            damaged, "1 Yawgmoth\u{FFFD}s Will",
+            "the bad byte became one replacement character and cost only its own line"
+        );
+        gone(&path);
     }
 }

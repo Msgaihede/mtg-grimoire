@@ -264,6 +264,7 @@ pub fn run() {
             deck::deck_missing_to_wishlist,
             deck_import::deck_import_resolve,
             deck_import::deck_import_commit,
+            deck_import::deck_import_read_file,
             deck::format_specs_list,
             deck_meta::deck_category_list,
             deck_meta::deck_category_create,
