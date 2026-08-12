@@ -108,8 +108,9 @@ Ignored:
 
 ### `//` is not always a comment
 
-`1 Branchloft Pathway // Boulderloft Pathway` is one card and appears five times in the
-reference list. **A comment is `//` at the start of a line; `//` inside a line is part of the
+`1 Branchloft Pathway // Boulderloft Pathway` is one card and appears **seven** times in the
+reference list (counted off the fixture, not remembered — this line said five until Task 1's
+review caught it). **A comment is `//` at the start of a line; `//` inside a line is part of the
 name.** This gets its own test, and the reference list below is the fixture that keeps it true.
 
 ### Section headers
@@ -197,23 +198,34 @@ Deterministic in both arms — the tie-break runs to `id`, which is unique.
 
 ---
 
-## 5. `CardFacts` narrowing
+## 5. `CardIdentity` — asking about a card that is not in a deck yet
 
-`src/features/decks/validation/types.ts` today reads `export type CardFacts = DeckCard`, so
-`commanderIneligibility` can only be asked about a card that is already a row in a deck. The
-preview has to ask it about a card that is not in the deck yet.
+`src/features/decks/validation/types.ts` reads `export type CardFacts = DeckCard`, so
+`commanderIneligibility` can only be asked about a card that is already a *row in a deck*. The
+preview has to ask it about a card that is not in the deck yet, and there is no honest
+`categoryKind` or `id` to invent for one.
 
-`CardFacts` becomes a `Pick<DeckCard, …>` of the fields the validation modules actually read —
-`cardId`, `name`, `quantity`, `typeLine`, `oracleText`, `power`, `toughness`, `colorIdentity`,
-`legalities`, `faces`, `everUncommon`, and whatever else the sweep finds. Every existing full
-`DeckCard` still satisfies it, so no call site changes; the type-check is the proof, and
-`npm run verify` is where it lands. The implementation derives the field list by reading the
-five validation modules, not from this list — this list is a description, not a specification.
+**`CardFacts` is left exactly as it is.** The engine really does read deck-row fields —
+`categoryKind` (8 reads), `categoryActive`, `quantity` — so narrowing it wholesale would be
+wrong. Instead, `types.ts` gains the card-level half as its own name:
 
-**If the sweep finds that the validation modules genuinely read deck-row fields beyond
-`quantity`** (a `categoryKind`, a `tagId`), the narrowing is abandoned and the importer builds
-a full `DeckCard` with placeholder deck fields instead. That is the fallback, and it is a
-local ugliness rather than a wrong type.
+```ts
+export type CardIdentity = Pick<
+  CardFacts,
+  | "cardId" | "name" | "oracleId" | "manaCost" | "cmc" | "typeLine" | "oracleText"
+  | "colors" | "colorIdentity" | "legalities" | "power" | "toughness" | "layout"
+  | "rarity" | "faces" | "gameChanger" | "everUncommon"
+>;
+```
+
+and the three functions the preview needs — `frontFace`, `identityOf`, `commanderIneligibility`
+— take a `CardIdentity` instead of a `CardFacts`. **Every existing caller still compiles**: a
+full `DeckCard` satisfies a `Pick` of itself, so this only widens what may be passed. No call
+site changes and no behaviour changes; the type-check is the whole proof, and `npm run verify`
+is where it lands.
+
+`validateCommanderZone` keeps taking `CardFacts[]` — it reads `quantity` — and the preview does
+not call it. The importer asks the per-card question and nothing more.
 
 ---
 
