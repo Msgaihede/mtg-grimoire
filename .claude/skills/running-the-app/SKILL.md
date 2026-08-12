@@ -167,13 +167,23 @@ Releasing is **stop the process, then delete the lock** — `release` does both 
 command. Do it on success, on failure, and when you abandon the task. A held lock over a
 live process blocks every other agent, and nothing will clear it for you.
 
+**Releasing is not a decision to hand back to the user.** Offering to release — "say the
+word and I'll release it" — is not releasing, and it is the form this failure actually
+takes: it reads as helpfulness while leaving every other agent blocked on an answer the
+user did not know they owed. Release first. Then offer to bring it straight back up,
+which costs seconds.
+
 | Rationalisation | Reality |
 | --- | --- |
+| "I'll leave it up and offer to release it if they want" | Offering is not releasing. Release, then offer to relaunch. |
+| "They might want a follow-up check" | Then relaunch for it. Booting again is cheaper than blocking every other agent. |
 | "The next step needs it, I'll leave it up" | Release, then acquire again. It costs seconds. |
 | "The task failed, so there is nothing to clean up" | The app is still running. Release. |
 | "Another agent can just take it" | Only if the process is dead. Yours is not. |
 | "The user will close the window" | They will not know it is theirs to close. |
 | "I only ran Storybook, that is not the app" | It is the other lock. Release it. |
 
-Before you report finishing, run `lock.ps1 status`. Anything reading `HELD` and naming
-your worktree means you are not finished.
+**Your final report must end with the output of `lock.ps1 status`.** Not a claim that you
+released — the command's own output, both lines. It is a required part of the report, the
+same way a test result is. Anything reading `HELD` and naming your worktree means you are
+not finished, whatever else you were about to say.
