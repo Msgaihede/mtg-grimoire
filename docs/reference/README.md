@@ -15,7 +15,7 @@ or a number to compare a new measurement against.
 | [image-cache.md](image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [search-faceting.md](search-faceting.md) | The in-memory index, and why faceting fails open | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [in-app-updates.md](in-app-updates.md) | Why the portable swap is hand-written | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
-| [decks-storage.md](decks-storage.md) | Deck tables, the six card commands, the allocator, the audit log | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [decks-storage.md](decks-storage.md) | Deck tables, the seven card commands, the allocator, the audit log | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [decks-live-findings.md](decks-live-findings.md) | What driving the shipped window found — **including three open bugs** | [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md) |
 | [frontend-design.md](frontend-design.md) | The ribbon, card images, foil, layers, tables | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [motion.md](motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |

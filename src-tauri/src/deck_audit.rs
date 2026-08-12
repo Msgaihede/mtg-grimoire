@@ -14,10 +14,14 @@
 //!   it changes with the wording and with the reader's language, and a table that stored one
 //!   would be a table full of the phrasing of whichever release wrote each row. `auditText.ts`
 //!   renders these facts; nothing here writes prose a user reads.
-//! * **Every deck write records exactly one row.** A write that silently records nothing is
-//!   precisely the bug this table exists to prevent, so the rule is a rule and not a
-//!   preference — `every_deck_write_leaves_exactly_one_audit_row` drives each command once
-//!   and counts. **Six** writes deliberately record nothing, and each says why on its own doc:
+//! * **Every deck write records exactly one row per change it made.** A write that silently
+//!   records nothing is precisely the bug this table exists to prevent, so the rule is a rule
+//!   and not a preference — `every_deck_write_leaves_exactly_one_audit_row` drives each command
+//!   once and counts. Two commands make more than one change in a call and so owe more than one
+//!   row, each pinned by a test of its own: [`crate::deck::update_deck`] records one row per
+//!   changed **field**, and [`crate::deck_import::commit_import`] in `replace` mode records the
+//!   `remove` and the `add` it did — opposite deltas, which one signed row cannot carry.
+//!   **Six** writes deliberately record nothing, and each says why on its own doc:
 //!   [`crate::deck::delete_deck`] (the row would CASCADE away with the deck it describes);
 //!   [`crate::deck::missing_to_wishlist`] and [`crate::deck_theory::missing_to_wishlist`]
 //!   (they write the wishlist, not the deck); and three of `deck_meta`'s four folder writes —
@@ -157,6 +161,25 @@ pub struct DeckAuditEntry {
 ///   ([`crate::deck::DeckPatch`]) and both are deck writes, so the alternative was a write that
 ///   records nothing — the one thing this table exists to prevent. `description` is the v5
 ///   column the "New deck" dialog fills; `notes` is the separate v8 one.
+///
+/// # An import is `add` and `remove` with an `import` payload
+///
+/// [`crate::deck_import::commit_import`] reuses those two kinds rather than adding a tenth —
+/// no new [`crate::schema::AUDIT_KINDS`] value, so no CHECK rebuild and no migration — and
+/// tells itself apart by the single `import` key its payload nests everything under:
+///
+/// | kind | payload |
+/// |---|---|
+/// | `add` | `{ "import": { "mode": "merge"\|"replace", "lines": 105, "cards": 117, "categories": 6 } }` |
+/// | `remove` | `{ "import": { "mode": "replace", "cleared": 42 } }` |
+///
+/// `card_id` and `card_name` are **NULL** on both, because an import is about no one card, and
+/// `delta` is `+cards` / `−cleared`. `lines` is how many items the list handed over and `cards`
+/// is the copies they asked for — a list naming one card twice is 2 lines and can be 5 cards —
+/// while `categories` counts the **distinct piles touched**, not the ones created (that number
+/// is the outcome's, and the drawer is a record of what happened rather than of what was new).
+/// The `remove` row exists only when a `replace` actually cleared something: a history of a
+/// removal that removed nothing is a line the drawer would have to explain.
 pub fn record(
     tx: &Connection,
     deck_id: i64,
@@ -335,14 +358,23 @@ mod tests {
     }
 
     /// The rule this table exists for. Each command is driven **once**, over a deck whose
-    /// history is emptied first, and each must leave exactly one row behind — no more (a
-    /// double-record is a history that counts a change twice) and, far more importantly, no
+    /// history is emptied first, and each must leave behind exactly the rows it owes — no more
+    /// (a double-record is a history that counts a change twice) and, far more importantly, no
     /// fewer.
     ///
-    /// Written as a list of closures rather than as twenty tests because the claim is about
-    /// the *set* of commands: a new deck write that records nothing fails here the moment its
-    /// line is added, and forgetting to add the line is the only way to slip past — which is
-    /// cheaper to notice in review than a missing test file.
+    /// Written as a list of closures rather than as **twenty-five** tests because the claim is
+    /// about the *set* of commands: a new deck write that records nothing fails here the moment
+    /// its line is added, and forgetting to add the line is the only way to slip past — which
+    /// is cheaper to notice in review than a missing test file. **Count the list, never a
+    /// remembered number**; it has been written down wrong twice.
+    ///
+    /// **Every case owes one row but one**, so the count rides in the case rather than in the
+    /// assertion. `deck_import_commit` in `replace` mode had two *effects* — it cleared a
+    /// variant and it filled it — with opposite deltas, and one signed row cannot carry both;
+    /// it owes a `remove` and an `add`. That is the same reading of "exactly one" that
+    /// `a_patch_that_changes_two_fields_records_both` already pins for `deck_update`: the rule
+    /// is one row per **change**, not per call. Its `merge` sibling is here beside it precisely
+    /// so the pair shows where the split falls.
     #[test]
     fn every_deck_write_leaves_exactly_one_audit_row() {
         let conn = seeded();
@@ -364,8 +396,22 @@ mod tests {
         // lock and its signature is what says so.
         let cover_bytes = crate::images::encode_cover(&covers.join("source.png")).unwrap();
 
-        /// One command under test: what to call it in a failure, and how to drive it.
-        type Case<'a> = (&'a str, Box<dyn Fn() + 'a>);
+        /// One command under test: what to call it in a failure, how many rows it owes, and
+        /// how to drive it.
+        type Case<'a> = (&'a str, i64, Box<dyn Fn() + 'a>);
+
+        /// One line of an imported decklist.
+        fn imported(
+            card_id: &str,
+            quantity: i64,
+            category: &str,
+        ) -> crate::deck_import::ImportItem {
+            crate::deck_import::ImportItem {
+                card_id: card_id.to_owned(),
+                quantity,
+                category_name: category.to_owned(),
+            }
+        }
 
         // Every command that writes to a deck, each paired with the state it needs. The
         // fixture work in each closure runs *before* the history is cleared, so only the one
@@ -373,12 +419,14 @@ mod tests {
         let cases: Vec<Case<'_>> = vec![
             (
                 "deck_create",
+                1,
                 Box::new(|| {
                     deck(&conn, "Another");
                 }),
             ),
             (
                 "deck_update",
+                1,
                 Box::new(|| {
                     crate::deck::update_deck(
                         &conn,
@@ -393,6 +441,7 @@ mod tests {
             ),
             (
                 "deck_update (folder)",
+                1,
                 Box::new(|| {
                     crate::deck::update_deck(
                         &conn,
@@ -410,6 +459,7 @@ mod tests {
                 // copies the live deck into it — and it must still be **one** line. N `add`
                 // rows for one press would read as a deck somebody typed out.
                 "deck_update (theory)",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4)
                         .unwrap();
@@ -429,6 +479,7 @@ mod tests {
             ),
             (
                 "deck_theory_copy_from_live",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4)
                         .unwrap();
@@ -438,18 +489,21 @@ mod tests {
             ),
             (
                 "deck_duplicate",
+                1,
                 Box::new(|| {
                     crate::deck::duplicate_deck(&conn, id, None).unwrap();
                 }),
             ),
             (
                 "deck_set_cover_image",
+                1,
                 Box::new(|| {
                     crate::deck::set_cover_image(&conn, &covers, id, &cover_bytes).unwrap();
                 }),
             ),
             (
                 "deck_set_folder",
+                1,
                 Box::new(|| {
                     crate::deck::set_folder(&conn, id, Some(folder)).unwrap();
                     clear(&conn);
@@ -458,6 +512,7 @@ mod tests {
             ),
             (
                 "deck_add_card",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
@@ -465,6 +520,7 @@ mod tests {
             ),
             (
                 "deck_set_card_quantity",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
@@ -474,6 +530,7 @@ mod tests {
             ),
             (
                 "deck_set_card_quantity (zero)",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
@@ -483,6 +540,7 @@ mod tests {
             ),
             (
                 "deck_move_card",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
@@ -492,6 +550,7 @@ mod tests {
             ),
             (
                 "deck_swap_printing",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
@@ -502,6 +561,7 @@ mod tests {
             ),
             (
                 "deck_card_set_tag",
+                1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
@@ -515,12 +575,14 @@ mod tests {
             ),
             (
                 "deck_category_create",
+                1,
                 Box::new(|| {
                     crate::deck_meta::create_category(&conn, id, "Ramp").unwrap();
                 }),
             ),
             (
                 "deck_category_rename",
+                1,
                 Box::new(|| {
                     let cat = crate::deck_meta::create_category(&conn, id, "Value")
                         .unwrap()
@@ -531,6 +593,7 @@ mod tests {
             ),
             (
                 "deck_category_set_active",
+                1,
                 Box::new(|| {
                     let cat = crate::deck_meta::create_category(&conn, id, "Off")
                         .unwrap()
@@ -541,12 +604,14 @@ mod tests {
             ),
             (
                 "deck_category_reorder",
+                1,
                 Box::new(|| {
                     crate::deck_meta::reorder_categories(&conn, id, &[side, main]).unwrap();
                 }),
             ),
             (
                 "deck_category_delete",
+                1,
                 Box::new(|| {
                     let cat = crate::deck_meta::create_category(&conn, id, "Doomed")
                         .unwrap()
@@ -557,12 +622,14 @@ mod tests {
             ),
             (
                 "deck_tag_create",
+                1,
                 Box::new(|| {
                     crate::deck_meta::create_tag(&conn, id, "Fresh", "amber").unwrap();
                 }),
             ),
             (
                 "deck_tag_update",
+                1,
                 Box::new(|| {
                     let tag = crate::deck_meta::create_tag(&conn, id, "Old", "amber")
                         .unwrap()
@@ -573,6 +640,7 @@ mod tests {
             ),
             (
                 "deck_tag_delete",
+                1,
                 Box::new(|| {
                     let tag = crate::deck_meta::create_tag(&conn, id, "Doomed", "amber")
                         .unwrap()
@@ -586,6 +654,7 @@ mod tests {
                 // no deck and are exempt; a delete re-files every deck in the folder through
                 // `decks.folder_id`'s SET NULL, and one deck in it is one row.
                 "deck_folder_delete",
+                1,
                 Box::new(|| {
                     let doomed = crate::deck_meta::create_folder(&conn, None, "Retired")
                         .unwrap()
@@ -595,6 +664,45 @@ mod tests {
                     crate::deck_meta::delete_folder(&conn, doomed).unwrap();
                 }),
             ),
+            (
+                // A whole decklist is still **one** change to a deck. N `add` rows for one
+                // paste would bury every other event of that day under the import.
+                "deck_import_commit (merge)",
+                1,
+                Box::new(|| {
+                    crate::deck_import::commit_import(
+                        &conn,
+                        id,
+                        "live",
+                        "merge",
+                        &[
+                            imported("bolt-lea", 4, "Main deck"),
+                            imported("serra-lea", 2, "Main deck"),
+                        ],
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
+                // The one case in this list that owes **two** rows, and the doc above says why:
+                // a replace over a non-empty variant cleared cards and added cards, and one
+                // signed `delta` cannot be both −6 and +4.
+                "deck_import_commit (replace)",
+                2,
+                Box::new(|| {
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 6)
+                        .unwrap();
+                    clear(&conn);
+                    crate::deck_import::commit_import(
+                        &conn,
+                        id,
+                        "live",
+                        "replace",
+                        &[imported("serra-lea", 4, "Main deck")],
+                    )
+                    .unwrap();
+                }),
+            ),
         ];
 
         /// Empty every deck's history, so the next case counts only its own row.
@@ -602,13 +710,16 @@ mod tests {
             conn.execute("DELETE FROM deck_audit", []).unwrap();
         }
 
-        for (name, drive) in cases {
+        for (name, owed, drive) in cases {
             clear(&conn);
             drive();
             let written: i64 = conn
                 .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(written, 1, "`{name}` must record exactly one audit row");
+            assert_eq!(
+                written, owed,
+                "`{name}` must record exactly {owed} audit row(s)"
+            );
         }
         let _ = std::fs::remove_dir_all(&covers);
     }

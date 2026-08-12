@@ -35,7 +35,7 @@ on — do not work from this page alone.
 | --- | --- |
 | [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities |
 | [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
-| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
+| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, decklist import, the editor's views and drags |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
 
@@ -69,7 +69,7 @@ number to compare against.
 | [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
-| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the six card commands, the allocator, the audit log |
+| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the seven card commands, the allocator, the audit log, the decklist import |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including three open bugs** |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |

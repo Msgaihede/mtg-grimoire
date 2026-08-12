@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -22,6 +22,7 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
+import { CreateDeckDialog } from "./CreateDeckDialog";
 import {
   buildFolderTree,
   deckDraggable,
@@ -37,9 +38,14 @@ import {
   type FolderNaming,
   type FolderNode,
 } from "./FolderTree";
+import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
-import { useFormatSpecs } from "./useFormatSpecs";
+
+/** The gallery imports into a deck of its own and never into an existing one — there is no
+ *  deck open here to import into. A module constant so the prop keeps one identity across
+ *  every render of a view that redraws on every drag. */
+const NEW_DECK: ImportTarget = { kind: "new" };
 
 /**
  * The wall.
@@ -76,16 +82,6 @@ const HEADING_BUTTON = cn(
   "motion-reduce:transition-none",
   FOCUS,
 );
-
-/**
- * What a new deck's format is until the reader says otherwise — `decks.format_key`'s own DDL
- * default and `deck::DEFAULT_FORMAT`, spelled here because the picker has to *select*
- * something before the seeded table has answered.
- *
- * Casual rather than the first row of the list: Casual caps nothing and is judged against no
- * card pool, so a deck that has not been given a format yet is not a deck full of complaints.
- */
-const DEFAULT_FORMAT = "casual";
 
 /**
  * Scryfall's image policy (spec §5/§10), which is why it is not conditional on there being
@@ -125,6 +121,7 @@ export function deckBadge(deck: DeckRow): DeckBadge {
  */
 type Panel =
   | { kind: "createDeck" }
+  | { kind: "importDeck" }
   | { kind: "deleteDeck"; deckId: number }
   | { kind: "moveDeck"; deckId: number }
   | { kind: "newFolder"; parentId: number | null }
@@ -307,7 +304,17 @@ export function DecksPage() {
   /** The click-away way out: the layer goes, the caret stays where the reader put it. */
   const close = useCallback(() => setPanel(null), []);
 
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: panel !== null });
+  // Every panel on this screen but the two modals. `CreateDeckDialog` and `ImportDeckDialog`
+  // register their own rungs, because each outlives `panel` by the length of its fade and a
+  // rung that came up with the *element* would still be consuming Escape while the next layer
+  // opened. Two `"inner"` peers are not ordered by this protocol at all, so the one that owns
+  // the press has to be the only one that asked for it — hence the exclusion rather than a
+  // second registration.
+  useDismissOnEscape({
+    layer: "inner",
+    onDismiss: dismiss,
+    enabled: panel !== null && panel.kind !== "createDeck" && panel.kind !== "importDeck",
+  });
 
   const openCreate = useCallback(() => {
     // A refusal from the last attempt is not news about this one.
@@ -352,6 +359,16 @@ export function DecksPage() {
     (deck: DeckRow) => {
       // Nobody makes a deck in order to look at a tile of it.
       setOpenDeckId(deck.id);
+      dismiss();
+    },
+    [dismiss, setOpenDeckId],
+  );
+
+  /** The same thing one door along: a list imported as a deck opens as one. The outcome's
+   *  numbers belong to the dialog that was showing them and are not repeated out here. */
+  const onImported = useCallback(
+    (deckId: number) => {
+      setOpenDeckId(deckId);
       dismiss();
     },
     [dismiss, setOpenDeckId],
@@ -624,6 +641,36 @@ export function DecksPage() {
               >
                 New folder
               </button>
+
+              {/* A quiet control beside the primary one: making a deck and importing one are
+                  the same act with different starting material, and the gallery has exactly one
+                  primary action. Pressed again, it closes what it opened — the row's own
+                  convention for every trigger here. */}
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={panel?.kind === "importDeck"}
+                  aria-haspopup="dialog"
+                  onClick={(e) =>
+                    panel?.kind === "importDeck"
+                      ? dismiss()
+                      : open({ kind: "importDeck" }, e.currentTarget)
+                  }
+                  className={HEADING_BUTTON}
+                >
+                  Import deck
+                </button>
+                {/* Rendered always and told whether it is open, so the panel can fade *out*:
+                    an `{open && …}` here would unmount the surface on the render that closes
+                    it, and take its exit tween with it. */}
+                <ImportDeckDialog
+                  target={NEW_DECK}
+                  open={panel?.kind === "importDeck"}
+                  onDismiss={dismiss}
+                  onClose={close}
+                  onImported={onImported}
+                />
+              </div>
 
               <NewDeck
                 buttonRef={newDeckRef}
@@ -1381,7 +1428,19 @@ function DeleteFolderConfirm({
   );
 }
 
-/** The view's one primary action, and the form behind it. */
+/**
+ * The view's one primary action, and the dialog behind it.
+ *
+ * **The blur dismissal is gone with the anchored form it belonged to.** A popup closes when
+ * focus leaves it; a modal does not, because the caret cannot leave — {@link CreateDeckDialog}
+ * traps Tab, which is what makes its `aria-modal` true rather than merely claimed. The guard
+ * that handler needed (a `Create deck` button disabling itself on the press blurs with no
+ * `relatedTarget`, and the form would have closed *as if the write had worked*) is gone with
+ * it: there is nothing left to guard.
+ *
+ * The trigger keeps `aria-haspopup="dialog"` and `aria-expanded`, both of which are now
+ * simply true.
+ */
 function NewDeck({
   buttonRef,
   open,
@@ -1394,41 +1453,15 @@ function NewDeck({
   buttonRef: RefObject<HTMLButtonElement | null>;
   open: boolean;
   onOpen: () => void;
-  /** Escape, and the trigger pressed a second time: the caret comes back here. */
+  /** Escape, the dialog's ✕ and the trigger pressed a second time: the caret comes back here. */
   onDismiss: () => void;
-  /** Focus left the form on its own. Closes and hands nothing back. */
+  /** A press on the scrim: the dialog goes, the caret stays where the reader put it. */
   onClose: () => void;
   create: Decks["create"];
   onCreated: (deck: DeckRow) => void;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
   return (
-    <div
-      ref={rootRef}
-      className="relative"
-      // Clicking or tabbing away closes the form, and does it without a window listener that
-      // could fight the Escape handshake — `AddToCollection`'s arrangement, for its reason.
-      // The boundary is the whole control rather than the panel: on `relatedTarget` being the
-      // trigger, closing here would race the toggle below and leave the form open forever.
-      //
-      // A half-typed name is discarded, exactly as every other popup in this app discards its
-      // half-made decision (the quick-add loses its quantity, the set picker its query). One
-      // rule for all of them is worth more than a rescued word — and the alternative, a
-      // trigger that refuses to close while the field is dirty, is a control that stops
-      // working for a reason the reader cannot see.
-      //
-      // Not while the deck is being written, though, and this is the same mechanism the delete
-      // question guards against: `Create deck` disables itself on the press, the browser blurs
-      // a disabled control with no `relatedTarget` at all, and this handler would read the
-      // press as the reader leaving — closing the form *as if it had worked*. It is worse here
-      // than there, because this form is the only place a refusal can be read: `writeFailure`
-      // above covers the writes a tile makes, not this one, and reopening the form calls
-      // `create.reset()`. So a refused create would leave no deck and no sentence saying why.
-      onBlur={(e) => {
-        if (create.isPending) return;
-        if (open && !rootRef.current?.contains(e.relatedTarget)) onClose();
-      }}
-    >
+    <div>
       <button
         ref={buttonRef}
         type="button"
@@ -1445,140 +1478,17 @@ function NewDeck({
         <Plus className="size-4" aria-hidden="true" />
         New deck
       </button>
-      {open && <CreateDeckForm create={create} onCreated={onCreated} />}
+      {/* Rendered always and told whether it is open, so the panel can fade *out*: an
+          `{open && …}` here would unmount the surface on the render that closes it, and take
+          its exit tween with it. */}
+      <CreateDeckDialog
+        create={create}
+        open={open}
+        onCreated={onCreated}
+        onDismiss={onDismiss}
+        onClose={onClose}
+      />
     </div>
   );
 }
 
-/**
- * Two questions and no more: what it is called, and what it is for.
- *
- * The format list is the seeded `format_specs` table read in its own `sort_order`, filtered
- * to `enabled_in_picker` — which is the whole of why Future Standard, a format you can test
- * a card against but cannot build for, is not offered here.
- */
-function CreateDeckForm({
-  create,
-  onCreated,
-}: {
-  create: Decks["create"];
-  onCreated: (deck: DeckRow) => void;
-}) {
-  const { specs } = useFormatSpecs();
-  const picker = useMemo(() => specs.filter((s) => s.enabledInPicker), [specs]);
-  const [name, setName] = useState("");
-  const [formatKey, setFormatKey] = useState(DEFAULT_FORMAT);
-  const nameRef = useRef<HTMLInputElement>(null);
-  const id = useId();
-
-  // The caret starts in the field the reader has to fill.
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
-  const failure = create.isError ? ipcError(create.error) : null;
-  const trimmed = name.trim();
-
-  return (
-    <div
-      role="dialog"
-      aria-label="New deck"
-      // Anchored rather than portalled, and not `aria-modal`: `SetCombobox`'s decision, for
-      // its reason — `style-src 'self'` refuses what every overlay library injects. Pinned to
-      // the trigger's **right** edge, because nothing clips these popups and this one opens at
-      // the end of the heading row: a 288px panel hanging off the right of a 1280px window
-      // scrolls the whole app sideways rather than being cut off.
-      className={cn(
-        "absolute right-0 top-11 w-72 rounded-lg border border-border bg-surface p-3",
-        "shadow-lg",
-        LAYER.popup,
-      )}
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!trimmed) return;
-          create.mutate({ name: trimmed, formatKey }, { onSuccess: onCreated });
-        }}
-        className="space-y-3"
-      >
-        <div>
-          <label htmlFor={`${id}-name`} className="mb-1 block text-xs text-dim">
-            Name
-          </label>
-          <input
-            id={`${id}-name`}
-            ref={nameRef}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={cn(
-              "h-9 w-full rounded-md border border-border bg-bg px-2 text-sm",
-              "focus:border-accent focus:outline-none",
-            )}
-          />
-        </div>
-        <div>
-          <label htmlFor={`${id}-format`} className="mb-1 block text-xs text-dim">
-            Format
-          </label>
-          <select
-            id={`${id}-format`}
-            value={formatKey}
-            onChange={(e) => setFormatKey(e.target.value)}
-            // The seeded table is read once per session and is normally already in hand by
-            // the time this opens; on the one launch where it is not, the select still has to
-            // *say* something, and what it would create is what it shows.
-            disabled={picker.length === 0}
-            className={cn(
-              "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-              "disabled:opacity-60",
-              FOCUS,
-            )}
-          >
-            {picker.length === 0 ? (
-              <option value={DEFAULT_FORMAT}>Casual</option>
-            ) : (
-              picker.map((s) => (
-                <option key={s.key} value={s.key}>
-                  {s.displayName}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-
-        {/* No wrapper here, for a reason worth stating: this line carries no padding and no
-            border, so `height: 0` on the element itself really is 0 and it can be the animated
-            one. `overflow-hidden` is still owed — the sentence is laid out at its full size
-            whatever the box is, and without it the text is drawn over the button below for the
-            first frame. The form is a `space-y-3` stack, so the 12px the line brings with it
-            still arrives at once; it is the two lines of the sentence that grow. */}
-        <AnimatePresence initial={false}>
-          {failure && (
-            <motion.p
-              {...statusLine}
-              role="alert"
-              className="overflow-hidden text-xs text-destructive"
-            >
-              Could not create the deck — {failure}
-            </motion.p>
-          )}
-        </AnimatePresence>
-
-        <button
-          type="submit"
-          disabled={!trimmed || create.isPending}
-          className={cn(
-            "h-9 w-full rounded-md border border-accent text-sm text-accent",
-            "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-            "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          Create deck
-        </button>
-      </form>
-    </div>
-  );
-}

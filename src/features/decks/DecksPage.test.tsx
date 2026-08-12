@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
+import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
 import { cardImageUrl, imageOrigin } from "@/lib/images";
 import { spec } from "./validation/fixtures";
 
@@ -19,6 +19,14 @@ const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+// The import dialog's three commands and the sync it reads to tell "your list is wrong" from
+// "the card database is not filled in yet". Mounted only while the dialog is open, but the
+// whole `ipc` object is replaced here, so a command left out is a `TypeError` rather than a
+// missing answer.
+const deckImportResolve = vi.hoisted(() => vi.fn());
+const deckImportCommit = vi.hoisted(() => vi.fn());
+const deckImportReadFile = vi.hoisted(() => vi.fn());
+const syncStatus = vi.hoisted(() => vi.fn());
 // The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
 // resolve; what it is called with is asserted in its own test below.
 const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -38,6 +46,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderMove,
     deckFolderDelete,
     formatSpecs,
+    deckImportResolve,
+    deckImportCommit,
+    deckImportReadFile,
+    syncStatus,
   },
 }));
 
@@ -126,6 +138,46 @@ const PICKER: FormatSpec[] = [
   spec("casual"),
 ];
 
+/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+ *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: null,
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  printingCount: 1,
+  ownedQuantity: 0,
+};
+
+/** A card database that is filled in and idle: the import dialog reads this to tell a list
+ *  that is wrong from one the app has not synced the cards for yet. */
+const SYNCED: SyncStatus = {
+  cardCount: 116_695,
+  lastCheckAt: null,
+  bulkUpdatedAt: null,
+  lastError: null,
+  lastIngestSkipped: null,
+  dataDir: "C:/data",
+  syncing: false,
+  imageStoreFailures: 0,
+};
+
 function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -151,6 +203,12 @@ beforeEach(() => {
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
+  // One printing, so a one-line paste has something to resolve to and the Import button is
+  // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
+  deckImportResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
+  deckImportReadFile.mockReset().mockResolvedValue("");
+  syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });
 });
@@ -431,16 +489,73 @@ describe("DecksPage", () => {
   });
 
   /**
+   * The gallery's second door into a deck: a list somebody else wrote.
+   *
+   * A quiet control beside the primary one, because making a deck and importing one are the
+   * same act with different starting material — and the gallery has exactly one primary action.
+   */
+  it("opens the import dialog from the gallery heading", async () => {
+    wrap(<DecksPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
+
+    expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    // The gallery has no deck open, so there is nothing to merge into and no choice to offer.
+    expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * One piece of state for every panel on this screen, which is what makes "never two" a shape
+   * rather than a thing to remember: two `"inner"` Escape rungs open at once are not ordered by
+   * that protocol at all, and both would consume one press.
+   */
+  it("never has the create dialog and the import dialog open at once", async () => {
+    wrap(<DecksPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
+    expect(await screen.findByRole("dialog", { name: "New deck" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
+
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+    expect(screen.getByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "New deck" }));
+
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+    expect(screen.getByRole("dialog", { name: "New deck" })).toBeInTheDocument();
+  });
+
+  /** Nobody imports a deck in order to look at a tile of it — the same rule creating one
+   *  follows, through the same handler. */
+  it("opens the new deck in the editor after an import", async () => {
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
+
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    await userEvent.click(screen.getByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "casual" }),
+    );
+    await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
+  });
+
+  /**
    * The one place a refused create can be read is the form it was made in — `writeFailure`
    * covers the three writes a *tile* makes, not this one, and reopening the form resets the
    * mutation. So the form has to outlive the press.
    *
-   * The press is what puts it at risk: `Create deck` disables itself, and a browser blurs a
-   * disabled control **with no `relatedTarget` at all** — which the click-away handler reads as
-   * the reader leaving. That blur is the one event jsdom will not produce on its own (it does
-   * not blur a control that becomes disabled, and a `userEvent.click` elsewhere then finds
-   * nothing to move the caret *from*), so it is dispatched here directly. Delivered any other
-   * way this test passes over a missing guard — it was written that way first, and did.
+   * The press used to put it at risk: `Create deck` disables itself, a browser blurs a disabled
+   * control **with no `relatedTarget` at all**, and the anchored form's click-away handler read
+   * that as the reader leaving — closing the form *as if the write had worked*. The modal has
+   * no such handler, so the `focusOut` below now proves the opposite of what it once did:
+   * **focus leaving a modal is not a dismissal.** It is dispatched directly because jsdom will
+   * not produce it on its own (it does not blur a control that becomes disabled, and a
+   * `userEvent.click` elsewhere then finds nothing to move the caret *from*).
    */
   it("keeps the create form open while the write is in flight, so a refusal has somewhere to land", async () => {
     let refuse!: (reason: string) => void;
@@ -572,16 +687,32 @@ describe("DecksPage", () => {
     expect(deckDelete).not.toHaveBeenCalled();
   });
 
-  /** Every other popup in the app closes when the reader looks away; this one too. */
-  it("closes the create form on a click away, without handing the caret back", async () => {
+  /**
+   * The dialog's pointer way out, and the one thing that separates it from every anchored
+   * popup in this app: a press **on the scrim**, not a press anywhere outside.
+   *
+   * The form used to close on a blur, which is right for a popup and wrong for a modal — the
+   * caret cannot leave a trapped layer, so nothing outside it can be pressed by accident.
+   *
+   * **It does not hand the caret back, and Escape does.** That is CLAUDE.md's rule for every
+   * layer in this app: Escape is the reader saying "put me back", and a press outside is the
+   * reader already being somewhere else. This dialog handed it back either way until the
+   * import dialog was built beside it and the two were made to agree.
+   */
+  it("closes the create form on a press on the scrim, and leaves the caret alone", async () => {
     wrap(<DecksPage />);
     const newDeck = await screen.findByRole("button", { name: "New deck" });
     await userEvent.click(newDeck);
     await screen.findByLabelText("Name");
 
-    await userEvent.click(document.body);
+    // A press inside the panel is not a dismissal, whatever it lands on.
+    const panel = screen.getByRole("dialog", { name: "New deck" });
+    fireEvent.mouseDown(panel);
+    expect(screen.getByLabelText("Name")).toBeInTheDocument();
 
-    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    fireEvent.mouseDown(panel.parentElement as HTMLElement);
+
+    await waitFor(() => expect(screen.queryByLabelText("Name")).not.toBeInTheDocument());
     expect(newDeck).not.toHaveFocus();
   });
 

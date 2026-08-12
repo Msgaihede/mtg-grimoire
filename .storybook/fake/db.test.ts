@@ -20,6 +20,7 @@ import type {
   DeckDetail,
   EntryChange,
   EntryInput,
+  ImportResolveLine,
   SearchRequest,
   SearchSortKey,
   WishlistPage,
@@ -1854,6 +1855,201 @@ describe("missing to the wishlist", () => {
   });
 });
 
+/**
+ * What a decklist has to survive on its way into a deck.
+ *
+ * The resolve half is about **which printing a name means**, which is the one question the
+ * webview cannot answer for itself; the commit half is about the grain, the variant and the
+ * categories. Neither is about parsing — that is `import/parse.ts`, and it never reaches here.
+ */
+describe("the decklist import", () => {
+  /** `c21 263`, 2021 — the older Sol Ring, and the one nothing prefers until it is owned. */
+  const SOL_OLD = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "c21")!;
+  /** `sld 913`, 2025 — the newest, which is what a bare name lands on. */
+  const SOL_NEW = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "sld")!;
+  /** The double-faced row: a decklist writes it `Delver of Secrets` and `cards.name` does not. */
+  const DELVER = CARDS.find((c) => c.name.startsWith("Delver of Secrets //"))!;
+
+  /** The three fields of a resolve line, so a case can name only the ones it is about. */
+  function resolve(db: FakeDb, lines: Partial<ImportResolveLine>[]) {
+    return readHandlers(db).deck_import_resolve({
+      lines: lines.map((l) => ({ name: "", setCode: null, collectorNumber: null, ...l })),
+    });
+  }
+
+  it("resolves a name to a printing it has", () => {
+    const rows = resolve(makeDb(), [
+      { name: "Sol Ring" },
+      // The set code in the case a parser that upper-cased `(C21)` would send. Honoured, and
+      // `printingCount` is the *arm's* count — one printing, not the card's two.
+      { name: "Sol Ring", setCode: "C21", collectorNumber: "263" },
+    ]);
+    expect(rows[0]).toMatchObject({ index: 0, hintMissed: false });
+    // The newest of the two, because the collection holds neither.
+    expect(rows[0].matched).toMatchObject({ cardId: SOL_NEW.id, printingCount: 2 });
+    expect(rows[1].matched).toMatchObject({ cardId: SOL_OLD.id, printingCount: 1 });
+    expect(rows[1].hintMissed).toBe(false);
+  });
+
+  it("resolves a front-face name to a double-faced card", () => {
+    const rows = resolve(makeDb(), [
+      { name: "Delver of Secrets" },
+      // …and the fold arm, which is where case and diacritics survive: neither the exact-name
+      // arm nor the front-face range matches this one.
+      { name: "delver of secrets" },
+    ]);
+    // **The whole printed name** comes back, which is what `deck_cards.name` denormalizes and
+    // the one case a preview echoing the line's own name would hide.
+    expect(rows[0].matched).toMatchObject({ cardId: DELVER.id, name: DELVER.name });
+    expect(rows[1].matched).toMatchObject({ cardId: DELVER.id });
+  });
+
+  it("prefers a printing the collection holds", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: SOL_OLD.id, quantity: 1 })] });
+    // The older printing now, and the reason is on the row: `ownedQuantity` is why it won.
+    expect(resolve(db, [{ name: "Sol Ring" }])[0].matched).toMatchObject({
+      cardId: SOL_OLD.id,
+      ownedQuantity: 1,
+    });
+  });
+
+  it("answers a name it does not know with a null match", () => {
+    const rows = resolve(makeDb(), [
+      { name: "Nonesuch Card" },
+      // A hint that named nothing is reported and **falls through**: wanting a printing this
+      // app has not got is never a reason to lose the card.
+      { name: "Sol Ring", setCode: "zzz", collectorNumber: "1" },
+      // A collector number with no set beside it cannot narrow anything, so it is a missed
+      // hint without ever being tried.
+      { name: "Sol Ring", collectorNumber: "263" },
+    ]);
+    expect(rows[0]).toMatchObject({ matched: null, hintMissed: false });
+    expect(rows[1].hintMissed).toBe(true);
+    expect(rows[1].matched).toMatchObject({ cardId: SOL_NEW.id });
+    expect(rows[2].hintMissed).toBe(true);
+    expect(rows[2].matched).toMatchObject({ cardId: SOL_NEW.id });
+  });
+
+  it("commits a merge onto the grain", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1 })],
+    });
+    const out = writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "merge",
+      items: [
+        { cardId: BOLT.id, quantity: 2, categoryName: "Main deck" },
+        // The same card on two lines is one row for the sum, not two.
+        { cardId: BOLT.id, quantity: 3, categoryName: "Main deck" },
+      ],
+    });
+    // `added` is what the list **asked for**, not what the deck landed on.
+    expect(out).toEqual({ added: 5, removed: 0, categoriesCreated: 0 });
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(6);
+  });
+
+  it("commits a replace that clears only its own variant", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 }),
+        deckCard({ id: 2, cardId: BOLT_A.id, variant: "theory", quantity: 7 }),
+      ],
+    });
+    const out = writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "replace",
+      items: [{ cardId: BOLT_B.id, quantity: 1, categoryName: "Main deck" }],
+    });
+    // Copies, not rows — the number the history's `delta` carries.
+    expect(out).toEqual({ added: 1, removed: 4, categoriesCreated: 0 });
+    // Replacing what is sleeved up never touches the plan.
+    expect(db.deckCards.filter((dc) => dc.variant === "theory")).toHaveLength(1);
+    expect(db.deckCards.filter((dc) => dc.variant === "live")).toHaveLength(1);
+    // The cards go and the **filing stays**: a category is the reader's, not the list's.
+    expect(db.deckCategories.filter((c) => c.deckId === 1)).toHaveLength(5);
+    // One row per *effect*, never one per card.
+    expect(db.deckAudit.map((a) => a.kind)).toEqual(["remove", "add"]);
+    expect(db.deckAudit.map((a) => a.delta)).toEqual([-4, 1]);
+  });
+
+  it("creates the categories the items name", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const out = writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "merge",
+      items: [
+        { cardId: BOLT_A.id, quantity: 1, categoryName: "Ramp" },
+        // Trimmed before it is keyed, so this is the same pile and not a second creation.
+        { cardId: BOLT_B.id, quantity: 1, categoryName: "  Ramp  " },
+        // A section the deck already has by name costs nothing — matched by **name alone**, so
+        // a `Sideboard` line lands on the seeded `side` row rather than making a second pile.
+        { cardId: SOL_NEW.id, quantity: 1, categoryName: "Sideboard" },
+      ],
+    });
+    expect(out.categoriesCreated).toBe(1);
+    const ramp = db.deckCategories.filter((c) => c.deckId === 1 && c.name === "Ramp");
+    expect(ramp).toHaveLength(1);
+    expect(ramp[0]).toMatchObject({ kind: "main", isActive: true });
+    // Two printings, so two rows — one pile.
+    expect(db.deckCards.filter((dc) => dc.categoryId === ramp[0].id)).toHaveLength(2);
+    expect(
+      db.deckCards.filter((dc) => dc.categoryId === categoryId(1, "side")),
+    ).toHaveLength(1);
+  });
+
+  it("refuses an empty item list", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, quantity: 4 })],
+    });
+    // The refusal that matters most in `replace`, where "do nothing" and "clear the deck and
+    // put nothing back" are the same call with the same arguments.
+    expect(() =>
+      writeHandlers(db).deck_import_commit({
+        deckId: 1,
+        variant: "live",
+        mode: "replace",
+        items: [],
+      }),
+    ).toThrow(/nothing to import/i);
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckAudit).toHaveLength(0);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the deck as it was", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 })],
+    });
+    expect(() =>
+      writeHandlers(db).deck_import_commit({
+        deckId: 1,
+        variant: "live",
+        mode: "replace",
+        items: [
+          { cardId: BOLT_B.id, quantity: 1, categoryName: "Ramp" },
+          { cardId: "no-such-card", quantity: 1, categoryName: "Ramp" },
+        ],
+      }),
+    ).toThrow(/no card with the id/);
+    // The rows the replace was about to clear are still there, and no half-made category is
+    // left behind it.
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(4);
+    expect(db.deckCategories.some((c) => c.name === "Ramp")).toBe(false);
+  });
+
+  it("has no file to read, and says so rather than inventing a decklist", () => {
+    expect(() => readHandlers(makeDb()).deck_import_read_file()).toThrow(/no file picker/i);
+  });
+});
+
 describe("the busy fault", () => {
   it("refuses a write in words and leaves the row alone", () => {
     const db = makeDb({
@@ -1914,12 +2110,18 @@ describe("the busy fault", () => {
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
     };
-    // 40 commands in the table, the five above excluded: 35 that really take the lock —
-    // re-counted 2026-08-12 with `set_marketplace`, which is the newest of them. Like
-    // `error_log_clear` before it, it takes `AppState.db` through `lock_for` and is therefore
-    // refusable, where its own read half (`get_marketplace`, on `db_read`) is not.
+    // The five above excluded, this is every command that really takes the write lock —
+    // re-counted 2026-08-12 **after merging two branches that each added one**, which is the
+    // case this number keeps losing to: deck-import added `deck_import_commit` and the
+    // marketplace branch added `set_marketplace`, each re-counted correctly against its own
+    // base, and the merge made both counts wrong at once.
+    //
+    // Both follow the same split as `error_log_clear` before them: the write half takes
+    // `AppState.db` through `lock_for` and is therefore refusable, while its read half
+    // (`deck_import_resolve`, `get_marketplace`) goes through `db_read` and answers through
+    // every second of a sync.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(35);
+    expect(names).toHaveLength(36);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
