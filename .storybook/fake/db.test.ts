@@ -1914,12 +1914,12 @@ describe("the busy fault", () => {
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
     };
-    // 39 commands in the table, the five above excluded: 34 that really take the lock.
-    // `error_log_clear` is the newest of them — it takes `AppState.db` through `lock_for`
-    // like every other write, which is what makes it refusable where `error_log_list`
-    // (on `db_read`) is not.
+    // 40 commands in the table, the five above excluded: 35 that really take the lock —
+    // re-counted 2026-08-12 with `set_marketplace`, which is the newest of them. Like
+    // `error_log_clear` before it, it takes `AppState.db` through `lock_for` and is therefore
+    // refusable, where its own read half (`get_marketplace`, on `db_read`) is not.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(34);
+    expect(names).toHaveLength(35);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -1958,6 +1958,29 @@ describe("the whole command table", () => {
     // `deck_missing_to_wishlist` takes `deckId` where its four neighbours take `id` — the
     // odd one out, and Tauri matches by name.
     await expect(invoke<number>("deck_missing_to_wishlist", { id: 1 })).rejects.toThrow();
+  });
+
+  /**
+   * The one setting stored as an `app_meta` row, and the two states that row has that a
+   * narrowed field could not reach: never written, and written by a build that knew an id this
+   * one does not. Both read as the default, and only a *write* refuses — which is the whole of
+   * why the table cannot collect junk while a downgrade still renders prices.
+   */
+  it("falls back to the default marketplace on a missing or unknown row, and refuses a bad write", () => {
+    expect(readHandlers(makeDb()).get_marketplace()).toBe("tcgplayer");
+    expect(readHandlers(makeDb({ marketplace: "moxfield" })).get_marketplace()).toBe("tcgplayer");
+    expect(readHandlers(makeDb({ marketplace: "cardmarket" })).get_marketplace()).toBe("cardmarket");
+
+    const db = makeDb();
+    writeHandlers(db).set_marketplace({ id: "cardmarket" });
+    expect(db.marketplace).toBe("cardmarket");
+    expect(readHandlers(db).get_marketplace()).toBe("cardmarket");
+
+    expect(() => writeHandlers(db).set_marketplace({ id: "moxfield" })).toThrow(
+      /is not a marketplace/,
+    );
+    // Refused, and the row it would have overwritten is still the one that was chosen.
+    expect(db.marketplace).toBe("cardmarket");
   });
 
   it("answers a sync run without touching the store", () => {

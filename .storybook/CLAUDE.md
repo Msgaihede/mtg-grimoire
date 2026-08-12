@@ -20,12 +20,14 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **eight** faults
+  Four seeds (`empty`/`starter`/`needsReview`/`large`), **nine** faults
   (`busy`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
-  `updateError`); saying nothing gets `starter` with no fault. A fault is set on the _world_, so a
-  story shows what the **app** does with a refusal rather than what one mocked call returns.
-  **Re-count this list when you add one** — it said "four" for three faults' worth of drift,
-  because a prose-only edit routes to neither CI job and nothing goes red.
+  `updateError`/`errorLog`); saying nothing gets `starter` with no fault. A fault is set on the
+  _world_, so a story shows what the **app** does with a refusal rather than what one mocked
+  call returns.
+  **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
+  then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
+  edit routes to neither CI job and nothing goes red.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.

@@ -75,7 +75,9 @@ export const Shopping: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeVisible();
     // The sentence this dialog exists to say.
     await expect(canvas.getByText(/are cuts you have already made/)).toBeVisible();
-    await expect(canvas.getByText("Prices as of the last card-data sync.")).toBeVisible();
+    await expect(
+      canvas.getByText("TCGplayer prices as of the last card-data sync."),
+    ).toBeVisible();
   },
 };
 

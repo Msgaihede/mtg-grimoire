@@ -256,7 +256,7 @@ export const SingleFaced: Story = {
     // files of jsdom in parallel. The default second is a wait on the *scheduler*, and it
     // flaked once at that length while passing this play in isolation every time.
     await waitFor(
-      () => expect(within(pane).getByText("Prices as of the last card-data sync.")).toBeVisible(),
+      () => expect(within(pane).getByText("TCGplayer prices as of the last card-data sync.")).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
 
@@ -468,7 +468,7 @@ export const AllFinishes: Story = {
     // `SingleFaced` writes out: the pane fades in, and a `toBeVisible` under it is false until
     // the arrival lands.
     await waitFor(
-      () => expect(within(pane).getByText("Prices as of the last card-data sync.")).toBeVisible(),
+      () => expect(within(pane).getByText("TCGplayer prices as of the last card-data sync.")).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     // Once in the card's own facts and once on its row in the printings list below. The badge's
