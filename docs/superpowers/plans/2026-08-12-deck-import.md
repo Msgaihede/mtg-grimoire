@@ -12,6 +12,35 @@
 
 ## Global Constraints
 
+> **Revised 2026-08-12 after merging `origin/main` (26 commits).** Main restructured the docs and
+> added a motion vocabulary. Both change what every task below must obey; the changes are folded
+> into the constraints and into Tasks 7, 10, 11, 13 and 14.
+
+- **The binding rules live in per-directory `CLAUDE.md` files now, not one root page.** The root
+  `CLAUDE.md` is a short index. Read the one that governs what you are touching:
+
+  | Working on | Read |
+  |---|---|
+  | Anything Rust | `src-tauri/CLAUDE.md` |
+  | Any UI | `src/CLAUDE.md` |
+  | Deck domain, categories, the editor | `src/features/decks/CLAUDE.md` |
+  | Stories, the fake, seeds and faults | `.storybook/CLAUDE.md` |
+
+  Long-form measurements sit in `docs/reference/` — `decks-storage.md`, `motion.md`,
+  `frontend-design.md`, `storybook.md`, `live-ui-verification.md`, `data-and-sync.md`.
+- **Motion is a shared vocabulary and every animated surface uses it** (`src/lib/motion.ts`,
+  `motion@13.1.0`). Import a **preset** — `scrim`, `dialog`, `popup`, `press` — never a duration.
+  **Two APIs are forbidden and fail silently:** `AnimatePresence mode="popLayout"` and
+  `animateView()` both inject a `<style>` element, which the shipped `style-src 'self'` blocks
+  while dev, Storybook and jsdom all stay green. `mode="sync"` and `"wait"` are fine.
+  `src/lib/tokens.test.ts` sweeps for both.
+- **A `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false for
+  anything inside a newly opened overlay until the next frame.** Assertions about content inside
+  a surface that just opened need `waitFor` — in component tests and in story `play`s alike.
+- **The `mtg-grimoire-sb-mcp` MCP server that `src/CLAUDE.md` mandates is NOT connected in this
+  session.** Substitute the discipline, not the tool: before using any prop on an existing
+  component, read that component's source and its `.stories.tsx`. Never infer a prop from its
+  name or from another library.
 - **Read `CLAUDE.md` before every task.** Its hard rules are binding, especially "Hard rules — decks".
 - **`npm run verify`** (build + lint + Vitest + cargo test) must pass before every commit. Run it from the worktree root.
 - **`.storybook/fake/db.ts` cannot be grepped** — ripgrep classifies it as binary and reports "no matches" for text that is there. **Read it** with the Read tool instead. (Same for any `Grep` over `.storybook/fake/`.)
@@ -1098,6 +1127,8 @@ export const SECTION_CATEGORY = {
 ```
 
 - A line's category is `SECTION_CATEGORY[line.section]` when the section is not `"deck"`, else `autoCategoryFor({ typeLine: match.typeLine })`.
+
+**Changed under you by main, and it matters here.** `useDeck.addCard` now applies `autoCategoryFor` itself, on its single definition, taking an optional `typeLine` that travels from the call site — and `useDeck.ts` exports `DEFAULT_CATEGORY_NAME` (`"Main deck"`). The distinction that module draws is: a type line of **`null`** (an orphan, or a layout with no bucket word) is `Uncategorised`; an **absent** type line is `DEFAULT_CATEGORY_NAME`. An import always has the resolved card's `typeLine` in hand, so it is never in the "absent" case — every planned card goes through `autoCategoryFor` and an unresolvable type line lands in `Uncategorised`. **Do not route the import through `addCard`**; it writes one card per call and the whole point of `deck_import_commit` is one transaction and one allocator run. Read `src/features/decks/CLAUDE.md`'s "The category model" section before writing this file.
 - The tally's order: the four `SECTION_CATEGORY` values in `PREDEFINED_CATEGORY_NAMES` order, then the type buckets in `AUTO_CATEGORY_DISPLAY_ORDER`, then `UNCATEGORISED`. `inactive` is true for `"Maybeboard"` **and nothing else** — the four predefined kinds are fixed and only that one is seeded inactive.
 - Commander, in order: `spec === null || spec.commanderRule === null` → `notApplicable`. Any card in the `"Commander"` category → `fromFile`. Else gather every card `c` where `commanderIneligibility(identityOf(c.match), spec.commanderRule, spec) === null`; exactly one → `automatic`; otherwise → `ask` with the candidates.
   - The adapter from `ImportMatch` to `CardIdentity` is a plain object literal — every field of `CardIdentity` is on `ImportMatch` under the same name. Write it out once as `function identityOf(m: ImportMatch): CardIdentity`.
@@ -1267,12 +1298,16 @@ Run: `npx vitest run src/features/decks/CreateDeckDialog.test.tsx`
 
 - [ ] **Step 3: Build the dialog**
 
-**Read `src/features/decks/TheoryDiffDialog.tsx:265-300` and copy its shell exactly** — it is the pattern, and reinventing it is how a modal ends up with an `aria-modal` it does not honour:
+**Read `src/features/decks/TheoryDiffDialog.tsx` in full and copy its shell exactly** — it is the pattern, and reinventing it is how a modal ends up with an `aria-modal` it does not honour. **It gained motion when main landed, so read the file rather than this description:**
 
-- scrim: `<div className={cn("fixed inset-0 flex items-center justify-center bg-bg/70 p-4", LAYER.overlay)}>` with `onMouseDown` closing only when `e.target === e.currentTarget` (**`onMouseDown`, not `onClick`** — a click fires on the common ancestor of press and release, so a text selection dragged past the panel edge would otherwise dismiss it);
-- panel: `ref`, `tabIndex={-1}`, `role="dialog"`, `aria-modal="true"`, `aria-labelledby` pointing at its `<h2>`, `onKeyDown={trapTab}`;
+- the whole surface is wrapped in `<AnimatePresence>`, and the panel is mounted only while open;
+- scrim: `<motion.div {...scrim} className={cn("fixed inset-0 flex items-center justify-center bg-bg/70 p-4", LAYER.overlay)}>` with `onMouseDown` closing only when `e.target === e.currentTarget` (**`onMouseDown`, not `onClick`** — a click fires on the common ancestor of press and release, so a text selection dragged past the panel edge would otherwise dismiss it);
+- panel: `<motion.div {...dialog}>` with `ref`, `tabIndex={-1}`, `role="dialog"`, `aria-modal="true"`, `aria-labelledby` pointing at its `<h2>`, `onKeyDown={trapTab}`;
+- `scrim` and `dialog` are imported from `@/lib/motion` — **never a hand-written duration, and never `mode="popLayout"`**;
 - `useDismissOnEscape({ layer: "inner", onDismiss })` with a `useCallback`-stable `onDismiss`;
 - focus the **name input** on mount (this dialog has one obvious first field, unlike `TheoryDiffDialog` which focuses its panel).
+
+**Every test assertion about content inside this dialog needs `waitFor`** — a `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false until the next frame even with `MotionGlobalConfig.skipAnimations`. That is the single most likely way this task's tests fail for a reason that is not a bug.
 
 The body is the two fields and the button lifted from `CreateDeckForm` — same labels, same `DEFAULT_FORMAT`, same `enabledInPicker` filter, same refusal line, same disabled rule. Do not redesign them.
 
@@ -1399,7 +1434,7 @@ it("shows the file reader's refusal beside the button", async () => {});
 
 - [ ] **Step 4: Run, fail, build the dialog**
 
-Same modal shell as Task 10 (**read `TheoryDiffDialog.tsx` again — do not copy from memory**). Three states in one panel, `step: "source" | "preview"`:
+Same modal shell as Task 10 — `AnimatePresence`, `motion.div {...scrim}`, `motion.div {...dialog}` from `@/lib/motion`, `trapTab`, `useDismissOnEscape({ layer: "inner" })` (**read `TheoryDiffDialog.tsx` and the `CreateDeckDialog` Task 10 just built — do not copy from memory**). Two steps in one panel, `step: "source" | "preview"`:
 
 **Source step** — a `<textarea>` (labelled, ~14 rows), a *Choose file…* button, and for `target.kind === "new"` the name and format fields from `CreateDeckDialog` (extract them into a small shared component **only if that is a clean lift**; a second copy of two form fields is not worth a bad abstraction — decide by looking, and say which you chose in the commit message). Prefill the name from `parsed.suggestedName` when the reader has not typed one.
 
@@ -1512,7 +1547,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 2: Re-count the Storybook numbers**
 
-`CLAUDE.md`'s Storybook section states story-file, story, and docs-page counts, and says to re-count them in the same commit that adds a story. Do it the only way that is honest:
+Those counts moved out of the root page when main split the docs: they now live in **`docs/reference/storybook.md`**, and `.storybook/CLAUDE.md` governs the fake. The rule is unchanged and is now stated as a global one in the root `CLAUDE.md` — "a prose-only edit routes to neither CI job, so nothing goes red when a document rots; re-count in the same commit that changes one". Do it the only way that is honest:
 
 ```bash
 npm run build-storybook
@@ -1524,9 +1559,16 @@ Update the four numbers in `CLAUDE.md` from that output. Also re-count the `play
 grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l
 ```
 
-- [ ] **Step 3: Write the feature into `CLAUDE.md`**
+- [ ] **Step 3: Write the feature into the docs**
 
-A new section, **`## Deck import`**, after "Deck builder, driven in the shipped window". Keep it to what a future reader cannot derive from the code — the decisions and the traps, not the file list:
+Main split one page into five plus a reference set, so this lands in **two** places and neither is the root `CLAUDE.md`:
+
+1. **`src/features/decks/CLAUDE.md`** — a short **`## Import`** section carrying only the binding rules, in that file's voice. This is what loads when someone touches the deck feature.
+2. **`docs/reference/decks-storage.md`** — the long-form record: the Rust commands, the measurements with the build named, and anything the live pass finds. That file already holds the deck tables, the six card commands, the allocator and the audit log, and `deck_import_commit` is the seventh command.
+
+Add a row to the root `CLAUDE.md`'s reference table **only if** you create a new reference doc; do not create one — import belongs with deck storage.
+
+What to write, in both places scaled to their voice — the decisions and the traps, not the file list:
 
 - The parser is one parser on purpose, and `//` is a comment only at the start of a line.
 - Resolution prefers a printing you **own**, then the newest paper printing; the tie-break runs to `id` so an import is deterministic.
@@ -1560,8 +1602,14 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 Storybook runs in a browser and the suite runs in jsdom. **Neither ships.** Every UI task in this repo's history found something in the real WebView2 that no suite could see.
 
+**Read `docs/reference/live-ui-verification.md` first — it is the harness contract**, and it documents traps that have each cost a session.
+
 **Files:**
-- Modify: `CLAUDE.md` (fill in the measured lines Task 13 left open)
+- Modify: `docs/reference/decks-storage.md` and `src/features/decks/CLAUDE.md` (fill in the measured lines Task 13 left open)
+
+**Two worktree-specific facts, learned the hard way on this repo:**
+- **Drive `scripts/cdp.mjs` from PowerShell, not Bash** — the Bash tool refuses its `eval` calls as unverifiable in a worktree-isolated session. Avoid nested quotes and `$` in the expression you pass.
+- A CDP recorder dies with the window it is attached to and says nothing about it. Re-attach after any relaunch and check the line count at the end.
 
 - [ ] **Step 1: Launch the real app with CDP**
 
