@@ -29,12 +29,21 @@ export function formatPrice(value: number | null, currency: Currency): string {
 }
 
 /**
- * The provenance sentence, which now has to name the marketplace.
+ * The provenance sentence, which has to name the marketplace **and get its source right**.
  *
- * It was a constant while there was only one answer. With five in the picker, a bare "prices
- * as of the last sync" would leave the reader to guess whose prices they are looking at — and
- * the whole point of the setting is that the answer changed.
+ * It was a constant while there was only one answer. With five in the picker, a bare "prices as
+ * of the last sync" would leave the reader to guess whose prices they are looking at — and the
+ * whole point of the setting is that the answer changed.
+ *
+ * Two sentences now, because there are two sources and they are refreshed by different things.
+ * TCGplayer's and Cardmarket's numbers ride in with the card data, so the card sync is what
+ * dates them; Card Kingdom's and Mana Pool's are downloaded on their own schedule, and saying
+ * "the last card-data sync" over those would point a reader at a date that has nothing to do
+ * with the figure beside it. The exact stamp for a feed lives in Settings, where there is room
+ * for it — see `MarketplacePanel`.
  */
 export function pricesAsOf(marketplace: Marketplace): string {
-  return `${marketplace.label} prices as of the last card-data sync.`;
+  return marketplace.feed
+    ? `${marketplace.label} prices as of the last price-feed refresh.`
+    : `${marketplace.label} prices as of the last card-data sync.`;
 }

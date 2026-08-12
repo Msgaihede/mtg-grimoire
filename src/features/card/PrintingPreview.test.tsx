@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CardDetail, Printing, PrintingsResponse } from "@/lib/ipc";
+import type { MarketplaceId } from "@/lib/marketplace";
 import { fireDragEvent } from "@/test-drag";
 
 const detail: CardDetail = {
@@ -22,7 +23,7 @@ const detail: CardDetail = {
   artist: "Christopher Rush",
   releasedAt: "1993-08-05",
   legalities: '{"modern":"legal"}',
-  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  finishPrices: { nonfoil: 400.5, foil: null, etched: null },
   finishes: '["nonfoil"]',
   imageStatus: "highres_scan",
   faces: [],
@@ -39,7 +40,7 @@ const printing = (over: Partial<Printing> = {}): Printing => ({
   artist: "Christopher Rush",
   lang: "en",
   finishes: '["nonfoil"]',
-  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  finishPrices: { nonfoil: 400.5, foil: null, etched: null },
   promo: false,
   fullArt: false,
   frameEffects: null,
@@ -63,8 +64,8 @@ const cardPrintings = vi.fn();
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
-    cardDetail: (id: string) => cardDetail(id),
-    cardPrintings: (o: string) => cardPrintings(o),
+    cardDetail: (id: string, marketplace: MarketplaceId) => cardDetail(id, marketplace),
+    cardPrintings: (o: string, marketplace: MarketplaceId) => cardPrintings(o, marketplace),
   },
 }));
 import { CardDetailPane } from "./CardDetailPane";
@@ -416,7 +417,9 @@ describe("the printings list preview", () => {
     // What a refetch does: the same query, a different list. (`p2` is gone from it, so React
     // cannot reuse the row the picture was hung on.)
     act(() => {
-      qc.setQueryData(["card", "printings", "o1"], {
+      // The marketplace is the last segment of the key — `card_printings` prices every row with
+      // it, so two marketplaces are two lists. Nothing here has chosen one.
+      qc.setQueryData(["card", "printings", "o1", "tcgplayer"], {
         items: [printing(), printing({ id: "p4", setCode: "2ed", collectorNumber: "162" })],
         total: 2,
       });

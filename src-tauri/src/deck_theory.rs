@@ -49,12 +49,14 @@ pub struct TheoryDiffRow {
     /// How many more copies theory wants than live has. Always positive: a card live has as
     /// many of is not on this list at all, and one it has *more* of is a cut, not a purchase.
     pub quantity: i64,
-    /// Nonfoil `usd` from this printing's `prices` blob — `DeckCardRow::unit_price_usd`'s rule,
-    /// and never `cards.price_usd`, which is a display fallback chain and must not be summed.
-    pub unit_price_usd: Option<f64>,
-    /// The same in EUR, from `$.eur` — the twin that lets the shopping list be priced on
-    /// Cardmarket without a second query.
-    pub unit_price_eur: Option<f64>,
+    /// What one copy costs at the marketplace the read was given, **nonfoil** —
+    /// `DeckCardRow::unit_price`'s rule over [`crate::deck::DECK_FINISH`], and never
+    /// `cards.price_usd`, which is a display fallback chain and must not be summed.
+    ///
+    /// `None` where that marketplace does not price the printing, which is a fact about the
+    /// shop rather than a hole: a shopping list quoting a price from somewhere the reader is
+    /// not buying is worse than an em dash.
+    pub unit_price: Option<f64>,
     pub set_code: String,
     pub collector_number: String,
     /// Copies of this oracle card the collection holds and **no built deck has claimed**.
@@ -109,15 +111,19 @@ fn group_key(oracle_id: Option<&str>, card_id: &str) -> String {
 /// nothing, so a card parked in the theory Maybeboard is not something the user has decided to
 /// play, and a card parked in the *live* Maybeboard is not something the deck has. Filtering
 /// one side and not the other is how a scratchpad would come to fill a shopping list.
-const DIFF_SELECT: &str = "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
+fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
+    format!(
+        "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
             dc.collector_number, dc.quantity, cat.name, c.oracle_id,
-            CAST(json_extract(c.prices, '$.usd') AS REAL),
-            CAST(json_extract(c.prices, '$.eur') AS REAL)
+            {price}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND cat.is_active = 1
-      ORDER BY cat.sort_order, cat.id, dc.name, dc.id";
+      ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
+        price = crate::sorting::price_expr(marketplace, crate::deck::DECK_FINISH)
+    )
+}
 
 /// Copies of one card the collection holds that no **built** deck has spoken for.
 ///
@@ -158,18 +164,27 @@ const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
 ///
 /// Ordered by where the representative row falls in the editor's own reading order, so the
 /// shopping list runs down the deck the way the deck is drawn.
-pub fn theory_diff(conn: &Connection, deck_id: i64) -> Result<Vec<TheoryDiffRow>, String> {
-    Ok(grouped_diff(conn, deck_id)?
+pub fn theory_diff(
+    conn: &Connection,
+    deck_id: i64,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<TheoryDiffRow>, String> {
+    Ok(grouped_diff(conn, deck_id, marketplace)?
         .into_iter()
         .map(|g| g.row)
         .collect())
 }
 
 /// [`theory_diff`]'s working form — see [`Grouped`] for why the oracle id stays.
-fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String> {
+fn grouped_diff(
+    conn: &Connection,
+    deck_id: i64,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<Grouped>, String> {
     // Both variants in one read: two reads could not be compared, because a card write between
     // them would put a copy on one side of the subtraction and not the other.
-    let mut stmt = conn.prepare(DIFF_SELECT).map_err(|e| e.to_string())?;
+    let sql = diff_select(marketplace);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![deck_id], |r| {
             Ok((
@@ -181,8 +196,7 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
                 r.get::<_, i64>(5)?,            // quantity
                 r.get::<_, String>(6)?,         // category name
                 r.get::<_, Option<String>>(7)?, // oracle_id
-                r.get::<_, Option<f64>>(8)?,    // unit price, usd
-                r.get::<_, Option<f64>>(9)?,    // unit price, eur
+                r.get::<_, Option<f64>>(8)?,    // unit price
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -202,8 +216,7 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
             quantity,
             category,
             oracle,
-            usd,
-            eur,
+            unit_price,
         ) = row.map_err(|e| e.to_string())?;
         let key = group_key(oracle.as_deref(), &card_id);
         if variant == THEORY {
@@ -219,8 +232,7 @@ fn grouped_diff(conn: &Connection, deck_id: i64) -> Result<Vec<Grouped>, String>
                             category_name: category,
                             // Filled below, once both sides are summed.
                             quantity: 0,
-                            unit_price_usd: usd,
-                            unit_price_eur: eur,
+                            unit_price,
                             set_code,
                             collector_number,
                             owned_spare: 0,
@@ -394,7 +406,10 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
         return Err(crate::deck::GONE.to_owned());
     }
     let mut touched = 0;
-    for grouped in grouped_diff(&tx, deck_id)? {
+    // The default marketplace, for [`crate::deck::missing_to_wishlist`]'s reason: this reads
+    // names and counts, never a price, and a shopping list must not depend on where the reader
+    // shops.
+    for grouped in grouped_diff(&tx, deck_id, crate::sorting::Marketplace::default())? {
         let Some(oracle_id) = grouped.oracle_id else {
             continue;
         };
@@ -437,10 +452,12 @@ fn unfinished(e: tauri::Error) -> String {
 pub async fn deck_theory_diff(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
+    marketplace: Option<String>,
 ) -> Result<Vec<TheoryDiffRow>, String> {
     let state = state.inner().clone();
+    let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
-        theory_diff(&crate::sync::lock_db_read(&state), deck_id)
+        theory_diff(&crate::sync::lock_db_read(&state), deck_id, marketplace)
     })
     .await
     .map_err(|e| format!("the theory list could not be read: {e}"))?
@@ -476,6 +493,10 @@ pub async fn deck_theory_missing_to_wishlist(
 mod tests {
     use super::*;
     use crate::deck::{DeckInput, DeckPatch};
+
+    /// The marketplace a test that is **not about prices** reads through —
+    /// [`crate::deck`]'s constant, kept per module.
+    const ANY_MARKET: crate::sorting::Marketplace = crate::sorting::Marketplace::Tcgplayer;
 
     /// Two printings of one oracle card, plus a second card — the second printing is what
     /// `the_diff_compares_oracle_cards_not_printings` turns on.
@@ -640,7 +661,7 @@ mod tests {
         add(&conn, id, "serra-lea", main, THEORY, 1);
         add(&conn, id, "bolt-m10", main, THEORY, 3);
 
-        let diff = theory_diff(&conn, id).unwrap();
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
 
         // `bolt-m10` is another printing of `bolt-lea`'s card, so the two theory rows are one
         // group: 5 + 3 wanted against 4 held is 4 short. The Angel is a cut and is not here.
@@ -662,7 +683,7 @@ mod tests {
         add(&conn, id, "bolt-lea", main, THEORY, 1);
         add(&conn, id, "bolt-m10", main, THEORY, 1);
 
-        let diff = theory_diff(&conn, id).unwrap();
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
 
         assert_eq!(diff.len(), 1, "one card, not two printings: {diff:?}");
         assert_eq!(diff[0].quantity, 1, "two wanted, one held");
@@ -674,7 +695,7 @@ mod tests {
         // The same comparison from the other side: swapping the live printing for the other
         // one changes nothing, because the card is the same card.
         crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, LIVE).unwrap();
-        assert_eq!(theory_diff(&conn, id).unwrap()[0].quantity, 1);
+        assert_eq!(theory_diff(&conn, id, ANY_MARKET).unwrap()[0].quantity, 1);
     }
 
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
@@ -696,14 +717,14 @@ mod tests {
         add(&conn, id, "serra-lea", maybe, THEORY, 2);
 
         assert!(
-            theory_diff(&conn, id).unwrap().is_empty(),
+            theory_diff(&conn, id, ANY_MARKET).unwrap().is_empty(),
             "a scratchpad is not a shopping list"
         );
 
         // Live's copy parked in the Maybeboard is not a copy the deck has, either.
         add(&conn, id, "bolt-lea", maybe, LIVE, 3);
         add(&conn, id, "bolt-lea", main, THEORY, 2);
-        let diff = theory_diff(&conn, id).unwrap();
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
         assert_eq!(diff.len(), 1);
         assert_eq!(
             diff[0].quantity, 1,
@@ -723,7 +744,7 @@ mod tests {
         add(&conn, id, "bolt-lea", main, THEORY, 4);
 
         assert_eq!(
-            theory_diff(&conn, id).unwrap()[0].owned_spare,
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
             3,
             "nothing is built, so every copy is spare"
         );
@@ -742,7 +763,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(theory_diff(&conn, id).unwrap()[0].owned_spare, 1);
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            1
+        );
     }
 
     /// Another printing of the same card counts: `owned_spare` is per oracle card, exactly as
@@ -755,7 +779,10 @@ mod tests {
         own(&conn, "bolt-m10", 2);
         add(&conn, id, "bolt-lea", main, THEORY, 3);
 
-        assert_eq!(theory_diff(&conn, id).unwrap()[0].owned_spare, 2);
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            2
+        );
     }
 
     /// Every wish this deck raised, oldest first.
@@ -813,7 +840,7 @@ mod tests {
         // The premise: the deck is not built, so nothing has *claimed* those copies and every
         // one of them reads spare — which is right for a reader and is the whole trap for a
         // subtraction, since `quantity` has already taken the live list off.
-        let diff = theory_diff(&conn, id).unwrap();
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
         assert_eq!((diff[0].quantity, diff[0].owned_spare), (1, 2));
         assert_eq!((diff[1].quantity, diff[1].owned_spare), (4, 3));
 
@@ -939,15 +966,14 @@ mod tests {
         );
     }
 
-    /// A shopping list has to be priced in the marketplace the reader shops at, so every line
-    /// carries both figures — the euro one under the dollar one's rule, `$.eur` out of the
-    /// printing the theory row names and never `cards.price_eur`.
+    /// A shopping list is priced at the marketplace the reader shops at, and at nowhere else —
+    /// one figure per line, out of the printing the theory row names, never `cards.price_usd`.
     ///
-    /// The third line is an etched-only printing: it has a dollar price through `usd_etched`
-    /// and **no euro price at all**, because Scryfall publishes no `eur_etched`. It reads
-    /// `None` here rather than being quoted at some nonfoil rate.
+    /// The second line is an etched-only printing. A theory row, like every deck row, is
+    /// **nonfoil**, so it has no price at any of the four: TCGplayer's `usd` key is null, there
+    /// is no euro key at all, and neither feed carries a nonfoil row for it.
     #[test]
-    fn a_diff_line_is_priced_in_both_currencies() {
+    fn a_diff_line_is_priced_by_the_marketplace_it_was_asked_for() {
         let conn = seeded();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -960,6 +986,14 @@ mod tests {
                   0.71,NULL,'{}');"#,
         )
         .unwrap();
+        conn.execute_batch(
+            "INSERT INTO marketplace_prices VALUES
+                ('cardkingdom','both','nonfoil',9.0),
+                ('cardkingdom','etched-only','etched',0.6),
+                ('manapool','both','nonfoil',11.0),
+                ('manapool','bolt-lea','nonfoil',390.0);",
+        )
+        .unwrap();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
         set_theory(&conn, id, true);
@@ -968,29 +1002,42 @@ mod tests {
         // `bolt-lea`'s blob is dollars only — the ordinary case for an older printing.
         add(&conn, id, "bolt-lea", main, THEORY, 1);
 
-        let diff = theory_diff(&conn, id).unwrap();
-        let line = |card: &str| diff.iter().find(|r| r.card_id == card).unwrap();
+        let price = |card: &str, marketplace| {
+            theory_diff(&conn, id, marketplace)
+                .unwrap()
+                .iter()
+                .find(|r| r.card_id == card)
+                .unwrap()
+                .unit_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
 
+        assert_eq!(price("both", Tcgplayer), Some(10.0));
+        assert_eq!(price("both", Cardmarket), Some(7.5));
+        assert_eq!(price("both", Cardkingdom), Some(9.0));
+        assert_eq!(price("both", Manapool), Some(11.0));
+
+        for marketplace in [Tcgplayer, Cardmarket, Cardkingdom, Manapool] {
+            assert_eq!(
+                price("etched-only", marketplace),
+                None,
+                "{marketplace:?}: a theory row is nonfoil — `price_usd`'s 0.71 fallback chain \
+                 is not this figure, and neither is an etched feed row"
+            );
+        }
+
+        assert_eq!(price("bolt-lea", Tcgplayer), Some(400.0));
         assert_eq!(
-            (line("both").unit_price_usd, line("both").unit_price_eur),
-            (Some(10.0), Some(7.5))
+            price("bolt-lea", Cardmarket),
+            None,
+            "a blob with no `eur` is unpriced there, never the dollar figure"
         );
         assert_eq!(
-            (
-                line("etched-only").unit_price_usd,
-                line("etched-only").unit_price_eur
-            ),
-            (None, None),
-            "nonfoil out of the blob — `price_usd`'s 0.71 fallback chain is not this figure"
+            price("bolt-lea", Cardkingdom),
+            None,
+            "and a printing the feed has never listed is unpriced too"
         );
-        assert_eq!(
-            (
-                line("bolt-lea").unit_price_usd,
-                line("bolt-lea").unit_price_eur
-            ),
-            (Some(400.0), None),
-            "a blob with no `eur` is unpriced in euros, never the dollar figure"
-        );
+        assert_eq!(price("bolt-lea", Manapool), Some(390.0));
     }
 
     /// The hand-mirrored wire contract, pinned so a field added here and never mirrored in
@@ -1002,8 +1049,7 @@ mod tests {
             name: "Lightning Bolt".to_owned(),
             category_name: "Main deck".to_owned(),
             quantity: 2,
-            unit_price_usd: Some(400.0),
-            unit_price_eur: Some(320.0),
+            unit_price: Some(400.0),
             set_code: "lea".to_owned(),
             collector_number: "161".to_owned(),
             owned_spare: 1,
@@ -1013,7 +1059,7 @@ mod tests {
             value,
             serde_json::json!({
                 "cardId": "bolt-lea", "name": "Lightning Bolt", "categoryName": "Main deck",
-                "quantity": 2, "unitPriceUsd": 400.0, "unitPriceEur": 320.0,
+                "quantity": 2, "unitPrice": 400.0,
                 "setCode": "lea", "collectorNumber": "161", "ownedSpare": 1
             })
         );

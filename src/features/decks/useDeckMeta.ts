@@ -9,6 +9,7 @@ import {
   type TagColor,
   type TagSuggestion,
 } from "@/lib/ipc";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor, UNCATEGORISED } from "./autoCategory";
 import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./useDeck";
 
@@ -47,6 +48,11 @@ const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORISED];
  * about the deck, not about one of its two lists — so a Live/Theory switch changes the numbers
  * in the headings and never the headings themselves.
  *
+ * **The marketplace scopes one number and is in the categories key for it**: a category's
+ * `totalPrice` is a sum at one marketplace, and the two are not conversions of each other.
+ * The tag reads take no marketplace at all — a `DeckTag` carries a count and no money — which
+ * is why only one of the three keys below grew a segment.
+ *
  * A known narrowing, and it is the backend's rather than this hook's: every category and tag
  * **write** answers with the `live` variant's counts, because a rename carries no variant of
  * its own. It costs nothing here — the row a mutation answers with is its result and is never
@@ -54,10 +60,11 @@ const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORISED];
  */
 export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAULT_VARIANT) {
   const queryClient = useQueryClient();
+  const { marketplace } = useMarketplace();
 
   const categoriesQuery = useQuery({
-    queryKey: ["decks", "categories", deckId, variant],
-    queryFn: () => ipc.deckCategoryList(opened(deckId), variant),
+    queryKey: ["decks", "categories", deckId, variant, marketplace.id],
+    queryFn: () => ipc.deckCategoryList(opened(deckId), variant, marketplace.id),
     enabled: deckId !== null,
   });
 
@@ -237,8 +244,9 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
         .filter(({ card, target }) => target !== UNCATEGORISED && target !== card.categoryName);
       if (moves.length === 0) return 0;
 
-      // The deck as it is now, not as this panel last read it.
-      const existing = await ipc.deckCategoryList(deck, variant);
+      // The deck as it is now, not as this panel last read it. The marketplace is along for
+      // the ride because the command takes one; nothing here reads a price.
+      const existing = await ipc.deckCategoryList(deck, variant, marketplace.id);
       // Only **active** piles are somewhere a card may be filed. An inactive one of the right
       // name is not a target, and it is not something to create over either: the name is taken,
       // so `deck_category_create` would refuse it. Both facts are read off the same list.

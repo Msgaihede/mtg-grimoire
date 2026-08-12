@@ -172,15 +172,16 @@ function columnsFor(
       // screen. A row with no price for its finish has no value either — that is a hole in
       // the data, not a zero. The header sorts by *this* number, not by the unit price
       // underneath it: a column that reorders by something other than the figure printed in
-      // it is a column that lies — and, since schema-less prices come in two currencies, not
-      // by the *other* currency's number either, which is what `CollectionQuery.currency`
-      // exists to prevent.
+      // it is a column that lies. It cannot be sorted in another marketplace's money either,
+      // and that is now structural rather than guarded: `CollectionQuery.marketplace` decides
+      // the figure and the order together.
       //
-      // **The euro column is emptier than the dollar one, and that is the data.** An etched
-      // row has no `eur_etched` key to read, so it is an em dash here on Cardmarket while
-      // showing a figure on TCGplayer. The nonfoil rate is *not* borrowed for it.
+      // **How empty this column is depends on the marketplace, and that is the data.** An
+      // etched row has no `eur_etched` key to read, so it is an em dash on Cardmarket while
+      // showing a figure on TCGplayer; a printing a bulk feed never listed is an em dash on
+      // that feed. No other marketplace's rate is borrowed for either.
       cell: (row) => {
-        const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
+        const unit = row.unitPrice;
         return (
           <>
             {formatPrice(unit === null ? null : unit * row.quantity, currency)}

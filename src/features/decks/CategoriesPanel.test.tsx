@@ -58,8 +58,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     isActive: true,
     sortOrder: over.id,
     cardCount: 0,
-    totalPriceUsd: null,
-    totalPriceEur: null,
+    totalPrice: null,
     ...over,
   };
   // Both lists, defaulting to the one-list count: these fixtures are single-list decks unless
@@ -76,7 +75,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
  */
 const CATEGORIES: DeckCategory[] = [
   category({ id: 1, name: "Commander", kind: "commander", sortOrder: 0 }),
-  category({ id: 2, name: "Ramp", sortOrder: 1, cardCount: 12, totalPriceUsd: 34.5 }),
+  category({ id: 2, name: "Ramp", sortOrder: 1, cardCount: 12, totalPrice: 34.5 }),
   category({ id: 3, name: "Removal", sortOrder: 2, cardCount: 9 }),
   category({ id: 4, name: "Sideboard", kind: "side", sortOrder: 3 }),
   category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 }),
@@ -213,7 +212,7 @@ describe("CategoriesPanel", () => {
   it("reads both lists for the variant it was given", async () => {
     mount({ variant: "theory" });
     await screen.findByText("Ramp");
-    expect(deckCategoryList).toHaveBeenCalledWith(1, "theory");
+    expect(deckCategoryList).toHaveBeenCalledWith(1, "theory", "tcgplayer");
     expect(deckTagList).toHaveBeenCalledWith(1, "theory");
     // And the tags of the **other** variant too, which is a different question and has one
     // consumer: the delete confirmation, whose reach is not scoped by the variant on screen.
@@ -668,7 +667,7 @@ describe("categories", () => {
     // An empty deck moves nothing, which is the sentence a reader needs — the drawer draws no
     // cards, so without a count there is no way to tell a no-op from a failure.
     expect(await screen.findByText(/Nothing to file/)).toBeInTheDocument();
-    expect(deckGet).toHaveBeenCalledWith(1, "live");
+    expect(deckGet).toHaveBeenCalledWith(1, "live", "tcgplayer");
   });
 });
 

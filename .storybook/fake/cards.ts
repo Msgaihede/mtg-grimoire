@@ -58,9 +58,11 @@ export interface FakeCard {
    *  A **finish's** price is a lookup in here and nowhere else. */
   prices: string;
   /**
-   * The `cards.price_usd` column — the number a search result shows, and the *only* source
-   * `CardSummary.priceUsd` has (`search.rs` selects this column; it does not touch
-   * {@link FakeCard.prices}).
+   * The `cards.price_usd` column — the number a search result shows **on a marketplace priced
+   * from Scryfall's data**, and the only source `CardSummary.price` has there (`search.rs`
+   * selects this column; it does not touch {@link FakeCard.prices}). Card Kingdom and Mana Pool
+   * price the same row out of `marketplace_prices` instead, so this column is one of four
+   * answers rather than the answer.
    *
    * It is a **display and sort fallback chain**, not a finish's price: `card_row.rs` fills it
    * `usd` → `usd_foil` → `usd_etched`, so on a foil-only printing it quotes the foil. Never

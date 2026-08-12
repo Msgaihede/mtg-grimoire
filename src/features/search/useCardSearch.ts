@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { ipc, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
-import type { Currency } from "@/lib/marketplace";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
@@ -131,32 +130,13 @@ export function toggleColor(picked: readonly ColorKey[], key: ColorKey): ColorKe
   return [...picked.filter((c) => c !== "C"), key];
 }
 
-/**
- * The currency a money sort has to cross the wire with — or `undefined`, when none does.
- *
- * **The one place the selected marketplace reaches the backend.** Every other price decision
- * in this app is made on this side, off the twin columns Rust returns on every row, so a
- * marketplace switch is a re-render rather than a refetch (`useMarketplace`'s doc is the
- * promise this keeps). Ordering is the exception: `ORDER BY` runs inside SQLite, and a Price
- * column sorted by dollars while printing euros is a column that lies about its own arrow.
- *
- * So it is sent **only while a money column is actually deciding the order**, and it is part
- * of the query key on exactly the same condition. That is what keeps the promise intact for
- * the common case: a name-ordered list is byte-for-byte the payload it always was and is
- * never refetched on a switch, while a price-ordered one is re-asked — which it must be,
- * because the answer genuinely differs.
- *
- * Every term is checked, not just the first: a secondary money key breaks the ties, and ties
- * broken in the wrong currency are rows in the wrong places.
- */
-export function sortCurrency<K extends string>(
-  sort: SortSpec<K>,
-  moneyKeys: readonly K[],
-  currency: Currency,
-): Currency | undefined {
-  const money = moneyKeys as readonly string[];
-  return sort.some((term) => money.includes(term.key)) ? currency : undefined;
-}
+// `sortCurrency` is gone, and so is the `currency` parameter it fed. It existed to send the
+// selected currency **only** when a money column was deciding the order, because everything
+// else about a price was decided on this side off the twin fields every row carried. Rust now
+// answers one price per row for the marketplace it was asked about, so the marketplace decides
+// the source *and* the money *and* the order together, and it travels on every price-bearing
+// query rather than on the ones that happen to be sorted by money. Two things could not
+// disagree any more, so there is nothing left to keep in step.
 
 /**
  * The offset for the page after these, or `undefined` when there is nothing left.
@@ -202,8 +182,9 @@ export function needsNextPage(lastRenderedIndex: number, loadedCount: number): b
  * one request whose empty answer proves the database itself is empty (see `unfiltered`).
  */
 export function useCardSearch() {
-  // Which marketplace's prices this list is quoting. Only its **currency** is read, and only
-  // for the sort — the Price cell reads the twin field the row already carries.
+  // Which marketplace's prices this list is quoting. It is an input to the query rather than
+  // a formatting choice: the backend prices the page with it, so it is in the key below and a
+  // switch re-asks.
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
   const [format, setFormat] = useState("");
@@ -233,8 +214,6 @@ export function useCardSearch() {
   // and must not cost a second round trip.
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
-  // `undefined` unless the Price header is deciding the order — see {@link sortCurrency}.
-  const currencyParam = sortCurrency(sort, ["price"], marketplace.currency);
 
   // Every input the request is built from, so a changed filter can never be answered by
   // another filter's cached pages.
@@ -257,11 +236,11 @@ export function useCardSearch() {
     // *rows*, not a different order over the same rows, so the two modes must never answer
     // each other from cache.
     allPrintings ? "all" : "collapsed",
-    // Empty on every search that is not price-ordered, which is what keeps a marketplace
-    // switch off the wire: the key is unchanged, so the cached pages stand and the Price
-    // cells simply read the other twin field. Present — and therefore a different question —
-    // exactly when the backend was asked to order by money.
-    currencyParam ?? "",
+    // **On every search, not only a price-ordered one.** The marketplace decides what the
+    // Price column *contains* now, not merely how it is ordered — Card Kingdom's numbers come
+    // out of a different table from TCGplayer's — so two marketplaces are two answers to the
+    // same filters, and neither may be served from the other's cached pages.
+    marketplace.id,
   ];
 
   const query = useInfiniteQuery({
@@ -281,9 +260,11 @@ export function useCardSearch() {
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
-        // Absent unless a money column is deciding the order — the backend defaults to
-        // `usd`, which is what every non-price sort has always been answered with.
-        currency: currencyParam,
+        // Always sent, unlike the filters above: it is not a refinement that can be left off,
+        // it is which prices the page is quoting. The backend's default is `tcgplayer` and
+        // this is often exactly that — sending it anyway keeps the payload and the query key
+        // saying the same thing.
+        marketplace: marketplace.id,
         // Absent rather than `false` when all printings are asked for: uncollapsed is the
         // backend's own default, and sending it would make the payload lie about intent —
         // the same rule `paperOnly` follows below.
@@ -374,10 +355,11 @@ export function useCardSearch() {
     },
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
-     * sentence, its currency for the formatter and for the fields a row is read by.
+     * sentence and its currency for the formatter. The *numbers* were decided by the query
+     * this is part of the key of.
      *
-     * Handed on rather than read again in the view: it is already here for the sort, and one
-     * source means a header that names TCGplayer and a cell that prints euros cannot happen.
+     * Handed on rather than read again in the view: one source means a header that names
+     * TCGplayer over cells the backend priced at Card Kingdom cannot happen.
      */
     marketplace,
     query,

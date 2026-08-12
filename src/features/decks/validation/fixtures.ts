@@ -341,11 +341,10 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
     // A printing fact the engine never reads -- it is here so the row is a whole DeckCard.
     finishes: null,
     everUncommon: false,
-    // Both currencies, and unpriced in both by default: a fixture that quoted one and not the
-    // other would make every marketplace assertion pass or fail for the wrong reason. A test
-    // about money sets the pair it is about.
-    unitPriceUsd: null,
-    unitPriceEur: null,
+    // Unpriced by default: the validation engine never reads money, and a fixture that quoted
+    // a number would make a money assertion elsewhere pass for the wrong reason. A test about
+    // price sets the one field.
+    unitPrice: null,
     ownedQuantity: 0,
     ...overrides,
   };

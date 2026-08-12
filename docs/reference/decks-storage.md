@@ -74,9 +74,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws every
   conclusion. `oldschool` is the one printing-sensitive key, and it comes out right with no
   special case because each row carries its own printing's answer.
-- **A deck card's unit price is the nonfoil `usd` key of that printing's `prices` blob** — a
-  deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
-  `cards.price_usd` is a fallback chain and is never summed, here least of all.
+- **A deck card's unit price is that printing's nonfoil price at the marketplace the read was
+  given** — a deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
+  Built by `sorting::price_expr`, never by hand: for TCGplayer and Cardmarket that is the `usd`
+  or `eur` key of the printing's `prices` blob, and for Card Kingdom and Mana Pool a lookup in
+  `marketplace_prices`. `cards.price_usd` is a fallback chain and is never summed, here least of
+  all. A deck-write readback with no marketplace of its own quotes `marketplace::stored(conn)`,
+  so renaming a category does not answer a Cardmarket reader in dollars.
 - **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
   deck's rows inside the caller's transaction, greedily and deterministically: `KIND_PRIORITY`
   (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`

@@ -1,10 +1,12 @@
 /**
  * The fake `listen`, aliased over `@tauri-apps/api/event`.
  *
- * Exactly two events reach the frontend, and they are all of `app.emit` in `src-tauri/src`:
- * `sync:progress` (`SyncProgressEvent`, subscribed once by `useSyncProgress`) and
- * `collection:reconciled` (`ReconciledEvent`, subscribed by `useSyncInvalidation`). A story
- * drives either with `emitFake`.
+ * Four events reach the frontend, and they are all of `app.emit` in `src-tauri/src`:
+ * `sync:progress` (`SyncProgressEvent`, subscribed once by `useSyncProgress`),
+ * `collection:reconciled` (`ReconciledEvent`, subscribed by `useSyncInvalidation`),
+ * `update:progress` (`UpdateProgressEvent`, subscribed by `useUpdate`) and
+ * `marketplace:progress` (`FeedProgressEvent`, subscribed once by `useMarketplaceProgress`).
+ * A story drives any of them with `emitFake`.
  *
  * `UnlistenFn` is not re-exported and does not need to be: `ipc.ts` imports it as
  * `type UnlistenFn`, which the transform erases, so the alias never has to answer for it at

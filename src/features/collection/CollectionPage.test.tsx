@@ -53,8 +53,7 @@ const BOLT: CollectionRow = {
   condition: "NM",
   quantity: 2,
   tradelistQuantity: 0,
-  unitPriceUsd: 400.5,
-  unitPriceEur: 350,
+  unitPrice: 400.5,
   purchasePrice: null,
   purchaseCurrency: null,
   acquiredAt: null,
@@ -76,10 +75,8 @@ const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({
   uniqueCards: 0,
   entries: 0,
   tradelistCards: 0,
-  valueUsd: 0,
-  valueEur: 0,
-  unpricedUsd: 0,
-  unpricedEur: 0,
+  value: 0,
+  unpriced: 0,
   needsReview: 0,
   ...over,
 });
@@ -215,15 +212,12 @@ describe("CollectionPage", () => {
    * other currency is not on screen at all.
    */
   it("adds the collection up in the selected currency, and says whose prices they are", async () => {
-    collectionSummary.mockResolvedValue(
-      summary({ totalCards: 1240, uniqueCards: 812, valueUsd: 9876.5, valueEur: 8100 }),
-    );
+    collectionSummary.mockResolvedValue(summary({ totalCards: 1240, uniqueCards: 812, value: 9876.5 }));
     wrap(<CollectionPage />);
 
     expect(await screen.findByText("1,240")).toBeInTheDocument();
     expect(screen.getByText("812")).toBeInTheDocument();
     expect(screen.getByText("$9,876.50")).toBeInTheDocument();
-    expect(screen.queryByText("€8,100.00")).not.toBeInTheDocument();
     expect(screen.queryByText("Value (EUR)")).not.toBeInTheDocument();
 
     // Spec §5: no price on screen without saying how old it is — and, with five marketplaces
@@ -235,17 +229,21 @@ describe("CollectionPage", () => {
     );
   });
 
-  /** The other side of the same switch: Cardmarket's figure, Cardmarket's label, Cardmarket's
-   *  sentence — and no dollars anywhere. */
+  /**
+   * The other side of the same switch: Cardmarket's figure, Cardmarket's label, Cardmarket's
+   * sentence — and no dollars anywhere.
+   *
+   * **The euro figure is a different answer to the same query, not a second field.** The
+   * marketplace is in `collection_summary`'s payload and in the query's key, so switching
+   * re-runs the aggregate; the mock therefore answers a different number rather than the same
+   * object with a second key on it.
+   */
   it("adds it up in euros when the marketplace is Cardmarket", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    collectionSummary.mockResolvedValue(
-      summary({ totalCards: 1240, uniqueCards: 812, valueUsd: 9876.5, valueEur: 8100 }),
-    );
+    collectionSummary.mockResolvedValue(summary({ totalCards: 1240, uniqueCards: 812, value: 8100 }));
     wrap(<CollectionPage />);
 
     await waitFor(() => expect(screen.getByText("€8,100.00")).toBeInTheDocument());
-    expect(screen.queryByText("$9,876.50")).not.toBeInTheDocument();
     expect(screen.getByText("Value (EUR)").closest("div")).toHaveAttribute(
       "title",
       pricesAsOf(MARKETPLACES.cardmarket),
@@ -254,28 +252,23 @@ describe("CollectionPage", () => {
 
   /**
    * A total that silently omits the cards it has no price for is a number that lies by
-   * rounding down — **and the count is the one for the currency on screen.**
+   * rounding down — **and the count belongs to the figure beside it.**
    *
-   * The two are genuinely different rows: `eur_etched` does not exist in Scryfall's data, so
-   * an etched printing is priced in dollars and unpriced in euros at the same time. Rust
-   * counts both so the note can be about the figure beside it rather than about the other one,
-   * and this is where a mixed-up pair would show.
+   * No two marketplaces have the same holes: `eur_etched` does not exist in Scryfall's data, so
+   * an etched printing is priced on TCGplayer and unpriced on Cardmarket at once, and a card a
+   * bulk feed has never listed is unpriced on that feed alone. Rust counts at the marketplace
+   * it summed at, so the note is never about another one's gaps.
    */
-  it("shows how many copies the value could not price, in this currency", async () => {
-    collectionSummary.mockResolvedValue(
-      summary({ totalCards: 1240, valueUsd: 100, unpricedUsd: 2, unpricedEur: 7 }),
-    );
+  it("shows how many copies the value could not price", async () => {
+    collectionSummary.mockResolvedValue(summary({ totalCards: 1240, value: 100, unpriced: 2 }));
     wrap(<CollectionPage />);
 
     expect(await screen.findByText("2 unpriced")).toBeInTheDocument();
-    expect(screen.queryByText("7 unpriced")).not.toBeInTheDocument();
   });
 
-  it("shows the euro unpriced count on a euro marketplace", async () => {
+  it("shows the other marketplace's own unpriced count when it is chosen", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    collectionSummary.mockResolvedValue(
-      summary({ totalCards: 1240, valueEur: 100, unpricedUsd: 2, unpricedEur: 7 }),
-    );
+    collectionSummary.mockResolvedValue(summary({ totalCards: 1240, value: 100, unpriced: 7 }));
     wrap(<CollectionPage />);
 
     await waitFor(() => expect(screen.getByText("7 unpriced")).toBeInTheDocument());
@@ -283,7 +276,7 @@ describe("CollectionPage", () => {
   });
 
   it("leaves the unpriced note off when everything has a price", async () => {
-    collectionSummary.mockResolvedValue(summary({ totalCards: 3, valueUsd: 10, valueEur: 9 }));
+    collectionSummary.mockResolvedValue(summary({ totalCards: 3, value: 10 }));
     wrap(<CollectionPage />);
 
     await screen.findByText("$10.00");
@@ -563,8 +556,7 @@ describe("CollectionPage", () => {
           rarity: null,
           manaCost: null,
           typeLine: null,
-          unitPriceUsd: null,
-          unitPriceEur: null,
+          unitPrice: null,
           needsReview: REVIEW_NOTE,
         },
       ]),
@@ -652,57 +644,54 @@ describe("CollectionPage", () => {
    */
   it("prices the Value column in the selected currency", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    collectionList.mockResolvedValue(
-      page([{ ...BOLT, quantity: 3, unitPriceUsd: 400.5, unitPriceEur: 350 }]),
-    );
+    collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 3, unitPrice: 350 }]));
     wrap(<CollectionPage />);
 
     await screen.findByText("Lightning Bolt");
     await waitFor(() => expect(screen.getByText("€1,050.00")).toBeInTheDocument());
     expect(screen.getByText("€350.00 ea")).toBeInTheDocument();
-    expect(screen.queryByText("$1,201.50")).not.toBeInTheDocument();
   });
 
   /**
-   * An etched row has no `eur_etched` key to be priced by, so on Cardmarket its Value cell is
-   * an em dash — never its dollar figure relabelled — and no `ea` line is drawn under a total
-   * that does not exist.
+   * A row the selected marketplace does not quote — an etched printing on Cardmarket, where
+   * `eur_etched` does not exist, or a printing a bulk feed has never listed — arrives with a
+   * `null` unit price, so its Value cell is an em dash and no `ea` line is drawn under a total
+   * that does not exist. Nothing is borrowed from anywhere: there is no other number on the row.
    */
-  it("shows an em dash for a row with no price in the selected currency", async () => {
+  it("shows an em dash for a row this marketplace does not price", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    collectionList.mockResolvedValue(
-      page([{ ...BOLT, quantity: 3, unitPriceUsd: 71.5, unitPriceEur: null }]),
-    );
+    collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 3, unitPrice: null }]));
     wrap(<CollectionPage />);
 
     await screen.findByText("Lightning Bolt");
     await waitFor(() => expect(screen.getByText("—")).toBeInTheDocument());
     expect(screen.queryByText(/ea$/)).not.toBeInTheDocument();
-    expect(screen.queryByText("$214.50")).not.toBeInTheDocument();
   });
 
   /**
-   * **The Value header's order and its figures must name one currency.**
+   * **The marketplace crosses the wire on every read, not only a money-sorted one.**
    *
-   * `ORDER BY` runs inside SQLite, so unlike every other price decision in this app it cannot
-   * be made on this side — a column sorted by dollars while printing euros is the exact bug
-   * `CollectionQuery.currency` exists to prevent. And it is sent *only* for the two money
-   * orders, which is what keeps a marketplace switch off the wire on a name-ordered list.
+   * It used to be a `currency` sent only while a money column was deciding the order, because
+   * everything else about a price was decided on this side off the twin fields every row
+   * carried. It decides the *figures* now — Card Kingdom's numbers come out of a different
+   * table from TCGplayer's — so it is on every payload and in every key, and a Value column
+   * cannot end up ordered in one marketplace's money while printing another's.
    */
-  it("sends the currency only when a money column is deciding the order", async () => {
+  it("sends the marketplace on every read, sorted by money or not", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
     const user = userEvent.setup();
     wrap(<CollectionPage />);
 
     await screen.findByText("Lightning Bolt");
-    await waitFor(() => expect(lastQuery().currency).toBeUndefined());
+    await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
 
     await user.click(screen.getByRole("button", { name: /^Copies/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
-    expect(lastQuery().currency).toBeUndefined();
+    expect(lastQuery().marketplace).toBe("cardmarket");
 
     await user.click(screen.getByRole("button", { name: /^Value/ }));
-    await waitFor(() => expect(lastQuery().currency).toBe("eur"));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
+    expect(lastQuery().marketplace).toBe("cardmarket");
   });
 
   /** The wall is a wall of *cards*: two entries for one printing (a foil and a nonfoil) are

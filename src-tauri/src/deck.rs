@@ -1754,16 +1754,14 @@ pub struct DeckCardRow {
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
     pub ever_uncommon: bool,
-    /// Nonfoil `usd` from the prices blob — `WishRow::unit_price_usd`'s rule. Never
-    /// `cards.price_usd`, which is a display fallback chain and must not be summed.
-    pub unit_price_usd: Option<f64>,
-    /// The same in EUR, from `$.eur`. Both travel on every row so that switching marketplace
-    /// is a re-render rather than a refetch of every deck.
+    /// What one copy costs at the marketplace the read was given, **nonfoil** —
+    /// `WishRow::unit_price`'s rule over [`DECK_FINISH`]. Never `cards.price_usd`, which is a
+    /// display fallback chain and must not be summed.
     ///
-    /// A deck names a *printing* and never a finish, so this is the nonfoil rate in both
-    /// currencies and the etched hole cannot arise here — an etched-only printing simply has
-    /// no `$.eur`, and reads `None`, which is the same answer it already gives in dollars.
-    pub unit_price_eur: Option<f64>,
+    /// A deck names a *printing* and never a finish, so this is the nonfoil rate everywhere
+    /// and the etched hole cannot arise: an etched-only printing simply has no nonfoil price
+    /// at any marketplace, and reads `None` at all of them.
+    pub unit_price: Option<f64>,
     /// Copies of this oracle card the allocator secured for this deck, attributed to this
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
@@ -1830,7 +1828,9 @@ pub struct FormatSpecRow {
 /// that is not there.
 ///
 /// The `ORDER BY` is [`read_deck_cards`]'s contract; see its doc for why it lives in SQL.
-const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
+fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
+    format!(
+        "SELECT dc.id, dc.card_id,
             dc.category_id, cat.name, cat.kind, cat.is_active,
             dc.variant, dc.tag_id, t.name, t.color,
             dc.quantity, dc.name,
@@ -1838,8 +1838,7 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
             c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
             c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
             c.faces, c.game_changer, c.finishes,
-            CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
-            CAST(json_extract(c.prices, '$.eur') AS REAL) AS unit_price_eur,
+            {price} AS unit_price,
             EXISTS(SELECT 1 FROM cards u
                     WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
        FROM deck_cards dc
@@ -1847,7 +1846,18 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
        LEFT JOIN deck_tags t ON t.id = dc.tag_id
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND dc.variant = ?2
-      ORDER BY cat.sort_order, cat.id, dc.name, dc.id";
+      ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
+        price = crate::sorting::price_expr(marketplace, DECK_FINISH)
+    )
+}
+
+/// The finish every deck price is quoted at.
+///
+/// **A deck row names a printing and has no finish** — `deck_cards`' grain is
+/// `(deck_id, variant, category_id, card_id)` and stops there, so there is nothing in the
+/// model that says whether a copy is foil. Nonfoil is the answer that reads as "what this
+/// card costs", and it is the one every deck total in this crate has always used.
+pub(crate) const DECK_FINISH: &str = "'nonfoil'";
 
 /// The whole deck in one read: the gallery's row, one variant's cards, every category, every
 /// tag, every fact, every number.
@@ -1864,15 +1874,24 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
 /// was asked for, because all three parts of this answer describe one list of cards. Threading
 /// it into [`crate::deck_meta::list_categories`] and not into
 /// [`crate::deck_meta::list_tags`] is exactly how they came to disagree once.
-pub fn get_deck(conn: &Connection, id: i64, variant: &str) -> Result<Option<DeckDetail>, String> {
+///
+/// **`marketplace` scopes every price in the answer, the categories' totals included**, for the
+/// same reason `variant` scopes every count: a column header priced on Cardmarket over rows
+/// priced on TCGplayer is a screen whose two halves disagree.
+pub fn get_deck(
+    conn: &Connection,
+    id: i64,
+    variant: &str,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Option<DeckDetail>, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
     let Some(deck) = read_deck(conn, id)? else {
         return Ok(None);
     };
-    let mut cards = read_deck_cards(conn, id, variant)?;
+    let mut cards = read_deck_cards(conn, id, variant, marketplace)?;
     fill_unknown_power_toughness(conn, &mut cards)?;
     attribute_owned(&mut cards, &owned_by_oracle(conn, id)?);
-    let categories = crate::deck_meta::list_categories(conn, id, variant)?;
+    let categories = crate::deck_meta::list_categories(conn, id, variant, marketplace)?;
     let tags = crate::deck_meta::list_tags(conn, id, variant)?;
     Ok(Some(DeckDetail {
         deck,
@@ -1896,8 +1915,10 @@ fn read_deck_cards(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
+    marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<DeckCardRow>, String> {
-    let mut stmt = conn.prepare(DECK_CARD_SELECT).map_err(|e| e.to_string())?;
+    let sql = deck_card_select(marketplace);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![deck_id, variant], |r| {
             Ok(DeckCardRow {
@@ -1932,9 +1953,8 @@ fn read_deck_cards(
                 faces: r.get(28)?,
                 game_changer: r.get(29)?,
                 finishes: r.get(30)?,
-                unit_price_usd: r.get(31)?,
-                unit_price_eur: r.get(32)?,
-                ever_uncommon: r.get(33)?,
+                unit_price: r.get(31)?,
+                ever_uncommon: r.get(32)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -2286,7 +2306,11 @@ pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
 pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     allocate_deck(&tx, deck_id)?;
-    let detail = get_deck(&tx, deck_id, LIVE)?.ok_or_else(|| GONE.to_owned())?;
+    // The default marketplace, and it costs nothing to be wrong about: this reads names,
+    // quantities and claims, and never a price. Threading the setting in would only make a
+    // shopping list depend on where the user shops.
+    let detail = get_deck(&tx, deck_id, LIVE, crate::sorting::Marketplace::default())?
+        .ok_or_else(|| GONE.to_owned())?;
 
     // Oracle-grained, so the same card short in two categories is one wish for the sum —
     // which is what "one wish per card still missing" means, and what the reader would count.
@@ -2505,10 +2529,17 @@ pub async fn deck_get(
     state: tauri::State<'_, Arc<AppState>>,
     id: i64,
     variant: String,
+    marketplace: Option<String>,
 ) -> Result<Option<DeckDetail>, String> {
     let state = state.inner().clone();
+    let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
-        get_deck(&crate::sync::lock_db_read(&state), id, &variant)
+        get_deck(
+            &crate::sync::lock_db_read(&state),
+            id,
+            &variant,
+            marketplace,
+        )
     })
     .await
     .map_err(|e| format!("the deck could not be read: {e}"))?
@@ -2652,6 +2683,11 @@ mod tests {
     /// The other variant, spelled out beside [`LIVE`] so a test that means "the plan" says so.
     const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 
+    /// The marketplace a test that is **not about prices** reads through. Named rather than
+    /// spelled `Marketplace::default()` at fifteen call sites, so that the handful of tests
+    /// that do care about the shop stand out by naming one.
+    const ANY_MARKET: crate::sorting::Marketplace = crate::sorting::Marketplace::Tcgplayer;
+
     /// Five printings of two oracle cards.
     ///
     /// `o1` is three printings of one common — the allocator's cross-printing walk needs a
@@ -2792,7 +2828,7 @@ mod tests {
 
     /// What the deck says it owns of one printing, read the way the editor reads it.
     fn owned_of(conn: &Connection, deck_id: i64, card_id: &str, category_id: i64) -> i64 {
-        let detail = get_deck(conn, deck_id, LIVE).unwrap().unwrap();
+        let detail = get_deck(conn, deck_id, LIVE, ANY_MARKET).unwrap().unwrap();
         card_row(&detail, card_id, category_id).owned_quantity
     }
 
@@ -4311,7 +4347,7 @@ mod tests {
             vec![(lea, 2), (m10, 1)],
             "a different printing of the same oracle card is the same card"
         );
-        let detail = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
         let row = card_row(&detail, "bolt-lea", main);
         assert_eq!((row.quantity, row.owned_quantity), (4, 3), "3 of 4");
 
@@ -4468,7 +4504,9 @@ mod tests {
         add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 4).unwrap();
 
         assert_eq!(claims(&conn, deck.id), vec![], "a plan reserves nothing");
-        let theory = get_deck(&conn, deck.id, THEORY).unwrap().unwrap();
+        let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             card_row(&theory, "bolt-lea", main).owned_quantity,
             0,
@@ -4482,7 +4520,9 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
-        let theory = get_deck(&conn, deck.id, THEORY).unwrap().unwrap();
+        let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             card_row(&theory, "bolt-lea", main).owned_quantity,
             0,
@@ -4548,7 +4588,7 @@ mod tests {
         add(&conn, deck.id, "serra-8ed", side, 1);
         add(&conn, deck.id, "bolt-lea", main, 4);
 
-        let detail = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
         let alpha = card_row(&detail, "serra-lea", main);
         let eighth = card_row(&detail, "serra-8ed", side);
 
@@ -4587,7 +4627,7 @@ mod tests {
                 alpha.color_identity.as_deref(),
                 alpha.type_line.as_deref(),
                 alpha.power.as_deref(),
-                alpha.unit_price_usd
+                alpha.unit_price
             ),
             (
                 Some(5.0),
@@ -4598,21 +4638,18 @@ mod tests {
             )
         );
         assert_eq!(
-            card_row(&detail, "bolt-lea", main).unit_price_usd,
+            card_row(&detail, "bolt-lea", main).unit_price,
             Some(400.0),
             "nonfoil `usd` out of the blob, never `price_usd`"
         );
     }
 
-    /// Every deck row carries both currencies, so switching marketplace is a re-render rather
-    /// than a refetch of the whole deck. The euro figure is `$.eur` under the same rule the
-    /// dollar one follows — nonfoil, out of this printing's blob, never `cards.price_eur`.
-    ///
-    /// A deck names a *printing* and never a finish, so the etched hole cannot open here the
-    /// way it does on the collection: an etched-only printing simply has no `$.eur`, and reads
-    /// `None` exactly as it already reads `None` in dollars when it has no `$.usd`.
+    /// A deck row's one price comes from the marketplace the read was given, and from nowhere
+    /// else. A deck names a *printing* and never a finish, so the price is the nonfoil rate
+    /// everywhere — which is what makes the etched-only printing read `None` on all four,
+    /// where the collection's etched *entry* is priced by two of them.
     #[test]
-    fn a_deck_row_carries_a_euro_price_beside_its_dollar_one() {
+    fn a_deck_row_is_priced_by_the_marketplace_the_read_was_given() {
         let conn = seeded();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -4625,31 +4662,68 @@ mod tests {
                   0.71,NULL,'{}');"#,
         )
         .unwrap();
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "both", "nonfoil", 9.00),
+                // Card Kingdom has never listed `bolt-lea`, and the etched printing has only
+                // an etched row — which a deck, being nonfoil, does not read.
+                ("cardkingdom", "etched-only", "etched", 0.60),
+                ("manapool", "both", "nonfoil", 11.00),
+                ("manapool", "bolt-lea", "nonfoil", 390.00),
+            ],
+        );
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         add(&conn, deck.id, "both", main, 1);
         add(&conn, deck.id, "etched-only", main, 1);
         add(&conn, deck.id, "bolt-lea", main, 1);
 
-        let detail = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
-        let priced = card_row(&detail, "both", main);
-        assert_eq!(
-            (priced.unit_price_usd, priced.unit_price_eur),
-            (Some(10.0), Some(7.5))
-        );
+        let price = |card: &str, marketplace| {
+            let detail = get_deck(&conn, deck.id, LIVE, marketplace)
+                .unwrap()
+                .unwrap();
+            card_row(&detail, card, main).unit_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
 
-        let etched = card_row(&detail, "etched-only", main);
-        assert_eq!(
-            (etched.unit_price_usd, etched.unit_price_eur),
-            (None, None),
-            "nonfoil out of the blob, and `price_usd`'s 0.71 fallback chain is not it"
-        );
+        assert_eq!(price("both", Tcgplayer), Some(10.0));
+        assert_eq!(price("both", Cardmarket), Some(7.5));
+        assert_eq!(price("both", Cardkingdom), Some(9.0));
+        assert_eq!(price("both", Manapool), Some(11.0));
+
+        for marketplace in [Tcgplayer, Cardmarket, Cardkingdom, Manapool] {
+            assert_eq!(
+                price("etched-only", marketplace),
+                None,
+                "{marketplace:?}: a deck reads the nonfoil rate, and there is not one — \
+                 `price_usd`'s 0.71 fallback chain is not it, and neither is an etched feed row"
+            );
+        }
 
         assert_eq!(
-            card_row(&detail, "bolt-lea", main).unit_price_eur,
+            price("bolt-lea", Cardmarket),
             None,
             "a blob with no `eur` at all is unpriced, never the dollar figure"
         );
+        assert_eq!(
+            price("bolt-lea", Cardkingdom),
+            None,
+            "and a printing the feed has never listed is unpriced too"
+        );
+        assert_eq!(price("bolt-lea", Manapool), Some(390.0));
+    }
+
+    /// Rows in `marketplace_prices` — [`crate::collection`]'s helper, kept per module.
+    fn seed_feed(conn: &Connection, rows: &[(&str, &str, &str, f64)]) {
+        for (marketplace, card_id, finish, price) in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO marketplace_prices
+                    (marketplace, card_id, finish, price) VALUES (?1,?2,?3,?4)",
+                params![marketplace, card_id, finish, price],
+            )
+            .unwrap();
+        }
     }
 
     /// **Rules 4 and 6.** One read answers with one variant's cards and **every** category and
@@ -4680,7 +4754,7 @@ mod tests {
         crate::deck_meta::set_card_tag(&conn, deck.id, "serra-8ed", main, THEORY, Some(tag.id))
             .unwrap();
 
-        let live = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
+        let live = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
 
         assert_eq!(
             live.cards
@@ -4742,7 +4816,9 @@ mod tests {
              is why the tag on one four-of reads 4"
         );
 
-        let theory = get_deck(&conn, deck.id, THEORY).unwrap().unwrap();
+        let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             theory
                 .cards
@@ -4795,7 +4871,7 @@ mod tests {
         conn.execute("DELETE FROM cards WHERE id = 'bolt-jp'", [])
             .unwrap();
 
-        let detail = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
 
         assert_eq!(detail.cards.len(), 1, "listed, never dropped");
         let row = &detail.cards[0];
@@ -4818,7 +4894,7 @@ mod tests {
         assert!(row.oracle_id.is_none());
         assert!(row.legalities.is_none());
         assert!(row.type_line.is_none());
-        assert!(row.unit_price_usd.is_none());
+        assert!(row.unit_price.is_none());
         assert!(
             !row.ever_uncommon,
             "nothing is known, so nothing is claimed"
@@ -4910,7 +4986,7 @@ mod tests {
             "the column is empty until the next sync — that is the case under test"
         );
 
-        let detail = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
 
         let ship = card_row(&detail, "ship", commander);
         assert_eq!(
@@ -5246,8 +5322,7 @@ mod tests {
             game_changer: Some(false),
             finishes: Some(r#"["nonfoil","foil"]"#.to_owned()),
             ever_uncommon: false,
-            unit_price_usd: Some(400.0),
-            unit_price_eur: Some(320.0),
+            unit_price: Some(400.0),
             owned_quantity: 3,
         })
         .unwrap();
@@ -5264,8 +5339,7 @@ mod tests {
                 "legalities": "{\"modern\":\"legal\"}", "power": null, "toughness": null,
                 "layout": "normal", "rarity": "common", "faces": null,
                 "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
-                "everUncommon": false, "unitPriceUsd": 400.0, "unitPriceEur": 320.0,
-                "ownedQuantity": 3
+                "everUncommon": false, "unitPrice": 400.0, "ownedQuantity": 3
             })
         );
 
@@ -5286,7 +5360,8 @@ mod tests {
         // categories, because that is what the editor draws before anything is in it.
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let detail =
-            serde_json::to_value(get_deck(&conn, deck.id, LIVE).unwrap().unwrap()).unwrap();
+            serde_json::to_value(get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap())
+                .unwrap();
         assert_eq!(detail["deck"]["formatKey"], "modern");
         assert_eq!(detail["cards"], serde_json::json!([]));
         assert_eq!(detail["tags"], serde_json::json!([]));

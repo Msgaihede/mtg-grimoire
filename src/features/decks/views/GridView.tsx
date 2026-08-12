@@ -147,7 +147,7 @@ function GridCard({
   actions,
 }: {
   card: DeckCard;
-  /** Which of the row's two unit prices the tile's foot prints. */
+  /** How the tile's foot writes the row's one unit price. */
   currency: Currency;
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
@@ -224,7 +224,7 @@ function GridCard({
         <span className="flex h-5 items-center gap-1 px-1.5 font-mono text-[0.5625rem] text-dim">
           <RarityGem rarity={card.rarity} />
           <span className="ml-auto shrink-0 tabular-nums text-text">
-            {formatPrice(currency === "eur" ? card.unitPriceEur : card.unitPriceUsd, currency)}
+            {formatPrice(card.unitPrice, currency)}
           </span>
         </span>
       </button>

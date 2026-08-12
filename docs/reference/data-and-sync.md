@@ -184,7 +184,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v10.** v10 adds `cards.legal_mask`, backfills it, and widens
+- **Schema is v11.** v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
+  `PRIMARY KEY (marketplace, card_id, finish)`, `WITHOUT ROWID`) and `marketplace_feed_meta`
+  (`marketplace, fetched_at, feed_built_at, row_count`) for the Card Kingdom and Mana Pool
+  price feeds. **They are tables and not `cards` columns because `swap_staging` drops `cards`
+  on every sync**, and re-downloading 112 MiB of feed to restore a price column is not a
+  recovery plan; `card_id` is a *soft* reference with **no foreign key**, since a feed and the
+  corpus are collected on different days and a price for a printing this database has never
+  seen is the expected case. The step touches `cards` not at all, so — like v8 and v9 — it
+  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
+  rebuild. See
+  [the price-feed spec](../superpowers/specs/2026-08-12-marketplace-price-feeds-design.md).
+  v10 adds `cards.legal_mask`, backfills it, and widens
   `idx_cards_collapse` to carry the filter columns. **Our step sits _below_ main's v8 and v9
   in the ladder deliberately** — it has now been renumbered **twice**, from v8 when main's
   deck-category step landed and from v9 when main's error log did, and each time it had to
@@ -233,9 +244,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
   what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
   `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
-  `idx_cards_collapse` share a name. **The v9 fixture is "head minus one" and is renamed on
-  every renumber** (`v8_database` → `v9_database` so far) — it means "the version below ours",
-  never a fixed number. It is also why a rewind fixture may only undo the steps
+  `idx_cards_collapse` share a name. **`v10_database` is "head minus one" and is renamed on
+  every renumber** — it means "the version below the newest step", never a fixed number, and
+  `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
+  `SCHEMA_VERSION - 1` so the two cannot drift apart. `v9_database` is a *different* claim and
+  is pinned to the literal 9: it is the last version **below the `CARDS_INDEXES` replay**,
+  which is the only thing that can prove a machine entering the ladder under v10 still ends up
+  with every index a fresh install has. It is also why a rewind fixture may only undo the steps
   _above_ where it claims to sit: `migrate` reads `user_version` once and walks every step
   above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
   tables and dies on a duplicate column — a failure no real upgrade can produce.

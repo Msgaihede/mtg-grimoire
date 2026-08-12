@@ -4,7 +4,6 @@ import {
   colorParam,
   cycleTriState,
   DEBOUNCE_MS,
-  sortCurrency,
   toggleColor,
   toggleIn,
   type ColorKey,
@@ -14,13 +13,6 @@ import { FINISHES, type Finish } from "@/lib/finish";
 import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
-
-/**
- * The two orders SQLite has to be told a currency for: what a row is worth, and what one copy
- * costs. Both read a `unit_price_*` column inside the `ORDER BY`, so neither can be decided on
- * this side — see {@link sortCurrency}.
- */
-const COLLECTION_MONEY_SORTS: readonly CollectionSortKey[] = ["value", "price"];
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this; a collection is
@@ -142,8 +134,8 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
  * every scrolled page would be worse still.
  */
 export function useCollection() {
-  // Which marketplace this list quotes. The Value cells read the twin field off the rows they
-  // already have; only the two money **orders** have to cross the wire.
+  // Which marketplace this list quotes — an input to both queries below, and part of both
+  // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
   const [format, setFormat] = useState("");
@@ -193,14 +185,26 @@ export function useCollection() {
     // `paperOnly` is deliberately absent: the collection forces it off. A paper test over a
     // printing that has left `cards` would throw away exactly the rows this list exists to
     // keep showing.
+    //
+    // The marketplace **is** a filter in the sense that matters here: it decides the numbers
+    // the list and the header both carry, so it belongs on the shared object and in the key
+    // both queries are built from.
+    marketplace: marketplace.id,
   };
 
   /**
-   * Which rows are being asked for — and nothing about what order they come back in.
+   * Which rows are being asked for, and whose prices they are quoted at — and nothing about
+   * what order they come back in.
    *
    * The summary is keyed on this alone: it is a statement about a *set* of rows, and an
    * order is not part of a set, so re-sorting the table must not re-run nine aggregates
    * over the same collection.
+   *
+   * The marketplace is in here rather than beside the sort, and it is the one segment that is
+   * not about which rows: `value` and `unpriced` are sums **at one marketplace**, and the two
+   * are not conversions of each other — each omits the copies it cannot price. So a switch
+   * genuinely does re-run the aggregates, which is the cost the singular-price shape trades
+   * for never having to carry four of every figure.
    */
   const filterKey = [
     debouncedText,
@@ -213,20 +217,13 @@ export function useCollection() {
     // Three terms, not two: the flagged rows and the rows nothing flagged are two different
     // sets, so a key that spelled both `""` would serve the complement from the other's cache.
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
+    marketplace.id,
   ];
-
-  // `undefined` unless Value or the unit-price order is deciding the list — see
-  // {@link sortCurrency}. Deliberately **not** part of `filterKey`: the summary is a statement
-  // about a *set* of rows and carries both currencies already, so a marketplace switch must
-  // not re-run nine aggregates any more than a re-sort does.
-  const currencyParam = sortCurrency(sort, COLLECTION_MONEY_SORTS, marketplace.currency);
 
   // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
   // every write in the app already fires refreshes the table and the header together.
   const sortKey = sort.map((t) => `${t.key}:${t.dir}`).join(",");
-  // The currency rides in the *sort* segment, because that is the only thing it changes: on a
-  // name-ordered list it is empty and the cached pages stand through a marketplace switch.
-  const listKey = ["collection", "list", filterKey, sortKey, currencyParam ?? ""];
+  const listKey = ["collection", "list", filterKey, sortKey];
 
   const query = useInfiniteQuery({
     queryKey: listKey,
@@ -236,8 +233,6 @@ export function useCollection() {
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
-        // Absent unless a money column is deciding the order; the backend defaults to `usd`.
-        currency: currencyParam,
         limit: COLLECTION_PAGE_SIZE,
         offset: pageParam,
       }),
@@ -332,7 +327,8 @@ export function useCollection() {
     },
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
-     * sentence, its currency for the formatter and for which twin field a cell reads.
+     * sentence and its currency for the formatter. The figures themselves were decided by the
+     * two queries this is part of the key of.
      */
     marketplace,
     query,

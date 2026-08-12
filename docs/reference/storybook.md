@@ -2,19 +2,22 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **353 stories across 47 story files,
-46 docs pages** — counted off `storybook-static/index.json`, which is the only place the
-three agree (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the
-`.mdx`). **Measured 2026-08-12** off a fresh `build-storybook` on the
-deck-import branch merged with the marketplace one: 399 entries, 353 `story`,
-46 `docs`, 48 distinct `importPath`s.
+`npm run storybook` · `npm run build-storybook`. **358 stories across 47 story files, 46 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree
+(`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
+**Measured 2026-08-12** off a fresh `build-storybook` on the price-feed branch merged with
+`main`: 404 entries, 358 `story`, 46 `docs`, 48 distinct `importPath`s. The five stories over
+`main`'s 353 are `Settings/MarketplacePanel`'s, which went from three to eight when Card Kingdom
+and Mana Pool became selectable and a feed gained a state to draw; no story *file* was added,
+which is why that count did not move.
 
-**This line is where a derived count goes to die, twice over.** The deck-import branch's own
-`CreateDeckDialog` commit counted from source without building and was one story file and three
-stories short of what the index answered. Then two branches each re-measured correctly against
-their own base — 346/46/45 and 344/45/44 — and **merged into a conflict where neither was
-right**, because each was blind to the other's story files. A count is a measurement of a tree,
-not of a branch: re-measure after every merge that touches stories, or the number is a
+**This line is where a derived count goes to die, three times over.** The deck-import branch's
+own `CreateDeckDialog` commit counted from source without building and was one story file and
+three stories short of what the index answered. Then two branches each re-measured correctly
+against their own base — 346/46/45 and 344/45/44 — and **merged into a conflict where neither
+was right**, because each was blind to the other's story files. The price-feed branch then
+measured 349/45/44 against *its* base and merged into the same trap. A count is a measurement of
+a tree, not of a branch: re-measure after every merge that touches stories, or the number is a
 placeholder wearing a figure's clothes.
 **Re-count them in the same commit that adds a story.** This line read 326 for three stories'
 worth of drift and then took three more without noticing, because a prose-only edit routes to
@@ -44,9 +47,9 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **nine** faults — `busy`/`syncError`/
-  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/`errorLog`.
-  Saying nothing gets `starter` with no
+  seeds `empty`/`starter`/`needsReview`/`large`, **ten** faults — `busy`/`syncError`/
+  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/`errorLog`/
+  `feedFetchError`. Saying nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
   refusal rather than what one mocked call returns. **`indexCold` is the one that is not a
   failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
@@ -59,6 +62,13 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
   `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
   `deck_list`: a screen that could not read the deck would not be showing a panel about it.
+  **`feedFetchError` is the network at the far end of a price feed**, added 2026-08-12 with
+  Card Kingdom and Mana Pool: `marketplace_feed_refresh` refuses and — the whole point — the
+  rows already in `marketplace_prices` **stay**, because a failed fetch leaves the previous
+  prices in place and writes the reason to `error_log`. It is the only way a story can stand in
+  the state that has prices _and_ a failure, which is the one the panel's wording is hardest to
+  get right in. The backend refuses a feed that parses to zero rows for the same reason, so an
+  error page cannot wipe a working table.
 - **A world belongs to a story, not to the module — because a docs page mounts every story on
   it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
   so a fake built on module globals looks right and answers all ten stories of a docs page as

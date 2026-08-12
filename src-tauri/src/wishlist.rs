@@ -54,10 +54,11 @@ pub struct WishlistQuery {
     /// breaking its ties. Empty or absent is name order. Keys outside [`WISHLIST_SORTS`]
     /// are dropped, never interpolated.
     pub sort: Option<Vec<crate::sorting::SortTerm>>,
-    /// Which currency the `cost` and `price` sorts order by. Absent — or anything this build
-    /// does not recognise — means `usd`. [`crate::collection::CollectionQuery`]'s field,
-    /// verbatim; see [`crate::sorting::Currency`].
-    pub currency: crate::sorting::Currency,
+    /// Where to quote prices from, and therefore what the `cost` and `price` sorts order by.
+    /// Absent — or anything this build does not recognise — means `tcgplayer`.
+    /// [`crate::collection::CollectionQuery`]'s field, verbatim; see
+    /// [`crate::sorting::Marketplace`].
+    pub marketplace: crate::sorting::Marketplace,
     pub limit: u32,
     pub offset: u32,
 }
@@ -89,15 +90,15 @@ pub struct WishRow {
     pub type_line: Option<String>,
     pub quantity: i64,
     pub preferred_finish: Option<String>,
-    /// The cheapest way to satisfy this wish, per copy: the preferred finish's price if one
-    /// is named, else the nonfoil price of the printing (or of any printing of the oracle
-    /// card, for an unpinned wish).
-    pub unit_price_usd: Option<f64>,
-    /// The same in EUR, with the hole the data actually has: **`eur_etched` does not
-    /// exist**, so a wish for the etched printing is unpriced in euros rather than quoted
-    /// at the nonfoil rate. [`crate::collection::FINISH_PRICE_EUR`]'s rule, re-expressed
-    /// over the wish's preferred finish rather than over an entry's own.
-    pub unit_price_eur: Option<f64>,
+    /// The cheapest way to satisfy this wish, per copy, at the marketplace the query named:
+    /// the preferred finish's price if one is named, else the nonfoil price of the printing
+    /// (or of any printing of the oracle card, for an unpinned wish).
+    ///
+    /// Carries whatever hole that marketplace has. On Cardmarket a wish for the *etched*
+    /// printing is unpriced rather than quoted at the nonfoil rate — **`eur_etched` does not
+    /// exist** — while Mana Pool, which publishes an etched column, answers with a number.
+    /// [`crate::sorting::price_expr`]'s rule over [`WISH_FINISH`].
+    pub unit_price: Option<f64>,
     /// How many copies the collection already has against this wish.
     pub owned_quantity: i64,
     pub notes: Option<String>,
@@ -181,43 +182,39 @@ const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
     },
 ];
 
-/// `cost` and `price`, in each currency.
+/// `cost` and `price` — the two keys that turn on the reader's marketplace.
 ///
 /// `cost` is what finishing the wish still costs — unit price over the copies *missing*,
 /// which is the figure the Cost cell prints and which is zero for a fulfilled wish however
 /// dear the card is. `price` is what one copy costs, and stays reachable from the select.
 ///
-/// All four order by **output aliases** rather than by any column of either table, so a
-/// rename there is a `prepare` error at run time; `every_sort_key_prepares…` is what catches
-/// it, and it now runs every key in both currencies. The euro pair carries the hole the data
-/// has: a wish for the *etched* printing is NULL in euros and sorts last, because there is no
-/// `eur_etched` key to quote it from.
+/// Both order by the **output alias** rather than by any column of either table, so a rename
+/// there is a `prepare` error at run time; `every_sort_key_prepares…` is what catches it, and
+/// it runs every key at every marketplace. Whatever hole the chosen marketplace has rides
+/// along: on Cardmarket a wish for the *etched* printing is NULL and sorts last, because
+/// there is no `eur_etched` key to quote it from.
 const WISHLIST_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
     crate::sorting::PricedSort {
-        usd: crate::sorting::SortColumn {
-            key: "cost",
-            asc: "unit_price_usd * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
-            desc: "unit_price_usd * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
-        },
-        eur: crate::sorting::SortColumn {
-            key: "cost",
-            asc: "unit_price_eur * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
-            desc: "unit_price_eur * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
-        },
+        key: "cost",
+        asc: "{price} * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
+        desc: "{price} * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
     },
     crate::sorting::PricedSort {
-        usd: crate::sorting::SortColumn {
-            key: "price",
-            asc: "unit_price_usd ASC NULLS LAST",
-            desc: "unit_price_usd DESC NULLS LAST",
-        },
-        eur: crate::sorting::SortColumn {
-            key: "price",
-            asc: "unit_price_eur ASC NULLS LAST",
-            desc: "unit_price_eur DESC NULLS LAST",
-        },
+        key: "price",
+        asc: "{price} ASC NULLS LAST",
+        desc: "{price} DESC NULLS LAST",
     },
 ];
+
+/// What the page calls its price column, and therefore what its money sorts order by.
+const UNIT_PRICE_ALIAS: &str = "unit_price";
+
+/// The finish a wish is priced at: the one it names, or nonfoil for a wish with no preference
+/// — which is what "the cheapest way to satisfy this" means when the wish does not say.
+///
+/// [`crate::collection::ENTRY_FINISH`]'s counterpart, over the wish's own column rather than
+/// over an entry's.
+pub const WISH_FINISH: &str = "coalesce(w.preferred_finish, 'nonfoil')";
 
 pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
     if let Some(f) = input.preferred_finish.as_deref() {
@@ -459,23 +456,14 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
 
     let order = crate::sorting::order_by(
         q.sort.as_deref(),
-        &crate::sorting::sorts_for(WISHLIST_SORTS, WISHLIST_PRICE_SORTS, q.currency),
+        &crate::sorting::sorts_for(WISHLIST_SORTS, WISHLIST_PRICE_SORTS, UNIT_PRICE_ALIAS),
         "w.name ASC",
         "w.id ASC",
     );
     let sql = format!(
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
-                CAST(json_extract(c.prices,
-                    CASE coalesce(w.preferred_finish, 'nonfoil')
-                        WHEN 'foil' THEN '$.usd_foil'
-                        WHEN 'etched' THEN '$.usd_etched'
-                        ELSE '$.usd' END) AS REAL) AS unit_price_usd,
-                CASE coalesce(w.preferred_finish, 'nonfoil') WHEN 'etched' THEN NULL ELSE
-                    CAST(json_extract(c.prices,
-                        CASE coalesce(w.preferred_finish, 'nonfoil')
-                            WHEN 'foil' THEN '$.eur_foil'
-                            ELSE '$.eur' END) AS REAL) END AS unit_price_eur,
+                {price} AS {UNIT_PRICE_ALIAS},
                 {OWNED_SQL} AS owned_quantity,
                 w.notes, w.needs_review, w.updated_at,
                 -- Appended rather than placed beside `c.mana_cost` where it belongs in the
@@ -483,7 +471,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                 -- mid-list renumbers eight of them by hand. Last costs one index and nothing
                 -- else.
                 c.type_line
-         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
+         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+        price = crate::sorting::price_expr(q.marketplace, WISH_FINISH)
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
@@ -503,15 +492,14 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     lang: r.get(6)?,
                     rarity: r.get(7)?,
                     mana_cost: r.get(8)?,
-                    type_line: r.get(17)?,
+                    type_line: r.get(16)?,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
-                    unit_price_usd: r.get(11)?,
-                    unit_price_eur: r.get(12)?,
-                    owned_quantity: r.get(13)?,
-                    notes: r.get(14)?,
-                    needs_review: r.get(15)?,
-                    updated_at: r.get(16)?,
+                    unit_price: r.get(11)?,
+                    owned_quantity: r.get(12)?,
+                    notes: r.get(13)?,
+                    needs_review: r.get(14)?,
+                    updated_at: r.get(15)?,
                 })
             },
         )
@@ -1132,8 +1120,7 @@ mod tests {
             type_line: Some("Instant".into()),
             quantity: 4,
             preferred_finish: Some("foil".into()),
-            unit_price_usd: Some(40.0),
-            unit_price_eur: Some(32.0),
+            unit_price: Some(40.0),
             owned_quantity: 2,
             notes: None,
             needs_review: None,
@@ -1146,7 +1133,7 @@ mod tests {
                 "id": 3, "oracleId": "o1", "cardId": null, "name": "Lightning Bolt",
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
                 "manaCost": "{R}", "typeLine": "Instant", "quantity": 4, "preferredFinish": "foil",
-                "unitPriceUsd": 40.0, "unitPriceEur": 32.0, "ownedQuantity": 2, "notes": null,
+                "unitPrice": 40.0, "ownedQuantity": 2, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000
             })
         );
@@ -1209,7 +1196,7 @@ mod tests {
         assert_eq!(row.id, wish.id);
         assert_eq!(row.name, "Lightning Bolt", "the name is the wish's own");
         assert_eq!(row.rarity, None, "nothing is invented for a gone printing");
-        assert_eq!(row.unit_price_usd, None);
+        assert_eq!(row.unit_price, None);
     }
 
     /// Free text filters the wish's *own* name, which is the only name an any-printing
@@ -1493,7 +1480,7 @@ mod tests {
                 .iter()
                 .find(|r| r.preferred_finish.as_deref() == finish)
                 .unwrap()
-                .unit_price_usd
+                .unit_price
         };
         assert_eq!(price_of(None), Some(5.0));
         assert_eq!(price_of(Some("foil")), Some(40.0));
@@ -1569,10 +1556,10 @@ mod tests {
             .is_some_and(|s| s.contains("removed this printing")));
     }
 
-    /// EUR per copy follows the wish's own finish, with the hole the data has: a foil wish
-    /// prices at eur_foil, an etched wish is NULL — unpriced, never the nonfoil rate.
+    /// Cardmarket per copy follows the wish's own finish, with the hole the data has: a foil
+    /// wish prices at `eur_foil`, an etched wish is NULL — unpriced, never the nonfoil rate.
     #[test]
-    fn unit_price_eur_reads_the_blob_by_preferred_finish_and_etched_is_unpriced() {
+    fn a_cardmarket_price_reads_the_blob_by_preferred_finish_and_etched_is_unpriced() {
         let conn = seeded();
         for finish in [None, Some("foil"), Some("etched")] {
             add_wish(
@@ -1587,13 +1574,17 @@ mod tests {
             .unwrap();
         }
 
-        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let on = |marketplace| WishlistQuery {
+            marketplace,
+            ..Default::default()
+        };
+        let rows = list_wishes(&conn, &on(crate::sorting::Marketplace::Cardmarket)).unwrap();
         let eur_of = |finish: Option<&str>| {
             rows.items
                 .iter()
                 .find(|r| r.preferred_finish.as_deref() == finish)
                 .unwrap()
-                .unit_price_eur
+                .unit_price
         };
         assert_eq!(eur_of(None), Some(4.00));
         assert_eq!(eur_of(Some("foil")), Some(32.00));
@@ -1606,21 +1597,55 @@ mod tests {
             "there is no eur_etched key, and the nonfoil rate is not a stand-in"
         );
 
-        // A wish whose printing has left `cards` is unpriced in both currencies: there is no
-        // blob to read, in either.
+        // A wish whose printing has left `cards` is unpriced everywhere: there is no blob to
+        // read, and no id a feed could be joined on either.
         conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
             .unwrap();
-        let orphaned = list_wishes(&conn, &WishlistQuery::default()).unwrap();
-        assert!(orphaned
-            .items
-            .iter()
-            .all(|r| r.unit_price_eur.is_none() && r.unit_price_usd.is_none()));
+        for marketplace in MARKETPLACES {
+            let orphaned = list_wishes(&conn, &on(marketplace)).unwrap();
+            assert!(
+                orphaned.items.iter().all(|r| r.unit_price.is_none()),
+                "{marketplace:?}"
+            );
+        }
     }
 
-    /// Three wishes whose dollar order and euro order disagree on every pair, one of them for
+    /// Every marketplace a price can come from — [`crate::collection`]'s list, kept per module
+    /// so neither can be extended without the other noticing.
+    const MARKETPLACES: [crate::sorting::Marketplace; 4] = [
+        crate::sorting::Marketplace::Tcgplayer,
+        crate::sorting::Marketplace::Cardmarket,
+        crate::sorting::Marketplace::Cardkingdom,
+        crate::sorting::Marketplace::Manapool,
+    ];
+
+    /// `sorting`'s rule over this table's money keys: a clause with no `{price}` hole in it
+    /// quotes one marketplace whatever the reader picked.
+    #[test]
+    fn every_wishlist_money_sort_names_the_price_hole() {
+        for p in WISHLIST_PRICE_SORTS {
+            assert!(p.asc.contains(crate::sorting::PRICE_HOLE), "{}", p.asc);
+            assert!(p.desc.contains(crate::sorting::PRICE_HOLE), "{}", p.desc);
+        }
+    }
+
+    /// Rows in `marketplace_prices` — [`crate::collection`]'s helper, kept per module.
+    fn seed_feed(conn: &Connection, rows: &[(&str, &str, &str, f64)]) {
+        for (marketplace, card_id, finish, price) in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO marketplace_prices
+                    (marketplace, card_id, finish, price) VALUES (?1,?2,?3,?4)",
+                rusqlite::params![marketplace, card_id, finish, price],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Three wishes whose order disagrees between every pair of marketplaces, one of them for
     /// the **etched** printing — whose blob names a `$.eur` that the etched wish must not
-    /// take. Quantities differ too, so `cost` and `price` cannot agree by accident.
-    fn seeded_currencies() -> Connection {
+    /// take, and which Card Kingdom's feed has never listed while Mana Pool's has. Quantities
+    /// differ too, so `cost` and `price` cannot agree by accident.
+    fn seeded_marketplaces() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
         for (id, prices) in [
@@ -1639,6 +1664,17 @@ mod tests {
             )
             .unwrap();
         }
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "cheap-usd", "nonfoil", 3.00),
+                ("cardkingdom", "dear-usd", "nonfoil", 20.00),
+                // and no `cardkingdom` row for the etched printing at all.
+                ("manapool", "cheap-usd", "nonfoil", 8.00),
+                ("manapool", "dear-usd", "nonfoil", 1.00),
+                ("manapool", "etched", "etched", 4.00),
+            ],
+        );
         for (card, finish, quantity) in [
             ("cheap-usd", None, 10),
             ("dear-usd", None, 1),
@@ -1659,17 +1695,17 @@ mod tests {
     }
 
     /// Ordering happens inside SQLite, so the chosen marketplace has to reach it. Both keys,
-    /// both directions, both currencies — and the etched wish, unpriced on Cardmarket, stays
-    /// last whichever way the euro sort runs.
+    /// both directions, all four shops — and the etched wish, unpriced on two of them, stays
+    /// last whichever way those two run.
     #[test]
-    fn the_cost_and_price_sorts_order_by_the_currency_they_are_asked_for() {
-        let conn = seeded_currencies();
-        let names = |key: &str, dir: &str, currency| -> Vec<String> {
+    fn the_cost_and_price_sorts_order_by_the_marketplace_they_are_asked_for() {
+        let conn = seeded_marketplaces();
+        let names = |key: &str, dir: &str, marketplace| -> Vec<String> {
             list_wishes(
                 &conn,
                 &WishlistQuery {
                     sort: Some(vec![term(key, dir)]),
-                    currency,
+                    marketplace,
                     ..Default::default()
                 },
             )
@@ -1679,74 +1715,117 @@ mod tests {
             .map(|r| r.name)
             .collect()
         };
-        let (usd, eur) = (crate::sorting::Currency::Usd, crate::sorting::Currency::Eur);
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+        let order = |ids: &str| -> Vec<String> { ids.split(',').map(str::to_owned).collect() };
 
-        // Per copy: $1 / $50 / $9 against €90 / €2 / —.
+        // Per copy. TCGplayer $1 / $50 / $9; Cardmarket €90 / €2 / —; Card Kingdom
+        // $3 / $20 / — (no feed row); Mana Pool $8 / $1 / $4.
         assert_eq!(
-            names("price", "asc", usd),
-            ["cheap-usd", "etched", "dear-usd"]
+            names("price", "asc", Tcgplayer),
+            order("cheap-usd,etched,dear-usd")
         );
         assert_eq!(
-            names("price", "asc", eur),
-            ["dear-usd", "cheap-usd", "etched"]
+            names("price", "desc", Tcgplayer),
+            order("dear-usd,etched,cheap-usd")
         );
         assert_eq!(
-            names("price", "desc", usd),
-            ["dear-usd", "etched", "cheap-usd"]
+            names("price", "asc", Cardmarket),
+            order("dear-usd,cheap-usd,etched")
         );
         assert_eq!(
-            names("price", "desc", eur),
-            ["cheap-usd", "dear-usd", "etched"]
+            names("price", "desc", Cardmarket),
+            order("cheap-usd,dear-usd,etched")
+        );
+        assert_eq!(
+            names("price", "asc", Cardkingdom),
+            order("cheap-usd,dear-usd,etched"),
+            "a printing the feed has never listed is unpriced and sorts last"
+        );
+        assert_eq!(
+            names("price", "desc", Cardkingdom),
+            order("dear-usd,cheap-usd,etched")
+        );
+        assert_eq!(
+            names("price", "asc", Manapool),
+            order("dear-usd,etched,cheap-usd")
+        );
+        assert_eq!(
+            names("price", "desc", Manapool),
+            order("cheap-usd,etched,dear-usd"),
+            "Mana Pool quotes etched, so the etched wish places rather than trails"
         );
 
-        // × the copies still missing, and nothing is owned: $10 / $50 / $18 against
-        // €900 / €2 / —.
+        // × the copies still missing, and nothing is owned: 10 / 1 / 2. TCGplayer
+        // $10 / $50 / $18; Cardmarket €900 / €2 / —; Card Kingdom $30 / $20 / —;
+        // Mana Pool $80 / $1 / $8.
         assert_eq!(
-            names("cost", "asc", usd),
-            ["cheap-usd", "etched", "dear-usd"]
+            names("cost", "asc", Tcgplayer),
+            order("cheap-usd,etched,dear-usd")
         );
         assert_eq!(
-            names("cost", "asc", eur),
-            ["dear-usd", "cheap-usd", "etched"]
+            names("cost", "desc", Tcgplayer),
+            order("dear-usd,etched,cheap-usd")
         );
         assert_eq!(
-            names("cost", "desc", usd),
-            ["dear-usd", "etched", "cheap-usd"]
+            names("cost", "asc", Cardmarket),
+            order("dear-usd,cheap-usd,etched")
         );
         assert_eq!(
-            names("cost", "desc", eur),
-            ["cheap-usd", "dear-usd", "etched"]
+            names("cost", "desc", Cardmarket),
+            order("cheap-usd,dear-usd,etched")
+        );
+        assert_eq!(
+            names("cost", "asc", Cardkingdom),
+            order("dear-usd,cheap-usd,etched"),
+            "`cost` and `price` disagree on Card Kingdom, which is what the copies are for"
+        );
+        assert_eq!(
+            names("cost", "desc", Cardkingdom),
+            order("cheap-usd,dear-usd,etched")
+        );
+        assert_eq!(
+            names("cost", "asc", Manapool),
+            order("dear-usd,etched,cheap-usd")
+        );
+        assert_eq!(
+            names("cost", "desc", Manapool),
+            order("cheap-usd,etched,dear-usd")
         );
     }
 
-    /// The euro orders are *different strings* over a second select alias, so each is its own
-    /// chance to fail at **prepare** time — the whole list, and only ever on Cardmarket.
+    /// Each marketplace writes a *different expression* into the same statement, and two of
+    /// them reach a table this query does not join — so every key is its own chance to fail
+    /// at **prepare** time, on one shop and not the others.
     #[test]
-    fn every_sort_key_prepares_in_euros_too() {
-        let conn = seeded_currencies();
-        for key in [
-            "name", "owned", "quantity", "cost", "price", "added", "nope",
-        ] {
-            for dir in ["asc", "desc"] {
-                let page = list_wishes(
-                    &conn,
-                    &WishlistQuery {
-                        sort: Some(vec![term(key, dir)]),
-                        currency: crate::sorting::Currency::Eur,
-                        ..Default::default()
-                    },
-                )
-                .unwrap_or_else(|e| panic!("sorting by `{key}` {dir} in euros failed: {e}"));
-                assert_eq!(page.items.len(), 3);
+    fn every_sort_key_prepares_at_every_marketplace() {
+        let conn = seeded_marketplaces();
+        for marketplace in MARKETPLACES {
+            for key in [
+                "name", "owned", "quantity", "cost", "price", "added", "nope",
+            ] {
+                for dir in ["asc", "desc"] {
+                    let page = list_wishes(
+                        &conn,
+                        &WishlistQuery {
+                            sort: Some(vec![term(key, dir)]),
+                            marketplace,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!("sorting by `{key}` {dir} on {marketplace:?} failed: {e}")
+                    });
+                    assert_eq!(page.items.len(), 3);
+                }
             }
         }
     }
 
-    /// Absent means dollars — the order every caller had before there was a picker — and so
-    /// does a currency this build has never heard of.
+    /// Absent means TCGplayer — the prices every caller had before there was a picker — and
+    /// so does an id this build has never heard of.
     #[test]
-    fn a_query_with_no_currency_sorts_in_dollars() {
-        let conn = seeded_currencies();
+    fn a_query_with_no_marketplace_quotes_tcgplayer() {
+        let conn = seeded_marketplaces();
         let names = |json: &str| -> Vec<String> {
             let q: WishlistQuery = serde_json::from_str(json).unwrap();
             list_wishes(&conn, &q)
@@ -1758,16 +1837,16 @@ mod tests {
         };
         let sort = r#""sort":[{"key":"price","dir":"asc"}]"#;
 
-        let dollars = ["cheap-usd", "etched", "dear-usd"];
-        assert_eq!(names(&format!("{{{sort}}}")), dollars, "absent");
+        let tcgplayer = ["cheap-usd", "etched", "dear-usd"];
+        assert_eq!(names(&format!("{{{sort}}}")), tcgplayer, "absent");
         assert_eq!(
-            names(&format!(r#"{{{sort},"currency":"gbp"}}"#)),
-            dollars,
-            "and a currency this build has never heard of"
+            names(&format!(r#"{{{sort},"marketplace":"ebay"}}"#)),
+            tcgplayer,
+            "and an id this build has never heard of"
         );
         assert_eq!(
-            names(&format!(r#"{{{sort},"currency":"eur"}}"#)),
-            ["dear-usd", "cheap-usd", "etched"]
+            names(&format!(r#"{{{sort},"marketplace":"cardkingdom"}}"#)),
+            ["cheap-usd", "dear-usd", "etched"]
         );
     }
 }

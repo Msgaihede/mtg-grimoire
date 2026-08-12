@@ -171,18 +171,20 @@ pub struct ResolveLine {
 /// carried `unit_price_usd` while `DECK_CARD_SELECT` carried only that one currency; the
 /// marketplace work then added `unit_price_eur` beside it there and not here, which is exactly
 /// the drift the "copied verbatim" claim above existed to prevent, and the doc went on claiming
-/// it for a merge. Three reasons the answer is *remove* rather than *add the euro twin*:
+/// it for a merge. Three reasons the answer was *remove* rather than *keep up with it*:
 ///
 /// * **Nothing reads it.** Swept 2026-08-12 across the whole frontend: every `unitPriceUsd` on
 ///   an `ImportMatch` is a fixture filling the field in as `null` — four of them
 ///   (`plan.test.ts`, `ImportDeckDialog.test.tsx`, `DeckEditor.test.tsx`, `DecksPage.test.tsx`)
 ///   plus the Storybook fake's `toImportMatch`. The import preview draws no money at all.
-/// * **One currency on a DTO is now wrong by rule.** `src/CLAUDE.md`: money is drawn with
-///   `formatPrice(value, currency)` off `useMarketplace()`, never a hardcoded `priceUsd`, and
-///   Rust ships **both** currencies on every priced row so switching is a re-render. A lone
-///   dollar figure on a DTO nobody prices from is a field that can only be used incorrectly.
-/// * **A field that does not exist cannot drift.** The preview that one day draws a price will
-///   add the pair, against the rule as it stands then.
+/// * **A price on a DTO that names no marketplace is wrong by rule.** A price is only meaningful
+///   beside the marketplace it was quoted at, and this struct answers a *plan* rather than a
+///   priced list — nothing in the request that builds it says where the reader shops.
+/// * **A field that does not exist cannot drift**, which the price-feed work then proved twice
+///   over: the twin fields this bullet was written against are themselves gone, replaced by a
+///   single `unit_price` chosen by a `marketplace` query parameter. A preview that one day draws
+///   a price will take the marketplace like every other priced read, against the rule as it
+///   stands then.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportMatch {
@@ -261,10 +263,13 @@ pub struct ImportResolveRow {
 ///
 /// * **`c.finishes` is absent** — a deck names a printing and never a finish, so that column
 ///   exists for the editor's foil marking, which no preview draws.
-/// * **Both price columns are absent**, and that is the one difference worth reading
-///   [`ImportMatch`]'s doc for: `DECK_CARD_SELECT` selects `unit_price_usd` *and*
-///   `unit_price_eur`, this list selects neither, and copying only the dollar one is what the
-///   marketplace merge caught this constant doing. Nothing in the preview prices anything.
+/// * **The price column is absent**, and that is the one difference worth reading
+///   [`ImportMatch`]'s doc for: `DECK_CARD_SELECT` builds a `unit_price` through
+///   `sorting::price_expr` at the marketplace its query was given, and this list has no
+///   marketplace to build one at. Nothing in the preview prices anything. (It read
+///   `unit_price_usd` *and* `unit_price_eur` when this bullet was written; copying only the
+///   dollar one is what the marketplace merge caught this constant doing, and the price-feed
+///   work has since collapsed the pair.)
 /// * **`owned_quantity` and `printing_count` are added**, because the import asks two questions
 ///   the editor does not.
 ///

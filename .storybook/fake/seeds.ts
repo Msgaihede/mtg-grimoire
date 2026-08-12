@@ -30,7 +30,13 @@
  * because `cards` is the sync's table and **no write in this fake touches it**.
  */
 import { CARDS, type FakeCard } from "./cards";
-import { CLOCK_BASE, makeDb, neverCheckedUpdate } from "./db";
+import {
+  CLOCK_BASE,
+  makeDb,
+  marketplaceFeedMeta,
+  marketplaceFeedPrices,
+  neverCheckedUpdate,
+} from "./db";
 import type {
   FakeDb,
   FakeDeck,
@@ -846,12 +852,31 @@ function starterAudit(): FakeDeckAudit[] {
   ];
 }
 
+/**
+ * Both downloaded price feeds, already fetched — which is the state a reader who has ever
+ * chosen Card Kingdom is in, and the only one a story about *prices* can be written against.
+ *
+ * The `never fetched` state is still reachable and is the honest default of every other seed:
+ * `empty` has no cards to price, and `large` deliberately skips this so its 5 243-row corpus
+ * does not build 30 000 feed rows for a seed whose whole subject is virtualisation. A story that
+ * wants "no rows yet" on a full corpus empties `db.marketplacePrices`.
+ */
+function starterFeeds(cards: readonly FakeCard[]) {
+  const marketplacePrices = marketplaceFeedPrices(cards);
+  return { marketplacePrices, marketplaceFeeds: marketplaceFeedMeta(marketplacePrices, FETCHED_AT) };
+}
+
+/** When the seeded feeds were pulled: an hour before the seeded world's own clock, so a panel
+ *  reads `fresh` rather than sitting on the 24 h staleness edge. */
+const FETCHED_AT = CLOCK_BASE - HOUR;
+
 function starterSeed(): FakeDb {
   const decks = starterDecks();
   const deckCategories = starterCategories();
   const deckTags = starterTags();
   const migrated = starterDeckCards(deckCategories);
   return makeDb({
+    ...starterFeeds(CARDS),
     collectionEntries: starterEntries(),
     wishlistEntries: starterWishes(),
     decks,

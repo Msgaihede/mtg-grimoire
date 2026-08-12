@@ -38,8 +38,7 @@ const BOLT: WishRow = {
   typeLine: "Instant",
   quantity: 4,
   preferredFinish: "foil",
-  unitPriceUsd: 400.5,
-  unitPriceEur: 320,
+  unitPrice: 400.5,
   ownedQuantity: 1,
   notes: null,
   needsReview: null,
@@ -60,8 +59,7 @@ const ANY: WishRow = {
   preferredFinish: null,
   quantity: 1,
   ownedQuantity: 0,
-  unitPriceUsd: 12,
-  unitPriceEur: 10,
+  unitPrice: 12,
 };
 
 const page = (items: WishRow[], total = items.length) => ({ items, total });
@@ -274,7 +272,7 @@ describe("WishlistPage", () => {
   /** A total that silently omits the cards it has no price for is a number that lies by
    *  rounding down — the same rule the collection header follows. */
   it("says how many wishes the total could not price", async () => {
-    wishlistList.mockResolvedValue(page([{ ...BOLT, unitPriceUsd: null }, ANY]));
+    wishlistList.mockResolvedValue(page([{ ...BOLT, unitPrice: null }, ANY]));
     wrap(<WishlistPage />);
 
     const figure = await total();
@@ -288,24 +286,23 @@ describe("WishlistPage", () => {
    * reader picked. On Cardmarket the figure, the label and the as-of sentence all move
    * together, and the dollars are not on screen at all.
    *
-   * **And the unpriced count moves with them, which is the half that matters.** The euro
-   * column has a hole the dollar one does not — `eur_etched` is documented and absent from
-   * Scryfall's data — so an etched wish is priced in dollars and unpriced in euros at the same
-   * time. A count borrowed from the other currency would be wrong about exactly the rows this
-   * note exists for, and nothing falls back: the etched wish contributes nothing to the sum
-   * rather than its dollar price.
+   * **And the unpriced count is summed from the rows on screen, which is the half that
+   * matters.** No two marketplaces have the same holes — an etched wish has no `eur_etched` key
+   * on Cardmarket, and a card a bulk feed has never listed is unpriced on that feed alone — so
+   * a row this marketplace does not quote arrives with a `null` unit price, contributes nothing
+   * to the sum, and is counted. Nothing is borrowed, because there is nothing to borrow from.
    */
-  it("prices what is still to buy in euros, and counts the etched hole on its own", async () => {
+  it("prices what is still to buy in euros, and counts what it could not price", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    const ETCHED: WishRow = {
+    const UNQUOTED: WishRow = {
       ...ANY,
       id: 9,
       name: "Sol Ring",
       preferredFinish: "etched",
-      unitPriceUsd: 30,
-      unitPriceEur: null,
+      unitPrice: null,
     };
-    wishlistList.mockResolvedValue(page([BOLT, ETCHED]));
+    // What a Cardmarket read answers: the Bolt at €320, the etched wish at nothing at all.
+    wishlistList.mockResolvedValue(page([{ ...BOLT, unitPrice: 320 }, UNQUOTED]));
     wrap(<WishlistPage />);
 
     // Three of the four Bolts at €320, and nothing at all for the etched wish.
@@ -313,9 +310,6 @@ describe("WishlistPage", () => {
     expect(await within(eur).findByText("€960.00")).toBeInTheDocument();
     expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
     expect(eur).toHaveAttribute("title", pricesAsOf(MARKETPLACES.cardmarket));
-    // The dollar sum over the same rows — $1,231.50 — is nowhere on screen, and neither is
-    // the etched wish's own $30 propping the euro total up.
-    expect(screen.queryByText("$1,231.50")).not.toBeInTheDocument();
     expect(screen.queryByText("Still to buy (USD)")).not.toBeInTheDocument();
   });
 
@@ -324,15 +318,14 @@ describe("WishlistPage", () => {
    * only drawn where more than one copy is missing and therefore survives every single-copy
    * fixture above it.
    *
-   * `ORDER BY` is the other half: it runs inside SQLite, so a Cost header ranking by dollars
-   * while the cells print euros is the bug `WishlistQuery.currency` exists to prevent — and it
-   * is sent only for the money orders, which is what keeps a marketplace switch off the wire
-   * on a name-ordered list.
+   * The marketplace is the other half, and it is on **every** read rather than only a
+   * money-sorted one: it decides the figures now, not just the order, so a Cost header cannot
+   * rank in one marketplace's money while its cells print another's.
    */
-  it("prices the Cost column in the selected currency and sorts by the same one", async () => {
+  it("prices the Cost column in the selected currency and sends the marketplace with every read", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
     const user = userEvent.setup();
-    wishlistList.mockResolvedValue(page([BOLT]));
+    wishlistList.mockResolvedValue(page([{ ...BOLT, unitPrice: 320 }]));
     wrap(<WishlistPage />);
 
     const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]') as HTMLElement;
@@ -342,9 +335,10 @@ describe("WishlistPage", () => {
     await waitFor(() => expect(within(row).getByText("€960.00")).toBeInTheDocument());
     expect(within(row).getByText("€320.00 ea")).toBeInTheDocument();
 
-    await waitFor(() => expect(lastQuery().currency).toBeUndefined());
+    await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
     await user.click(screen.getByRole("button", { name: /^Cost/ }));
-    await waitFor(() => expect(lastQuery().currency).toBe("eur"));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "cost", dir: "desc" }]));
+    expect(lastQuery().marketplace).toBe("cardmarket");
   });
 
   /**

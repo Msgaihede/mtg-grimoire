@@ -54,8 +54,14 @@ both plus the frontend.
   its version and then has the lower block write back over it. Only the newest step may
   create from `CARDS_INDEXES`, which describes the table _at head_; a step that _changes_ an
   index definition must `DROP` it first or the widening is a silent no-op on exactly the
-  machines that need it. Schema is at **v10** — see
+  machines that need it. Schema is at **v11** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
+- **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
+  is dropped on every sync, so a price column would be destroyed by the next refresh —
+  and `card_id` there is a **soft** reference with no foreign key, because a feed and the
+  corpus are collected on different days. `src/marketplace_feed.rs` is the only writer:
+  Near Mint from both feeds, cheapest row wins a collision, and an unpriced finish gets
+  **no row** rather than a zero.
 
 ## Hard rules — user data
 
@@ -80,14 +86,31 @@ both plus the frontend.
 - **A finish's price is a lookup in the `prices` blob** (`usd`/`usd_foil`/`usd_etched`;
   `eur_etched` does not exist, so etched is unpriced in EUR). `cards.price_usd` is a
   sort/display fallback chain and must never be summed. `tix` is never summed with fiat.
-- **Every price field ships a EUR twin beside its USD one, and Rust never picks between
-  them** — the marketplace setting is the frontend's to read, so a query that returned one
-  currency would make switching a refetch instead of a re-render. The one exception is
-  `ORDER BY`, which happens inside SQLite: `SearchRequest`/`CollectionQuery`/`WishlistQuery`
-  carry a `currency`, and **anything that is not exactly `"eur"` is USD** — absent, null, a
-  number, `"EUR"` — because a future marketplace id must not fail the whole request.
-  `sorting::sorts_for` splits each whitelist into shared and priced halves so a new money
-  sort cannot be added to dollars and silently forgotten in euros.
+- **A list query is told which marketplace to price in and answers one number per row.**
+  `SearchRequest`/`CollectionQuery`/`WishlistQuery` and the three priced deck commands carry a
+  `marketplace`, and **anything that is not `cardmarket`/`cardkingdom`/`manapool` is
+  `tcgplayer`** — absent, null, a number, `cardtrader` — through a hand-written `Deserialize`
+  that never fails, because a future marketplace id must not fail the whole request. There are
+  no `Usd`/`Eur` twin fields: they were right while both prices were keys of one blob, and a
+  third source in its own table would have meant four numbers per row that four of five renders
+  ignore.
+- **`card_detail`/`card_printings` carry one too, and answer `FinishPrices` rather than the
+  blob.** They resolve it through the same `Marketplace::from_opt`, and each returns
+  `{ nonfoil, foil, etched }` per printing, every field nullable and every one built by
+  `price_expr`. **`cards.prices` is not on either DTO** — the card pane is where a reader
+  compares what each finish costs, and a blob carrying two of the four marketplaces could only
+  ever have answered em dashes for the other two.
+- **Every price in the crate is built by `sorting::price_expr` / `printing_price_expr`**, never
+  by hand. Blob-backed marketplaces keep the `json_extract` text verbatim — **including the
+  etched hole**, `CASE finish WHEN 'etched' THEN NULL` — and feed-backed ones emit a correlated
+  scalar subquery on `(marketplace, card_id, finish)` rather than a `LEFT JOIN`, so a per-finish
+  query cannot multiply its own rows by the finishes a printing is listed in.
+  `sorting::sorts_for` fills one `{price}` hole (`sorting::PRICE_HOLE`) per money sort, so a
+  sort cannot be wired for one marketplace and forgotten for another.
+- **A deck-write readback quotes `marketplace::stored(conn)`**, not a default — renaming a
+  category must not answer a Cardmarket reader with a TCGplayer total. `missing_to_wishlist` is
+  the deliberate exception: it reads names and counts, and a shopping list must not depend on
+  where the reader shops.
 - **Wishlist fulfillment is finish-aware.** A foil wish is not filled by a nonfoil copy; a
   wish naming no finish is filled by any. `wishlist::OWNED_SQL` sums `quantity`, so a
   collection row stepped to zero contributes nothing.

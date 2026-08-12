@@ -7,7 +7,7 @@ const names = (cards: readonly { name: string }[]) => cards.map((c) => c.name);
 describe("sortCards", () => {
   it("orders by name, and leaves the input alone", () => {
     const cards = [card({ name: "Sol Ring" }), card({ name: "Arcane Signet" })];
-    const sorted = sortCards(cards, "alphabetical", "usd");
+    const sorted = sortCards(cards, "alphabetical");
 
     expect(names(sorted)).toEqual(["Arcane Signet", "Sol Ring"]);
     expect(names(cards)).toEqual(["Sol Ring", "Arcane Signet"]);
@@ -27,7 +27,6 @@ describe("sortCards", () => {
         card({ name: "Arcane Signet", cmc: 2 }),
       ],
       "manaCost",
-      "usd",
     );
 
     expect(names(sorted)).toEqual(["Ancestral Recall", "Arcane Signet", "Bear", "Orphan"]);
@@ -41,53 +40,56 @@ describe("sortCards", () => {
   it("orders by price, dearest first, with unpriced last", () => {
     const sorted = sortCards(
       [
-        card({ name: "Arcane Signet", unitPriceUsd: 0.99 }),
-        card({ name: "Orphan", unitPriceUsd: null }),
-        card({ name: "Mana Crypt", unitPriceUsd: 168 }),
-        card({ name: "Sol Ring", unitPriceUsd: 1.99 }),
+        card({ name: "Arcane Signet", unitPrice: 0.99 }),
+        card({ name: "Orphan", unitPrice: null }),
+        card({ name: "Mana Crypt", unitPrice: 168 }),
+        card({ name: "Sol Ring", unitPrice: 1.99 }),
       ],
       "price",
-      "usd",
     );
 
     expect(names(sorted)).toEqual(["Mana Crypt", "Sol Ring", "Arcane Signet", "Orphan"]);
   });
 
   /**
-   * **The order follows the currency**, which is the whole reason `sortCards` takes one: the
-   * two markets do not rank the same cards the same way, and a deck sorted by dollars while
-   * every cell prints euros is a list disagreeing with itself.
+   * **The order follows the rows, which is now the only thing it could follow.**
    *
-   * The fixture is built so the two orders are genuinely reversed rather than incidentally
-   * different — nothing here would catch a `currency` argument that was accepted and ignored
-   * if the euro prices merely scaled the dollar ones.
+   * `sortCards` took a `Currency` while every row carried two prices, so it needed a test that
+   * it ranked by the right one. Rust answers a single `unitPrice` per row at the marketplace
+   * the deck was read at, so two marketplaces are two sets of rows rather than two fields — and
+   * the order changing with them is the whole behaviour, stated here as two lists that rank
+   * genuinely differently rather than as two scalings of one.
    */
-  it("ranks by the currency it is given, not always by dollars", () => {
-    const cards = [
-      card({ name: "Cheap Abroad", unitPriceUsd: 100, unitPriceEur: 1 }),
-      card({ name: "Dear Abroad", unitPriceUsd: 1, unitPriceEur: 100 }),
+  it("ranks by whatever price the rows arrived with", () => {
+    const here = [
+      card({ name: "Cheap Here", unitPrice: 1 }),
+      card({ name: "Dear Here", unitPrice: 100 }),
+    ];
+    const elsewhere = [
+      card({ name: "Cheap Here", unitPrice: 100 }),
+      card({ name: "Dear Here", unitPrice: 1 }),
     ];
 
-    expect(names(sortCards(cards, "price", "usd"))).toEqual(["Cheap Abroad", "Dear Abroad"]);
-    expect(names(sortCards(cards, "price", "eur"))).toEqual(["Dear Abroad", "Cheap Abroad"]);
+    expect(names(sortCards(here, "price"))).toEqual(["Dear Here", "Cheap Here"]);
+    expect(names(sortCards(elsewhere, "price"))).toEqual(["Cheap Here", "Dear Here"]);
   });
 
   /**
-   * An etched printing has no `eur_etched` key to be priced by, so on a euro marketplace it is
-   * unpriced — and unpriced sorts last, exactly as an orphan does. It must **not** fall back
-   * to the dollar figure and sort to the head of the list as the dearest card in the deck.
+   * A card the selected marketplace does not quote arrives with a `null` price — an etched
+   * printing on Cardmarket (`eur_etched` does not exist), or a printing a bulk feed has never
+   * listed. It sorts **last**, exactly as an orphan does, and there is no other number on the
+   * row it could be ranked by instead.
    */
-  it("sorts a row unpriced in this currency last, however dear it is in the other", () => {
+  it("sorts a row this marketplace does not price last, however dear it is elsewhere", () => {
     const sorted = sortCards(
       [
-        card({ name: "Etched Bomb", unitPriceUsd: 168, unitPriceEur: null }),
-        card({ name: "Sol Ring", unitPriceUsd: 1.99, unitPriceEur: 1.5 }),
+        card({ name: "Never listed", unitPrice: null }),
+        card({ name: "Sol Ring", unitPrice: 1.99 }),
       ],
       "price",
-      "eur",
     );
 
-    expect(names(sorted)).toEqual(["Sol Ring", "Etched Bomb"]);
+    expect(names(sorted)).toEqual(["Sol Ring", "Never listed"]);
   });
 
   /**
@@ -107,7 +109,6 @@ describe("sortCards", () => {
         card({ name: "Orphan", typeLine: null }),
       ],
       "type",
-      "usd",
     );
 
     expect(names(sorted)).toEqual([
@@ -133,12 +134,12 @@ describe("sortCards", () => {
       card({ name: "Sol Ring", setCode: "lea", cmc: 1 }),
     ];
 
-    expect(sortCards(cards, "manaCost", "usd").map((c) => c.setCode)).toEqual([
+    expect(sortCards(cards, "manaCost").map((c) => c.setCode)).toEqual([
       "cmm",
       "3ed",
       "lea",
     ]);
-    expect(sortCards(cards, "alphabetical", "usd").map((c) => c.setCode)).toEqual([
+    expect(sortCards(cards, "alphabetical").map((c) => c.setCode)).toEqual([
       "cmm",
       "3ed",
       "lea",
@@ -152,13 +153,13 @@ describe("sortCards", () => {
    */
   it("never throws on a row whose printing has left the card database", () => {
     const orphans = [
-      card({ name: "Sword of the Meek", typeLine: null, cmc: null, unitPriceUsd: null }),
-      card({ name: "Aether Vial", typeLine: null, cmc: null, unitPriceUsd: null }),
+      card({ name: "Sword of the Meek", typeLine: null, cmc: null, unitPrice: null }),
+      card({ name: "Aether Vial", typeLine: null, cmc: null, unitPrice: null }),
     ];
 
     for (const option of SORT_OPTIONS) {
-      expect(() => sortCards(orphans, option.value, "usd")).not.toThrow();
-      expect(sortCards(orphans, option.value, "usd")).toHaveLength(2);
+      expect(() => sortCards(orphans, option.value)).not.toThrow();
+      expect(sortCards(orphans, option.value)).toHaveLength(2);
     }
   });
 

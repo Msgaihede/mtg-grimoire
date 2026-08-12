@@ -96,13 +96,14 @@ describe("typeCounts", () => {
 });
 
 /**
- * `deckStats` in dollars.
+ * `deckStats`, under the name the assertions below were written against.
  *
- * Only two of the fields it answers have an opinion about money — `price` and `unpriced` —
- * so every claim about a curve, a pie or a size is made through this rather than restating a
- * currency it is not about. The two that *are* about it name theirs.
+ * It took a currency while every row carried two prices; the rows carry one now, priced by the
+ * backend at the marketplace the deck was read at, so there is nothing to pass. The alias
+ * stays because it reads as "the ordinary case" at forty call sites that are about curves,
+ * pies and sizes rather than about money.
  */
-const usdStats = (cards: readonly DeckCard[]) => deckStats(cards, "usd");
+const usdStats = (cards: readonly DeckCard[]) => deckStats(cards);
 
 describe("deckStats", () => {
   /** The curve is the deck's casting costs: nine buckets, and the last one is open-ended —
@@ -176,8 +177,8 @@ describe("deckStats", () => {
    *  fallback chain and must never be summed. */
   it("sums the row price by copies and counts what it could not price", () => {
     const stats = usdStats([
-      spell("Bolt", 1, { quantity: 4, unitPriceUsd: 2.5 }),
-      spell("Bear", 2, { quantity: 2, unitPriceUsd: null }),
+      spell("Bolt", 1, { quantity: 4, unitPrice: 2.5 }),
+      spell("Bear", 2, { quantity: 2, unitPrice: null }),
     ]);
 
     expect(stats.price).toBe(10);
@@ -185,39 +186,44 @@ describe("deckStats", () => {
   });
 
   it("has no price at all when nothing in the deck is priced", () => {
-    expect(usdStats([spell("Bolt", 1, { unitPriceUsd: null })]).price).toBeNull();
+    expect(usdStats([spell("Bolt", 1, { unitPrice: null })]).price).toBeNull();
   });
 
   /**
-   * **The two money fields follow the currency, and the `unpriced` count with them.** That
-   * second half is the one worth pinning: the two currencies do not have the same holes, so a
-   * deck of etched printings is fully priced in dollars and entirely unpriced in euros — and a
-   * shared count would be wrong about whichever figure it was not describing.
+   * **The `unpriced` count belongs to the figure beside it**, which is the half worth pinning
+   * now that the marketplace is a query parameter: no two marketplaces have the same holes, so
+   * the same deck is fully priced at one and partly unpriced at another, and the count has to
+   * arrive with the total rather than be carried across a switch.
    *
-   * Nothing falls back. The euro total here is the euro rows only; the dollar figure for the
-   * etched copies is not borrowed to fill the gap, because a price nobody quoted is worse than
-   * an em dash beside "2 unpriced".
+   * Nothing falls back — a row this marketplace does not quote arrives as a `null` `unitPrice`
+   * and is *counted*, never charged at anything, because a price nobody quoted is worse than an
+   * em dash beside "2 unpriced". There is no second field on the row to borrow from any more,
+   * which is the mistake this shape retires rather than guards against.
    */
-  it("prices in the currency it is given, and counts that currency's own gaps", () => {
-    const cards = [
-      spell("Bolt", 1, { quantity: 4, unitPriceUsd: 2.5, unitPriceEur: 2 }),
-      spell("Etched Bomb", 2, { quantity: 2, unitPriceUsd: 50, unitPriceEur: null }),
+  it("counts the copies it could not price beside the total that omits them", () => {
+    const wholePriced = [
+      spell("Bolt", 1, { quantity: 4, unitPrice: 2.5 }),
+      spell("Rare Bomb", 2, { quantity: 2, unitPrice: 50 }),
     ];
+    const priced = deckStats(wholePriced);
+    expect(priced.price).toBe(110);
+    expect(priced.unpriced).toBe(0);
 
-    const usd = deckStats(cards, "usd");
-    expect(usd.price).toBe(110);
-    expect(usd.unpriced).toBe(0);
-
-    const eur = deckStats(cards, "eur");
-    expect(eur.price).toBe(8);
-    expect(eur.unpriced).toBe(2);
+    // The same deck read at a marketplace that does not list the second card.
+    const partly = [
+      spell("Bolt", 1, { quantity: 4, unitPrice: 2 }),
+      spell("Rare Bomb", 2, { quantity: 2, unitPrice: null }),
+    ];
+    const gappy = deckStats(partly);
+    expect(gappy.price).toBe(8);
+    expect(gappy.unpriced).toBe(2);
   });
 
-  it("has no euro price at all for a deck of nothing but etched printings", () => {
-    const etched = [spell("Etched Bomb", 2, { quantity: 2, unitPriceUsd: 50, unitPriceEur: null })];
+  it("has no price at all for a deck this marketplace lists none of", () => {
+    const unlisted = [spell("Rare Bomb", 2, { quantity: 2, unitPrice: null })];
 
-    expect(deckStats(etched, "usd").price).toBe(100);
-    expect(deckStats(etched, "eur").price).toBeNull();
+    expect(deckStats(unlisted).price).toBeNull();
+    expect(deckStats(unlisted).unpriced).toBe(2);
   });
 
   /** The same arithmetic every row's own badge does, added up once. */
@@ -344,8 +350,8 @@ describe("deckStats", () => {
    *  never claims a copy for it either. */
   it("leaves the seeded Maybeboard out of every number", () => {
     const stats = usdStats([
-      spell("Bolt", 1, { quantity: 4, unitPriceUsd: 1 }),
-      spell("Ghost", 5, { categoryKind: "maybe", quantity: 9, unitPriceUsd: 100 }),
+      spell("Bolt", 1, { quantity: 4, unitPrice: 1 }),
+      spell("Ghost", 5, { categoryKind: "maybe", quantity: 9, unitPrice: 100 }),
     ]);
 
     expect(stats.copies).toBe(4);
@@ -363,14 +369,14 @@ describe("deckStats", () => {
    */
   it("leaves a category the reader switched off out of the size and the curve", () => {
     const stats = usdStats([
-      spell("Bolt", 1, { quantity: 4, unitPriceUsd: 1 }),
+      spell("Bolt", 1, { quantity: 4, unitPrice: 1 }),
       spell("Ghost", 5, {
         categoryId: 7,
         categoryName: "Cuts",
         categoryKind: "main",
         categoryActive: false,
         quantity: 9,
-        unitPriceUsd: 100,
+        unitPrice: 100,
       }),
     ]);
 
@@ -573,7 +579,7 @@ describe("DeckStats", () => {
   /** Spec §5: a price never appears without saying how old it is — and, now that a reader can
    *  pick, whose it is. */
   it("says how old the deck's price is, and whose", () => {
-    strip([card({ name: "Bolt", unitPriceUsd: 4.5, quantity: 2 })]);
+    strip([card({ name: "Bolt", unitPrice: 4.5, quantity: 2 })]);
 
     expect(screen.getByText("Price (USD)").closest("div")).toHaveAttribute(
       "title",
@@ -589,8 +595,10 @@ describe("DeckStats", () => {
    */
   it("draws the selected marketplace's currency in the figure, the label and the sentence", () => {
     render(
+      // The row as a Cardmarket read answers it: €3.00 a copy, where TCGplayer's read of the
+      // same card answers $4.50. A switch changes the rows, not which field a figure reads.
       <DeckStats
-        cards={[card({ name: "Bolt", unitPriceUsd: 4.5, unitPriceEur: 3, quantity: 2 })]}
+        cards={[card({ name: "Bolt", unitPrice: 3, quantity: 2 })]}
         marketplace={MARKETPLACES.cardmarket}
         send={sender()}
       />,
@@ -611,7 +619,7 @@ describe("DeckStats", () => {
   it("shows an em dash and an unpriced count for a deck with no euro prices", () => {
     render(
       <DeckStats
-        cards={[card({ name: "Etched Bomb", unitPriceUsd: 50, unitPriceEur: null, quantity: 2 })]}
+        cards={[card({ name: "Etched Bomb", unitPrice: null, quantity: 2 })]}
         marketplace={MARKETPLACES.cardmarket}
         send={sender()}
       />,

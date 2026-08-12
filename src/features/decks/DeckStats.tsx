@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
-import type { Currency, Marketplace } from "@/lib/marketplace";
+import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
@@ -172,18 +172,17 @@ export interface DeckStatsSummary {
    *  lands — an average of no numbers is not 0. */
   averageManaValue: number | null;
   /**
-   * Summed from each row's own nonfoil unit price **in the currency {@link deckStats} was
-   * given**, never `cards.price_usd` — which is a display fallback chain and must not be
-   * added up. `null` when nothing is priced.
+   * Summed from each row's own {@link DeckCard.unitPrice}, never `cards.price_usd` — which is
+   * a display fallback chain and must not be added up. `null` when nothing is priced.
    *
-   * Unsuffixed on purpose: it was `priceUsd` while there was one answer, and a field called
-   * `Usd` holding euros is worse than one that names no currency at all. Which currency it is
-   * belongs to the call, not to the field.
+   * Which marketplace's money this is was decided when the deck was read; this figure is
+   * simply the sum of what arrived.
    */
   price: number | null;
   /** Copies the sum could not price, so a total that omits them does not lie by rounding
-   *  down. **Per currency, because the holes are not the same ones**: a deck of etched
-   *  printings is fully priced in dollars and entirely unpriced in euros. */
+   *  down. **The holes are not the same at every marketplace** — a deck of etched printings is
+   *  fully priced on TCGplayer and entirely unpriced on Cardmarket — so this number travels
+   *  with the figure beside it and is never carried across a switch. */
   unpriced: number;
   /** Copies this deck secured from the collection, and the ones it could not. */
   owned: number;
@@ -305,10 +304,12 @@ function drawable(slices: Slice[]): Slice[] {
  * behind it, and arithmetic that can only be checked by reading pixels is arithmetic nobody
  * checks.
  *
- * `currency` reaches exactly two of the numbers below — {@link DeckStatsSummary.price} and
- * {@link DeckStatsSummary.unpriced} — and nothing else here has an opinion about money.
+ * **It took a `Currency` and no longer needs one.** Two of the numbers below are about money —
+ * {@link DeckStatsSummary.price} and {@link DeckStatsSummary.unpriced} — and both are now read
+ * off a single `unitPrice` per row, priced by the backend at the marketplace the deck was read
+ * at. Nothing here chooses between two figures, so nothing here has to be told which to pick.
  */
-export function deckStats(cards: readonly DeckCard[], currency: Currency): DeckStatsSummary {
+export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
   // One flag rather than the old `zone !== "maybe"`, and it is the same line `validateDeck`
   // opens with: a pile switched off counts toward nothing whatever it is called and whatever
   // kind it is.
@@ -412,12 +413,11 @@ export function deckStats(cards: readonly DeckCard[], currency: Currency): DeckS
   let owned = 0;
   let missing = 0;
   for (const card of counted) {
-    // The twin field the currency names, and no chain across the two: a copy nobody quoted a
-    // euro price for is counted as unpriced, never charged at the dollar rate.
-    const unit = currency === "eur" ? card.unitPriceEur : card.unitPriceUsd;
-    if (unit === null) unpriced += card.quantity;
+    // A copy the selected marketplace has never quoted is counted as unpriced, never charged
+    // at another marketplace's rate — there is no other number on the row to charge it at.
+    if (card.unitPrice === null) unpriced += card.quantity;
     else {
-      price += unit * card.quantity;
+      price += card.unitPrice * card.quantity;
       priced += card.quantity;
     }
     // The row badge's own arithmetic, added up: a claim is clamped to what the row wants, and
@@ -484,12 +484,13 @@ export function DeckStats({
   send,
 }: {
   cards: readonly DeckCard[];
-  /** Which marketplace the Price figure quotes — its currency for the arithmetic, its label
-   *  for the as-of sentence on the figure's tooltip. */
+  /** Which marketplace the Price figure quotes — its currency for the formatter and its label
+   *  for the as-of sentence on the figure's tooltip. The arithmetic needs neither: the rows
+   *  arrived priced. */
   marketplace: Marketplace;
   send: MissingWrite;
 }) {
-  const stats = useMemo(() => deckStats(cards, marketplace.currency), [cards, marketplace]);
+  const stats = useMemo(() => deckStats(cards), [cards]);
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**

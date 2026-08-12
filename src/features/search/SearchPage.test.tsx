@@ -65,21 +65,18 @@ const BOLT: CardSummary = {
   rarity: "common",
   typeLine: "Instant",
   manaCost: "{R}",
-  priceUsd: 400.5,
+  price: 400.5,
   // Not a conversion of the dollar figure: nothing in this app converts, and a euro price that
   // happened to be `usd × rate` would make a currency mix-up read as arithmetic rather than as
   // the wrong field being drawn.
-  priceEur: 320.25,
   layout: "normal",
   oracleId: "o-bolt",
   finishes: `["nonfoil","foil"]`,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLowUsd: 400.5,
-  priceHighUsd: 400.5,
-  priceLowEur: 320.25,
-  priceHighEur: 320.25,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 /** Every nullable column at once — the shape a token or an unpriced printing arrives in. */
@@ -92,18 +89,15 @@ const SPARSE: CardSummary = {
   rarity: null,
   typeLine: null,
   manaCost: null,
-  priceUsd: null,
-  priceEur: null,
+  price: null,
   layout: "normal",
   oracleId: null,
   finishes: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLowUsd: null,
-  priceHighUsd: null,
-  priceLowEur: null,
-  priceHighEur: null,
+  priceLow: null,
+  priceHigh: null,
 };
 
 const page = (
@@ -297,9 +291,9 @@ describe("SearchPage", () => {
           ...BOLT,
           name: "Sol Ring",
           printings: 132,
-          priceUsd: 2.15,
-          priceLowUsd: 0.75,
-          priceHighUsd: 4200,
+          price: 2.15,
+          priceLow: 0.75,
+          priceHigh: 4200,
         },
       ]),
     );
@@ -322,72 +316,57 @@ describe("SearchPage", () => {
   });
 
   /**
-   * **The Price column follows the marketplace, and the euro span is its own pair.**
+   * **The Price column is written in the selected marketplace's currency.**
    *
-   * `CardSummary` carries four span fields rather than two because a group's euro span can be
-   * narrower than its dollar one — each spans the printings that have a price *in that
-   * currency* — so this asserts the euro pair is read rather than the dollar one relabelled.
+   * The span is the one the backend answered for that marketplace — a group's range covers the
+   * printings *it* prices, so it is legitimately narrower at one than at another — and the cell
+   * only has to write it. What this pins is the currency the writing uses: a column of euro
+   * figures wearing dollar signs would be the same lie either way round.
    */
   it("prices in the selected marketplace's currency", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    searchCards.mockResolvedValue(
-      page([
-        { ...BOLT, priceLowUsd: 0.75, priceHighUsd: 4200, priceLowEur: 1.5, priceHighEur: 900 },
-      ]),
-    );
+    searchCards.mockResolvedValue(page([{ ...BOLT, priceLow: 1.5, priceHigh: 900 }]));
     wrap(<SearchPage />);
 
     await screen.findByText(BOLT.name);
     await waitFor(() => expect(screen.getByText("€1.50–€900.00")).toBeInTheDocument());
-    expect(screen.queryByText("$0.75–$4,200.00")).not.toBeInTheDocument();
+    expect(screen.queryByText("$1.50–$900.00")).not.toBeInTheDocument();
   });
 
   /**
-   * A row priced in dollars and unpriced in euros — an etched-only printing, which has no
-   * `eur_etched` key to be priced by. It is an em dash on Cardmarket, never the dollar figure
-   * wearing a euro sign.
+   * A row the selected marketplace does not quote — an etched-only printing on Cardmarket,
+   * where there is no `eur_etched` key, or a printing a bulk feed has never listed. It is an em
+   * dash, never another marketplace's figure wearing a euro sign.
    */
-  it("shows an em dash for a row with no price in the selected currency", async () => {
+  it("shows an em dash for a row this marketplace does not price", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
     searchCards.mockResolvedValue(
-      page([
-        {
-          ...BOLT,
-          priceUsd: 71.5,
-          priceEur: null,
-          priceLowUsd: 71.5,
-          priceHighUsd: 71.5,
-          priceLowEur: null,
-          priceHighEur: null,
-        },
-      ]),
+      page([{ ...BOLT, price: null, priceLow: null, priceHigh: null }]),
     );
     wrap(<SearchPage />);
 
     await screen.findByText(BOLT.name);
     await waitFor(() => expect(screen.getByText("—")).toBeInTheDocument());
-    expect(screen.queryByText("$71.50")).not.toBeInTheDocument();
   });
 
   /**
-   * **The one place the marketplace crosses the wire.** Ordering happens inside SQLite, so a
-   * Price header sorted by dollars while the cells print euros is the exact bug
-   * `SearchRequest.currency` exists to prevent.
+   * **The marketplace crosses the wire on every search, sorted by money or not.**
    *
-   * The first half is the other half of the same rule and is what keeps a marketplace switch
-   * off the network: an unsorted search sends no `currency` at all, so its cached pages stand
-   * and the cells simply read the other field.
+   * It used to be a `currency` sent only while the Price header was deciding the order, because
+   * every row carried both figures and the cell picked. Rust answers one price per row now, so
+   * the marketplace decides the *numbers* — and a search that omitted it would be answered in
+   * TCGplayer's dollars however the picker was set.
    */
-  it("sends the currency only when a money column is deciding the order", async () => {
+  it("sends the marketplace on every search", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
     wrap(<SearchPage />);
 
     await screen.findByText(BOLT.name);
-    await waitFor(() => expect(lastRequest().currency).toBeUndefined());
+    await waitFor(() => expect(lastRequest().marketplace).toBe("cardmarket"));
 
     await userEvent.click(screen.getByRole("button", { name: /^Price/ }));
-    await waitFor(() => expect(lastRequest().currency).toBe("eur"));
-    expect(lastRequest().sort).toEqual([{ key: "price", dir: "desc" }]);
+    await waitFor(() => expect(lastRequest().sort).toEqual([{ key: "price", dir: "desc" }]));
+    expect(lastRequest().marketplace).toBe("cardmarket");
   });
 
   it("passes the format filter", async () => {

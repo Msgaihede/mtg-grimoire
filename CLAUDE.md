@@ -1,8 +1,13 @@
 # MTG Grimoire
 
 Portable Windows desktop app for tracking a Magic: The Gathering collection.
-Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage,
-Scryfall as the only external dependency.
+Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage.
+
+**Scryfall is the card data and the only dependency the app needs to work.** Two price feeds
+join it — Card Kingdom's and Mana Pool's public bulk pricelists — and both are optional by
+construction: nothing downloads until a reader selects that marketplace, and a feed that never
+answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
+needs a per-user JWT and publishes no bulk download.
 
 ## Commands
 
@@ -66,6 +71,7 @@ number to compare against.
 | --- | --- |
 | [data-and-sync.md](docs/reference/data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement |
 | [scryfall.md](docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
+| [the price-feed research](docs/superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap |
 | [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |

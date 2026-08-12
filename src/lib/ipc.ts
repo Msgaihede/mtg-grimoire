@@ -11,7 +11,8 @@
  * Sources, verified field by field:
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
  * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
- * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`      — `src-tauri/src/card.rs`
+ * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
+ * `FinishPrices`                                 — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
@@ -19,12 +20,19 @@
  * `DeckInput`/`DeckPatch`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
+ * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
+ *
+ * **Every price field on this page is singular, and the marketplace is how it was chosen.**
+ * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
+ * `totalPrice` / `value`, already in that marketplace's money — or, where a *card* rather than
+ * a priced list is the answer, one {@link FinishPrices} triple in it. There is no twin field to
+ * pick between and no fallback across marketplaces — see `@/lib/marketplace`.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
-import type { Currency, MarketplaceId } from "./marketplace";
+import type { MarketplaceId } from "./marketplace";
 import type { ImageVariant } from "./images";
 import type { SortSpec } from "./sort";
 
@@ -97,12 +105,17 @@ export interface SearchRequest {
    */
   sort?: SortSpec<SearchSortKey>;
   /**
-   * Which currency a `price` sort orders by. Absent means `usd`.
+   * Which marketplace every price on the page is quoted from — the source *and* the money, in
+   * one parameter. Absent means `tcgplayer`, which is what this command answered before the
+   * setting existed.
    *
-   * The one place the selected marketplace has to cross the wire: ordering happens inside
-   * SQLite, so unlike every other price decision in this app it cannot be made on this side.
+   * **It decides the numbers, not just their order.** `price_expr(marketplace)` builds the one
+   * SQL fragment every price site reads: Scryfall's blob for TCGplayer and Cardmarket, a join
+   * against `marketplace_prices` for Card Kingdom and Mana Pool. So it subsumes the `currency`
+   * sort parameter this field replaced — a `price` sort orders by whatever this names, and a
+   * column cannot end up sorted in one marketplace's money while printing another's.
    */
-  currency?: Currency;
+  marketplace?: MarketplaceId;
   /**
    * Fold every printing of one card into a single row, represented by the newest printing.
    *
@@ -127,16 +140,17 @@ export interface CardSummary {
   typeLine: string | null;
   manaCost: string | null;
   /**
-   * The row's own price in each currency — a display/sort fallback chain
-   * (`usd → usd_foil → usd_etched`), never a per-finish figure. Read the one the selected
-   * marketplace's `currency` names; see `@/lib/marketplace`.
+   * The row's own price **in the marketplace the request named** — a display/sort fallback
+   * chain across finishes (nonfoil → foil → etched), never a per-finish figure.
    *
-   * Both arrive on every row so that switching marketplace is a re-render rather than a
-   * refetch. `priceEur` is `null` far more often than `priceUsd` — there is no `eur_etched`
-   * key in Scryfall's data at all, so an etched-only printing is unpriced in euros.
+   * One field, because the marketplace is a query parameter: the backend has already decided
+   * whose price this is, and a cell renders it with `formatPrice(price, marketplace.currency)`.
+   * `null` is *unpriced at that marketplace* and is drawn as an em dash — never a reason to
+   * reach for another marketplace's number. It is `null` far more often on some than on
+   * others: there is no `eur_etched` key in Scryfall's data at all, so an etched-only printing
+   * is unpriced on Cardmarket, and a printing a feed has never listed is unpriced there.
    */
-  priceUsd: number | null;
-  priceEur: number | null;
+  price: number | null;
   layout: string;
   /**
    * The oracle card this printing is of. `null` mirrors `cards.oracle_id`'s nullability and
@@ -185,19 +199,16 @@ export interface CardSummary {
    */
   printings: number;
   /**
-   * Cheapest and dearest {@link CardSummary.priceUsd} among the printings this row stands
-   * for; both equal it when the search is not collapsed. Render a range only when the two
-   * differ — most cards have one printing, and `$2.15–$2.15` is noise.
+   * Cheapest and dearest {@link CardSummary.price} among the printings this row stands for;
+   * both equal it when the search is not collapsed. Render a range only when the two differ —
+   * most cards have one printing, and `$2.15–$2.15` is noise.
    *
-   * Suffixed by currency since there are two: a bare `priceLow` was unambiguous only while
-   * every price in the app was dollars. Each pair spans the printings **that have a price in
-   * that currency**, so a group's euro span can be narrower than its dollar one — or absent
-   * while the dollar one exists.
+   * Unsuffixed, like every price on this page: the pair spans the printings that have a price
+   * **at the marketplace the request named**, so the same group's span legitimately differs
+   * between two marketplaces — or exists at one and not at another.
    */
-  priceLowUsd: number | null;
-  priceHighUsd: number | null;
-  priceLowEur: number | null;
-  priceHighEur: number | null;
+  priceLow: number | null;
+  priceHigh: number | null;
 }
 
 /** A page of results plus the size of the whole match set, for the pager. */
@@ -284,6 +295,27 @@ export interface CardFace {
   artist: string | null;
 }
 
+/**
+ * What one printing costs per finish, **at the marketplace the request named**.
+ *
+ * Keyed by the `Finish` union's own three words, so a price cell is `finishPrices[finish]` and
+ * there is no table in between to get wrong. `null` is *unpriced at that marketplace* and draws
+ * as an em dash — never a reason to reach for another marketplace's number, and the holes are
+ * different at every one of them: Scryfall carries no `eur_etched` key at all, so etched is
+ * `null` on Cardmarket for every card in the game, while Mana Pool publishes real etched prices
+ * and either bulk feed can simply never have listed a printing.
+ *
+ * This replaced a raw `prices` blob on {@link CardDetail} and {@link Printing}. The blob is
+ * TCGplayer's six keys and Cardmarket's, and it is *structurally* blind to the two marketplaces
+ * whose prices live in `marketplace_prices` — a card pane reading it could only ever draw em
+ * dashes on half the picker.
+ */
+export interface FinishPrices {
+  nonfoil: number | null;
+  foil: number | null;
+  etched: number | null;
+}
+
 /** Everything the detail pane renders about one printing. */
 export interface CardDetail {
   id: string;
@@ -305,8 +337,8 @@ export interface CardDetail {
   releasedAt: string | null;
   /** JSON: 23 legality keys and growing. Parse it, never index fixed fields. */
   legalities: string | null;
-  /** JSON: six keys, decimal **strings**. A finish price is a lookup in here. */
-  prices: string | null;
+  /** Per finish, at the marketplace `cardDetail` was called with. See {@link FinishPrices}. */
+  finishPrices: FinishPrices;
   finishes: string | null;
   imageStatus: string | null;
   faces: CardFace[];
@@ -326,7 +358,9 @@ export interface Printing {
   /** Scryfall's two-letter code. Every language is listed; `en` is merely the common one. */
   lang: string;
   finishes: string | null;
-  prices: string | null;
+  /** Per finish, at the marketplace `cardPrintings` was called with — the figures a reader
+   *  compares printings by. See {@link FinishPrices}. */
+  finishPrices: FinishPrices;
   promo: boolean;
   fullArt: boolean;
   frameEffects: string | null;
@@ -497,9 +531,9 @@ export interface CollectionQuery extends CardFilters {
   needsReview?: boolean;
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<CollectionSortKey>;
-  /** Which currency the `value` and `price` sorts order by. Absent means `usd`; see
-   *  {@link SearchRequest.currency}. */
-  currency?: Currency;
+  /** Which marketplace every price is quoted from, and therefore what the `value` and `price`
+   *  orders rank by. Absent means `tcgplayer`; see {@link SearchRequest.marketplace}. */
+  marketplace?: MarketplaceId;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;
@@ -530,12 +564,16 @@ export interface CollectionRow {
   condition: string;
   quantity: number;
   tradelistQuantity: number;
-  /** Per copy, per finish, from the `prices` blob — never the derived `price_usd` column,
-   *  which is a fallback chain and would price a plain copy at foil rates. */
-  unitPriceUsd: number | null;
-  /** The same in EUR, with the hole the data has: `eur_etched` does not exist, so an etched
-   *  card is unpriced in euros rather than valued at the nonfoil rate. */
-  unitPriceEur: number | null;
+  /**
+   * Per copy, per finish, at the marketplace the query named — never the derived `price_usd`
+   * column, which is a fallback chain and would price a plain copy at foil rates.
+   *
+   * `null` is unpriced *there*, and the holes are not the same at every marketplace:
+   * `eur_etched` does not exist in Scryfall's data, so an etched card is unpriced on
+   * Cardmarket; a printing a bulk feed has never listed is unpriced on that feed. Neither is
+   * ever filled in from another marketplace's number.
+   */
+  unitPrice: number | null;
   purchasePrice: number | null;
   purchaseCurrency: string | null;
   acquiredAt: string | null;
@@ -571,12 +609,13 @@ export interface CollectionSummary {
   uniqueCards: number;
   entries: number;
   tradelistCards: number;
-  valueUsd: number;
-  valueEur: number;
-  /** Copies with no price for their finish. Shown beside the value, because a total that
-   *  silently omits 400 cards is a number that lies by rounding down. */
-  unpricedUsd: number;
-  unpricedEur: number;
+  /** Summed at the marketplace the query named, over the copies it has a price for. */
+  value: number;
+  /** Copies with no price for their finish **at that marketplace**. Shown beside the value,
+   *  because a total that silently omits 400 cards is a number that lies by rounding down —
+   *  and the count travels with its own figure, since the two marketplaces do not have the
+   *  same holes. */
+  unpriced: number;
   needsReview: number;
 }
 
@@ -613,9 +652,9 @@ export interface WishlistQuery extends CardFilters {
   needsReview?: boolean;
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<WishlistSortKey>;
-  /** Which currency the `cost` and `price` sorts order by. Absent means `usd`; see
-   *  {@link SearchRequest.currency}. */
-  currency?: Currency;
+  /** Which marketplace every price is quoted from, and therefore what the `cost` and `price`
+   *  orders rank by. Absent means `tcgplayer`; see {@link SearchRequest.marketplace}. */
+  marketplace?: MarketplaceId;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;
@@ -646,12 +685,11 @@ export interface WishRow {
   typeLine: string | null;
   quantity: number;
   preferredFinish: string | null;
-  /** The cheapest way to satisfy this wish, per copy: the preferred finish's price if one is
-   *  named, else the nonfoil price of the printing (or of any printing of the oracle card). */
-  unitPriceUsd: number | null;
-  /** The same in EUR, with the hole the data has: `eur_etched` does not exist, so a wish for
-   *  the etched printing is `null` here rather than quoted at the nonfoil rate. */
-  unitPriceEur: number | null;
+  /** The cheapest way to satisfy this wish, per copy, at the marketplace the query named: the
+   *  preferred finish's price if one is named, else the nonfoil price of the printing (or of
+   *  any printing of the oracle card). `null` is unpriced there — {@link CollectionRow.unitPrice}
+   *  has the rule and the two ways a hole happens. */
+  unitPrice: number | null;
   /**
    * Copies the collection holds **against this wish** — narrowed by everything the wish
    * says: its printing if it names one, and its finish if it names one.
@@ -745,12 +783,11 @@ export interface DeckCategory {
    * {@link DeckCategory.cardCountAllVariants}, and read both before reaching for either.
    */
   cardCount: number;
-  /** Nonfoil `usd` × copies over the same variant, `null` when nothing here has a price. */
-  totalPriceUsd: number | null;
-  /** The same in EUR. Lower than a naive conversion would suggest and legitimately so: a
-   *  category holding etched printings sums fewer cards here, because `eur_etched` does not
-   *  exist and those copies are unpriced rather than valued at the nonfoil rate. */
-  totalPriceEur: number | null;
+  /** Nonfoil unit price × copies over the same variant, at the marketplace the read named;
+   *  `null` when nothing here has a price there. A partial sum rather than nothing, and two
+   *  marketplaces' totals over one pile are legitimately not a conversion of each other — each
+   *  omits the copies *it* cannot price. */
+  totalPrice: number | null;
   /**
    * Copies filed here **across both variants**, live and theory together — the number a
    * destructive confirmation has to quote, and the same answer whichever variant was asked by.
@@ -858,11 +895,10 @@ export interface TheoryDiffRow {
   /** How many more copies theory wants than live has. **Always positive**: a card live has as
    *  many of is not on this list, and one it has more of is a cut rather than a purchase. */
   quantity: number;
-  /** Nonfoil `usd` from this printing's prices blob, per copy — {@link DeckCard.unitPriceUsd}'s
-   *  rule. Never `cards.price_usd`, which is a display fallback chain and must not be summed. */
-  unitPriceUsd: number | null;
-  /** The same in EUR, from `$.eur`. */
-  unitPriceEur: number | null;
+  /** Nonfoil unit price for this printing at the marketplace the read named —
+   *  {@link DeckCard.unitPrice}'s rule. Never `cards.price_usd`, which is a display fallback
+   *  chain and must not be summed. */
+  unitPrice: number | null;
   setCode: string;
   collectorNumber: string;
   /**
@@ -1250,11 +1286,15 @@ export interface DeckCard {
    *  key answers a different question (the 99). `false` for an orphan — nothing is known
    *  about a card that is not there. */
   everUncommon: boolean;
-  /** Nonfoil `usd` from the prices blob, per copy — {@link WishRow.unitPriceUsd}'s rule.
-   *  Never `cards.price_usd`, which is a display fallback chain and must not be summed. */
-  unitPriceUsd: number | null;
-  /** The same in EUR, from `$.eur`. */
-  unitPriceEur: number | null;
+  /**
+   * Nonfoil unit price for this printing at the marketplace the read named, per copy —
+   * {@link WishRow.unitPrice}'s rule. Never `cards.price_usd`, which is a display fallback
+   * chain and must not be summed.
+   *
+   * **A deck names a printing, not a finish**, which is why this is the nonfoil figure rather
+   * than a chain across finishes: `deck_cards` stores no finish and there is none to price by.
+   */
+  unitPrice: number | null;
   /**
    * Copies of this oracle card the allocator **secured for this deck**, attributed to this
    * row in the read's own order and clamped to what each collection entry still holds.
@@ -1753,6 +1793,78 @@ export type ErrorSource =
 export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";
 
 /**
+ * What one downloaded price feed's table looks like right now — `marketplace_feed_meta`, plus
+ * a row for a feed that has never been fetched.
+ *
+ * Only the **feed-backed** marketplaces have one of these. TCGplayer and Cardmarket arrive
+ * with the card data and have no refresh of their own, so their freshness is the sync's and is
+ * already on the ribbon; Card trader has nothing to fetch at all.
+ *
+ * `fetchedAt` is `null` exactly when the feed has never been pulled — the table's own column is
+ * `NOT NULL`, so a null here means "no row", which is the state a first selection acts on. The
+ * three fields answer three different questions and a reader needs all three: `fetchedAt` is
+ * when *this app* asked, {@link MarketplaceFeedStatus.feedBuiltAt} is when the *feed* was made,
+ * and `rowCount` is how much of it landed.
+ */
+export interface MarketplaceFeedStatus {
+  marketplace: MarketplaceId;
+  /** Unix **seconds**, when this app last pulled the feed. `null` = never. */
+  fetchedAt: number | null;
+  /**
+   * The feed's own stamp, as it published it — Card Kingdom's `meta.created_at`, which reads
+   * `2026-08-11 21:07:02`. `null` for a feed that publishes none, which is Mana Pool: there is
+   * nothing to show and no reason to invent one out of `fetchedAt`.
+   */
+  feedBuiltAt: string | null;
+  /** Rows stored for this feed, as of `fetchedAt`. **`null` when never fetched** — not `0`, so
+   *  "nothing downloaded" and "a fetch that landed nothing" stay two states. */
+  rowCount: number | null;
+  /**
+   * Older than the backend's refresh interval (24 h), **or never fetched at all**.
+   *
+   * Computed there rather than here, and read rather than re-derived: `REFRESH_INTERVAL_SECS`
+   * is the one definition of how long a price stays believable, and a second copy of the
+   * arithmetic on this side would be a second place for it to drift. A stamp in the future — a
+   * clock that moved — counts as stale rather than underflowing.
+   */
+  stale: boolean;
+  /**
+   * A refresh is in flight **right now**, whoever started it.
+   *
+   * The authoritative answer, and the reason it exists: the backend refreshes the selected feed
+   * at start-up when its rows are stale or absent, so a fetch can be running before this window
+   * has mounted anything. It is one of *three* sources `useMarketplace` reconciles, because
+   * this one is only as fresh as the last status read.
+   */
+  refreshing: boolean;
+}
+
+/** The phases `marketplace_feed.rs` emits. Four, against `SyncPhase`'s eight: a feed is one
+ *  file, so there is no check, no set list and nothing to reclaim. */
+export type FeedPhase = "downloading" | "ingesting" | "done" | "error";
+
+/**
+ * Payload of the `marketplace:progress` event.
+ *
+ * **Its own event rather than a new `SyncPhase`**, and that is a decision worth keeping:
+ * {@link SyncPhase} is a closed union with a *total* `PHASE_LABEL` map behind it, so a ninth
+ * phase arriving from Rust would render `undefined` on the ribbon rather than fail anywhere a
+ * test could see. This follows `update:progress`'s precedent instead — a second event with a
+ * payload of its own, and a label map that only has to be total over four words.
+ *
+ * `marketplace` is on the payload because two feeds exist and either can be the one running.
+ * Not a complete account of a fetch, for {@link SyncProgressEvent}'s reasons: Tauri drops
+ * events emitted before the webview registered its listener, and the **startup refresh can
+ * begin before this window has one**. `marketplaceFeedStatus` is the reliable half of the pair.
+ */
+export interface FeedProgressEvent {
+  marketplace: MarketplaceId;
+  phase: FeedPhase;
+  done: number;
+  total: number;
+}
+
+/**
  * One row of the error log.
  *
  * `operation` is deliberately *not* a union: the Rust column has no `CHECK`, because a new
@@ -1784,10 +1896,22 @@ export const ipc = {
   facetCards: (req: SearchRequest) => invoke<FacetResponse>("facet_cards", { req }),
   /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
   listSets: () => invoke<SetSummary[]>("list_sets"),
-  /** One printing in full, or `null` when no row has that id. */
-  cardDetail: (id: string) => invoke<CardDetail | null>("card_detail", { id }),
-  /** Every paper printing of the oracle card, newest first, capped at 400 with a full count. */
-  cardPrintings: (oracleId: string) => invoke<PrintingsResponse>("card_printings", { oracleId }),
+  /**
+   * One printing in full, or `null` when no row has that id.
+   *
+   * `marketplace` decides {@link CardDetail.finishPrices} and nothing else about the answer —
+   * but it decides them completely, so it belongs in the caller's query key like every other
+   * priced read. The backend's fallback for an unknown id is `tcgplayer`.
+   */
+  cardDetail: (id: string, marketplace: MarketplaceId) =>
+    invoke<CardDetail | null>("card_detail", { id, marketplace }),
+  /**
+   * Every paper printing of the oracle card, newest first, capped at 400 with a full count.
+   *
+   * `marketplace` prices every row per finish — the figures a reader is choosing a printing by.
+   */
+  cardPrintings: (oracleId: string, marketplace: MarketplaceId) =>
+    invoke<PrintingsResponse>("card_printings", { oracleId, marketplace }),
   /**
    * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
    * the work is queued, and an image that fails to prefetch simply fetches when it is
@@ -1836,9 +1960,13 @@ export const ipc = {
    * threaded into all three reads. What it does *not* scope is which categories and tags come
    * back: every one of them does either way, so switching between the two lists changes the
    * numbers in the column headings and never the columns themselves.
+   *
+   * `marketplace` decides every price in the answer — each card's {@link DeckCard.unitPrice}
+   * and each category's {@link DeckCategory.totalPrice} — so it is part of the question rather
+   * than of the presentation, and it belongs in the caller's query key.
    */
-  deckGet: (id: number, variant: DeckVariant) =>
-    invoke<DeckDetail | null>("deck_get", { id, variant }),
+  deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
+    invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
   deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
   /** Rename, re-format, cover, build and archive all arrive here. Sending `isBuilt`
    *  reallocates the deck in the same transaction. */
@@ -1882,12 +2010,13 @@ export const ipc = {
    * A deck's categories on their own — the same list `deckGet` already carries, for a panel
    * that wants it without the cards.
    *
-   * `variant` scopes each row's `cardCount`/`totalPriceUsd` and **nothing else**: which
-   * categories a deck has does not depend on which list is showing, which is what keeps the
-   * columns still while the reader switches between Live and Theory.
+   * `variant` scopes each row's `cardCount`/`totalPrice` and **nothing else**: which categories
+   * a deck has does not depend on which list is showing, which is what keeps the columns still
+   * while the reader switches between Live and Theory. `marketplace` decides what
+   * {@link DeckCategory.totalPrice} is a total *of*.
    */
-  deckCategoryList: (deckId: number, variant: DeckVariant) =>
-    invoke<DeckCategory[]>("deck_category_list", { deckId, variant }),
+  deckCategoryList: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
+    invoke<DeckCategory[]>("deck_category_list", { deckId, variant, marketplace }),
   /** A new category, always `kind: "main"` and always active, appended after the deck's last
    *  one. Refuses a name the deck already has — the grain is `(deckId, name)`. */
   deckCategoryCreate: (deckId: number, name: string) =>
@@ -2009,8 +2138,10 @@ export const ipc = {
   deckAuditList: (deckId: number, limit: number) =>
     invoke<DeckAuditEntry[]>("deck_audit_list", { deckId, limit }),
   /** What the plan wants and the deck does not have — see {@link TheoryDiffRow}. One
-   *  direction only, inactive categories excluded from both sides. */
-  deckTheoryDiff: (deckId: number) => invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId }),
+   *  direction only, inactive categories excluded from both sides. `marketplace` prices the
+   *  shopping list, which is the whole point of drawing one. */
+  deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
+    invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
    * Seed the theory list from the live one. Answers how many **rows** were written.
    *
@@ -2235,6 +2366,39 @@ export const ipc = {
   getMarketplace: () => invoke<string>("get_marketplace"),
   /** Choose one. Rejects an id the backend does not know, so `app_meta` cannot collect junk. */
   setMarketplace: (id: MarketplaceId) => invoke<void>("set_marketplace", { id }),
+  /**
+   * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
+   * afterwards.
+   *
+   * **Only the feed-backed marketplaces have a feed to refresh** — see
+   * {@link MarketplaceFeedStatus} — and asking for another one is refused rather than quietly
+   * doing nothing.
+   *
+   * Long: 63.7 MiB for Card Kingdom, 48.4 MiB for Mana Pool, so it reports through the same
+   * `Activity` mechanism every other long job uses and answers `collection::BUSY` under a
+   * running sync, like every other write. **A failed fetch leaves the previous prices in
+   * place** and writes the reason to `error_log` — stale prices with an honest as-of line beat
+   * an empty table — so a rejection here is not a reason to blank a price column.
+   */
+  marketplaceFeedRefresh: (marketplace: MarketplaceId) =>
+    invoke<MarketplaceFeedStatus>("marketplace_feed_refresh", { marketplace }),
+  /**
+   * Every feed-backed marketplace's state, whether or not it has ever been fetched — one row
+   * each, so a panel can draw the list without knowing which ones exist.
+   *
+   * Reads two small tables and makes no network call, so it is cheap to poll while a refresh
+   * is running.
+   */
+  marketplaceFeedStatus: () => invoke<MarketplaceFeedStatus[]>("marketplace_feed_status"),
+  /**
+   * A feed being fetched, phase by phase — the ribbon's fast path, beside `sync:progress` and
+   * `update:progress`.
+   *
+   * **Subscribe once**, like both of those: every extra call is another `listen` registration
+   * for the life of the app. `useMarketplaceProgress` is that one caller.
+   */
+  onMarketplaceProgress: (cb: (e: FeedProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<FeedProgressEvent>("marketplace:progress", (evt) => cb(evt.payload)),
 };
 
 /**

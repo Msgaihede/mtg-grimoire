@@ -104,7 +104,7 @@ function FakeWorld({
  * render — `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Everything else on every other docs page is isolated in-process, which
- * is what keeps the catalogue readable: **40 of the 45 story files still render inline** —
+ * is what keeps the catalogue readable: **40 of the 47 story files still render inline** —
  * re-counted 2026-08-12 with `Settings/MarketplacePanel`, and the count had rotted twice over
  * (it read "30 of 34" against 44 files). The fifth non-inline file is
  * `DeckSettingsDialog.stories.tsx`, which carries the same parameter for an unrelated reason of

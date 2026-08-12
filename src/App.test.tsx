@@ -21,6 +21,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // The shell listens for the reconcile event too, and a `.catch` cannot catch the
     // synchronous `TypeError` of calling `undefined`.
     onCollectionReconciled: vi.fn().mockResolvedValue(() => {}),
+    // And for a price feed's progress, which is the third event this window subscribes to —
+    // the backend refreshes the selected feed at start-up, so a window that was not listening
+    // would show a fetch nobody could see. Same reason it must be mocked rather than left off.
+    onMarketplaceProgress: vi.fn().mockResolvedValue(() => {}),
+    marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -129,18 +134,15 @@ const BOLT: CardSummary = {
   rarity: "common",
   typeLine: "Instant",
   manaCost: "{R}",
-  priceUsd: 400.5,
-  priceEur: 320.25,
+  price: 400.5,
   layout: "normal",
   oracleId: "o1",
   finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLowUsd: 400.5,
-  priceHighUsd: 400.5,
-  priceLowEur: 320.25,
-  priceHighEur: 320.25,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 /**
@@ -160,8 +162,7 @@ const MAIN: DeckCategory = {
   isActive: true,
   sortOrder: 0,
   cardCount: 0,
-  totalPriceUsd: null,
-  totalPriceEur: null,
+  totalPrice: null,
   cardCountAllVariants: 0,
 };
 
@@ -212,7 +213,9 @@ const ALPHA: Printing = {
   artist: "Christopher Rush",
   lang: "en",
   finishes: '["nonfoil"]',
-  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  // Priced by the backend at the marketplace the read named — nonfoil only, because that is
+  // the one finish Alpha exists in.
+  finishPrices: { nonfoil: 400.5, foil: null, etched: null },
   promo: false,
   fullArt: false,
   frameEffects: null,
@@ -227,7 +230,7 @@ const M10: Printing = {
   setName: "Magic 2010",
   collectorNumber: "146",
   releasedAt: "2009-07-17",
-  prices: '{"usd":"1.50","usd_foil":null,"usd_etched":null,"eur":null,"tix":null}',
+  finishPrices: { nonfoil: 1.5, foil: null, etched: null },
 };
 
 /** The same card as a collection row, for the Escape-from-a-stepper test below. */
@@ -247,8 +250,7 @@ const BOLT_ENTRY: CollectionRow = {
   condition: "NM",
   quantity: 2,
   tradelistQuantity: 0,
-  unitPriceUsd: 400.5,
-  unitPriceEur: 350,
+  unitPrice: 400.5,
   purchasePrice: null,
   purchaseCurrency: null,
   acquiredAt: null,
@@ -280,8 +282,7 @@ const BOLT_WISH: WishRow = {
   typeLine: "Instant",
   quantity: 2,
   preferredFinish: null,
-  unitPriceUsd: 400.5,
-  unitPriceEur: 350,
+  unitPrice: 400.5,
   ownedQuantity: 0,
   notes: null,
   needsReview: null,
@@ -306,7 +307,7 @@ const BOLT_DETAIL: CardDetail = {
   artist: "Christopher Rush",
   releasedAt: "1993-08-05",
   legalities: '{"modern":"legal"}',
-  prices: '{"usd":"400.50","usd_foil":null,"usd_etched":null}',
+  finishPrices: { nonfoil: 400.5, foil: null, etched: null },
   finishes: '["nonfoil"]',
   imageStatus: "highres_scan",
   faces: [],
@@ -343,10 +344,8 @@ beforeEach(() => {
     uniqueCards: 2,
     entries: 2,
     tradelistCards: 0,
-    valueUsd: 801,
-    valueEur: 700,
-    unpricedUsd: 0,
-    unpricedEur: 0,
+    value: 801,
+    unpriced: 0,
     needsReview: 0,
   });
   syncStatus.mockReset().mockResolvedValue({
@@ -403,7 +402,7 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
   await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
 
   expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
-  expect(deckGet).toHaveBeenCalledWith(4, "live");
+  expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
 
   await userEvent.click(screen.getByRole("button", { name: /back to decks/i }));
 
@@ -444,7 +443,10 @@ it("opens the detail pane for the card that was clicked, and closes it again", a
   await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
 
   const pane = await screen.findByRole("complementary", { name: /card details/i });
-  expect(cardDetail).toHaveBeenCalledWith("c1");
+  // The id **and** the marketplace: the pane's prices are the backend's, so a read that dropped
+  // the second argument would quote whatever the default happens to be under the reader's own
+  // heading. Nothing here has chosen one, so it is `tcgplayer`.
+  expect(cardDetail).toHaveBeenCalledWith("c1", "tcgplayer");
   expect(within(pane).getByText("Lightning Bolt")).toBeInTheDocument();
   // The results are still there behind it: the pane is docked, not drawn over them.
   expect(screen.getByRole("group", { name: "Search results" })).toBeInTheDocument();
