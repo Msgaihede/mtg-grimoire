@@ -216,11 +216,70 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   native window CDP cannot reach, so `deck_import_read_file` was exercised by invoking the command
   with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;
   the **click → path half is not**.
-- **_Placeholder — the live CDP pass over the shipped window has not run for the import yet._**
-  Everything above is `cargo`, `node:sqlite` or the frontend suite; nothing here has been driven
-  through the real WebView2. Fill this in from that pass and **do not quote a figure here until it
-  has run** — see [decks-live-findings.md](decks-live-findings.md) for what the last such pass
-  found that no suite could.
+- **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
+  Vite serving the frontend (`/src/main.tsx` in the page's script list, which is the cheap proof
+  that no stale embedded `dist/` is being measured), the live 116 695-card corpus, 1280×800.
+  The gallery path end to end: `Import deck` → paste `REFERENCE_LIST` → the box counts
+  **105 lines · 117 cards** → name it and pick Commander → Preview → **117 cards · 6 categories**
+  and **no problem list at all** → pick a commander → Import → the editor opens on the new deck.
+  Read back through `deck_get`: **105 of 105 lines resolved** against the live corpus — 0
+  unmatched, 0 hint misses, 0 parse issues — **105 rows carrying 117 copies**, and ten categories:
+  the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,
+  `Artifact` 7, `Instant` 7, `Enchantment` 5, `Sorcery` 4) and `Commander` 1.
+- **The two timings, both through `invoke` from the webview on that debug build**, medians with
+  the first two runs dropped: `deck_import_resolve` over the 105-line reference list **120.4 ms**
+  (116.9–141.3, 9 warm of 11), and `deck_import_commit` over its 105 items **7.9 ms** (7.1–8.0, 5
+  warm of 7, `replace` into a deck already holding them; outcome `added 117, removed 117,
+  categoriesCreated 0`). **That resolve figure does not contradict `resolve_lines`' 11.5 ms
+  above** — that one is a **release** build, Rust-only, over a file; this one is **debug** and
+  carries the answer back across the IPC boundary, which is **152.9 KB for 105 rows** (1.49 KB
+  each, because every `ImportMatch` ships oracle text and the whole `legalities` object). Quote
+  either only with its build named, or the pair reads as a regression that never happened.
+- **Variant scoping holds, measured rather than reasoned.** With a deck at 117 copies in both
+  lists, a `merge` of a 7-card list into `theory` left `live` at **117** and took `theory` to
+  **124**; a `replace` of an 11-card list into `live` took `live` to **11** and left `theory` at
+  **124**. `replace` cleared the cards and **left every category standing** — `Creature`,
+  `Instant`, `Sorcery` and `Enchantment` all survived at `card_count` 0, which is the "a category
+  is the reader's filing, not the list's" rule with a number against it. The audit drawer wrote
+  **two** rows for the replace and one for the merge: `Cleared 117 cards before importing` beside
+  `Imported 11 cards into 4 categories`, against a bare `Imported 7 cards into 3 categories`.
+- **Commander eligibility is right against the live corpus, including the 2026 Spacecraft rule.**
+  The reference list offered **56** candidates: its **55** legendary creatures **and `The
+  Seriema`**, a `Legendary Artifact — Spacecraft` with a 5/5 P/T box (CR 903.3). `Delighted
+  Halfling`, the one non-legendary creature among its 56 creatures, was correctly not offered.
+  This is the first time the `power`/`toughness` columns schema v5 added have been shown doing the
+  job they were added for, on real data rather than on a fixture.
+- **BUG, found live and not fixed: a printing hint that resolves is trusted over the name, so a
+  wrong hint silently imports a different card.** `BY_SET_AND_NUMBER` consults no name — which is
+  deliberate and documented, and is what lets a non-English list land on the right cards — but
+  nothing afterwards checks that the printing it found *is* the card the line named, and
+  `hint_missed` cannot say so because the hint did not miss. Measured: `Captain Sisay (brc 132)` →
+  **`Arcane Signet [brc 132]`**, `hint_missed: false`; `Sol Ring (ltc 285)` → **`Talisman of
+  Conviction`**; `Forest (unf 235)` → **`Plains`**; `Path to Exile (2x2 21)` → **`Monastery
+  Mentor`**. The preview shows **no problem at all** for any of them. The failing-open design is
+  intact for the case it was written for — `Captain Sisay (brc 99999)` sets `hint_missed: true`
+  and falls through to the name — so the gap is precisely "the hint matched *something else*",
+  which a stale collector number, a renumbered reprint or a hand-edited list all produce.
+- **BUG, in this repo's own fixture: `MOXFIELD_LIST`'s set/collector hints are fabricated.** Five
+  of its six lines name a printing that is a different card in the live corpus (only
+  `Arcane Signet (ELD) 331` is right), so the fixture demonstrates the trap above rather than a
+  Moxfield export. The parser tests stay green because they assert *parsing*, and Storybook stays
+  green because the fake carries its own corpus — nothing that runs in CI resolves this fixture
+  against real data. `REFERENCE_LIST`, which carries no hints at all, is unaffected and resolved
+  105 of 105.
+- **`MATCH_ORDER` has no language term**, so a name-only line lands on whatever paper printing is
+  newest — which for **5 of the reference list's 105 lines** is not an English one:
+  `Akroma's Will → soa 131 [ja]`, `Arcane Signet → hoc 95 [dw]`, `Mox Amber → hoc 96 [dw]`,
+  `Elesh Norn, Mother of Machines → one 418 [ph]`, `The Wandering Rescuer → pwcs 2026-3 [ja]`.
+  100 of 105 came back `en`. Recorded rather than fixed: determinism and "a printing you own
+  first" are the promises the order exists to keep, and a language preference is a fourth key
+  nobody has decided the position of.
+- **Card images decoded in the shipped window for the first time.** The 2026-08-11 deck-builder
+  pass could not render one because `cards.scryfall.io` was in a path-MTU black hole; on
+  2026-08-12 that host was reachable and the pass left **401 files / 20.17 MB** under
+  `data/images`, with a live `mtgimg://art/…` probe returning **626×457**. The black hole is a
+  property of the network on the day, not of this app — which is exactly what the earlier entry
+  claimed and nobody had been able to confirm.
 - **An add that names no category is filed by the card's type line; an add that names one is
   untouched.** So every _drag_ overrides the rule by construction — pointing at a column is
   naming a category — and nothing in the write path has to tell a gesture from a press. The rule

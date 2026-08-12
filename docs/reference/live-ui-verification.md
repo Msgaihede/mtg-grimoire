@@ -105,6 +105,27 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   can land on the first of them.
 - **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
   fault.** Reload with the recorder attached and read the entries that arrive after.
+- **Two worktrees cannot both run the app, and the way it fails is that you drive the wrong one.**
+  `tauri-plugin-single-instance` is keyed on the Tauri `identifier`, which is the same string in
+  every worktree, and every session sets the same `--remote-debugging-port=9222`. Measured
+  2026-08-12: a second worktree's app started while this one was mid-pass, this one died with
+  **exit code 0xffffffff and no panic, no stderr and nothing in the console recording**, and the
+  relaunch then exited **0** (single-instance) while `/json/list` went on answering — from the
+  *other* worktree's window. Every `cdp.mjs` command kept working and was driving somebody else's
+  branch. **The tell is the page target's URL and it costs one call**: `http://localhost:1420/` is
+  a `tauri dev` window and yours; `http://tauri.localhost/` is a built binary serving its embedded
+  `dist/`. Check it before the first gesture, and ask which worktree the process came from —
+  `Get-Process mtg-grimoire | Select-Object Id, Path` is enough, and `Get-CimInstance Win32_Process
+  -Filter "Name='mtg-grimoire.exe'"` adds the command line. **Wait the other session out — never
+  kill it**: it belongs to somebody else's task.
+- **Do not `import()` anything under `/node_modules/.vite/deps/` from an `eval`.** Vite answers a
+  stale dep-bundle hash with **504 Outdated Optimize Dep**, re-optimises, and forces a **full page
+  reload** — which silently drops every `window.__*` the pass was holding, resets the app's
+  zustand store to its default view, and kills the console recorder. Reach the app's own modules
+  by source path instead (`import('/src/lib/ipc.ts')`, `import('/src/features/…/fixtures.ts')`);
+  under `tauri dev` Vite serves and transforms those, so bare specifiers inside them resolve and
+  the module works — which is also the cheapest way to get `ipc` and a fixture into the page
+  without quoting a 2 500-character string through PowerShell.
 
 Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug/data/mtg.db`
 **while the app holds it** (WAL allows it). Delete every seeded row afterwards — `data/` is

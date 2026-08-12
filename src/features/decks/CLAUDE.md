@@ -109,6 +109,39 @@ panel, nothing written until Import). The Rust half and every measurement:
 - **The file picker's own half is unverified**, for the reason `deck_set_cover_image`'s is:
   `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is tested;
   click → path is not.
+- **Driven in the shipped window 2026-08-12** (`npm run tauri dev`, a **debug** build): the
+  gallery path end to end put **105 of 105** reference-list lines and all **117 copies** into a
+  new deck, `deck_import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
+  `invoke` on that build, and the commander step offered **56** candidates — the list's 55
+  legendary creatures plus a legendary Spacecraft with a P/T box. Every figure, the variant and
+  audit checks, and the three resolver-side bugs it found (the fourth is the next bullet):
+  [decks-storage.md](../../../docs/reference/decks-storage.md).
+- **The preview's tally is computed before the commander is chosen and is never recomputed, so
+  the two numbers on that step disagree with what gets written.** `buildImportPlan` fills
+  `categories` from `tallyOf(cards)`, which reads only `autoCategoryFor`'s answer;
+  `toImportItems(plan, commanderIds)` is what actually moves the commander, and it runs at
+  Import. Measured live: the reference list previewed as **`117 cards · 6 categories`** with
+  `Creature 56` and no Commander row, and `deck_get` after the import read **7 categories**,
+  `Creature 55`, `Commander 1`. It is worst on the **`automatic`** arm, where the reader is given
+  nothing to press — the dialog printed *"Krenko, Mob Boss goes in the command zone"* directly
+  above a tally listing him under `Creature` and no Commander pile at all. `fromFile` is the one
+  arm that agrees, because there the card already carries the Commander category name. The
+  `toImportItems` doc calls the split deliberate ("the plan is what the preview draws *while*
+  they are still choosing") and the split is fine; what is missing is a second tally over the
+  items actually being sent.
+- **The layer contract holds and was measured, not assumed.** The dialog's scrim computes to
+  `z-index: 45` from both entry points (`LAYER.overlay`, the rung the editor's other full-window
+  surfaces share); one Escape closed the dialog and **left the card pane open**, handing focus
+  back to the `Import cards` button that opened it, and a second Escape closed the pane; 22 Tab
+  presses from the textarea produced 22 focus landings and **every one inside the dialog**.
+- **Reduced motion is honoured on both halves, and only the live pass could show it.** Under
+  emulated `prefers-reduced-motion: reduce`, the panel's `transform` at 60 ms was **`none`**
+  against `matrix(0.9818…)` unemulated — `MotionConfig reducedMotion="user"` reduces `scale`
+  because it is a transform, unlike the deck stack's `marginBottom` — while `opacity` kept
+  animating (0.137), which is the weaker rule `lib/motion.ts` documents on purpose. No
+  `useReducedMotion()` opt-out is owed here. The buttons' CSS half read
+  `transition-property: none` **while `transition-duration` still read `0.12s`** — the false
+  failure the harness contract warns about, reproduced exactly.
 
 ## Views and interaction
 
@@ -181,7 +214,17 @@ price | type`). An **inactive category stays its own group in all three grouping
 
 ## Known open bugs
 
-Three, found by driving the shipped window and **none of them fixed** — the title row collapsing
-the deck name at 1060–1350px, a custom deck cover never appearing in the gallery, and Table view
-starving the card name. Detail and measurements:
+Six, all found by driving the shipped window and **none of them fixed.**
+
+Three from the 2026-08-11 builder pass — the title row collapsing the deck name at 1060–1350px, a
+custom deck cover never appearing in the gallery, and Table view starving the card name. Detail:
 [docs/reference/decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
+
+Three from the 2026-08-12 import pass. **The preview tally ignoring the commander choice** is
+written up in the `## Import` section above, because it is a TypeScript decision. The other two are
+in [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) with their
+reproductions: a **printing hint that resolves is trusted over the name**, so a wrong hint silently
+imports a different card and `hint_missed` stays `false`; and **`MOXFIELD_LIST`'s own hints are
+fabricated** — five of its six lines name a different card in the live corpus. A fourth finding,
+recorded there rather than filed: `MATCH_ORDER` has no language term, so 5 of the reference list's
+105 lines resolve to a non-English printing.
