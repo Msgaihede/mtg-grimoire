@@ -74,6 +74,14 @@
  * 10. **Every refusal is its Rust sentence verbatim, with one exception.** A story renders
  *    these, so they are copied rather than paraphrased; the parenthetical *why* inside
  *    {@link canonicalGrading}'s refusal is this parser's wording, because serde's could not be.
+ * 11. **The import's fold arm reads the whole fixture, where `deck_import::fold_match` reads
+ *    200 FTS candidates.** `cards_fts` exists to stop that arm scanning 116 k rows; over 43
+ *    it is the scan that is cheap and the index that would be the fiction. Everything the cap
+ *    decides — which candidates survive a truncation, and in what order — is therefore
+ *    unreachable here, and a story must never be *about* it. What the arm still does exactly
+ *    is the judging: {@link foldName}'s table is transcribed character for character and
+ *    {@link foldRank} keeps a whole name ahead of a front face, which is the half that decides
+ *    which printing a name lands on.
  *
  * Deliberately *not* on that list: `everUncommon`, `power`/`toughness`, `priceUsd` and
  * `isPaper` are **read off their columns**. They are facts the generator took from the full
@@ -115,6 +123,12 @@ import type {
   EntryInput,
   EntryPatch,
   FacetResponse,
+  ImportItem,
+  ImportMatch,
+  ImportMode,
+  ImportOutcome,
+  ImportResolveLine,
+  ImportResolveRow,
   InstallKind,
   Printing,
   ReleaseInfo,
@@ -2020,6 +2034,183 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
   };
 }
 
+/* ------------------------------------------------------------------ the import -------- */
+
+/**
+ * `deck_import::IMPORT_MODES` — what an import may do to the variant it lands in.
+ *
+ * A list rather than a union type for the Rust's reason: the refusal below **quotes it**, so
+ * the two spellings a caller can name and the two the sentence offers are one array. Read
+ * `IMPORT_MODES[1]` by index for the same discipline `deck_audit`'s kind constants follow.
+ */
+const IMPORT_MODES = ["merge", "replace"] as const;
+const IMPORT_REPLACE = IMPORT_MODES[1];
+
+/** `deck_import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
+ *  "clear the deck and put nothing back" are the same call with the same arguments. */
+const NOTHING_TO_IMPORT = "There is nothing to import.";
+
+/**
+ * What {@link readHandlers}'s `deck_import_read_file` says instead of inventing a decklist.
+ *
+ * **Not a Rust sentence, and the only handler in this file that has none.** The real command
+ * takes a path the OS file picker answered, and there is no picker in a browser — so a fake
+ * that returned text would be a story about a gesture no reader of that story can make. The
+ * dialog's file arm is the live pass's to prove; a story that wants a decklist pastes one.
+ */
+const NO_FILE_PICKER = "No file picker in Storybook.";
+
+/**
+ * `deck_import::fold_name`'s table, transcribed — every character it maps and no other.
+ *
+ * Keyed on the **lower-case** half of each pair only, because {@link foldName} lowercases
+ * before it looks anything up where the Rust lowercases in its fallthrough arm. The two agree
+ * on every character in the table: `Á`.toLowerCase() is `á`, and `Æ` is `æ`.
+ */
+const FOLD_LETTERS: Readonly<Record<string, string>> = {
+  á: "a", à: "a", â: "a", ä: "a", ã: "a", å: "a",
+  é: "e", è: "e", ê: "e", ë: "e",
+  í: "i", ì: "i", î: "i", ï: "i",
+  ó: "o", ò: "o", ô: "o", ö: "o", õ: "o", ø: "o",
+  ú: "u", ù: "u", û: "u", ü: "u",
+  ñ: "n",
+  ç: "c",
+  ý: "y", ÿ: "y",
+  æ: "ae", œ: "oe", ß: "ss",
+  "’": "'", "ʼ": "'", "`": "'",
+  "–": "-", "—": "-",
+};
+
+/**
+ * `deck_import::fold_name` — a card name reduced to what two people typing it would agree on:
+ * lowercase, no diacritics, one kind of apostrophe, single spaces.
+ *
+ * Anything not in {@link FOLD_LETTERS} passes through, so a name in a script the table has
+ * never heard of folds to itself and still matches itself exactly.
+ */
+export function foldName(raw: string): string {
+  let out = "";
+  for (const ch of raw.toLowerCase()) out += FOLD_LETTERS[ch] ?? ch;
+  return out.split(/\s+/u).filter((word) => word !== "").join(" ");
+}
+
+/**
+ * `deck_import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
+ * the whole name, `1` for the front face only, `null` for neither.
+ *
+ * **A rank rather than a bool**, and that is what keeps an art series from winning: the SQL
+ * arms hold the exact name ahead of a front face by *asking in sequence*, and this arm asks
+ * once and sorts, so the same preference has to be a sort key or `"N // N"` outranks `N`.
+ */
+function foldRank(cardName: string, wanted: string): number | null {
+  if (foldName(cardName) === wanted) return 0;
+  const at = cardName.indexOf(" // ");
+  if (at >= 0 && foldName(cardName.slice(0, at)) === wanted) return 1;
+  return null;
+}
+
+/**
+ * `deck_import::MATCH_ORDER` — a printing you own, then the newest, then the id.
+ *
+ * The `id` tie-break is not decoration: it is what makes an import **deterministic**, so the
+ * same list pasted twice puts the same printings in the deck. `releasedAt` needs no coalesce
+ * here because {@link FakeCard.releasedAt} is not nullable where `cards.released_at` is.
+ */
+function importOrder(db: FakeDb): Compare<FakeCard> {
+  return (a, b) =>
+    ownedOfPrinting(db, b.id) - ownedOfPrinting(db, a.id) ||
+    cmp(b.releasedAt, a.releasedAt) ||
+    cmp(b.id, a.id);
+}
+
+/**
+ * `deck_import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT` plus the two
+ * facts only an import asks for.
+ *
+ * `everUncommon` is read off its column for {@link toDeckCard}'s reason, where the SQL
+ * computes it with an `EXISTS` over `cards`: it is a fact the generator took from the full
+ * 116 k-row corpus, and re-deriving it over 43 rows would answer a question about the fixture.
+ * `unitPriceUsd` is the nonfoil `usd` key of **this printing's** blob, never `priceUsd`.
+ */
+function toImportMatch(db: FakeDb, c: FakeCard, printingCount: number): ImportMatch {
+  return {
+    cardId: c.id,
+    // **The whole printed name**, so a DFC resolved from its front face comes back `"A // B"`.
+    name: c.name,
+    setCode: c.setCode,
+    collectorNumber: c.collectorNumber,
+    lang: c.lang,
+    oracleId: c.oracleId,
+    manaCost: c.manaCost,
+    cmc: c.cmc,
+    typeLine: c.typeLine,
+    oracleText: c.oracleText,
+    colors: c.colors,
+    colorIdentity: c.colorIdentity,
+    legalities: c.legalities,
+    power: c.power,
+    toughness: c.toughness,
+    layout: c.layout,
+    rarity: c.rarity,
+    faces: c.faces,
+    // A plain boolean where `DeckCard.gameChanger` is nullable: a resolved line always names a
+    // card that exists, which is the state that `null` is reserved for.
+    gameChanger: c.gameChanger,
+    everUncommon: c.everUncommon,
+    unitPriceUsd: priceKey(c, "usd"),
+    ownedQuantity: ownedOfPrinting(db, c.id),
+    printingCount,
+  };
+}
+
+/**
+ * One SQL arm's answer: `MATCH_ORDER`'s winner, carrying `count(*) OVER ()` as its
+ * `printingCount`.
+ *
+ * The count is **the arm's**, not the card's — `count(*) OVER ()` is computed before `LIMIT`,
+ * so it counts every row the `WHERE` matched. That is why `ImportMatch.printingCount` means
+ * six different things and only means "printings of this card" on a line with no hint.
+ */
+function bestOf(db: FakeDb, candidates: FakeCard[]): ImportMatch | null {
+  if (candidates.length === 0) return null;
+  const winner = [...candidates].sort(importOrder(db))[0];
+  return toImportMatch(db, winner, candidates.length);
+}
+
+/**
+ * `deck_import::fold_match` — fold both sides and compare, the arm the three exact ones fall
+ * through to.
+ *
+ * The candidate set is the whole paper fixture rather than `cards_fts`' 200; simplification 11
+ * says what that gives up. `printingCount` is the number that survived the fold, because the
+ * reader is choosing between printings of *their* card rather than between everything that
+ * happened to mention it.
+ */
+function foldMatch(db: FakeDb, name: string): ImportMatch | null {
+  const wanted = foldName(name);
+  // A single-faced name has no front half, so an empty `wanted` would rank every card 1.
+  if (wanted === "") return null;
+  const kept: { rank: number; card: FakeCard }[] = [];
+  for (const card of db.cards) {
+    if (!card.isPaper) continue;
+    const rank = foldRank(card.name, wanted);
+    if (rank !== null) kept.push({ rank, card });
+  }
+  if (kept.length === 0) return null;
+  const order = importOrder(db);
+  // The whole name ahead of a front face, then `MATCH_ORDER`'s three keys in its own order.
+  kept.sort((a, b) => a.rank - b.rank || order(a.card, b.card));
+  return toImportMatch(db, kept[0].card, kept.length);
+}
+
+/** `deck_import::given` — a hint the caller actually gave: trimmed, and absent when blank.
+ *  `""` and `"   "` reach here from real exports (a trailing tab in a Moxfield paste is
+ *  enough), and either bound into `set_code = ?1` turns every line into a missed hint. */
+function givenHint(hint: string | null): string | null {
+  const trimmed = (hint ?? "").trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 /**
  * Every read command, bound to one store.
  *
@@ -2468,6 +2659,102 @@ export function readHandlers(db: FakeDb) {
     deck_theory_diff: (args: { deckId: number }): TheoryDiffRow[] => {
       refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
       return theoryDiff(db, args.deckId).map((g) => g.row);
+    },
+
+    /**
+     * `deck_import::resolve_lines` — every name in a parsed decklist, resolved to a printing
+     * this app has. **Read-only**, and one call for the whole list.
+     *
+     * Six arms, tried in the order the reader's own intent runs out — **narrowest first, and
+     * the exact name always ahead of a front face**:
+     *
+     * 1. **A set and a collector number** name one printing and are taken at their word; no
+     *    name is consulted at all, so a list whose names are in another language still lands.
+     * 2. **The set, with the name** — a hint whose *number* named nothing usually still has the
+     *    right set, and discarding it there throws away the reader's best information at the
+     *    moment it is most likely to be right.
+     * 3. **The set, with the name as a front face.**
+     * 4. **The name**, exactly. A separate arm from 5 as a *correctness* fix rather than a
+     *    performance one: one `OR`-ed arm lets the ordering choose between a real card and an
+     *    art series' `"N // N"` row, and 51 names in the live corpus have one that wins.
+     * 5. **The name as a front face** of an `"A // B"` printing — the commonest way a decklist
+     *    writes a double-faced card down.
+     * 6. **The folded name** ({@link foldMatch}), which is where case and diacritics survive.
+     *
+     * A name no printing bears is `matched: null` and **never a rejection**: 99 good lines must
+     * not be lost to one bad one, so the preview quotes the miss and the import proceeds.
+     * `hintMissed` means *some part of what the reader wrote about the printing was not used* —
+     * so a collector number that named nothing sets it even when the set and name then answer,
+     * and a collector number with no set beside it sets it without being tried at all (a
+     * collector number is not unique across sets, so it can only ever narrow one).
+     *
+     * The set code is lower-cased and compared binary, as `resolve_lines` binds it: 0 of the
+     * corpus's 116 695 rows carry a set code in any other case, while a parser that
+     * upper-cases `(MH2)` is the ordinary source of one. The collector number keeps its
+     * case-insensitivity, which is the one place `COLLATE NOCASE` survives.
+     */
+    deck_import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
+      // `is_paper = 1` is on every arm, so it is applied once here.
+      const paper = db.cards.filter((c) => c.isPaper);
+      // `c.name >= "{name} // " AND c.name < "{name} //!"`, which over a byte-wise comparison
+      // is exactly "carries that prefix" — see `deck_import::front_face_range` for the proof.
+      const fronts = (name: string) => paper.filter((c) => c.name.startsWith(`${name} // `));
+
+      return args.lines.map((line, index) => {
+        // An empty name is no name at all: the front-face range of `""` is a real range over
+        // real names, so a blank line reaching the name arms would resolve to an arbitrary
+        // printing rather than to nothing. A printing hint needs no name and is still honoured.
+        const name = line.name.trim();
+        let matched: ImportMatch | null = null;
+        let hintMissed = false;
+
+        const set = givenHint(line.setCode)?.toLowerCase() ?? null;
+        const number = givenHint(line.collectorNumber);
+        if (set !== null) {
+          const inSet = paper.filter((c) => c.setCode === set);
+          if (number !== null) {
+            matched = bestOf(
+              db,
+              inSet.filter((c) => c.collectorNumber.toLowerCase() === number.toLowerCase()),
+            );
+          }
+          // Set before the fallbacks below, so a number that named nothing stays reported even
+          // when the set and name go on to answer.
+          hintMissed = matched === null;
+          if (matched === null && name !== "") {
+            matched =
+              bestOf(db, inSet.filter((c) => c.name === name)) ??
+              bestOf(db, inSet.filter((c) => c.name.startsWith(`${name} // `)));
+            if (number === null) hintMissed = matched === null;
+          }
+        } else if (number !== null) {
+          hintMissed = true;
+        }
+
+        if (matched === null && name !== "") {
+          matched =
+            bestOf(db, paper.filter((c) => c.name === name)) ??
+            bestOf(db, fronts(name)) ??
+            foldMatch(db, name);
+        }
+        // The caller's index rides along rather than being inferred: the list that was sent is
+        // the only thing that knows what line 34 said.
+        return { index, matched, hintMissed };
+      });
+    },
+
+    /**
+     * `deck_import::read_import_file`, which **throws here and always will**.
+     *
+     * The real command takes a path `@tauri-apps/plugin-dialog`'s `open()` answered — a native
+     * window CDP cannot drive and a browser does not have. So there is no gesture in a story
+     * that reaches this, and a handler that invented a decklist would be a story about a thing
+     * that cannot happen: the file arm's refusal would be the only branch anyone ever saw, and
+     * it would be the wrong one. A story that wants a list pastes one, which is the same string
+     * travelling the same path from one line later.
+     */
+    deck_import_read_file: (): string => {
+      throw refuse(NO_FILE_PICKER);
     },
 
     /**
@@ -4008,6 +4295,144 @@ export function writeHandlers(db: FakeDb) {
         addWish(db, { oracleId, name: want.name, quantity: want.quantity });
       }
       return missing.size;
+    },
+
+    /**
+     * `deck_import::commit_import` — a whole decklist into one deck, in one transaction.
+     *
+     * **The command exists for the allocator.** Looping {@link deck_add_card} would be correct
+     * in every other respect and would rebuild the deck's claims once per line. In the app it
+     * runs once, at the end, over the finished deck; here it runs at the next `deck_get` like
+     * every other write in this file (simplification 2), so the saving is invisible and the
+     * shape is what matters.
+     *
+     * Three decisions borrowed verbatim, because each is a thing that would be wrong the other
+     * way. **`replace` clears the cards and leaves the categories** — a category is the
+     * reader's filing, not the list's, and sweeping them would delete piles somebody named,
+     * reordered and switched off to import a file that mentions none of that. **It clears one
+     * variant**, which is the reason `variant` is in the grain at all. And **the history is one
+     * row per *effect*, never one per card**: an import of 117 cards would otherwise bury every
+     * other event of that day, so it writes an `add` row carrying the counts plus — on a
+     * `replace` that actually cleared something — a `remove` row, neither naming a card.
+     *
+     * **Every refusal is raised before anything is written**, which is this fake's stand-in for
+     * the transaction: the Rust checks each line as it reaches it and rolls back, and the only
+     * difference a caller can see is that there is no half-made category behind a refusal here
+     * either. That is the observable contract — a line naming a printing the card database has
+     * not got refuses the import and leaves the deck, including the one a `replace` was about
+     * to clear, exactly as it was.
+     */
+    deck_import_commit: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      mode: ImportMode;
+      items: ImportItem[];
+    }): ImportOutcome => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      if (!IMPORT_MODES.some((m) => m === args.mode)) {
+        throw refuse(
+          `\`${args.mode}\` is not an import mode. Use one of: ${IMPORT_MODES.join(", ")}.`,
+        );
+      }
+      // A write that writes nothing is not a write — `add_card`'s refusal for a quantity of
+      // zero, one level up.
+      if (args.items.length === 0) throw refuse(NOTHING_TO_IMPORT);
+      const deck = requireDeck(db, args.deckId);
+      // The whole list is judged before the first row moves; see the doc above.
+      for (const item of args.items) {
+        if (item.quantity <= 0) throw refuse(ZERO_ADD);
+        validMetaName(item.categoryName, "A category");
+        requireCard(db, item.cardId);
+      }
+
+      // **Copies, not rows** — the number the `remove` row's `delta` carries and the number a
+      // reader recognises.
+      let removed = 0;
+      if (args.mode === IMPORT_REPLACE) {
+        const cleared = db.deckCards.filter(
+          (dc) => dc.deckId === deck.id && dc.variant === variant,
+        );
+        removed = cleared.reduce((n, dc) => n + dc.quantity, 0);
+        db.deckCards = db.deckCards.filter((dc) => !cleared.includes(dc));
+      }
+
+      // Keyed on the **trimmed** name, which is the form `categoryForName` stores and therefore
+      // the form two lines have to agree on: `Ramp` and `  Ramp  ` are one pile in the database,
+      // and a map keyed on the raw string would count them as two in the history row.
+      const categories = new Map<string, FakeDeckCategory>();
+      let categoriesCreated = 0;
+      let added = 0;
+      for (const item of args.items) {
+        const name = item.categoryName.trim();
+        let category = categories.get(name);
+        if (!category) {
+          // Asked *before* the find-or-create, because afterwards there is no way to tell a
+          // category that was made from one that was already there — and "3 new categories" is
+          // a sentence the preview promises.
+          const existed = db.deckCategories.some((c) => c.deckId === deck.id && c.name === name);
+          category = categoryForName(db, deck.id, name);
+          if (!existed) categoriesCreated += 1;
+          categories.set(name, category);
+        }
+        const card = requireCard(db, item.cardId);
+        const existing = deckCardAt(db, deck.id, item.cardId, category.id, variant);
+        if (existing) {
+          // `DECK_CARD_GRAIN`'s `ON CONFLICT … DO UPDATE`: a list naming a card on two lines
+          // lands as one row with the sum, and a merge folds onto what the deck already held.
+          existing.quantity += item.quantity;
+        } else {
+          db.deckCards.push({
+            id: nextId(db.deckCards),
+            deckId: deck.id,
+            categoryId: category.id,
+            variant,
+            cardId: item.cardId,
+            tagId: null,
+            quantity: item.quantity,
+            name: card.name,
+            setCode: card.setCode,
+            collectorNumber: card.collectorNumber,
+            lang: card.lang,
+            needsReview: null,
+          });
+        }
+        // What the list *asked for*, not what the deck landed on: a merge that folded 3 onto an
+        // existing 2 reports 3 and the row now holds 5.
+        added += item.quantity;
+      }
+
+      // Facts only — `auditText.ts` words them. No card is named, because an import is about no
+      // one card, and the counts are what a reader is owed instead.
+      if (removed > 0) {
+        record(
+          db,
+          deck.id,
+          variant,
+          "remove",
+          null,
+          { import: { mode: args.mode, cleared: removed } },
+          -removed,
+        );
+      }
+      record(
+        db,
+        deck.id,
+        variant,
+        "add",
+        null,
+        {
+          import: {
+            mode: args.mode,
+            lines: args.items.length,
+            cards: added,
+            categories: categories.size,
+          },
+        },
+        added,
+      );
+      deck.updatedAt = stamp(db);
+      return { added, removed, categoriesCreated };
     },
 
     /* ------------------------------------------------- categories, tags and folders ---- */
