@@ -2,7 +2,7 @@
 
 **Validation is TypeScript** (spec §3). Rust supplies **facts** (`DeckCardRow`: per-printing
 `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws **every**
-conclusion. The storage side — tables, the six card commands, the allocator, the audit log —
+conclusion. The storage side — tables, the seven card commands, the allocator, the audit log —
 is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) and
 [src-tauri/CLAUDE.md](../../../src-tauri/CLAUDE.md).
 
@@ -70,6 +70,86 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   `diffTotals` take no `Currency` at all any more — a heading, the rows under it and the strip
   above them cannot be about different money, by construction.
 
+## Import
+
+`import/` is `parse.ts` (text → lines), `plan.ts` (lines + the printings Rust resolved → piles, a
+commander, tallies), `useDeckImport.ts` (the writes) and `ImportDeckDialog.tsx` (two steps, one
+panel, nothing written until Import). The Rust half and every measurement:
+[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+
+- **One parser for every export, and every rule in it is a _per-line_ rule.** A format detector
+  would have to choose a reader before it had read anything, and would be wrong about exactly the
+  lists somebody has edited by hand. So an unfamiliar mixture is read line by line rather than
+  refused whole.
+- **`//` is a comment only at the _start_ of a line.** `1 Branchloft Pathway // Boulderloft
+  Pathway` is one card and there are seven such names in the reference list alone, so a `//` found
+  anywhere else is part of the name and must never be cut.
+- **The line splitter takes CRLF, a lone LF _and a lone CR_.** `/\r?\n/` — the obvious spelling —
+  treats a carriage return on its own as nothing and `.` does not cross one, so a CR-only paste
+  arrived as **one** row that matched nothing and the whole list came back as a single issue.
+- **Nothing is ever silently dropped.** A line the parser cannot read becomes a `ParseIssue`
+  carrying its number and its raw text, and one bad line never aborts the parse. The only lines
+  that leave no trace are the ones making no claim — blanks and comments.
+- **`plan.ts` makes every deck decision and the dialog makes none.** The pile is `autoCategoryFor`
+  (the app's one rule, never copied — a plain add, a drag with no column under it and an imported
+  line have to agree) and the commander is `commanderIneligibility`, the same rule the validation
+  panel judges a built deck by. A looser "looks like a commander" test here would offer a card the
+  panel then refuses.
+- **`row.index` is the address, never the array position.** `deck_import_resolve` carries the
+  caller's own index back precisely so the two can differ; reading `rows[i]` against
+  `parsed.lines[i]` works today and mis-files the whole list the day anything filters between them.
+- **`CardIdentity` is the card-level half of `CardFacts`, and `CardFacts` was deliberately _not_
+  narrowed to it.** It exists so the importer can ask "could this be a commander?" about a card
+  that is in no deck yet and therefore has no `id`, no `categoryKind` and no honest `quantity` to
+  invent — but the engine really does read `categoryKind`, `categoryActive` and `quantity`, so a
+  card in a deck is more than a card. Every existing caller passes a whole `DeckCard`, which
+  satisfies a `Pick` of itself, so the widening changed no call site.
+- **An import is not an add path and must never become one.** Routing a list through
+  `useDeck.addCard` would be one transaction and one **allocator run per line**;
+  `deck_import_commit` is one of each. `useDeckImport`'s fourth mutation, `importIntoNewDeck`, is
+  `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
+  transactions, and a refused import must not leave half a deck in the gallery. The commit's
+  refusal is what the caller hears, never the clean-up delete's.
+- **The file picker's own half is unverified**, for the reason `deck_set_cover_image`'s is:
+  `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is tested;
+  click → path is not.
+- **Driven in the shipped window 2026-08-12** (`npm run tauri dev`, a **debug** build): the
+  gallery path end to end put **105 of 105** reference-list lines and all **117 copies** into a
+  new deck, `deck_import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
+  `invoke` on that build, and the commander step offered **56** candidates — the list's 55
+  legendary creatures plus a legendary Spacecraft with a P/T box. Every figure, the variant and
+  audit checks, and the three resolver-side faults it found — all since fixed: a printing hint
+  trusted over the card name, `MOXFIELD_LIST`'s fabricated hints, and `MATCH_ORDER` having no
+  language term — are in
+  [decks-storage.md](../../../docs/reference/decks-storage.md).
+- **The preview's tally is counted over the _items_, never over the plan** — `tallyOf(items)`
+  where `items` is `toImportItems(plan, commanderIds)`, so it recomputes on every press. There is
+  deliberately **no `categories` field on `ImportPlan`**: the piles are a fact about what is being
+  sent, and the commander choice is applied in `toImportItems` and nowhere else, so that is the
+  only place a preview of it can be counted. `totalCards` stays on the plan, because the choice
+  changes _which_ pile a card lands in and never _how many_ copies land. This was a live bug:
+  measured 2026-08-12, the reference list previewed as **`117 cards · 6 categories`** with
+  `Creature 56` and no Commander row while `deck_get` after the import read **7 categories**,
+  `Creature 55`, `Commander 1`. Worst on the **`automatic`** arm, where the reader presses
+  nothing — the dialog printed *"Krenko, Mob Boss goes in the command zone"* directly above a
+  tally filing him under `Creature`. `fromFile` was the one arm that agreed, because there the
+  card already carries the Commander category name. The split `toImportItems`' doc calls
+  deliberate is still right ("the plan is what the preview draws _while_ they are still
+  choosing"); what was wrong is that the tally was ever part of the plan.
+- **The layer contract holds and was measured, not assumed.** The dialog's scrim computes to
+  `z-index: 45` from both entry points (`LAYER.overlay`, the rung the editor's other full-window
+  surfaces share); one Escape closed the dialog and **left the card pane open**, handing focus
+  back to the `Import cards` button that opened it, and a second Escape closed the pane; 22 Tab
+  presses from the textarea produced 22 focus landings and **every one inside the dialog**.
+- **Reduced motion is honoured on both halves, and only the live pass could show it.** Under
+  emulated `prefers-reduced-motion: reduce`, the panel's `transform` at 60 ms was **`none`**
+  against `matrix(0.9818…)` unemulated — `MotionConfig reducedMotion="user"` reduces `scale`
+  because it is a transform, unlike the deck stack's `marginBottom` — while `opacity` kept
+  animating (0.137), which is the weaker rule `lib/motion.ts` documents on purpose. No
+  `useReducedMotion()` opt-out is owed here. The buttons' CSS half read
+  `transition-property: none` **while `transition-duration` still read `0.12s`** — the false
+  failure the harness contract warns about, reproduced exactly.
+
 ## Views and interaction
 
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
@@ -135,13 +215,20 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's four full-window surfaces (Categories & tags, History, Theory diff, Deck settings)
-  are held in **one** piece of state, because `useDismissOnEscape` orders exactly two rungs and
-  two `"inner"` peers open at once are not ordered at all.
+- The editor's five full-window surfaces (Import, Categories & tags, History, Theory diff, Deck
+  settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
+  rungs and two `"inner"` peers open at once are not ordered at all.
 
 ## Known open bugs
 
-Three, found by driving the shipped window and **none of them fixed** — the title row collapsing
-the deck name at 1060–1350px, a custom deck cover never appearing in the gallery, and Table view
-starving the card name. Detail and measurements:
+Three, all found by driving the shipped window and **none of them fixed** — all from the
+2026-08-11 builder pass: the title row collapsing the deck name at 1060–1350px, a custom deck
+cover never appearing in the gallery, and Table view starving the card name. Detail:
 [docs/reference/decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
+
+The 2026-08-12 import pass found four more and **all four are fixed**, each with a test that fails
+against the code before it: the preview tally ignoring the commander choice (the `## Import`
+section above — it is a TypeScript decision), and three resolver-side ones in
+[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) with their
+reproductions — a printing hint trusted over the card name, `MOXFIELD_LIST`'s fabricated hints,
+and `MATCH_ORDER` having no language term.

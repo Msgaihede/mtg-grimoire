@@ -147,8 +147,9 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **`format_specs` is data, not code.** A rules change is a new migration step re-running the
   seed constant, never an engine branch; a new format is a row. Never derive one format from
   another.
-- **The allocator runs on five writes and nothing else** — a card write, the Built toggle,
-  `missing_to_wishlist`, `set_category_active`, `delete_category`. Growing the collection does
+- **The allocator runs on six writes and nothing else** — a card write, the Built toggle,
+  `missing_to_wishlist`, `set_category_active`, `delete_category`, and `commit_import` (**once**
+  for a whole decklist, which is the reason that command exists). Growing the collection does
   _not_ re-run it, so a deck reads new copies only after its next allocator run.
 - **Writing history is not a command.** `deck_audit::record(tx, …)` is called _inside the
   caller's already-open transaction_, which is what makes a rolled-back write leave no history.
@@ -158,6 +159,24 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **Two fences every deck write opens with, neither enforced by the DDL**: the variant must be
   one the schema knows, and the category must belong to _this_ deck — `deck_cards.category_id`'s
   FK only asks that the category exist, not whose it is.
+- **`deck_import.rs`: every resolution arm is one indexed lookup, and a `COLLATE NOCASE` or an
+  `OR` is what stops it being one.** `cards.name`/`set_code`/`collector_number` are plain `TEXT`,
+  so their indexes are BINARY and a comparison naming another collation plans as `SCAN c` — a full
+  table scan **per line**. Splitting the arms took a 105-line list from **46 123 ms to 11.5 ms**
+  (release, live corpus) and separately fixed a **correctness** bug: as one `OR`, art-series
+  `"N // N"` rows outranked the real card on 3 of those 105 lines. Case-insensitivity lives in the
+  fold arm, in Rust, over `cards_fts`. **Do not restore the collation here** — it reads like a
+  regression and is not one.
+- **`deck_import.rs`: a printing hint narrows which _printing of the named card_ to take, never
+  which card** (`hint_names_the_card`). `BY_SET_AND_NUMBER` consults no name in its SQL, so the row
+  it finds is folded against the line's name in Rust and a disagreement is treated as exactly a
+  hint that named nothing — `hint_missed`, and fall through. Before that guard,
+  `1 Captain Sisay (brc) 132` silently imported **Arcane Signet** with `hint_missed: false`. Same
+  reasoning as `deck_swap_printing`'s different-oracle guard.
+- **`deck_import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
+  language key is the decision: a copy you own in any language is still a copy you own, while
+  "newest" is exactly the key that put 5 of the reference list's 105 lines on a `ja`/`dw`/`ph`
+  printing. `fold_match` repeats the same keys in Rust and may never disagree.
 
 ## Scryfall and the network
 
@@ -218,4 +237,4 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the cover route |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the six card commands, the allocator, the audit log |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the seven card commands, the allocator, the audit log, the decklist import |

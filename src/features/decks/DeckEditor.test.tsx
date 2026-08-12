@@ -12,6 +12,8 @@ import type {
   DeckRow,
   DeckTag,
   FormatSpec,
+  ImportMatch,
+  SyncStatus,
 } from "@/lib/ipc";
 import { dragOnto, startDrag } from "@/test-drag";
 import { DECK_CARD_VARIANT } from "./cardControl";
@@ -38,6 +40,12 @@ const deckTagSuggestions = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
+// The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
+// "the card database is not filled in yet".
+const deckImportResolve = vi.hoisted(() => vi.fn());
+const deckImportCommit = vi.hoisted(() => vi.fn());
+const deckImportReadFile = vi.hoisted(() => vi.fn());
+const syncStatus = vi.hoisted(() => vi.fn());
 // The editor warms the `art` its own views draw — the variant the deck builder renders, and
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
 // stub only has to resolve; what it is *called with* is asserted in its own test below.
@@ -74,6 +82,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckAuditList,
     deckTheoryDiff,
     deckFolderList,
+    deckImportResolve,
+    deckImportCommit,
+    deckImportReadFile,
+    syncStatus,
   },
 }));
 
@@ -194,6 +206,45 @@ function found(name: string): CardSummary {
   };
 }
 
+/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+ *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: null,
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  printingCount: 1,
+  ownedQuantity: 0,
+};
+
+/** A card database that is filled in and idle. */
+const SYNCED: SyncStatus = {
+  cardCount: 116_695,
+  lastCheckAt: null,
+  bulkUpdatedAt: null,
+  lastError: null,
+  lastIngestSkipped: null,
+  dataDir: "C:/data",
+  syncing: false,
+  imageStoreFailures: 0,
+};
+
 function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -297,6 +348,14 @@ beforeEach(() => {
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
+  // One printing, so a one-line paste has something to resolve to and the Import button is
+  // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
+  deckImportResolve
+    .mockReset()
+    .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
+  deckImportReadFile.mockReset().mockResolvedValue("");
+  syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
 });
 
@@ -1206,11 +1265,12 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Each of the three header buttons opens its own full-window surface, and Escape closes the
+   * Each of the four header buttons opens its own full-window surface, and Escape closes the
    * one that is up and hands the caret back to the control that opened it — the editor stays a
    * *view*, so the deck is still on screen afterwards.
    */
   it.each([
+    ["Import cards", "Import a decklist"],
     ["Categories & tags", "Categories and tags"],
     ["History", "Deck history"],
     ["Deck settings", "Deck settings"],
@@ -1255,10 +1315,10 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **All four full-window overlays are modal, and Tab cannot leave one.**
+   * **All five full-window overlays are modal, and Tab cannot leave one.**
    *
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
-   * available right now — a pointer already cannot cross one. Two of the four used to let the
+   * available right now — a pointer already cannot cross one. Two of them used to let the
    * caret walk back into the editor anyway, which offered the capability to one input method and
    * denied it to the other while the docs argued it was deliberate.
    *
@@ -1274,6 +1334,7 @@ describe("DeckEditor", () => {
    * it, and the three are what catch a trap that wraps once and then leaks.
    */
   it.each([
+    ["Import cards", "Import a decklist", null],
     ["Categories & tags", "Categories and tags", null],
     ["History", "Deck history", null],
     ["Deck settings", "Deck settings", null],
@@ -1312,7 +1373,7 @@ describe("DeckEditor", () => {
 
   /**
    * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
-   * would consume one press — so the editor holds *one* piece of state for all five, and
+   * would consume one press — so the editor holds *one* piece of state for all six, and
    * opening any of them takes whichever was up down with it.
    */
   it("never has two of its own layers open at once", async () => {
@@ -1332,10 +1393,87 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("dialog", { name: "Deck history" })).toBeInTheDocument();
   });
 
+  /** The toolbar's fifth full-window surface, and the only one that writes cards in bulk. */
+  it("opens the import dialog from the toolbar", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    // Into *this* deck, so the choice the gallery's entry point cannot offer is here.
+    expect(within(dialog).getByText(/Into Burn · Live/)).toBeInTheDocument();
+  });
+
   /**
-   * The **sixth** `"inner"` peer on this screen, and the one no state union covers: the set
+   * **An import lands in the list on screen and nowhere else.**
+   *
+   * `variant` is in the deck-card grain precisely so a plan can be pasted over without touching
+   * what is sleeved up — so a `replace` pressed with Theory showing must clear Theory, and the
+   * warning must count Theory's cards. Getting this wrong is a reader losing their built deck to
+   * a paste they made into the plan.
+   */
+  it("imports into the variant on screen", async () => {
+    const live = detail({ theoryEnabled: true }, [bolt({ quantity: 4 })]);
+    const theory = detail({ theoryEnabled: true }, [
+      bolt({ quantity: 2, variant: "theory" }),
+      card({ name: "Bear", variant: "theory" }),
+    ]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Theory" }));
+    await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
+    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    // The count is the variant's own copies, not the deck's: 2 Bolts and 1 Bear.
+    expect(
+      await screen.findByLabelText("Replace — removes the 3 cards in Theory first"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(deckImportCommit).toHaveBeenCalledWith(4, "theory", "merge", [
+        { cardId: "sol-ring", quantity: 1, categoryName: "Artifact" },
+      ]),
+    );
+  });
+
+  /**
+   * The Escape handshake, from the layer that was added last: an `"inner"` rung consumes the
+   * press in the **capture** phase and calls `preventDefault()`, so the card detail pane docked
+   * beside this view — a bubble-phase listener that returns early on `defaultPrevented` — keeps
+   * its own press for the next one. One press, one layer.
+   */
+  it("closes the import dialog on Escape and leaves the card pane open", async () => {
+    await open();
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
+    await screen.findByRole("dialog", { name: "Import a decklist" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+    );
+    // With the dialog gone, the next press is the pane's.
+    await userEvent.keyboard("{Escape}");
+
+    window.removeEventListener("keydown", listen);
+    expect(heard).toEqual([true, false]);
+  });
+
+  /**
+   * The **seventh** `"inner"` peer on this screen, and the one no state union covers: the set
    * filter inside the docked search panel owns its own Escape rung (`SetCombobox`). What keeps
-   * it exclusive with the editor's own five is focus and click mechanics — each of them closes
+   * it exclusive with the editor's own six is focus and click mechanics — each of them closes
    * on focus-out or on a press outside its root — so it is pinned here in the assembled editor,
    * both ways round. Neither direction is a structural guarantee, and a test is the only thing
    * that would notice one of them being dropped.

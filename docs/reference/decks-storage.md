@@ -74,17 +74,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws every
   conclusion. `oldschool` is the one printing-sensitive key, and it comes out right with no
   special case because each row carries its own printing's answer.
-- **A deck card's unit price is the nonfoil `usd` key of that printing's `prices` blob** — a
-  deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
-  `cards.price_usd` is a fallback chain and is never summed, here least of all.
+- **A deck card's unit price is that printing's nonfoil price at the marketplace the read was
+  given** — a deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
+  Built by `sorting::price_expr`, never by hand: for TCGplayer and Cardmarket that is the `usd`
+  or `eur` key of the printing's `prices` blob, and for Card Kingdom and Mana Pool a lookup in
+  `marketplace_prices`. `cards.price_usd` is a fallback chain and is never summed, here least of
+  all. A deck-write readback with no marketplace of its own quotes `marketplace::stored(conn)`,
+  so renaming a category does not answer a Cardmarket reader in dollars.
 - **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
   deck's rows inside the caller's transaction, greedily and deterministically: `KIND_PRIORITY`
   (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
   decides what is allocated for) then row id, and within a card, exact printing, then real
   copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
-  `set_category_active` or `delete_category`** — those five and nothing else, which is worth
-  knowing while debugging, because pressing "Send missing to wishlist" or switching a pile off
-  rebuilds a deck's allocations as a side effect. A **built** deck's claims are subtracted from
+  `set_category_active`, `delete_category` or `commit_import`** — those six and nothing else,
+  which is worth knowing while debugging, because pressing "Send missing to wishlist" or
+  switching a pile off rebuilds a deck's allocations as a side effect. The import is the one
+  that runs it for **many** cards at once and still only once, which is the whole reason
+  `deck_import_commit` is a command rather than a loop over `deck_add_card`. A **built** deck's claims are subtracted from
   what other decks can see. The
   read clamps with `min(allocation, entry.quantity)`, so stepping a collection row down is
   honest immediately — but **growing the collection does not re-run the allocator**, so a deck
@@ -105,11 +111,16 @@ folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a
   called _inside the caller's already-open transaction_, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
 behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
-  **23** cases and asserts exactly one row each (count the list in `deck_audit.rs`, never a
-  remembered number — it has been written down wrong twice). "Exactly one" is per
-  _command_, not per field: **`deck_update` records one row per changed field**
+  **25** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
+  never a remembered number — it has been written down wrong twice). "Exactly one" is per
+  _change_, not per call, and **two** commands make more than one change in a call:
+  **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
-  satisfies that test only because every one of its cases changes exactly one field. The only
+  satisfies that test only because every one of its cases changes exactly one field; and
+  **`deck_import_commit` in `replace` mode records two** — a `remove` for what it cleared and
+  an `add` for what it imported, which one signed `delta` cannot be both of. Its `merge` mode
+  records one. Both use the existing `add`/`remove` kinds with an `import`-keyed payload, so
+  there is no tenth `AUDIT_KINDS` value and no migration. The only
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
   It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
@@ -120,7 +131,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
   per deck it un-filed.
-- **The six card commands, and what each takes.** `deck_get(id, variant)`;
+- **The six single-card commands, and what each takes** (the seventh, `deck_import_commit`, is
+  the bulk one and has its own bullet below).\
+  `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
   found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
@@ -131,6 +144,172 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
   variant must be one the schema knows, and the category must belong to _this_ deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
+- **`deck_import_commit(deckId, variant, mode, items)` is the seventh card command, and it
+  exists for the allocator.** Looping `deck_add_card` from the frontend would be correct in
+  every other respect and would run `allocate_deck` **once per line** — a hundred rebuilds of a
+  deck's claims for one import. It runs it once, at the end, over the finished deck. "Once" is
+  invisible in the result (the allocator is delete-and-rebuild, so N runs and one run leave
+  identical rows), so `the_allocator_runs_once_for_the_whole_import` counts row changes through
+  SQLite's `total_changes` instead: **43** for one run over 20 owned cards against **423** for
+  one run per item, both measured 2026-08-12. Everything else is `add_card`'s shape held to
+  deliberately — the same variant and `touch_deck` fences, the same `DECK_CARD_GRAIN`
+  `ON CONFLICT` fold (so a list naming a card twice is one row with the sum), the same
+  `category_for_name` find-or-create (so a `Sideboard` section lands on the seeded `side` row
+  and makes nothing). `mode` is `merge` or `replace` (`deck_import::IMPORT_MODES`), and
+  **`replace` clears the cards of the one variant it was given and leaves every category
+  standing** — a category is the reader's filing, not the list's. An empty item list is refused
+  in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
+  clearing the deck to put nothing back are the same call.
+- **`deck_import_resolve` is the import's read half, and it answers the one question TypeScript
+  cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
+  reused down the list, tried narrowest first — a set **and** a collector number; the set with the
+  name; the set with the name as a **front face**; the name, exactly; the name as a front face of
+  an `"A // B"` printing; and last the **folded** name (lowercase, diacritics stripped) through
+  `cards_fts`. The order every arm shares is one constant, `MATCH_ORDER`: **a printing you own
+  first, then the newest paper printing, then the `id`.** Owning it first is the whole point — a
+  reader importing a list they already have copies of wants their copies in the deck. **The `id`
+  tie-break is a requirement, not decoration**: two printings sharing a release date are ordinary
+  in this corpus, and without a total order the same list pasted twice builds two different decks.
+  The fold arm re-implements that order in Rust rather than being allowed to disagree with it.
+  **A hint that names nothing falls through and says so** — `hint_missed` is set and the name arms
+  run anyway, because a reader wanting a printing this app has not got is never a reason to lose
+  the card. Failing open is the rule throughout: a name nothing bears _and_ a line whose SQL failed
+  are both `matched: None`, and only a `prepare` failure — a broken schema, not a broken decklist —
+  is an `Err`.
+- **Every arm is one indexed lookup, and `COLLATE NOCASE` is what stopped it being one.**
+  `cards.name`, `set_code` and `collector_number` are plain `TEXT`, so `idx_cards_name` and
+  `idx_cards_set_cn` are BINARY and a comparison naming another collation cannot use them — nor
+  can an _expression_ over a column, which is what `substr(name, 1, instr(name, ' // ') - 1)` is.
+  Both plan as `SCAN c`, which is a full table scan **per line**. Timed through `resolve_lines`
+  itself on a **release** build over a copy of the live 116 695-row corpus, a 105-line commander
+  list, medians of nine: **11.5 ms** as it ships against **46 123 ms** for the first version's one
+  `OR`/`NOCASE` arm — the same column list, the same process, the same file, swapping only the
+  `WHERE` clause. A **4 000×** difference, and the difference between a feature and a hang. The
+  same list lower-cased is 31.6 ms and with an upper-cased `(SET) N` on every line 51.9 ms.
+  Case-insensitivity was not lost, it **moved to the fold arm**, which lowercases both sides in
+  Rust over `cards_fts` candidates — so a dropped `COLLATE NOCASE` here reads like a regression
+  and is not one.
+- **Splitting the exact-name and front-face arms was a _correctness_ fix that happened to be
+  free.** As one `OR`, `MATCH_ORDER` was left to choose between a real card and a `"N // N"` row —
+  and Scryfall's art series print exactly that, the trap
+  [search's relevance ranking](data-and-sync.md) already records. Measured 2026-08-12 over the live
+  corpus: **51 names** have a `"N // X"` printing that outranks every real printing of `N`, and **3
+  of the reference list's 105 lines** resolved to an art-series row instead of the card
+  (`Dakkon, Shadow Slayer` is the mechanism — `mh2` and `amh2` share a release date and the art
+  series wins the `id` tie-break). Asked in sequence the exact name always answers first. A
+  `MULTI-INDEX OR` **is** indexed, measured — and still wrong.
+- **`deck_import_read_file` takes a path, not bytes**, which is the same contract
+  `deck_set_cover_image` uses and the whole reason `dialog:allow-open` is sufficient and **no
+  `fs:` permission is granted anywhere**: a webview that can only _name_ a file needs none. The
+  1 MB cap (`MAX_IMPORT_BYTES`, shared with the paste path so the two cannot disagree) is read off
+  the **metadata**, so a 200 MB file pointed at by mistake is refused without ever being pulled
+  into memory. Decoding is `from_utf8_lossy` **deliberately**: a Windows-1252 apostrophe in one
+  card name should cost that one name, not the other hundred lines — the `U+FFFD` it leaves bears
+  no card's name, so the damaged line comes back quoted in the preview while everything else
+  resolves. A `from_utf8` would answer `Err` for the whole file and name no line.
+- **The TypeScript half decides everything a _deck_ decision is** (`src/features/decks/import/`,
+  and its own [CLAUDE.md](../../src/features/decks/CLAUDE.md) carries the binding rules): one
+  parser with per-line rules only, the pile from `autoCategoryFor`, the commander from
+  `commanderIneligibility`. The one type that crosses for it is **`CardIdentity`, the card-level
+  half of `CardFacts`** — everything true of a printing and nothing true only of a row in a deck —
+  so eligibility can be asked about a card that is in no deck yet. **`CardFacts` was deliberately
+  not narrowed to it**: the engine really does read `categoryKind`, `categoryActive` and
+  `quantity`, so a card in a deck is more than a card, and every existing caller passes a whole
+  `DeckCard`, which satisfies a `Pick` of itself.
+- **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
+  native window CDP cannot reach, so `deck_import_read_file` was exercised by invoking the command
+  with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;
+  the **click → path half is not**.
+- **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
+  Vite serving the frontend (`/src/main.tsx` in the page's script list, which is the cheap proof
+  that no stale embedded `dist/` is being measured), the live 116 695-card corpus, 1280×800.
+  The gallery path end to end: `Import deck` → paste `REFERENCE_LIST` → the box counts
+  **105 lines · 117 cards** → name it and pick Commander → Preview → **117 cards · 6 categories**
+  and **no problem list at all** → pick a commander → Import → the editor opens on the new deck.
+  **That `6 categories` is the tally bug being measured, not the shipped behaviour**: the pile
+  count was computed before the commander was chosen and never recomputed, so the same press
+  today reads **7 categories** with a `Commander` row — see
+  [the frontend's own rules](../../src/features/decks/CLAUDE.md) for the fix and the numbers.
+  Read back through `deck_get`: **105 of 105 lines resolved** against the live corpus — 0
+  unmatched, 0 hint misses, 0 parse issues — **105 rows carrying 117 copies**, and ten categories:
+  the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,
+  `Artifact` 7, `Instant` 7, `Enchantment` 5, `Sorcery` 4) and `Commander` 1.
+- **The two timings, both through `invoke` from the webview on that debug build**, medians with
+  the first two runs dropped: `deck_import_resolve` over the 105-line reference list **120.4 ms**
+  (116.9–141.3, 9 warm of 11), and `deck_import_commit` over its 105 items **7.9 ms** (7.1–8.0, 5
+  warm of 7, `replace` into a deck already holding them; outcome `added 117, removed 117,
+  categoriesCreated 0`). **That resolve figure does not contradict `resolve_lines`' 11.5 ms
+  above** — that one is a **release** build, Rust-only, over a file; this one is **debug** and
+  carries the answer back across the IPC boundary, which is **152.9 KB for 105 rows** (1.49 KB
+  each, because every `ImportMatch` ships oracle text and the whole `legalities` object). Quote
+  either only with its build named, or the pair reads as a regression that never happened.
+  **That payload was measured while `ImportMatch` still carried `unitPriceUsd`**, which the
+  marketplace merge has since removed (see the struct's own doc for why it is removed rather than
+  paired with a euro twin) — about 20 bytes a row of 1 490, so ~1.3 % smaller now. Stated as the
+  arithmetic it is; nobody has re-driven the window to re-measure it.
+- **Variant scoping holds, measured rather than reasoned.** With a deck at 117 copies in both
+  lists, a `merge` of a 7-card list into `theory` left `live` at **117** and took `theory` to
+  **124**; a `replace` of an 11-card list into `live` took `live` to **11** and left `theory` at
+  **124**. `replace` cleared the cards and **left every category standing** — `Creature`,
+  `Instant`, `Sorcery` and `Enchantment` all survived at `card_count` 0, which is the "a category
+  is the reader's filing, not the list's" rule with a number against it. The audit drawer wrote
+  **two** rows for the replace and one for the merge: `Cleared 117 cards before importing` beside
+  `Imported 11 cards into 4 categories`, against a bare `Imported 7 cards into 3 categories`.
+- **Commander eligibility is right against the live corpus, including the 2026 Spacecraft rule.**
+  The reference list offered **56** candidates: its **55** legendary creatures **and `The
+  Seriema`**, a `Legendary Artifact — Spacecraft` with a 5/5 P/T box (CR 903.3). `Delighted
+  Halfling`, the one non-legendary creature among its 56 creatures, was correctly not offered.
+  This is the first time the `power`/`toughness` columns schema v5 added have been shown doing the
+  job they were added for, on real data rather than on a fixture.
+- **A hint narrows which _printing of the named card_ to take. It never overrides which card** —
+  `hint_names_the_card`, and it was a live bug before it was a rule. `BY_SET_AND_NUMBER` consults
+  no name in its SQL, which is deliberate and is what lets a non-English list land on the right
+  cards; nothing then checked that the printing it found _was_ the card the line named, and
+  `hint_missed` could not say so because the hint had not missed. Measured 2026-08-12 in the
+  shipped window (**debug**) over the live corpus: `Captain Sisay (brc 132)` imported
+  **`Arcane Signet`**, `Sol Ring (ltc 285)` **`Talisman of Conviction`**, `Forest (unf 235)`
+  **`Plains`**, `Path to Exile (2x2 21)` **`Monastery Mentor`** — every one `hint_missed: false`
+  with no problem list drawn at all. The row's name is now folded against the line's, and a
+  disagreement is treated as **exactly** a hint that named nothing: `hint_missed`, and fall
+  through to the name arms, so a wrong hint costs the reader the printing and never the card.
+  **The check is the most permissive of the three name tests** (`fold_rank` — the whole folded
+  name or the folded front face), because both binary arms imply their folded form; so the guard
+  can only discard a row no name arm could have reached either. The set-with-name arms need none:
+  the name is in their `WHERE` clause. Same reasoning as `deck_swap_printing`'s different-oracle
+  guard — "swap this printing" must never become "swap this card".
+- **`MOXFIELD_LIST`'s hints are real pairs, verified against the corpus** — and they were
+  fabricated until 2026-08-12, when five of its six lines named a different card and the repo's
+  own Moxfield fixture demonstrated the trap above rather than a Moxfield export. Nothing in CI
+  catches that: the parser tests assert _parsing_, and Storybook carries its own corpus, so no
+  green check ever resolves a fixture against real data. Verified against the live 116 695-row
+  corpus (data of 2026-08-10): `Captain Sisay (INV) 237`, `Sol Ring (LTC) 284`,
+  `Arcane Signet (ELD) 331`, `Forest (UNF) 239`, `Path to Exile (2X2) 23`. `Captain Sisay` has no
+  `brc` printing at all — that set code was invented whole. **A hint that cannot be verified is
+  dropped from its line rather than guessed at.**
+- **`MATCH_ORDER` prefers English, behind the owned printing and ahead of the date.** Without a
+  language term a name-only line lands on whatever paper printing is newest, which for **5 of the
+  reference list's 105 lines** was not an English one: `Akroma's Will → soa 131 [ja]`,
+  `Arcane Signet → hoc 95 [dw]`, `Mox Amber → hoc 96 [dw]`,
+  `Elesh Norn, Mother of Machines → one 418 [ph]`, `The Wandering Rescuer → pwcs 2026-3 [ja]` —
+  100 of 105 `en`. With `(c.lang = 'en') DESC` in the order those five become `soa 1`, `sld 2816`,
+  `brr 98z`, `one 419` and `pdsk 41p`, and the list is **105 of 105 English** (re-measured
+  2026-08-12 through `node:sqlite` against the live corpus, driving the shipped statements' own
+  `WHERE`/`ORDER BY` text; the collection was empty, so `owned_quantity` was 0 on every row and
+  the language term was the only key that could move). **Position is the whole decision**: behind
+  `owned_quantity`, because a Japanese copy you own is still a copy you own and a deck that
+  preferred an English printing you have not got would claim nothing from the binder; ahead of
+  the date, because "newest" is a tie-break for which printing looks current and is exactly the
+  key that produced those five. `cards.lang` is `TEXT NOT NULL` holding Scryfall's codes (`en`,
+  `es`, `ja`, … 19 in the corpus, 0 NULL), so the predicate is a plain equality and never a
+  three-valued one — and the `id` tie-break still ends the order, so an import stays
+  deterministic. The fold arm sorts in Rust and carries the same term in the same position,
+  because that arm may never disagree with the SQL one.
+- **Card images decoded in the shipped window for the first time.** The 2026-08-11 deck-builder
+  pass could not render one because `cards.scryfall.io` was in a path-MTU black hole; on
+  2026-08-12 that host was reachable and the pass left **401 files / 20.17 MB** under
+  `data/images`, with a live `mtgimg://art/…` probe returning **626×457**. The black hole is a
+  property of the network on the day, not of this app — which is exactly what the earlier entry
+  claimed and nobody had been able to confirm.
 - **An add that names no category is filed by the card's type line; an add that names one is
   untouched.** So every _drag_ overrides the rule by construction — pointing at a column is
   naming a category — and nothing in the write path has to tell a gesture from a press. The rule

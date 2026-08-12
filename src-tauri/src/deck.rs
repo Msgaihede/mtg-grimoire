@@ -232,14 +232,19 @@ fn valid_format<'a>(conn: &Connection, key: &'a str) -> Result<&'a str, String> 
 }
 
 /// `set_code`, `collector_number`, `lang`, `name` — what a zone write copies onto its row.
-type Printing = (String, String, String, String);
+pub(crate) type Printing = (String, String, String, String);
 
 /// The printing and the name, as the deck row will remember them.
 ///
 /// The name is what `collection::printing_of` does not read and the wishlist does: a
 /// collection row is a thing the user can hold, but a deck list is *read*, and a line that
 /// can only say `e7f8…` once the id stops resolving is not a deck list.
-fn printing_of(conn: &Connection, card_id: &str) -> Result<Printing, String> {
+///
+/// `pub(crate)`, not private, for [`touch_deck`]'s reason: [`crate::deck_import::commit_import`]
+/// denormalizes exactly these four columns onto exactly the same table, and a second copy of
+/// this query would be a second place for an imported row and an added row to disagree about
+/// what a deck card remembers.
+pub(crate) fn printing_of(conn: &Connection, card_id: &str) -> Result<Printing, String> {
     printing_row(conn, card_id)?
         .ok_or_else(|| format!("no card with the id `{card_id}` is in the card database"))
 }

@@ -2,12 +2,23 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **349 stories across 45 story files, 44 docs
-pages** — counted off `storybook-static/index.json` on 2026-08-12 after the price-feed branch,
-which is the only place the three agree (`Object.values(index.entries)`, grouped by `type`; the
-46th `importPath` is the `.mdx`). The five new stories are `Settings/MarketplacePanel`'s, which
-went from three to eight when Card Kingdom and Mana Pool became selectable and a feed gained a
-state to draw; no story *file* was added, which is why that count did not move.
+`npm run storybook` · `npm run build-storybook`. **358 stories across 47 story files, 46 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree
+(`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
+**Measured 2026-08-12** off a fresh `build-storybook` on the price-feed branch merged with
+`main`: 404 entries, 358 `story`, 46 `docs`, 48 distinct `importPath`s. The five stories over
+`main`'s 353 are `Settings/MarketplacePanel`'s, which went from three to eight when Card Kingdom
+and Mana Pool became selectable and a feed gained a state to draw; no story *file* was added,
+which is why that count did not move.
+
+**This line is where a derived count goes to die, three times over.** The deck-import branch's
+own `CreateDeckDialog` commit counted from source without building and was one story file and
+three stories short of what the index answered. Then two branches each re-measured correctly
+against their own base — 346/46/45 and 344/45/44 — and **merged into a conflict where neither
+was right**, because each was blind to the other's story files. The price-feed branch then
+measured 349/45/44 against *its* base and merged into the same trap. A count is a measurement of
+a tree, not of a branch: re-measure after every merge that touches stories, or the number is a
+placeholder wearing a figure's clothes.
 **Re-count them in the same commit that adds a story.** This line read 326 for three stories'
 worth of drift and then took three more without noticing, because a prose-only edit routes to
 neither CI job — the same rot that left the fault list below saying four. **It had rotted
@@ -15,7 +26,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**43 of the 45 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**45 of the 47 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -76,10 +87,11 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   store's `set`. So the four story files that write it during render (`AppShell`,
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
-  **frame** and with it its own module graph. `DeckSettingsDialog` carries the same parameter
-  for an unrelated reason — its scrim is `fixed inset-0`, so inline it would cover the docs page
-  rather than its own block — and the other **38 docs pages render inline** (43 autodocs pages
-  less those five, re-counted 2026-08-12). A new story file
+  **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
+  `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
+  `fixed inset-0`, so inline it would cover the docs page rather than its own block — and the
+  other **38 docs pages render inline** (45 autodocs pages less those seven,
+  re-counted 2026-08-12 after the merge — the seven were found in source, not assumed). A new story file
   that writes the store needs the same parameter or its docs page shows one story's view under
   every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
@@ -103,8 +115,9 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**255** plays today, in a file of **258** tests — the other three are its own; `grep -rE
-"^\s+play:" src --include=*.stories.tsx | wc -l`, re-counted 2026-08-12), which is what puts a
+  (**264** plays today, in a file of **267** tests — the other three are its own;
+`grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
+summary for the second, both measured 2026-08-12 after the merge), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;

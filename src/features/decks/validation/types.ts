@@ -62,3 +62,23 @@ export interface ValidationIssue {
  * `colorIdentity` are concatenated letters (`"WU"`). `legalities` and `faces` are.
  */
 export type CardFacts = DeckCard;
+
+/**
+ * The **card-level** half of {@link CardFacts} — everything true of a printing, and nothing
+ * true only of a row in a deck.
+ *
+ * It exists so the importer can ask "could this be a commander?" about a card that is not in
+ * a deck yet, and therefore has no `id`, no `categoryKind` and no honest `quantity` to invent.
+ * `CardFacts` is deliberately **not** narrowed to this: the engine really does read
+ * `categoryKind` (eight times), `categoryActive` and `quantity`, so a card in a deck is more
+ * than a card.
+ *
+ * Every existing caller passes a whole {@link DeckCard}, which satisfies a `Pick` of itself —
+ * so widening a parameter to this type changes no call site and no behaviour.
+ */
+export type CardIdentity = Pick<
+  CardFacts,
+  | "cardId" | "name" | "oracleId" | "manaCost" | "cmc" | "typeLine" | "oracleText"
+  | "colors" | "colorIdentity" | "legalities" | "power" | "toughness" | "layout"
+  | "rarity" | "faces" | "gameChanger" | "everUncommon"
+>;

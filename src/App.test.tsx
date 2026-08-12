@@ -483,6 +483,56 @@ it("closes the set filter on the first Escape and the card on the second", async
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 });
 
+/**
+ * The same handshake, one view over and a different kind of inner layer.
+ *
+ * The test above is a popup inside the search view; this is a **modal full-window overlay** in
+ * the deck editor, which is where the pair is most ordinary — the editor opens the pane from its
+ * own cards and leaves its whole toolbar pressable behind it, so "paste a list" over "read this
+ * card" is two presses a reader actually makes.
+ *
+ * Neither component's own suite can see it: `DeckEditor.test.tsx` mounts the editor with no pane
+ * beside it, and the pane's tests have no dialog to open over them. What is asserted is that the
+ * dialog's **capture-phase** `preventDefault` reaches the pane's bubble-phase listener —
+ * registration order puts the pane first, so without capture one press closes both. Checked by
+ * breaking it (2026-08-12): with the dialog's rung set to `"outer"` this fails, and it fails in
+ * the revealing direction — the *pane* closes and the dialog stays, because the pane's listener
+ * then runs first and the dialog returns early on `defaultPrevented`.
+ */
+it("closes the import dialog on the first Escape and the card on the second", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValue(detail([DECK_BOLT]));
+  // The editor's docked search panel finds nothing, so the deck's own card is the only control
+  // by that name — the same reason the swap tests below stub it empty.
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+
+  await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+  await screen.findByRole("complementary", { name: /card details/i });
+  const trigger = screen.getByRole("button", { name: "Import cards" });
+  await userEvent.click(trigger);
+  // `findBy`, not `getBy`: the panel is a `motion` element and its first painted frame carries
+  // its `initial`, so everything inside it is invisible for one commit after the press.
+  expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+
+  await userEvent.keyboard("{Escape}");
+
+  // And `waitFor` on the way out for the mirror-image reason: the panel outlives the flag by
+  // the length of its exit.
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole("complementary", { name: /card details/i })).toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
 /** A card left open through a view change would dock beside a list it did not come from —
  *  a printing from the search, pinned open next to a wall of decks. */
 it("closes the card when the reader leaves the view", async () => {

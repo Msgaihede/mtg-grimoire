@@ -13,7 +13,7 @@ import { afterEach } from "vitest";
  * 60ms, `1` at 360ms. Nothing throws and nothing needs shimming; the animations are simply
  * *real*, and therefore timing-dependent.
  *
- * That is fine for a component test that awaits a `findBy*` and fatal for the ~242 story `play`
+ * That is fine for a component test that awaits a `findBy*` and fatal for the ~256 story `play`
  * functions `src/stories.test.tsx` composes: a `play` asserts on the DOM the moment it renders,
  * and half a fade is an element that is present, focusable, and at `opacity: 0.08`. This is a
  * setup file rather than something `stories.test.tsx` does for itself because

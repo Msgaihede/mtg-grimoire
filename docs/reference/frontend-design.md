@@ -163,10 +163,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   source text for whole class names, so a class built by interpolation emits no rule at all.
 - **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
   `layers.test.ts` asserts every link of it. **`overlay` is one rung for a drawer _and_ a modal,
-  deliberately, where two looks more careful**: the deck editor's four full-window surfaces —
-  Categories & tags, History, Theory diff, Deck settings — are held in **one** piece of state
-  (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and two
-  `"inner"` peers open at once are not ordered at all. At most one of the four is ever mounted,
+  deliberately, where two looks more careful**: the deck editor's five full-window surfaces —
+  Import, Categories & tags, History, Theory diff, Deck settings — are held in **one** piece of
+  state (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and
+  two `"inner"` peers open at once are not ordered at all. At most one of the five is ever
+  mounted,
   so there is no pair for a second number to order and inventing one would be a claim about a
   stack that cannot occur. They used to borrow `gate` and `dragTray` two apiece — each right in
   effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to

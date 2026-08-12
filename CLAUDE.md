@@ -1,12 +1,18 @@
 # MTG Grimoire
 
 Portable Windows desktop app for tracking a Magic: The Gathering collection.
-Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage,
-Scryfall as the only external dependency.
+Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage.
+
+**Scryfall is the card data and the only dependency the app needs to work.** Two price feeds
+join it — Card Kingdom's and Mana Pool's public bulk pricelists — and both are optional by
+construction: nothing downloads until a reader selects that marketplace, and a feed that never
+answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
+needs a per-user JWT and publishes no bulk download.
 
 ## Commands
 
-- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild)
+- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
+  one app runs across every worktree. See the `running-the-app` skill.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
@@ -34,9 +40,26 @@ on — do not work from this page alone.
 | --- | --- |
 | [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities |
 | [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
-| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
+| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, decklist import, the editor's views and drags |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
+
+## Project skills (`.claude/skills/`)
+
+Three skills carry the worktree workflow and are the authority on it — this file does not
+repeat them:
+
+- **`worktree-setup`** — first thing in a fresh worktree. `npm install` inside it (without
+  which three suites fail on Vite's `fs.allow` and it reads as your regression), the
+  base-branch check, and what is not shared with the main checkout.
+- **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
+  and both collisions are silent. Two locks in `locks/` under the git **common** dir
+  (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a
+  directory), claimed and released through
+  `.claude/skills/running-the-app/lock.ps1`. Ports stay 1420/6006/9222; they are hardcoded
+  in tracked files and must not be remapped.
+- **`shipping-a-branch`** — `npm run verify` → PR → merge `main` in (never rebase) →
+  wait for `ci-ok`. The agent does not press Merge.
 
 ## Reference docs
 
@@ -48,10 +71,11 @@ number to compare against.
 | --- | --- |
 | [data-and-sync.md](docs/reference/data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement |
 | [scryfall.md](docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
+| [the price-feed research](docs/superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap |
 | [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
-| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the six card commands, the allocator, the audit log |
+| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the seven card commands, the allocator, the audit log, the decklist import |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including three open bugs** |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
@@ -99,3 +123,15 @@ number to compare against.
 
 - Ultracode/dynamic workflows for large parallelizable work; subagents use Opus 5.
 - Superpowers flow: brainstorm → spec → plan → subagent-driven implementation.
+- **Fan a feature out to parallel subagents rather than working it one step at a time.** Split it
+  at the seams this repo already has — Rust command, TS domain logic, UI, stories, docs — and
+  dispatch the independent pieces in a single message so they run at once. Serialize only what
+  genuinely needs an earlier task's result. See `superpowers:dispatching-parallel-agents` and
+  `superpowers:subagent-driven-development`.
+- **Two subagents editing the same files in the same tree clobber each other.** Give each one
+  files no sibling touches, or its own worktree (`superpowers:using-git-worktrees`) — and note
+  that a worktree needs its own `npm install` before its suites pass.
+- **Tests run once, at the end, after fan-in — not inside each subagent.** A subagent's slice
+  compiles against a tree its siblings are still changing, so a suite run mid-fan-out fails for
+  reasons that are not its own, and `npm run verify` is too slow to pay for N times. Have each
+  one report what it changed, then run `npm run verify` yourself before the commit.

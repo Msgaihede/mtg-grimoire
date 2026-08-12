@@ -12,7 +12,7 @@
  * older or newer than the one that wrote it, so every field is read defensively and a
  * sentence degrades to its shortest honest form rather than taking the drawer down.
  */
-import type { DeckAuditEntry } from "@/lib/ipc";
+import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
 
 /** One line of the drawer: the sentence, and the quieter half under it. */
 export interface AuditLine {
@@ -60,6 +60,20 @@ function flag(value: unknown): boolean {
   return false;
 }
 
+/** A payload field read as a nested object — the shape an `import` row uses to keep its own
+ *  counts together — or `null` when there is none. */
+function nested(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** `1 card`, `2 cards`. One helper because four sentences now need it and the app must never
+ *  print "1 cards"; the irregular plural is passed rather than derived. */
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 /** Joined with the app's own separator, skipping the halves that are not there. */
 const line = (...parts: (string | null)[]): string | null => {
   const kept = parts.filter((part): part is string => part !== null && part.length > 0);
@@ -74,6 +88,16 @@ const cardName = (entry: DeckAuditEntry) => entry.cardName ?? "a card";
 export function auditSentence(entry: DeckAuditEntry): AuditLine {
   const p = facts(entry.payload);
   const name = cardName(entry);
+
+  // An import is the one `add` that names no card: it is a hundred of them. The payload
+  // carries the counts because the table records facts and this file words them — which is
+  // what lets the sentence change without a migration. Read **before** the per-card branches,
+  // because those would call it "Added a card".
+  const imported = nested(p.import);
+  if (imported !== null) {
+    const line = importLine(entry.kind, imported);
+    if (line !== null) return line;
+  }
 
   switch (entry.kind) {
     case "add": {
@@ -145,6 +169,40 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
   }
 }
 
+/**
+ * The one or two rows an import writes.
+ *
+ * A `replace` writes both — a `remove` for what it cleared, then the `add` — and a `merge`
+ * writes only the second. **The add row says nothing about the mode, and that is deliberate**:
+ * a replace that found nothing to clear writes no `remove` row at all, and by then it has done
+ * exactly what a merge into an empty list would have done. Naming the mode there would be a
+ * distinction the deck itself cannot show.
+ *
+ * `lines` is recorded and deliberately not printed. It counts *items* — the lines that
+ * resolved to a printing — so a reader would take it for the length of the file they pasted,
+ * and a reader counts cards anyway.
+ *
+ * `null` for any other kind, so a row a newer build wrote with an `import` payload on a kind
+ * this one has no sentence for falls through to its own branch instead of being claimed here.
+ */
+function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | null {
+  switch (kind) {
+    // Copies, not rows — the quantities the variant held, summed before the delete.
+    case "remove":
+      return {
+        text: `Cleared ${plural(count(p.cleared), "card")} before importing`,
+        detail: null,
+      };
+    case "add": {
+      const cards = plural(count(p.cards), "card");
+      const categories = plural(count(p.categories), "category", "categories");
+      return { text: `Imported ${cards} into ${categories}`, detail: null };
+    }
+    default:
+      return null;
+  }
+}
+
 /** A label put on a card, taken off it, or swapped for another one. */
 function cardTagLine(p: Record<string, unknown>, name: string): AuditLine {
   const tag = text(p.tag);
@@ -164,8 +222,7 @@ function tagLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.tag) ?? text(p.name) ?? "a tag";
   const previous = text(p.previous) ?? text(p.previousName);
   const cards = count(p.cards);
-  const moved = (suffix: string) =>
-    cards > 0 ? `${cards} ${cards === 1 ? "card" : "cards"} ${suffix}` : null;
+  const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
     case "create":
@@ -216,8 +273,7 @@ function folderLine(p: Record<string, unknown>): AuditLine {
 function categoryLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.name) ?? "a category";
   const cards = count(p.cards);
-  const moved = (suffix: string) =>
-    cards > 0 ? `${cards} ${cards === 1 ? "card" : "cards"} ${suffix}` : null;
+  const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
     case "create":
@@ -281,7 +337,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         const copied = count(p.copied);
         return {
           text: "Copied the live deck into theory",
-          detail: copied > 0 ? `${copied} ${copied === 1 ? "card" : "cards"}` : null,
+          detail: copied > 0 ? plural(copied, "card") : null,
         };
       }
       return {
