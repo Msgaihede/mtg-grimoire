@@ -82,9 +82,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
   decides what is allocated for) then row id, and within a card, exact printing, then real
   copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
-  `set_category_active` or `delete_category`** — those five and nothing else, which is worth
-  knowing while debugging, because pressing "Send missing to wishlist" or switching a pile off
-  rebuilds a deck's allocations as a side effect. A **built** deck's claims are subtracted from
+  `set_category_active`, `delete_category` or `commit_import`** — those six and nothing else,
+  which is worth knowing while debugging, because pressing "Send missing to wishlist" or
+  switching a pile off rebuilds a deck's allocations as a side effect. The import is the one
+  that runs it for **many** cards at once and still only once, which is the whole reason
+  `deck_import_commit` is a command rather than a loop over `deck_add_card`. A **built** deck's claims are subtracted from
   what other decks can see. The
   read clamps with `min(allocation, entry.quantity)`, so stepping a collection row down is
   honest immediately — but **growing the collection does not re-run the allocator**, so a deck
@@ -105,11 +107,16 @@ folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a
   called _inside the caller's already-open transaction_, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
 behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
-  **23** cases and asserts exactly one row each (count the list in `deck_audit.rs`, never a
-  remembered number — it has been written down wrong twice). "Exactly one" is per
-  _command_, not per field: **`deck_update` records one row per changed field**
+  **25** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
+  never a remembered number — it has been written down wrong twice). "Exactly one" is per
+  _change_, not per call, and **two** commands make more than one change in a call:
+  **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
-  satisfies that test only because every one of its cases changes exactly one field. The only
+  satisfies that test only because every one of its cases changes exactly one field; and
+  **`deck_import_commit` in `replace` mode records two** — a `remove` for what it cleared and
+  an `add` for what it imported, which one signed `delta` cannot be both of. Its `merge` mode
+  records one. Both use the existing `add`/`remove` kinds with an `import`-keyed payload, so
+  there is no tenth `AUDIT_KINDS` value and no migration. The only
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
   It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
@@ -120,7 +127,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
   per deck it un-filed.
-- **The six card commands, and what each takes.** `deck_get(id, variant)`;
+- **The six single-card commands, and what each takes** (the seventh, `deck_import_commit`, is
+  the bulk one and has its own bullet below).\
+  `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
   found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
@@ -131,6 +140,22 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
   variant must be one the schema knows, and the category must belong to _this_ deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
+- **`deck_import_commit(deckId, variant, mode, items)` is the seventh card command, and it
+  exists for the allocator.** Looping `deck_add_card` from the frontend would be correct in
+  every other respect and would run `allocate_deck` **once per line** — a hundred rebuilds of a
+  deck's claims for one import. It runs it once, at the end, over the finished deck. "Once" is
+  invisible in the result (the allocator is delete-and-rebuild, so N runs and one run leave
+  identical rows), so `the_allocator_runs_once_for_the_whole_import` counts row changes through
+  SQLite's `total_changes` instead: **43** for one run over 20 owned cards against **423** for
+  one run per item, both measured 2026-08-12. Everything else is `add_card`'s shape held to
+  deliberately — the same variant and `touch_deck` fences, the same `DECK_CARD_GRAIN`
+  `ON CONFLICT` fold (so a list naming a card twice is one row with the sum), the same
+  `category_for_name` find-or-create (so a `Sideboard` section lands on the seeded `side` row
+  and makes nothing). `mode` is `merge` or `replace` (`deck_import::IMPORT_MODES`), and
+  **`replace` clears the cards of the one variant it was given and leaves every category
+  standing** — a category is the reader's filing, not the list's. An empty item list is refused
+  in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
+  clearing the deck to put nothing back are the same call.
 - **An add that names no category is filed by the card's type line; an add that names one is
   untouched.** So every _drag_ overrides the rule by construction — pointing at a column is
   naming a category — and nothing in the write path has to tell a gesture from a press. The rule

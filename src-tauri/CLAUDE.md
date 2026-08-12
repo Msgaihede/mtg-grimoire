@@ -116,8 +116,9 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **`format_specs` is data, not code.** A rules change is a new migration step re-running the
   seed constant, never an engine branch; a new format is a row. Never derive one format from
   another.
-- **The allocator runs on five writes and nothing else** — a card write, the Built toggle,
-  `missing_to_wishlist`, `set_category_active`, `delete_category`. Growing the collection does
+- **The allocator runs on six writes and nothing else** — a card write, the Built toggle,
+  `missing_to_wishlist`, `set_category_active`, `delete_category`, and `commit_import` (**once**
+  for a whole decklist, which is the reason that command exists). Growing the collection does
   _not_ re-run it, so a deck reads new copies only after its next allocator run.
 - **Writing history is not a command.** `deck_audit::record(tx, …)` is called _inside the
   caller's already-open transaction_, which is what makes a rolled-back write leave no history.
@@ -187,4 +188,4 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the cover route |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the six card commands, the allocator, the audit log |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the seven card commands, the allocator, the audit log |

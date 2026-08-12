@@ -2,7 +2,7 @@
 
 **Validation is TypeScript** (spec §3). Rust supplies **facts** (`DeckCardRow`: per-printing
 `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws **every**
-conclusion. The storage side — tables, the six card commands, the allocator, the audit log —
+conclusion. The storage side — tables, the seven card commands, the allocator, the audit log —
 is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) and
 [src-tauri/CLAUDE.md](../../../src-tauri/CLAUDE.md).
 

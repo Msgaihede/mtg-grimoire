@@ -5,13 +5,19 @@
 //! decides everything a *deck* decision is — which pile a card lands in, which card is the
 //! commander, what the format is. What it cannot decide is **which printing in this app's
 //! corpus a name means**, because that is a question about 116 k rows of data. So this module
-//! answers exactly that and nothing else, one line at a time.
+//! answers exactly that, one line at a time — and then puts the answers in the deck, which is
+//! the second thing TypeScript cannot do from where it stands: see [`commit_import`].
 //!
 //! Shaped like [`crate::card`] and [`crate::search`]: pure functions over a `Connection`,
-//! testable without a Tauri app, wrapped in an `async` command that runs on the blocking pool
-//! against the **read-only** connection. [`resolve_lines`] writes nothing at all.
+//! testable without a Tauri app, wrapped in `async` commands that run on the blocking pool.
 //!
-//! Three rules run through the whole file:
+//! **Two halves, and they take different connections.** [`resolve_lines`] writes nothing at all
+//! and reads through `db_read`, like every other read in this app. [`commit_import`] is the
+//! write, and it takes the write connection through `db::lock_for` for one transaction — see
+//! its own doc for the reason it exists at all, which is that a decklist must cost the
+//! allocator **one** run rather than one per line.
+//!
+//! Three rules run through the read half:
 //!
 //! * **A printing you own wins.** Somebody importing a list they already own copies for wants
 //!   their copies in the deck, not a printing the app picked because it is newer. Only then
@@ -71,6 +77,8 @@
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The largest decklist file this app will read, in bytes.
@@ -86,6 +94,20 @@ pub const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
 /// A `[&str; 2]` and not an enum for [`crate::schema::DECK_VARIANTS`]'s reason — it is
 /// validated at the one command that takes it, and a list is what a refusal quotes back.
 pub const IMPORT_MODES: [&str; 2] = ["merge", "replace"];
+
+/// `IMPORT_MODES[1]` by **index and not by spelling**, the discipline [`crate::deck_audit`]'s
+/// kind constants apply to `AUDIT_KINDS`: the refusal above quotes that array, so a literal
+/// `"replace"` here that drifted from it would leave the one mode a caller can name unreachable
+/// while everything still compiled.
+const REPLACE: &str = IMPORT_MODES[1];
+
+/// What an import says when it was handed no lines at all.
+///
+/// A write that writes nothing is not a write — the same refusal [`crate::deck::add_card`]
+/// gives a quantity of zero. It matters most in `replace`, where "do nothing" and "clear the
+/// deck and put nothing back" are the same call with the same arguments, and only one of them
+/// is what a reader who pasted an empty box meant.
+pub const NOTHING_TO_IMPORT: &str = "There is nothing to import.";
 
 /// A card name reduced to what two people typing it would agree on: lowercase, no diacritics,
 /// one kind of apostrophe, single spaces.
@@ -575,6 +597,247 @@ pub async fn deck_import_resolve(
         .map_err(|e| format!("the decklist could not be resolved: {e}"))?
 }
 
+/// One line of a decklist, after TypeScript has decided everything a *deck* decision is.
+///
+/// The three fields are the three answers this command cannot compute for itself: which
+/// printing (resolved by [`resolve_lines`] and chosen, perhaps overridden, in the preview), how
+/// many, and which pile. The category arrives as a **name** rather than an id because an
+/// imported list names sections the deck may not have yet — and because the word itself is
+/// `autoCategoryFor`'s to compute, exactly as it is for [`crate::deck::add_card`]'s name arm.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportItem {
+    pub card_id: String,
+    pub quantity: i64,
+    pub category_name: String,
+}
+
+/// What an import did, in the three numbers the "Imported 117 cards" report is written from.
+///
+/// [`Self::added`] and [`Self::removed`] are **copies**, not rows — a reader counts cards — and
+/// `added` is what the list asked for rather than what the deck landed on, so a merge that
+/// folded 3 onto an existing 2 reports 3. [`Self::categories_created`] is the piles the import
+/// had to make, which is the part of the outcome a reader could not have predicted from the
+/// file: a section name their deck already had costs nothing.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcome {
+    pub added: i64,
+    pub removed: i64,
+    pub categories_created: i64,
+}
+
+/// A whole decklist into one deck, in one transaction.
+///
+/// **This command exists for the allocator.** Looping [`crate::deck::add_card`] from the
+/// frontend would be correct in every other respect and would run
+/// [`crate::deck::allocate_deck`] once per line — a hundred rebuilds of a deck's claims for one
+/// import, each one deleting and re-deriving every row the last one wrote. Here it runs
+/// **once**, at the end, over the finished deck.
+/// `the_allocator_runs_once_for_the_whole_import` counts the row changes, because that is the
+/// only place the difference is visible: the allocator is delete-and-rebuild, so one run and a
+/// hundred runs leave identical rows.
+///
+/// Everything else is [`crate::deck::add_card`]'s shape held to deliberately: the same two
+/// opening fences (a variant the schema knows, a deck that is still there), the same
+/// [`crate::schema::DECK_CARD_GRAIN`] `ON CONFLICT` fold, the same
+/// [`crate::deck_meta::category_for_name`] find-or-create, and the same
+/// [`crate::deck_audit::record`] call *inside* the caller's transaction. What it does not
+/// borrow is `add_card` itself — that is the whole point.
+///
+/// Three decisions worth stating, because each is a thing that would be wrong the other way:
+///
+/// * **`replace` clears the cards and leaves the categories.** A category is the reader's
+///   filing, not the list's; a replace that swept them would delete piles somebody named,
+///   reordered and switched off, to import a file that mentions none of that.
+/// * **It clears one variant.** `theory` is a plan and `live` is what is sleeved up, and
+///   replacing one must never touch the other — the reason `variant` is in the grain at all.
+/// * **The history is one row per *effect*, never one per card.** An import of 117 cards would
+///   put 117 rows in the drawer and bury every other event of that day. So: an `add` row
+///   carrying the counts, plus — in `replace`, and only when something was actually cleared —
+///   a `remove` row. Neither names a card, because no one card is what happened. This is the
+///   shape `deck_update` already uses (one row per changed field), and it needs no new
+///   [`crate::schema::AUDIT_KINDS`] value and so no migration.
+pub fn commit_import(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+    mode: &str,
+    items: &[ImportItem],
+) -> Result<ImportOutcome, String> {
+    let variant = crate::deck_meta::valid_variant(variant)?;
+    if !IMPORT_MODES.contains(&mode) {
+        return Err(format!(
+            "`{mode}` is not an import mode. Use one of: {}.",
+            IMPORT_MODES.join(", ")
+        ));
+    }
+    if items.is_empty() {
+        return Err(NOTHING_TO_IMPORT.to_owned());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    crate::deck::touch_deck(&tx, deck_id)?;
+
+    // **Copies, not rows.** `removed` becomes the `remove` row's `delta`, and that column is
+    // signed *copies* — the number the day header adds up and the number a reader recognises.
+    let removed: i64 = if mode == REPLACE {
+        let cleared: i64 = tx
+            .query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+                  WHERE deck_id = ?1 AND variant = ?2",
+                params![deck_id, variant],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2",
+            params![deck_id, variant],
+        )
+        .map_err(|e| e.to_string())?;
+        cleared
+    } else {
+        0
+    };
+
+    // Keyed on the **trimmed** name, which is the form `category_for_name` stores and therefore
+    // the form two lines have to agree on: `Ramp` and `  Ramp  ` are one pile in the database,
+    // and a map keyed on the raw string would count them as two categories in the history row.
+    let mut categories: HashMap<&str, i64> = HashMap::new();
+    let mut categories_created = 0i64;
+    let mut added = 0i64;
+    {
+        // Prepared once for the whole list rather than per line — the one place a 117-line
+        // import would otherwise pay 117 compilations of the same statement.
+        let sql = format!(
+            "INSERT INTO deck_cards
+                (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
+                 quantity, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, unixepoch(), unixepoch())
+             ON CONFLICT({grain}) DO UPDATE SET
+                quantity = deck_cards.quantity + excluded.quantity,
+                updated_at = unixepoch()",
+            grain = crate::schema::DECK_CARD_GRAIN
+        );
+        let mut insert = tx.prepare(&sql).map_err(|e| e.to_string())?;
+        for item in items {
+            // Before anything is created for this line: a refusal rolls the transaction back
+            // anyway, but there is no reason to make a category for a line that cannot land.
+            if item.quantity <= 0 {
+                return Err(crate::collection::ZERO_ADD.to_owned());
+            }
+            let category_name = item.category_name.trim();
+            let category_id = match categories.get(category_name) {
+                Some(id) => *id,
+                None => {
+                    // Asked *before* the find-or-create, because afterwards there is no way to
+                    // tell a category that was made from one that was already there — and "3
+                    // new categories" is a sentence the preview promises.
+                    let existed = tx
+                        .query_row(
+                            "SELECT 1 FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
+                            params![deck_id, category_name],
+                            |_| Ok(()),
+                        )
+                        .optional()
+                        .map_err(|e| e.to_string())?;
+                    // Creates a `kind = 'main'` category, and matches the four predefined ones
+                    // **by name** — so a `Sideboard` line lands on the seeded `side` row and
+                    // nothing is made. See `category_for_name`'s doc for why the lookup cannot
+                    // be narrowed to `main`.
+                    let id = crate::deck_meta::category_for_name(&tx, deck_id, category_name)?;
+                    if existed.is_none() {
+                        categories_created += 1;
+                    }
+                    categories.insert(category_name, id);
+                    id
+                }
+            };
+            let (set_code, collector_number, lang, name) =
+                crate::deck::printing_of(&tx, &item.card_id)?;
+            insert
+                .execute(params![
+                    deck_id,
+                    category_id,
+                    variant,
+                    item.card_id,
+                    set_code,
+                    collector_number,
+                    lang,
+                    name,
+                    item.quantity
+                ])
+                .map_err(|e| e.to_string())?;
+            // Saturating because `quantity` is an `i64` off the wire and this is the one place
+            // the values are summed; an overflow panic in a debug build would be a stranger
+            // failure than a number no deck can hold.
+            added = added.saturating_add(item.quantity);
+        }
+    }
+
+    crate::deck::allocate_deck(&tx, deck_id)?;
+
+    // Facts only — `auditText.ts` words them. `None` for the card because an import is about no
+    // one card, and the counts are what a reader is owed instead.
+    if removed > 0 {
+        crate::deck_audit::record(
+            &tx,
+            deck_id,
+            variant,
+            crate::deck_audit::REMOVE,
+            None,
+            &json!({ "import": { "mode": mode, "cleared": removed } }),
+            -removed,
+        )?;
+    }
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::ADD,
+        None,
+        &json!({
+            "import": {
+                "mode": mode,
+                "lines": items.len(),
+                "cards": added,
+                "categories": categories.len(),
+            }
+        }),
+        added,
+    )?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(ImportOutcome {
+        added,
+        removed,
+        categories_created,
+    })
+}
+
+/// A decklist into a deck: one transaction, one allocation, one or two history rows.
+///
+/// The **write** connection through `db::lock_for`, answering [`crate::collection::BUSY`] if it
+/// cannot take it — inlined rather than borrowing a `with_write` helper the way `deck.rs` and
+/// `deck_meta.rs` do, because this module has exactly one write and a helper for one call site
+/// is a second place to read.
+#[tauri::command]
+pub async fn deck_import_commit(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    variant: String,
+    mode: String,
+    items: Vec<ImportItem>,
+) -> Result<ImportOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+            Some(conn) => commit_import(&conn, deck_id, &variant, &mode, &items),
+            None => Err(crate::collection::BUSY.to_owned()),
+        }
+    })
+    .await
+    .map_err(|e| format!("the decklist could not be imported: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1017,6 +1280,509 @@ mod tests {
             "`clb` and `40k` share a release date, so the id decides — and it decides the \
              same way both times"
         );
+    }
+
+    // ------------------------------------------------------------------------------------
+    // commit_import
+    // ------------------------------------------------------------------------------------
+
+    /// A deck with nothing in it and its four predefined categories seeded — what an import
+    /// lands in. `commander` because it is the format an imported list is most often for, and
+    /// because it is what makes the `Commander` predefined category interesting.
+    fn deck(conn: &Connection) -> i64 {
+        crate::deck::create_deck(
+            conn,
+            &crate::deck::DeckInput {
+                name: "Imported".to_owned(),
+                format_key: "commander".to_owned(),
+                description: None,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    fn item(card_id: &str, quantity: i64, category_name: &str) -> ImportItem {
+        ImportItem {
+            card_id: card_id.to_owned(),
+            quantity,
+            category_name: category_name.to_owned(),
+        }
+    }
+
+    /// Everything one variant of this deck holds, as `(card id, category name, copies)`.
+    fn cards_in(conn: &Connection, deck_id: i64, variant: &str) -> Vec<(String, String, i64)> {
+        conn.prepare(
+            "SELECT dc.card_id, cat.name, dc.quantity
+               FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+              WHERE dc.deck_id = ?1 AND dc.variant = ?2
+              ORDER BY cat.name, dc.card_id",
+        )
+        .unwrap()
+        .query_map(params![deck_id, variant], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+    }
+
+    /// One deck card, spelled the way `cards_in` answers.
+    fn holding(card_id: &str, category: &str, quantity: i64) -> (String, String, i64) {
+        (card_id.to_owned(), category.to_owned(), quantity)
+    }
+
+    /// This deck's history as `(kind, delta, payload)`, oldest first.
+    fn audit(conn: &Connection, deck_id: i64) -> Vec<(String, i64, serde_json::Value)> {
+        crate::deck_audit::list(conn, deck_id, 500)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .map(|r| {
+                (
+                    r.kind,
+                    r.delta,
+                    serde_json::from_str(&r.payload).expect("a payload is JSON"),
+                )
+            })
+            .collect()
+    }
+
+    /// One card into one named category, through the ordinary single-card write — so a test
+    /// about an import never builds its "before" state with the thing under test.
+    fn put(conn: &Connection, deck_id: i64, card_id: &str, category: &str, variant: &str, n: i64) {
+        crate::deck::add_card(conn, deck_id, card_id, None, Some(category), variant, n).unwrap();
+    }
+
+    /// Forget every history row, so what a test counts afterwards is only what it drove.
+    fn clear_history(conn: &Connection) {
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+    }
+
+    #[test]
+    fn a_merge_folds_onto_the_grain() {
+        let conn = seeded();
+        let id = deck(&conn);
+        put(&conn, id, "sol-clb", "Main deck", "live", 2);
+
+        let out = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[item("sol-clb", 3, "Main deck")],
+        )
+        .unwrap();
+
+        assert_eq!(out.added, 3, "the copies the list asked for, not the total");
+        assert_eq!(out.removed, 0);
+        assert_eq!(out.categories_created, 0, "`Main deck` was already there");
+        assert_eq!(
+            cards_in(&conn, id, "live"),
+            vec![holding("sol-clb", "Main deck", 5)],
+            "one row of five, not a second row of three"
+        );
+    }
+
+    /// A decklist naming the same card on two lines is ordinary — a split of one card across
+    /// two sections of the file, or just a list somebody edited twice. The `ON CONFLICT` fold
+    /// is what lets TypeScript hand the lines over as it read them, without deduplicating first.
+    #[test]
+    fn a_list_naming_one_card_twice_lands_as_one_row() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        let out = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[item("sol-clb", 2, "Ramp"), item("sol-clb", 3, "Ramp")],
+        )
+        .unwrap();
+
+        assert_eq!(out.added, 5);
+        assert_eq!(
+            cards_in(&conn, id, "live"),
+            vec![holding("sol-clb", "Ramp", 5)]
+        );
+    }
+
+    #[test]
+    fn a_replace_clears_only_the_variant_it_was_given() {
+        let conn = seeded();
+        let id = deck(&conn);
+        put(&conn, id, "sol-clb", "Main deck", "live", 1);
+        put(&conn, id, "kolvori", "Main deck", "live", 1);
+        put(&conn, id, "jotun", "Main deck", "live", 2);
+        put(&conn, id, "sol-lea", "Main deck", "theory", 1);
+        put(&conn, id, "sol-c21", "Main deck", "theory", 1);
+
+        let out = commit_import(
+            &conn,
+            id,
+            "live",
+            "replace",
+            &[item("sol-40k", 1, "Main deck")],
+        )
+        .unwrap();
+
+        assert_eq!(out.removed, 4, "copies cleared, not rows");
+        assert_eq!(out.added, 1);
+        assert_eq!(
+            cards_in(&conn, id, "live"),
+            vec![holding("sol-40k", "Main deck", 1)]
+        );
+        assert_eq!(
+            cards_in(&conn, id, "theory"),
+            vec![
+                holding("sol-c21", "Main deck", 1),
+                holding("sol-lea", "Main deck", 1),
+            ],
+            "a plan is not what the reader asked to replace"
+        );
+    }
+
+    /// A category is the reader's filing, not the list's. A replace that swept them would
+    /// delete piles somebody named, reordered and switched off, to import a file that mentions
+    /// none of that — and the emptied category is exactly where they will want to put things
+    /// back.
+    #[test]
+    fn a_replace_leaves_the_categories_alone() {
+        let conn = seeded();
+        let id = deck(&conn);
+        let ramp = crate::deck_meta::create_category(&conn, id, "Ramp")
+            .unwrap()
+            .id;
+        crate::deck_meta::set_category_active(&conn, ramp, false).unwrap();
+        put(&conn, id, "sol-clb", "Ramp", "live", 1);
+
+        commit_import(
+            &conn,
+            id,
+            "live",
+            "replace",
+            &[item("jotun", 1, "Main deck")],
+        )
+        .unwrap();
+
+        let (name, active): (String, bool) = conn
+            .query_row(
+                "SELECT name, is_active FROM deck_categories WHERE id = ?1",
+                params![ramp],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("the category the reader made must still be there");
+        assert_eq!(name, "Ramp");
+        assert!(!active, "and still switched off");
+        assert_eq!(
+            cards_in(&conn, id, "live"),
+            vec![holding("jotun", "Main deck", 1)],
+            "empty, but still a pile"
+        );
+    }
+
+    #[test]
+    fn a_category_the_deck_does_not_have_is_created_once() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        let out = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[
+                item("sol-clb", 1, "Ramp"),
+                item("kolvori", 1, "Ramp"),
+                // The same pile written with the whitespace a paste leaves on it. One
+                // category, and the count must say one.
+                item("jotun", 1, "  Ramp  "),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(out.categories_created, 1);
+        let ramps: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND name = 'Ramp'",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ramps, 1);
+    }
+
+    /// A `Sideboard` section lands on the seeded `side` category rather than making a second
+    /// pile with the same word on it — `category_for_name` looks up by name alone, which is
+    /// what `DECK_CATEGORY_GRAIN` (one name per deck) requires of it.
+    #[test]
+    fn a_section_name_lands_on_the_predefined_category() {
+        let conn = seeded();
+        let id = deck(&conn);
+        let before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_categories WHERE deck_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let out = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[item("sol-clb", 1, "Sideboard")],
+        )
+        .unwrap();
+
+        assert_eq!(out.categories_created, 0);
+        let (kind, after): (String, i64) = conn
+            .query_row(
+                "SELECT cat.kind, (SELECT count(*) FROM deck_categories WHERE deck_id = ?1)
+                   FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+                  WHERE dc.deck_id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            kind, "side",
+            "the seeded row, whose kind is what the rules read"
+        );
+        assert_eq!(after, before, "and nothing new was made");
+    }
+
+    /// **The whole reason this command exists.** Looping `deck::add_card` would be correct in
+    /// every other respect and would run `allocate_deck` once per line.
+    ///
+    /// "Once" is not observable in the *result* — the allocator deletes and rebuilds, so twenty
+    /// runs and one run leave the same rows — so this counts **work** instead, through
+    /// SQLite's own `total_changes`. Both figures were measured 2026-08-12 by running this
+    /// fixture each way, and they are exactly the arithmetic, for twenty cards each owned once:
+    ///
+    /// * one run — 1 `touch_deck` + 1 category + 20 `deck_cards` + (0 claims deleted + 20
+    ///   written) + 1 audit row — **43**;
+    /// * one run per item — the allocator's k-th pass deletes `k−1` claims and writes `k`, so
+    ///   `sum(2k−1)` over 1..20 is 400 for the allocator alone — **423**, measured by moving
+    ///   `allocate_deck` inside the loop, which fails this test with that number.
+    ///
+    /// The assertion sits at 100, roughly an order of magnitude clear of both: it cannot fail
+    /// because a later change writes a few more rows, and cannot pass if the allocator is ever
+    /// moved back inside the loop.
+    #[test]
+    fn the_allocator_runs_once_for_the_whole_import() {
+        let conn = seeded();
+        let id = deck(&conn);
+        let mut items = Vec::new();
+        for n in 0..20 {
+            let card = format!("bulk-{n:02}");
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
+                                    released_at, is_paper, layout, rarity, type_line, prices, raw)
+                 VALUES (?1, ?2, ?3, 'blk', ?4, 'en', '2020-01-01', 1, 'normal', 'common',
+                         'Artifact', '{\"usd\":\"1.00\"}', '{}')",
+                params![
+                    card,
+                    format!("o-bulk-{n:02}"),
+                    format!("Bulk {n:02}"),
+                    n.to_string()
+                ],
+            )
+            .unwrap();
+            own(&conn, &card, 1);
+            items.push(item(&card, 1, "Main deck"));
+        }
+
+        let before = conn.total_changes();
+        let out = commit_import(&conn, id, "live", "merge", &items).unwrap();
+        let spent = conn.total_changes() - before;
+
+        assert_eq!(out.added, 20);
+        let claimed: (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), coalesce(sum(quantity), 0) FROM deck_allocations
+                  WHERE deck_id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            claimed,
+            (20, 20),
+            "every card owned, every copy claimed once"
+        );
+        assert!(
+            spent < 100,
+            "one allocator run costs ~43 row changes and twenty cost ~423; this import spent \
+             {spent}"
+        );
+    }
+
+    #[test]
+    fn a_merge_records_one_audit_row_and_a_replace_records_two() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        clear_history(&conn);
+        commit_import(&conn, id, "live", "merge", &[item("sol-clb", 2, "Ramp")]).unwrap();
+        let merged = audit(&conn, id);
+        assert_eq!(merged.len(), 1, "{merged:?}");
+        assert_eq!(merged[0].0, crate::deck_audit::ADD);
+        assert_eq!(merged[0].1, 2, "the copies the list put in");
+        assert_eq!(
+            merged[0].2,
+            serde_json::json!({
+                "import": { "mode": "merge", "lines": 1, "cards": 2, "categories": 1 }
+            })
+        );
+
+        clear_history(&conn);
+        commit_import(
+            &conn,
+            id,
+            "live",
+            "replace",
+            &[item("jotun", 1, "Ramp"), item("kolvori", 1, "Creature")],
+        )
+        .unwrap();
+        let replaced = audit(&conn, id);
+        assert_eq!(replaced.len(), 2, "{replaced:?}");
+        assert_eq!(
+            replaced[0].0,
+            crate::deck_audit::REMOVE,
+            "what went out first"
+        );
+        assert_eq!(replaced[0].1, -2);
+        assert_eq!(
+            replaced[0].2,
+            serde_json::json!({ "import": { "mode": "replace", "cleared": 2 } })
+        );
+        assert_eq!(replaced[1].0, crate::deck_audit::ADD);
+        assert_eq!(replaced[1].1, 2);
+        assert_eq!(
+            replaced[1].2,
+            serde_json::json!({
+                "import": { "mode": "replace", "lines": 2, "cards": 2, "categories": 2 }
+            })
+        );
+    }
+
+    /// A replace that finds nothing to clear records **one** row, not one with a zero in it —
+    /// a history of a removal that removed nothing is a line the drawer would have to explain.
+    #[test]
+    fn a_replace_over_an_empty_variant_records_only_the_add() {
+        let conn = seeded();
+        let id = deck(&conn);
+        clear_history(&conn);
+
+        let out =
+            commit_import(&conn, id, "live", "replace", &[item("sol-clb", 1, "Ramp")]).unwrap();
+
+        assert_eq!(out.removed, 0);
+        let rows = audit(&conn, id);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, crate::deck_audit::ADD);
+    }
+
+    /// The transaction rule, from the outside and at the worst moment: a **replace** whose
+    /// second item names a card this app has not got. By then the clear has run, a category has
+    /// been made and the first card has been written — and every one of those must be gone,
+    /// including the deck the reader was about to lose.
+    #[test]
+    fn a_refused_import_leaves_no_history_and_no_cards() {
+        let conn = seeded();
+        let id = deck(&conn);
+        put(&conn, id, "sol-clb", "Main deck", "live", 3);
+        clear_history(&conn);
+
+        let refused = commit_import(
+            &conn,
+            id,
+            "live",
+            "replace",
+            &[
+                item("jotun", 1, "Ramp"),
+                item("no-such-printing", 1, "Ramp"),
+            ],
+        )
+        .unwrap_err();
+
+        assert!(refused.contains("no-such-printing"), "{refused}");
+        assert_eq!(
+            cards_in(&conn, id, "live"),
+            vec![holding("sol-clb", "Main deck", 3)],
+            "the deck the replace was about to clear is still there"
+        );
+        assert_eq!(audit(&conn, id), vec![], "and it left no history");
+        let ramps: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND name = 'Ramp'",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ramps, 0, "nor the category it made on the way through");
+    }
+
+    #[test]
+    fn an_unknown_variant_and_an_unknown_mode_are_both_refused_in_words() {
+        let conn = seeded();
+        let id = deck(&conn);
+        let one = [item("sol-clb", 1, "Ramp")];
+
+        let variant = commit_import(&conn, id, "sideboard", "merge", &one).unwrap_err();
+        assert!(variant.contains("`sideboard`"), "{variant}");
+        assert!(variant.contains("live, theory"), "{variant}");
+
+        let mode = commit_import(&conn, id, "live", "append", &one).unwrap_err();
+        assert!(mode.contains("`append`"), "{mode}");
+        assert!(mode.contains("merge, replace"), "{mode}");
+
+        assert_eq!(cards_in(&conn, id, "live"), vec![]);
+    }
+
+    #[test]
+    fn an_empty_item_list_is_refused() {
+        let conn = seeded();
+        let id = deck(&conn);
+        clear_history(&conn);
+
+        assert_eq!(
+            commit_import(&conn, id, "live", "replace", &[]).unwrap_err(),
+            NOTHING_TO_IMPORT,
+            "and a `replace` least of all — it would clear the deck and put nothing back"
+        );
+        assert_eq!(audit(&conn, id), vec![]);
+    }
+
+    /// The same refusal `deck::add_card` gives a quantity of zero, from the one constant that
+    /// owns the sentence — a line asking for no copies would conjure a row out of nothing, and
+    /// `deck_cards`' own `CHECK (quantity > 0)` would answer with the table's name instead.
+    #[test]
+    fn an_item_asking_for_no_copies_is_refused() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        let refused =
+            commit_import(&conn, id, "live", "merge", &[item("sol-clb", 0, "Ramp")]).unwrap_err();
+
+        assert_eq!(refused, crate::collection::ZERO_ADD);
+        assert_eq!(cards_in(&conn, id, "live"), vec![]);
+    }
+
+    /// A deck id the gallery has not noticed is gone answers [`crate::deck::GONE`], one
+    /// statement before there is an orphan row to worry about — the fence every deck write
+    /// opens with, and this one is no exception.
+    #[test]
+    fn an_import_into_a_deck_that_is_not_there_is_refused() {
+        let conn = seeded();
+
+        let refused =
+            commit_import(&conn, 4321, "live", "merge", &[item("sol-clb", 1, "Ramp")]).unwrap_err();
+
+        assert_eq!(refused, crate::deck::GONE);
     }
 
     /// `printing_count` is how many rows *this line's rule* found, which through the bare-name

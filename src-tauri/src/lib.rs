@@ -263,6 +263,7 @@ pub fn run() {
             deck::deck_swap_printing,
             deck::deck_missing_to_wishlist,
             deck_import::deck_import_resolve,
+            deck_import::deck_import_commit,
             deck::format_specs_list,
             deck_meta::deck_category_list,
             deck_meta::deck_category_create,
