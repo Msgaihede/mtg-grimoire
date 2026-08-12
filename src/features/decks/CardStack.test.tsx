@@ -399,16 +399,24 @@ describe("CardStack does not reflow", () => {
   });
 
   /**
-   * The lift travels up as well as out: the open card comes forward over the cards before it,
-   * and the stack comes forward over the groups below it in the column.
+   * **The stack comes forward; a card in it never does.** Two different questions that used to
+   * be answered with the same class:
+   *
+   * The *list* is raised while anything is open, because the cards it pushes down leave its box
+   * on purpose and would otherwise be painted over by the next group in the column.
+   *
+   * A *card* is not, and this is the assertion that matters. These are `relative` siblings, so
+   * painting order is document order — every card is drawn over the one before it, which is the
+   * stacked look itself. Raising the open one inverts that against the whole tail of the stack,
+   * and it does it on the first frame, while the cards after it are still 269px from where they
+   * are going: the card appears to jump in front and the stack catches up around it. Letting
+   * them uncover it is the whole of the fix, and once they settle nothing is over it anyway.
    *
    * It used to be a pair of `LAYER` entries spelling `hover:` and `focus-within:` variants,
-   * which meant every card in every stack in the app carried both rules whether or not
-   * anything was open. It is the plain class applied from state now, so this asserts the part
-   * a variant could never say: that at rest **nothing** in the group is raised, and that
-   * opening one card raises that card and the list and nothing else.
+   * which meant every card in every stack carried both rules whether or not anything was open —
+   * so a variant could not have said this even to be wrong.
    */
-  it("raises the open card and its stack, and nothing at rest", async () => {
+  it("raises the stack but never a card in it", async () => {
     render(<CardStack cards={CARDS} label="Ramp" />);
 
     for (const element of [list(), ...items()]) {
@@ -418,10 +426,13 @@ describe("CardStack does not reflow", () => {
     arriveOn(items()[1]);
     await tick(STACK_OPEN_DWELL_MS);
 
+    // The group, yes.
     expect(list().className).toContain(LAYER.raised);
-    expect(items()[1].className).toContain(LAYER.raised);
-    expect(items()[0].className).not.toContain(LAYER.raised);
-    expect(items()[2].className).not.toContain(LAYER.raised);
+    // The open card, no — nor any of its neighbours. Document order is the whole z-order.
+    expect(openCard()).toBe(items()[1]);
+    for (const element of items()) {
+      expect(element.className).not.toContain(LAYER.raised);
+    }
   });
 });
 
