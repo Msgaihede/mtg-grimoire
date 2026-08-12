@@ -28,6 +28,7 @@ jobs:
     outputs:
       frontend: ${{ steps.classify.outputs.frontend }}
       rust: ${{ steps.classify.outputs.rust }}
+      powershell: ${{ steps.classify.outputs.powershell }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
@@ -47,6 +48,7 @@ jobs:
 
           frontend=false
           rust=false
+          powershell=false
 
           # A first push to a branch reports an all-zero `before`, and a force-push can
           # report a commit that no longer exists. Neither can be diffed, so both run
@@ -58,6 +60,7 @@ jobs:
             files=""
             frontend=true
             rust=true
+            powershell=true
           else
             # `--no-renames` is load-bearing: with rename detection on (the default since
             # git 2.9) a file moved out of `src/` into `src-tauri/` is reported as the
@@ -77,6 +80,7 @@ jobs:
               .github/workflows/ci.yml)
                 frontend=true
                 rust=true
+                powershell=true
                 ;;
 
               # Affects neither job. Nothing here is compiled, linted or tested: `eslint .`
@@ -87,6 +91,28 @@ jobs:
               .vscode/*|.gitignore|.gitattributes) ;;
               .release-please-manifest.json|release-please-config.json) ;;
               .github/workflows/release.yml) ;;
+
+              # PowerShell. `.claude/skills/running-the-app/lock.test.ps1` exercises the
+              # worktree lock tool, and nothing else in the repo consumes a `.ps1`: `eslint`
+              # does not lint one, `vitest` does not collect one, cargo does not read one.
+              # So a `.ps1` needs this job and only this job.
+              #
+              # **This arm must stay above `src-tauri/*` and `scripts/*`.** `case` is
+              # first-match-wins, and `scripts/` is on the frontend list solely because
+              # `eslint .` lints it — which is untrue of a `.ps1`, so a `scripts/*.ps1`
+              # matching the frontend arm first would run the wrong job and skip this one.
+              #
+              # It also narrows the `*)` fail-safe below, which previously sent every `.ps1`
+              # to both build jobs: measured on PR #28, whose `lock.ps1` ran `frontend` and
+              # the full `rust` matrix to prove nothing about either.
+              #
+              # `.psm1`/`.psd1` are here because a module or manifest `lock.ps1` imported
+              # would otherwise fall through to `*)` — which runs the two build jobs and
+              # skips the only job that would actually have tested it. That is the one
+              # direction the fail-safe cannot cover, since it does not set `powershell`.
+              *.ps1|*.psm1|*.psd1)
+                powershell=true
+                ;;
 
               # Rust. The crate is self-contained: nothing under `src-tauri/` reads a file
               # outside it (the one `include_str!` is its own `tauri.conf.json`), and the
@@ -125,6 +151,7 @@ jobs:
 
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "powershell=$powershell" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Changed-path routing"
@@ -133,6 +160,7 @@ jobs:
             echo "| --- | --- |"
             echo "| frontend | \`$frontend\` |"
             echo "| rust | \`$rust\` |"
+            echo "| powershell | \`$powershell\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
@@ -236,10 +264,31 @@ jobs:
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying
   # the day the matrix changes. This fixed name is the protected check; the matrix
   # underneath stays free to change.
+  powershell:
+    name: powershell
+    needs: changes
+    if: needs.changes.outputs.powershell == 'true'
+    # Windows, and not as a preference. `lock.ps1` is a Windows tool by construction: it
+    # identifies a lock's holder by pid + process name + `StartTime`, and its whole reason
+    # to exist is `tauri-plugin-single-instance` on WebView2. `Get-Process`'s `StartTime`
+    # is not portable, so a Linux leg would not be a cheaper version of this job — it
+    # would be a different and failing one.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `npm ci`, no cargo, no toolchain setup: the test sets its own `MTG_LOCK_DIR`
+      # (so it never touches the real lock directory or needs a git repo to find one) and
+      # spawns short-lived `pwsh` sleepers as its fixtures. `pwsh` is preinstalled on
+      # `windows-latest`.
+      - name: Run the lock tool's tests
+        shell: pwsh
+        run: pwsh -NoProfile -File .claude/skills/running-the-app/lock.test.ps1
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust]
+    needs: [changes, frontend, rust, powershell]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -247,17 +296,19 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
+          POWERSHELL: ${{ needs.powershell.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
           # as a pass would take this check green having run nothing at all.
           [ "$CHANGES" = "success" ] || exit 1
 
-          # A skip here is a deliberate answer from `changes`: that half of the repo did
-          # not change, so it has nothing to prove.
-          for result in "$FRONTEND" "$RUST"; do
+          # A skip here is a deliberate answer from `changes`: that part of the repo did
+          # not change, so it has nothing to prove. Every job gated on a `changes` output
+          # belongs in this loop — one left out is a job whose failure the gate ignores.
+          for result in "$FRONTEND" "$RUST" "$POWERSHELL"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;
