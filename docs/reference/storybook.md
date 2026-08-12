@@ -2,12 +2,12 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **XSTORIESX stories across XFILESX story files,
-XDOCSX docs pages** — counted off `storybook-static/index.json`, which is the only place the
-three agree (`Object.values(index.entries)`, grouped by `type`; the XPLUSONEX`th`
+`npm run storybook` · `npm run build-storybook`. **353 stories across 47 story files,
+46 docs pages** — counted off `storybook-static/index.json`, which is the only place the
+three agree (`Object.values(index.entries)`, grouped by `type`; the 48`th`
 `importPath` is the `.mdx`). **Measured 2026-08-12** off a fresh `build-storybook` on the
-deck-import branch merged with the marketplace one: XENTRIESX entries, XSTORIESX `story`,
-XDOCSX `docs`, XPLUSONEX distinct `importPath`s.
+deck-import branch merged with the marketplace one: 399 entries, 353 `story`,
+46 `docs`, 48 distinct `importPath`s.
 
 **This line is where a derived count goes to die, twice over.** The deck-import branch's own
 `CreateDeckDialog` commit counted from source without building and was one story file and three
@@ -23,7 +23,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**XAUTODOCSX of the XFILESX are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**45 of the 47 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -80,8 +80,8 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
   `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
   `fixed inset-0`, so inline it would cover the docs page rather than its own block — and the
-  other **XINLINEX docs pages render inline** (XAUTODOCSX autodocs pages less those seven,
-  re-counted 2026-08-12 after the merge). A new story file
+  other **38 docs pages render inline** (45 autodocs pages less those seven,
+  re-counted 2026-08-12 after the merge — the seven were found in source, not assumed). A new story file
   that writes the store needs the same parameter or its docs page shows one story's view under
   every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
@@ -105,7 +105,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**XPLAYSX** plays today, in a file of **XPLAYTESTSX** tests — the other three are its own;
+  (**264** plays today, in a file of **267** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
 summary for the second, both measured 2026-08-12 after the merge), which is what puts a
   story's own claim inside `npm run verify` —
