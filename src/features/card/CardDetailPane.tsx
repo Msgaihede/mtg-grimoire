@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FlipHorizontal2, X } from "lucide-react";
+import { motion, useIsPresent } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
@@ -12,6 +13,7 @@ import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL, finishPrice, parseFinishes, soleFinish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
+import { dialog } from "@/lib/motion";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -128,11 +130,86 @@ interface SwapOffer {
  * What it does borrow from a dialog is the focus contract, hand-rolled here as in
  * `SetCombobox`: focus moves in when it opens, and Escape hands it back to whatever opened
  * it.
+ *
+ * ## Two components, and the seam is where the animation had to go
+ *
+ * This half is the **box**: it is present for as long as *some* card is open, whichever card
+ * that is, and it is the thing `App`'s `AnimatePresence` tracks. {@link Body} is the card in
+ * it, keyed on the card, so a printings row still throws the whole per-card apparatus away —
+ * the front face, the scroll position, the opener the caret is owed to — and builds a new one.
+ * The key used to be on this component, at the mount site, and moving it down is the whole
+ * point: an exit is only owed when the pane *goes*, and card-to-card is not that.
+ *
+ * **Transform and opacity, never width.** The pane is a flex sibling whose width `DeckEditor`
+ * measures with a `ResizeObserver` to decide whether its search panel fits beside it, so a
+ * width tween would flip that panel to its rail and back mid-animation. Layout is therefore
+ * instant and only the paint moves.
+ *
+ * {@link dialog} rather than the drawer preset, which is the one this geometry argues for: a
+ * right-docked panel is exactly what `drawerRight` describes, but it arrives from `x: 100%` —
+ * off the right of its own slot, which here is already flush with the window — and the pane
+ * lives inside `AppShell`'s `overflow-auto` main region, so those 384px of travel are 384px of
+ * scrollable overflow and a horizontal scrollbar flashing on every card opened. A scale from
+ * the right edge reads as the same arrival and cannot overflow anything, because it is never
+ * larger than the box it lands in.
  */
 export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: () => void }) {
+  const paneRef = useRef<HTMLElement>(null);
+  /** False from the render that starts the fade out. */
+  const present = useIsPresent();
+
+  return (
+    <motion.aside
+      {...dialog}
+      ref={paneRef}
+      tabIndex={-1}
+      aria-label="Card details"
+      // On the way out it is a picture: not clickable, and not a second card sitting in the
+      // accessibility tree beside whatever the reader moved on to. `close` handed the caret
+      // back before this render, so nothing focused is being hidden.
+      aria-hidden={present ? undefined : true}
+      // The box a printings row's hover preview is positioned in and clipped by — one mark,
+      // because they are one box: `relative` makes the pane the containing block those
+      // coordinates are in, and it is the scroller, so it is also what would cut a picture in
+      // half. See {@link PREVIEW_FRAME_ATTR}.
+      {...{ [PREVIEW_FRAME_ATTR]: "" }}
+      // A block that scrolls, not a flex column: in a column the art is a flex item, and a
+      // pane shorter than the card would compress the image to fit rather than scroll —
+      // which is the one thing Scryfall's usage rules forbid outright.
+      className={cn(
+        "relative w-96 shrink-0 space-y-4 overflow-y-auto rounded-lg border border-border bg-surface p-4",
+        // Grown from the edge it is docked against, so the gesture points at where the pane
+        // comes from rather than at its own middle.
+        "origin-right",
+        !present && "pointer-events-none",
+        FOCUS,
+      )}
+    >
+      <Body key={cardId} cardId={cardId} onClose={onClose} paneRef={paneRef} />
+    </motion.aside>
+  );
+}
+
+/**
+ * One card in the pane — every piece of state that belongs to *this* card rather than to the
+ * pane, which is why it is keyed on the card and torn down with it.
+ *
+ * It draws the pane's children and not its box: the box is {@link CardDetailPane} above, and
+ * the two are split so that a card-to-card move is a remount of this and not an exit of that.
+ */
+function Body({
+  cardId,
+  onClose,
+  paneRef,
+}: {
+  cardId: string;
+  onClose: () => void;
+  /** The pane's own element, which outlives this body: the scroll reset, the focus on the way
+   *  in and the hand-back after a refused swap are all writes to it. */
+  paneRef: RefObject<HTMLElement | null>;
+}) {
   const [face, setFace] = useState(0);
   const [shown, setShown] = useState(cardId);
-  const paneRef = useRef<HTMLElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   /** What the write that re-keyed this pane did, once there is a pane to say it in. Set from
    *  the {@link handover} in the mount effect — see the live region it is drawn in. */
@@ -166,9 +243,12 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   }
 
   // The scroll position is the DOM's, not React's, so it is reset where DOM writes belong.
+  // `paneRef` is the pane's, handed down and stable for its life, so it changes nothing about
+  // when this runs — it is in the list because the rule is "every value read", not "every value
+  // that moves".
   useEffect(() => {
     if (paneRef.current) paneRef.current.scrollTop = 0;
-  }, [cardId]);
+  }, [cardId, paneRef]);
 
   // Once, on the way up: whatever had the caret is where Escape has to put it back.
   //
@@ -204,9 +284,10 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       openerRef.current = active;
     }
     paneRef.current?.focus();
-    // `cardId` is the pane's identity — `App` keys on it — so this list is constant for the
-    // life of the component and the effect still runs exactly once.
-  }, [cardId]);
+    // `cardId` is this body's identity — the pane keys on it — so this list is constant for the
+    // life of the component and the effect still runs exactly once. `paneRef` is the box's own
+    // ref, stable for as long as any card is open, and changes nothing about that.
+  }, [cardId, paneRef]);
 
   const close = useCallback(() => {
     const opener = openerRef.current;
@@ -312,7 +393,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
     if (deckGone && refusedSwap && document.activeElement === document.body) {
       paneRef.current?.focus();
     }
-  }, [deckGone, refusedSwap]);
+  }, [deckGone, refusedSwap, paneRef]);
 
   const offer: SwapOffer | null = deckRow && {
     row: deckRow,
@@ -341,23 +422,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
   });
 
   return (
-    <aside
-      ref={paneRef}
-      tabIndex={-1}
-      aria-label="Card details"
-      // The box a printings row's hover preview is positioned in and clipped by — one mark,
-      // because they are one box: `relative` makes the pane the containing block those
-      // coordinates are in, and it is the scroller, so it is also what would cut a picture in
-      // half. See {@link PREVIEW_FRAME_ATTR}.
-      {...{ [PREVIEW_FRAME_ATTR]: "" }}
-      // A block that scrolls, not a flex column: in a column the art is a flex item, and a
-      // pane shorter than the card would compress the image to fit rather than scroll —
-      // which is the one thing Scryfall's usage rules forbid outright.
-      className={cn(
-        "relative w-96 shrink-0 space-y-4 overflow-y-auto rounded-lg border border-border bg-surface p-4",
-        FOCUS,
-      )}
-    >
+    <>
       <div className="flex items-start gap-2">
         {/* The card's name is content, not a section header, so it stays in Geist —
             Cinzel is for view titles and hero copy, and never below 18px. */}
@@ -434,7 +499,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
           </p>
         </>
       )}
-    </aside>
+    </>
   );
 }
 
@@ -772,16 +837,21 @@ function PrintingRow({
   //
   // The dwell's own `onDragStart` above takes the hover preview down as this starts — wired
   // where the preview lives, so it was already right on the day these rows grew a drag.
+  // The type line is the **card's**, not this row's, and a `Printing` carries none anyway: it
+  // is what `autoCategoryFor` files by when the row is carried somewhere with no column to
+  // point at, and which pile a card belongs in is a fact about the card rather than about which
+  // piece of cardboard it was picked up from.
   const printingId = printing.id;
   const cardName = card.name;
+  const cardTypeLine = card.typeLine;
   useEffect(() => {
     const element = rowRef.current;
     if (!element) return;
     return cardDraggable({
       element,
-      payload: () => ({ kind: "card", cardId: printingId, name: cardName }),
+      payload: () => ({ kind: "card", cardId: printingId, name: cardName, typeLine: cardTypeLine }),
     });
-  }, [printingId, cardName]);
+  }, [printingId, cardName, cardTypeLine]);
 
   return (
     <li

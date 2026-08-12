@@ -45,6 +45,7 @@ import {
   type Ref,
 } from "react";
 import { GripVertical, X } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import {
   draggable,
   dropTargetForElements,
@@ -59,6 +60,7 @@ import {
   type TagColor,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { drawerRight, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
@@ -130,14 +132,27 @@ export interface CategoriesPanelProps {
 }
 
 /**
- * `null` when closed, and the drawer is a separate component for that reason: the queries and
- * the Escape registration belong to a panel that is *up*, and a hook cannot be skipped. A
- * closed drawer therefore costs nothing at all — no `deck_category_list`, no `deck_tag_list`,
- * no window listener — which is what makes it safe for the editor to mount this unconditionally.
+ * Nothing when closed, and the drawer is a separate component for that reason: the queries
+ * belong to a panel that is *up*, and a hook cannot be skipped. A closed drawer therefore costs
+ * nothing at all — no `deck_category_list`, no `deck_tag_list` — which is what makes it safe for
+ * the editor to mount this unconditionally.
+ *
+ * **The Escape rung is registered here rather than one floor down, and that is not tidiness.**
+ * With an exit animation the drawer outlives `open` by the length of its slide, so a rung that
+ * came up with the *element* would still be consuming Escape while the next overlay is opening
+ * — and two `"inner"` peers are not ordered by this protocol at all (`useDismissOnEscape`'s own
+ * doc). The editor's `Layer` union guarantees "never two" only because unmounting used to be
+ * synchronous. Registered out here on `enabled: open`, the rung is dead on the render that
+ * starts the exit, and the guarantee holds for the reason it always claimed to.
  */
-export function CategoriesPanel(props: CategoriesPanelProps): JSX.Element | null {
-  if (!props.open) return null;
-  return <Drawer {...props} />;
+export function CategoriesPanel(props: CategoriesPanelProps): JSX.Element {
+  const { open, onDismiss } = props;
+
+  useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
+
+  return (
+    <AnimatePresence>{open && <Drawer key="categories" {...props} />}</AnimatePresence>
+  );
 }
 
 function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
@@ -148,11 +163,8 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
   const { cards } = useDeck(deckId, variant);
 
   const panelRef = useRef<HTMLDivElement>(null);
-
-  // The `"inner"` rung: capture phase, `preventDefault()`, so one press closes this and leaves
-  // the card pane behind the view holding its own. See `useDismissOnEscape`'s header — the
-  // protocol orders exactly two rungs, so nothing else `"inner"` may be open beside this.
-  useDismissOnEscape({ layer: "inner", onDismiss });
+  /** False from the render that starts the slide out. */
+  const present = useIsPresent();
 
   // The caret moves into the layer, as it does for every other one in the app: the drawer's own
   // controls are then the next thing Tab reaches, and Escape has something to hand back.
@@ -161,7 +173,12 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
   }, []);
 
   return (
-    <div
+    // The scrim and the panel, one presence and two tweens: the ground darkens at the
+    // interaction tier and the drawer arrives more slowly over it, so it is never seen sliding
+    // across an undimmed window. Both register with the presence, so this is unmounted when the
+    // later of the two has finished.
+    <motion.div
+      {...scrim}
       // The scrim. A press that lands on it and not on the drawer is the reader leaving:
       // `onClose`, which closes without yanking the caret back — the outside-click half of the
       // Escape contract, and deliberately not the same answer as the ✕.
@@ -173,15 +190,21 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
+      // On the way out the layer is a picture and nothing else: not pressable, and not a second
+      // `role="dialog"` sitting in the accessibility tree beside whichever overlay the reader
+      // opened next. Focus left with the flag.
+      aria-hidden={present ? undefined : true}
       className={cn(
         "fixed inset-0 flex justify-end bg-black/60",
+        !present && "pointer-events-none",
         // The editor's overlay rung, above every anchored popup in the view behind this: `popup`
         // would *tie* with them, and equal z-indexes resolve by document order — where the editor
         // mounts this drawer is the editor's choice, not this file's.
         LAYER.overlay,
       )}
     >
-      <div
+      <motion.div
+        {...drawerRight}
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
@@ -226,8 +249,8 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
           <Categories meta={meta} cards={cards} />
           <Tags meta={meta} />
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

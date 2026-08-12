@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { MotionConfig } from "motion/react";
 import type { Decorator, Preview } from "@storybook/react-vite";
 import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
 import { setArtMode } from "./fake/images";
@@ -118,10 +119,22 @@ const withFake: Decorator = (Story, context) => {
   // that never saw `initialGlobals` (a docs render, a portable story). Synthetic is the safe
   // answer to anything that is not the literal `"live"` — it is the mode that needs no network.
   setArtMode(context.globals.art === "live" ? "live" : "synthetic");
+  // `<MotionConfig reducedMotion="user">` stands in for the one `src/App.tsx` mounts, because a
+  // story renders its component and never the app around it. Without it a workbench built to
+  // check accessibility would be the one place in the project where reduced motion is ignored —
+  // `motion`'s own default is `"never"`. It is a context provider and renders no DOM, so it
+  // costs a story nothing. `src/lib/tokens.test.ts` counts these only under `src/`; this is a
+  // second mount of the same rule, not a second rule.
+  //
+  // The suite's other half of the story wiring — `MotionGlobalConfig.skipAnimations` — is
+  // deliberately *not* here: this file is also the real Storybook browser, where the reader is
+  // meant to see the motion. It lives in `src/test-setup.ts`.
   return (
-    <FakeWorld params={(context.parameters.fake ?? {}) as FakeParams} viewMode={context.viewMode}>
-      <Story />
-    </FakeWorld>
+    <MotionConfig reducedMotion="user">
+      <FakeWorld params={(context.parameters.fake ?? {}) as FakeParams} viewMode={context.viewMode}>
+        <Story />
+      </FakeWorld>
+    </MotionConfig>
   );
 };
 

@@ -10,6 +10,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import {
@@ -21,6 +22,7 @@ import {
   type DeckRow,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { dialog as dialogMotion, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -102,14 +104,30 @@ export function DeckSettingsDialog({
   open,
   onDismiss,
   onClose,
-}: DeckSettingsDialogProps): JSX.Element | null {
+}: DeckSettingsDialogProps): JSX.Element {
+  // The `"inner"` rung, **registered out here on the flag** rather than one floor down on the
+  // panel's mount. One press closes this and the card pane behind the view keeps its own — and
+  // because an inner layer listens in the **capture** phase, it beats any handler a field
+  // inside the dialog could register. That is why no text field here tries to make Escape mean
+  // "revert what I typed": the press never reaches it, and a control that works only sometimes
+  // is worse than one that never claimed to.
+  //
+  // Out here because the panel now outlives `open` by the length of its fade, and a rung that
+  // came up with the *element* would still be consuming Escape while the next overlay opens —
+  // two `"inner"` peers, which `useDismissOnEscape` explicitly does not order. `enabled: open`
+  // kills it on the render that starts the exit.
+  useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
+
   // Closed is *nothing mounted*, not a hidden panel: the body below reads the deck, the folder
   // tree and the format table, and a dialog nobody opened has no business asking for any of
   // them. It also means every draft, every disclosure and the caret's position start clean on
   // each open, which is what a settings dialog should do — so the state lives one floor down
   // rather than being reset by an effect up here.
-  if (!open) return null;
-  return <Settings deckId={deckId} onDismiss={onDismiss} onClose={onClose} />;
+  return (
+    <AnimatePresence>
+      {open && <Settings key="settings" deckId={deckId} onDismiss={onDismiss} onClose={onClose} />}
+    </AnimatePresence>
+  );
 }
 
 /** The dialog proper — mounted only while it is open, which is what makes its state a session. */
@@ -128,6 +146,9 @@ function Settings({
   const queryClient = useQueryClient();
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  /** False from the render that starts the fade out — see {@link useDeckField}, which writes on
+   *  it, and the panel below, which goes inert on it. */
+  const present = useIsPresent();
 
   /** `useDeck`'s rule, on the two writes that have no hook: the whole `["decks"]` root, on
    *  success **and** on refusal — a refused write here is a busy database or a deck another
@@ -164,13 +185,6 @@ function Settings({
     panelRef.current?.focus({ preventScroll: true });
   }, []);
 
-  // The `"inner"` rung. One press closes this and the card pane behind the view keeps its own —
-  // and because an inner layer listens in the **capture** phase, it beats any handler a field
-  // inside the dialog could register. That is why no text field here tries to make Escape mean
-  // "revert what I typed": the press never reaches it, and a control that works only sometimes
-  // is worse than one that never claimed to.
-  useDismissOnEscape({ layer: "inner", onDismiss });
-
   const row = deck.deck;
   const loading = deck.query.isPending;
   const readFailure = deck.query.isError ? ipcError(deck.query.error) : null;
@@ -183,17 +197,25 @@ function Settings({
   const bannerFailure = writeFailure([deck.update, setFolder, setCoverImage]);
 
   return (
-    <div
+    // Scrim and panel in one presence: the ground fades first and the panel scales up over it,
+    // and the dialog is unmounted only once the later of the two tweens has finished.
+    <motion.div
+      {...scrim}
       // A **scrim**, and the app's first: every other layer here is anchored to its trigger and
       // leaves the view behind it live. This one covers the window, which is what the direction
       // asks for and what makes `aria-modal` below honest rather than a claim — see the panel.
       className={cn(
         "fixed inset-0 grid place-items-center bg-bg/75 p-4 sm:p-6",
+        !present && "pointer-events-none",
         // Above every anchored popup and above the editor's drag tray: a settings dialog opened
         // over the editor must not be painted under a menu the reader left open behind it. Below
         // `gate`, which is `SyncProgress` taking the whole window.
         LAYER.overlay,
       )}
+      // On the way out it is a picture: nothing to press, and nothing in the accessibility tree
+      // — a second `role="dialog"` beside whichever overlay the reader opened next would be a
+      // form they have already dismissed. Focus left with the flag.
+      aria-hidden={present ? undefined : true}
       // `onMouseDown`, not `onClick`, and the target check is why: a drag that starts on a
       // textarea's resize handle and ends out here fires a `click` on this element — the two
       // targets' common ancestor — so a click handler would close the dialog on a gesture that
@@ -202,7 +224,8 @@ function Settings({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div
+      <motion.div
+        {...dialogMotion}
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
@@ -298,8 +321,8 @@ function Settings({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -314,8 +337,25 @@ function Settings({
  *   send.
  * * **a commit on the way out.** Every other control in this dialog has already written by the
  *   time the reader reaches for the scrim; a field that threw its paragraph away would be the
- *   one control that punishes closing. So the unmount commits too — through the same ref, so a
+ *   one control that punishes closing. So closing commits too — through the same ref, so a
  *   field that was blurred normally writes once and not twice.
+ *
+ * ## "On the way out" is the *close*, not the unmount, and that is a decision
+ *
+ * It used to be the unmount, which was the same instant. It is not any more: the panel now
+ * outlives the flag by the length of its fade, so an unmount commit would hold a paragraph the
+ * reader typed for a fifth of a second after they asked for it to be put away — a **write
+ * waiting on an animation**, which is a coupling with nothing to recommend it and one real
+ * hazard behind it: whatever else takes the write connection in that window goes first, and a
+ * dialog dismissed as part of leaving the deck entirely would be racing its own editor's
+ * teardown. So the commit is driven by `useIsPresent`, which is false on the render that starts
+ * the exit — the same instant `open` went false upstairs.
+ *
+ * The unmount cleanup stays as a backstop and cannot double-write: `commit` clears the ref
+ * **where it reads it**, so the second caller has nothing to send. It is what covers the paths
+ * that have no exit at all — the editor unmounting under the dialog, a story or a test
+ * rendering the panel outside an `AnimatePresence` (where `useIsPresent` is `true` forever,
+ * which is exactly the answer that leaves those callers on the old behaviour).
  *
  * `blankIsNoop` is the name's: the backend refuses a blank name in words, and a name is not
  * something a deck should be able to lose by tabbing through the field. A description or a set
@@ -330,6 +370,7 @@ function useDeckField(
 ) {
   const [draft, setDraft] = useState<string | null>(null);
   const ref = useRef<string | null>(null);
+  const present = useIsPresent();
 
   const commit = useCallback(() => {
     const value = ref.current;
@@ -350,6 +391,11 @@ function useDeckField(
   useEffect(() => {
     latest.current = commit;
   });
+  // The close, and then the unmount behind it. Both go through `latest` and both are the same
+  // idempotent call; see this hook's doc for why there are two.
+  useEffect(() => {
+    if (!present) latest.current();
+  }, [present]);
   useEffect(() => () => latest.current(), []);
 
   return {
@@ -486,7 +532,8 @@ function CoverPreview({ deck }: { deck: DeckRow }) {
  *
  * **A known gap against the art-credit rule, recorded here rather than quietly inherited.**
  * The rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
- * illustrator must be credited — and it lives in **CLAUDE.md's decks section** and on
+ * illustrator must be credited — and it lives in **`src/CLAUDE.md`'s binding rules**, in full in
+ * **`docs/reference/frontend-design.md`**, and on
  * {@link DeckRow.coverArtist}'s own doc, with the original statement in
  * `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md`. These tiles do not credit
  * one. Nor do `CardStack` (the stacked card), `views/GridView` (the wall tile) or

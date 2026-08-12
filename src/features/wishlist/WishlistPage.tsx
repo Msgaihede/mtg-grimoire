@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
 import { FILTER_CONTROL, FILTER_FOCUS, ResetAll, ToggleChip } from "@/components/FilterChips";
 import { ManaText } from "@/components/ManaText";
@@ -17,6 +18,7 @@ import {
   type WishlistSortKey,
   type WishRow,
 } from "@/lib/ipc";
+import { statusLine } from "@/lib/motion";
 import { eurPrice, PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
@@ -78,15 +80,23 @@ function missingOf(row: WishRow): number {
 function DraggableRow({
   cardId,
   name,
+  typeLine,
   children,
   ...rest
-}: { cardId: string | null; name: string } & ComponentProps<"div">) {
+}: {
+  cardId: string | null;
+  name: string;
+  typeLine: string | null;
+} & ComponentProps<"div">) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
     if (!element || !cardId) return;
-    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name }) });
-  }, [cardId, name]);
+    // The type line files the card if it is carried somewhere with no column to point at — the
+    // sidebar's Decks entry. It is the one thing `WishRow` carries that this list never draws,
+    // and it is carried for exactly this (`ipc.ts`).
+    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name, typeLine }) });
+  }, [cardId, name, typeLine]);
   return (
     <div ref={ref} {...rest}>
       {children}
@@ -313,15 +323,24 @@ export function WishlistPage() {
 
         {/* A write that was refused, said where the writing happened. Not folded into the
             line above: that one describes the list, and this one describes something the
-            reader just did to it. */}
-        {writeFailure && (
-          <p
-            role="alert"
-            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-          >
-            Could not change your wishlist — {writeFailure}
-          </p>
-        )}
+            reader just did to it.
+
+            It grows into place instead of shoving the table down by its whole height. The
+            animated element is the wrapper and carries only `overflow-hidden`, because
+            `statusLine` takes `height` to 0 and a box with its own padding and border can
+            never — under `box-sizing: border-box` — be shorter than the two of them. */}
+        <AnimatePresence initial={false}>
+          {writeFailure && (
+            <motion.div {...statusLine} className="overflow-hidden">
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                Could not change your wishlist — {writeFailure}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {!empty && (
           <WishlistTable
@@ -710,6 +729,7 @@ function WishlistTable({
             {...props}
             cardId={row.cardId}
             name={row.name}
+            typeLine={row.typeLine}
             tabIndex={0}
             onClick={() => selectCard(row.cardId!)}
             onKeyDown={(e) => {

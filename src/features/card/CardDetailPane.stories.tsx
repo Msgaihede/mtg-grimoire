@@ -17,6 +17,10 @@ function printingId(setCode: string, collectorNumber: string): string {
   return printing(setCode, collectorNumber).id;
 }
 
+/** How long a `waitFor` will wait for one animation frame. See `SingleFaced`'s play for why
+ *  that is measured in seconds rather than milliseconds. */
+const FRAME_WAIT = 5_000;
+
 /** Deck 2's `main` slot, the printing in it, and the printing it can be swapped to. */
 const SOL_RING_C21 = printingId("c21", "263");
 
@@ -230,11 +234,31 @@ export const SingleFaced: Story = {
     ).toBeInTheDocument();
 
     // Two finishes, two prices, each from its own key in the blob.
-    await expect(within(pane).getByText("Nonfoil").closest("div")).toHaveTextContent(
-      "Nonfoil$2.50",
+    //
+    // **`{ selector: "dt" }`, because "Foil" is a word this pane says more than once.** The
+    // finish list says it in a `<dt>`; every foil row in the printings list below says it again
+    // inside `FinishMark`'s `<svg><title>`, which Testing Library matches like any other text.
+    // Which of them exist yet is a race with the printings query, so an unscoped lookup is a
+    // test that passes on how fast a mock resolved.
+    await expect(
+      within(pane).getByText("Nonfoil", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("Nonfoil$2.50");
+    await expect(
+      within(pane).getByText("Foil", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("Foil$2.39");
+    // **`waitFor`, because the pane arrives.** Its first painted frame is at `opacity: 0`, and
+    // `toBeVisible` walks the ancestors — so nothing inside it is visible until that lands, one
+    // frame away under the suite's `MotionGlobalConfig.skipAnimations`. Every other assertion
+    // on this page reads presence or text, which the initial frame already has.
+    //
+    // The timeout is generous on purpose: what is being waited for is a `requestAnimationFrame`
+    // — jsdom has no compositor, so `motion` drives its own loop off one — and the suite is 91
+    // files of jsdom in parallel. The default second is a wait on the *scheduler*, and it
+    // flaked once at that length while passing this play in isolation every time.
+    await waitFor(
+      () => expect(within(pane).getByText("Prices as of the last card-data sync.")).toBeVisible(),
+      { timeout: FRAME_WAIT },
     );
-    await expect(within(pane).getByText("Foil").closest("div")).toHaveTextContent("Foil$2.39");
-    await expect(within(pane).getByText("Prices as of the last card-data sync.")).toBeVisible();
 
     // Scryfall's image policy, in one line: the illustrator of the side on screen, and the
     // source. Not decoration and not optional (`CardDetailPane.tsx:417-424`).
@@ -429,13 +453,24 @@ export const AllFinishes: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const pane = await canvas.findByRole("complementary", { name: "Card details" });
-    await expect(within(pane).getByText("Nonfoil").closest("div")).toHaveTextContent(
-      "Nonfoil$17.85",
+    // `{ selector: "dt" }` on all three, for the reason `SingleFaced` writes out: every foil and
+    // etched row in the printings list says the same word inside `FinishMark`'s `<title>`.
+    await expect(
+      within(pane).getByText("Nonfoil", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("Nonfoil$17.85");
+    await expect(
+      within(pane).getByText("Foil", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("Foil$23.85");
+    await expect(
+      within(pane).getByText("Etched", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("Etched$18.68");
+    // Spec §5: a price is never shown without saying how old it is. `waitFor` for the reason
+    // `SingleFaced` writes out: the pane fades in, and a `toBeVisible` under it is false until
+    // the arrival lands.
+    await waitFor(
+      () => expect(within(pane).getByText("Prices as of the last card-data sync.")).toBeVisible(),
+      { timeout: FRAME_WAIT },
     );
-    await expect(within(pane).getByText("Foil").closest("div")).toHaveTextContent("Foil$23.85");
-    await expect(within(pane).getByText("Etched").closest("div")).toHaveTextContent("Etched$18.68");
-    // Spec §5: a price is never shown without saying how old it is.
-    await expect(within(pane).getByText("Prices as of the last card-data sync.")).toBeVisible();
     // Once in the card's own facts and once on its row in the printings list below. The badge's
     // `sr-only` prefix is a separate node, so each is checked through its own whole text.
     await within(pane).findByText("4 printings · 4 artworks");

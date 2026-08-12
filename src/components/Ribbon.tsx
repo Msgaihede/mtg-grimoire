@@ -1,6 +1,8 @@
 import { CircleArrowUp, RefreshCw } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { ManaLine } from "@/components/ManaLine";
 import type { Activity } from "@/lib/activity";
+import { TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 export interface RibbonProps {
@@ -120,8 +122,13 @@ export function Ribbon({
               onClick={onOpenUpdate}
               className={cn(
                 "inline-flex shrink-0 items-center gap-2 rounded-md border border-accent/60 px-3 py-1.5",
-                "text-sm text-accent",
-                "transition-colors duration-150 hover:bg-accent/10 motion-reduce:transition-none",
+                "text-sm text-accent hover:bg-accent/10",
+                // One arbitrary property list rather than a colour utility beside a transform
+                // one: those two compile to the same CSS longhand, so tailwind-merge keeps
+                // whichever it saw last and the press feedback snaps with nothing to show.
+                "transition-[color,background-color,border-color,opacity,transform,scale]",
+                "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
+                "motion-reduce:transition-none",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               )}
             >
@@ -132,11 +139,24 @@ export function Ribbon({
               {updateInstallable ? `Update to ${updateVersion}` : `${updateVersion} available`}
             </button>
           )}
-          {upToDate && !busy && !hasError && (
-            <p role="status" className="shrink-0 text-xs text-dim">
-              Already up to date
-            </p>
-          )}
+          {/* A fade, and deliberately **not** `statusLine`: this line is a flex item in a
+              horizontal row, so growing its height from zero would animate the one dimension
+              nothing here is laid out along, while the row's own width still jumped. Opacity
+              is the whole of what a sentence arriving in a row can honestly animate. */}
+          <AnimatePresence initial={false}>
+            {upToDate && !busy && !hasError && (
+              <motion.p
+                role="status"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={TRANSITION.fast}
+                className="shrink-0 text-xs text-dim"
+              >
+                Already up to date
+              </motion.p>
+            )}
+          </AnimatePresence>
           {/* One line, mounted for the life of the ribbon, saying either what the app is
               doing or what is in the database.
 
@@ -172,9 +192,16 @@ export function Ribbon({
             aria-busy={busy || undefined}
             className={cn(
               "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm",
-              "transition-colors duration-150 hover:bg-bg motion-reduce:transition-none",
+              "hover:bg-bg",
+              "transition-[color,background-color,border-color,opacity,transform,scale]",
+              "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
+              "motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              // Held at full size while a sync is running: the button is already `disabled` and
+              // `aria-busy`, and a press that dips and does nothing would be a third answer
+              // that disagrees with both.
               "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
+              "disabled:active:scale-100",
             )}
           >
             <RefreshCw className="size-4" aria-hidden="true" />

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { DeckSearchPanel } from "./DeckSearchPanel";
+import { AUTO_CATEGORY, DeckSearchPanel } from "./DeckSearchPanel";
 import { useDeck } from "./useDeck";
 
 /**
@@ -19,20 +19,21 @@ import { useDeck } from "./useDeck";
  * the list and both the editor and this wrapper read the same one. Hand-copying it here would
  * be a story asserting against ids the fake's database does not have.
  *
- * `targetCategoryId` is controlled, so the state lives here; **until the reader picks, it is the
- * first category the deck has**, which is the editor's own clamp in miniature — the deck read
- * settles a beat after the first render, and a wrapper holding an id chosen before then would
- * be holding one that names nothing.
+ * `targetCategoryId` is controlled, so the state lives here; **until the reader picks, it is
+ * {@link AUTO_CATEGORY}**, which is the editor's own default. It needs no clamp to a real id and
+ * that is the point of it: the deck read settles a beat after the first render, so a wrapper (or
+ * an editor) that reached for `categories[0]` before then held an id naming nothing — and once
+ * the read landed, `categories[0]` on a deck with no user pile of its own is the seeded
+ * **Commander** category, which is where every plain add used to go.
  */
 function Panel({ deckId, roomy = true }: { deckId: number; roomy?: boolean }) {
   const deck = useDeck(deckId);
-  const [picked, setPicked] = useState<number | null>(null);
-  const categories = deck.categories;
+  const [picked, setPicked] = useState<number>(AUTO_CATEGORY);
   return (
     <DeckSearchPanel
       add={deck.addCard}
-      categories={categories}
-      targetCategoryId={picked ?? categories[0]?.id ?? 0}
+      categories={deck.categories}
+      targetCategoryId={picked}
       onTargetCategoryChange={setPicked}
       roomy={roomy}
     />
@@ -129,21 +130,24 @@ export const Docked: Story = {
     // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
     // reader cannot tell apart.
     //
-    // Read off the select rather than written out, because the list is the **deck's** now
-    // rather than a derivation from its format — the fake seeds the categories every deck is
-    // born with, and a story that retyped their names would be asserting against the seed
-    // instead of against this panel.
+    // **The first option is not a category**, it is `Auto (by card type)`, and it is the
+    // default — so the name on the button is the pile *this card's type line* earns rather than
+    // the option's own text. Ancient Tomb is a Land, and it is written out here because that is
+    // the claim: the button promises the pile before the press, and it can only do that because
+    // `autoCategoryFor` reads the type line and nothing else.
     const select = within(panel).getByLabelText("Add to") as HTMLSelectElement;
     const options = within(select).getAllByRole("option") as HTMLOptionElement[];
     await expect(options.length).toBeGreaterThan(1);
     await expect(select).toHaveValue(options[0].value);
+    await expect(options[0].textContent).toBe("Auto (by card type)");
     await expect(
-      await within(panel).findByRole("button", {
-        name: `Add Ancient Tomb to ${options[0].textContent}`,
-      }),
+      await within(panel).findByRole("button", { name: "Add Ancient Tomb to Land" }),
     ).toBeInTheDocument();
 
-    // And the button follows the pick, which is the whole of what the select does.
+    // And the button follows the pick, which is the whole of what the select does. Read off the
+    // option rather than written out, because from here down the list is the **deck's** — the
+    // fake seeds the categories every deck is born with, and a story that retyped their names
+    // would be asserting against the seed instead of against this panel.
     await userEvent.selectOptions(select, options[1].value);
     await waitFor(async () => {
       await expect(

@@ -1,4 +1,6 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowUp } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { TRANSITION } from "@/lib/motion";
 import { ariaSortOf, sortRankOf, sortTermOf, type SortSpec } from "@/lib/sort";
 import { cn } from "@/lib/utils";
 
@@ -45,10 +47,14 @@ export function SortableHeader({
 }) {
   const term = sortTermOf(spec, sortKey);
   const rank = sortRankOf(spec, sortKey);
-  const Arrow = term?.dir === "desc" ? ArrowDown : ArrowUp;
   // Only when there is more than one, because "1 of 1" is a number that says nothing and
   // this row is 36px tall.
   const showRank = rank !== null && spec.length > 1;
+  // One arrow, turned over — not two components swapped. `ArrowDown` in place of `ArrowUp` is
+  // a different element in the same slot, so React unmounts one and mounts the other and the
+  // indicator *teleports*: the whole of what a second press means is that the order reversed,
+  // and nothing on screen said so. Half a turn is the same fact, drawn.
+  const turned = term?.dir === "desc";
 
   // Label first, always: an accessible name that does not begin with the visible word takes
   // the column out of reach of anyone driving the app by voice.
@@ -97,17 +103,48 @@ export function SortableHeader({
         )}
       >
         <span className="truncate">{label}</span>
-        {term && <Arrow className="size-3 shrink-0" aria-hidden="true" />}
+        {/* `initial={false}`, so a table that opens already sorted draws its arrow rather than
+            animating one in on first paint. The rotation is on `animate` and is matched on
+            `initial`: an arrow arriving into a descending column should appear already turned,
+            not spin as it fades in.
+
+            Both of these are `aria-hidden` and neither is a live region, so this is purely
+            visual — `aria-sort` on the header and "sort priority N" in the button's name carry
+            the same two facts in words, and neither moved. */}
+        <AnimatePresence initial={false}>
+          {term && (
+            <motion.span
+              key="arrow"
+              aria-hidden="true"
+              initial={{ opacity: 0, scale: 0.6, rotate: turned ? 180 : 0 }}
+              animate={{ opacity: 1, scale: 1, rotate: turned ? 180 : 0 }}
+              exit={{ opacity: 0, scale: 0.6 }}
+              transition={TRANSITION.fast}
+              className="flex shrink-0"
+            >
+              <ArrowUp className="size-3" />
+            </motion.span>
+          )}
+        </AnimatePresence>
         {/* `aria-hidden`: the same fact is in the button's name, where a screen reader will
-            reach it in words rather than as a bare digit after the column title. */}
-        {showRank && (
-          <span
-            aria-hidden="true"
-            className="shrink-0 rounded-sm bg-bg px-1 text-[0.65rem] leading-tight text-dim"
-          >
-            {rank}
-          </span>
-        )}
+            reach it in words rather than as a bare digit after the column title. It appears and
+            disappears as `spec.length` crosses 1, which is a press away from any two-key sort,
+            so it is given the same fade the arrow has rather than blinking in beside it. */}
+        <AnimatePresence initial={false}>
+          {showRank && (
+            <motion.span
+              key="rank"
+              aria-hidden="true"
+              initial={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.7 }}
+              transition={TRANSITION.fast}
+              className="shrink-0 rounded-sm bg-bg px-1 text-[0.65rem] leading-tight text-dim"
+            >
+              {rank}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </button>
     </span>
   );

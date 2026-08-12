@@ -946,7 +946,7 @@ describe("the result layout toggle", () => {
     stop();
 
     expect(carried.map(readDragData)).toEqual([
-      { kind: "card", cardId: "1", name: "Lightning Bolt" },
+      { kind: "card", cardId: "1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
 

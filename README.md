@@ -18,7 +18,10 @@ The installers are unsigned, so Windows SmartScreen warns on first run.
 
 ## Development
 
-See `CLAUDE.md` for architecture and `docs/` for specs and plans.
+See `CLAUDE.md` for architecture and the map of the rest. Rules for an area live in that area's
+own `CLAUDE.md` (`src/`, `src-tauri/`, `src/features/decks/`, `.storybook/`, `.github/`);
+`docs/reference/` holds the long-form record behind them, and `docs/superpowers/` the specs and
+plans.
 
 - `npm run tauri dev` — run the app
 - `npm run verify` — build + lint + Vitest + cargo test; run before every commit

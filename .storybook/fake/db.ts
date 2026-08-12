@@ -1200,6 +1200,11 @@ function toWishRow(db: FakeDb, w: FakeWish): WishRow {
     lang: w.lang,
     rarity: card?.rarity ?? null,
     manaCost: card?.manaCost ?? null,
+    // Off the joined card like `rarity` and `manaCost` beside it, and `null` when there is no
+    // card to join — an any-printing wish, or one whose printing has left the corpus. Nothing on
+    // the wishlist draws it; it is what files a dragged wish into a deck category
+    // (`autoCategoryFor`), which is a story `AppShell` can play.
+    typeLine: card?.typeLine ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
     unitPriceUsd: finishPriceUsd(card, finish),

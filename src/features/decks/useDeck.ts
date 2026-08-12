@@ -9,6 +9,7 @@ import {
   type DeckVariant,
 } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
+import { autoCategoryFor } from "./autoCategory";
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
  *  and the editor's `useMemo`s key off it. */
@@ -40,16 +41,16 @@ export const DEFAULT_VARIANT: DeckVariant = "live";
  * that name: the v8 migration's own word for the pile it put every legacy main-deck row in, so
  * a deck that predates categories and one made since agree about where a plain add goes.
  *
- * **Still one pile rather than `autoCategoryFor`, and now for a different reason.** That rule
- * exists (`autoCategory.ts`) and `useDeckMeta`'s `autoCategorise` presses it — but it reads a
- * card's **type line**, and the thing these surfaces hand this hook is a bare `cardId`. A hook
- * that fetched the card in order to file it would put a round trip in front of every quick add
- * to answer a question the reader can settle in one press afterwards. So a plain add goes to
- * one predictable pile, and the panel's "Auto-categorise from card types" is what splits it.
+ * **A fence now rather than the usual answer.** `autoCategoryFor` files an add that names no
+ * category (see {@link useDeck}'s `addCard`), and every surface in the app hands this hook a
+ * type line to file by — so this word is what is left for a caller that has neither a category
+ * nor a type line, which is a shape the app does not currently produce. It is kept because the
+ * alternative is filing such a card under `Uncategorised`, and "the caller told us nothing" and
+ * "the card's type line is unrecognised" are different states that should not land in one pile.
  *
- * Exported for that one reader: `useDeckMeta` has to know which piles are *nobody's choice*
- * before it is allowed to empty them, and a second copy of this string there would be a second
- * place to keep one word.
+ * Exported for two readers: `useDeckMeta` has to know which piles are *nobody's choice* before
+ * it is allowed to empty them, and a second copy of this string there would be a second place
+ * to keep one word.
  */
 export const DEFAULT_CATEGORY_NAME = "Main deck";
 
@@ -177,8 +178,23 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * denormalize the printing onto the row it inserts, so it refuses a card the database does
    * not have.
    *
-   * `categoryId` is what a drop onto a column sends. A caller with no column to name omits it
-   * and the add is filed under {@link DEFAULT_CATEGORY_NAME}, found or created.
+   * **`categoryId` is what a drop onto a column sends; a caller with none is filed by the
+   * card's type line.** Pointing at a column *is* naming a category, so every drag overrides
+   * the rule by construction and nothing here has to know a gesture from a press. A caller with
+   * no column — the panel's Add button under `Auto`, the toolbar quick add, the sidebar's Decks
+   * entry — passes `typeLine` instead, and `autoCategoryFor` names the pile for
+   * `deck_add_card` to find or create.
+   *
+   * **The rule is applied here and the fact it reads travels from the call site**, which is the
+   * one arrangement that keeps both halves true: `autoCategoryFor` stays a single rule in
+   * TypeScript (CLAUDE.md's boundary — Rust supplies facts, TS draws conclusions), and no add
+   * pays for a round trip to discover what it is adding. A hook that looked the card up in
+   * order to file it would put a query in front of every quick add; a call site that computed
+   * the *name* would be a second place to keep the rule. So: the type line comes in, the name
+   * goes out, and `null` — an orphan, or a layout with no bucket word — answers
+   * `Uncategorised`.
+   *
+   * With neither, {@link DEFAULT_CATEGORY_NAME}. No surface in the app sends neither today.
    *
    * **`["decks"]` again when it is refused**, which it shares with `swapPrinting` below and for
    * that rule's reason: this definition has a second call site outside the editor. The sidebar's
@@ -198,17 +214,26 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     mutationFn: ({
       cardId,
       categoryId = null,
+      typeLine,
       quantity,
     }: {
       cardId: string;
       categoryId?: number | null;
+      /** The card's own `type_line`, for the caller that named no category. `null` is a card
+       *  whose printing has left `cards`; **absent** is a caller with nothing to say, which is
+       *  not the same thing — see {@link DEFAULT_CATEGORY_NAME}. */
+      typeLine?: string | null;
       quantity: number;
     }) =>
       ipc.deckAddCard(
         opened(id),
         cardId,
         categoryId,
-        categoryId === null ? DEFAULT_CATEGORY_NAME : null,
+        categoryId !== null
+          ? null
+          : typeLine === undefined
+            ? DEFAULT_CATEGORY_NAME
+            : autoCategoryFor({ typeLine }),
         variant,
         quantity,
       ),

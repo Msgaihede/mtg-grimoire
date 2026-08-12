@@ -6,19 +6,30 @@ import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
 import { printing } from "../../../.storybook/fake/fixtures";
 import { CardGrid, type GridCard } from "./CardGrid";
 
-/** `GridCard` is the wall's whole contract — five fields, which both `CardSummary` and a mapped
- *  `CollectionRow` satisfy structurally. Anything a *particular* wall needs beyond it arrives
- *  through the `badge` and `action` slots rather than by widening this shape. */
-const gridCard = (c: FakeCard): GridCard => ({
+/**
+ * `GridCard` is the wall's whole contract — five fields, which both `CardSummary` and a mapped
+ * `CollectionRow` satisfy structurally. Anything a *particular* wall needs beyond it arrives
+ * through the `badge` and `action` slots rather than by widening this shape.
+ *
+ * The **sixth** field here is not a widening of that contract and must not become one: `CardGrid`
+ * is generic over `T extends GridCard`, and `typeLine` is a field the *payload* wants and the
+ * wall never draws — which is precisely the case that generic exists for. `SearchPage` hands it
+ * a whole `CardSummary` for the same reason. A wall with no type line to give (the collection's
+ * card mode) is unaffected, because it passes no `dragPayload` at all.
+ */
+type StoryCard = GridCard & { typeLine: string | null };
+
+const gridCard = (c: FakeCard): StoryCard => ({
   id: c.id,
   name: c.name,
   setCode: c.setCode,
   collectorNumber: c.collectorNumber,
   rarity: c.rarity,
+  typeLine: c.typeLine,
 });
 
 /** All 43 fixture printings (`.storybook/fake/cards.ts`), in the order that file lists them. */
-const ALL: GridCard[] = CARDS.map(gridCard);
+const ALL: StoryCard[] = CARDS.map(gridCard);
 
 const BOLT_ALPHA = gridCard(printing("lea", "161"));
 const BOLT_2X2 = gridCard(printing("2x2", "117"));
@@ -33,10 +44,11 @@ const BOLT_STRIXHAVEN = gridCard(printing("sta", "105"));
  * arrow per render would therefore tear the registration down and rebuild it on every scrolled
  * row — and a source that unregisters mid-drag is a drop that never arrives.
  */
-const tileDrag = (card: GridCard): DragPayload => ({
+const tileDrag = (card: StoryCard): DragPayload => ({
   kind: "card",
   cardId: card.id,
   name: card.name,
+  typeLine: card.typeLine,
 });
 
 /**
@@ -70,7 +82,10 @@ function cornerOf(tile: HTMLElement): Element | null {
 
 const meta = {
   title: "Search/CardGrid",
-  component: CardGrid<GridCard>,
+  // Pinned to the row shape these stories actually pass, which is the wall's contract plus the
+  // one field a drag payload needs — see {@link StoryCard}. `CardGrid<GridCard>` would type the
+  // `dragPayload` slot as taking the bare contract and reject the payload the real search sends.
+  component: CardGrid<StoryCard>,
   tags: ["autodocs"],
   args: {
     rows: ALL,
@@ -98,9 +113,9 @@ const meta = {
           "is ~117 k printings, so the alternative is 117 k DOM nodes.\n\n" +
           "The tiles are whole card images (the `grid` variant), which is also what keeps this " +
           "view inside Scryfall's image policy with no credit line of its own: the artist's " +
-          "name is printed on the card. An art crop here would need one — which is exactly " +
-          "why the deck views' art, which *is* a crop, always sits beside the card's name " +
-          "rather than alone.\n\n" +
+          "name is printed on the card. An art crop would need one — and the deck's stack and " +
+          "grid views draw whole cards for the same two reasons this wall does, so a reader " +
+          "moving between them is looking at the same object.\n\n" +
           "Two slots keep the wall generic. `badge` is a mark over the art's bottom-left " +
           "corner and `action` is one control at the end of the caption; the corner, its " +
           "felt backing and the `empty:hidden` guard belong to the wall, so two views cannot " +
@@ -109,7 +124,7 @@ const meta = {
       },
     },
   },
-} satisfies Meta<typeof CardGrid<GridCard>>;
+} satisfies Meta<typeof CardGrid<StoryCard>>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
