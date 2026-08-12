@@ -10,13 +10,13 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 
 `validation/` is the whole of it:
 
-| File | Owns |
-| --- | --- |
-| `engine.ts` | Size, copy limits, restricted semantics, legality |
-| `singleton.ts` | Exact-phrase exceptions, **re-derived from oracle text and never a card list** |
-| `commanders.ts` | Eligibility, partners, colour identity |
-| `companions.ts` | Companion rules |
-| `bracket.ts` | **Advisory only — `engine.ts` does not import it** |
+| File            | Owns                                                                           |
+| --------------- | ------------------------------------------------------------------------------ |
+| `engine.ts`     | Size, copy limits, restricted semantics, legality                              |
+| `singleton.ts`  | Exact-phrase exceptions, **re-derived from oracle text and never a card list** |
+| `commanders.ts` | Eligibility, partners, colour identity                                         |
+| `companions.ts` | Companion rules                                                                |
+| `bracket.ts`    | **Advisory only — `engine.ts` does not import it**                             |
 
 - `oldschool` is the one printing-sensitive legality key, and it comes out right with no special
   case because each row carries its own printing's answer.
@@ -95,9 +95,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   **70ms** dwell (`STACK_OPEN_DWELL_MS`) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`),
   where arming another card cancels the pending close. **No new hit target was needed** — a
   closed card is overlapped by its successor, so its only hittable part already _is_ its 34px
-  reveal strip. `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**; the open card takes
-  `LAYER.raised` from state. The margin is no longer a Tailwind literal either — `motion` writes
-  it inline, so the constants are the only place these numbers live.
+  reveal strip. `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**. The margin is no longer a
+  Tailwind literal either — `motion` writes it inline, so the constants are the only place these
+  numbers live.
+- **The stack comes forward; a card in it never does.** The list takes `LAYER.raised` while
+  anything is open, because the cards it pushes down leave its box on purpose. **No card carries
+  a z-index at all** — they are `relative` siblings, so painting order is document order, and
+  each card drawn over the one before it _is_ the stacked look. Raising the open card inverts
+  that for the whole tail of the stack, on the first frame, while the cards after it are still
+  269px from where they are going: it reads as the card jumping in front and the stack catching
+  up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
+  this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
   lift was observable from neither.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach

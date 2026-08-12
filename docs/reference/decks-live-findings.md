@@ -34,6 +34,15 @@ are all things no suite could have seen.
   was driven against the 312px card, before main's geometry landed. A live number belongs to a
   geometry, and merging one branch into another can invalidate a measurement without touching
   the code that took it.
+- **Paint order, measured 2026-08-12 after the z-index fix** — `document.elementFromPoint` at a
+  point both the open card and its successors cover (y=541, card 2 open): **mid-tween the
+  painted card is 6** and **settled it is 2**, with every card reading `z-index: auto` in both
+  samples and the list reading `10`. So the open card is correctly _behind_ the cards that have
+  not moved yet, and becomes visible only because they move away. **Before the fix the same
+  probe answered `2` in both** — the open card took `LAYER.raised` on its first frame and jumped
+  in front of the stack while the stack caught up around it. This is the shape of live check a
+  paint-order bug needs: jsdom lays nothing out and paints nothing, so the whole suite was green
+  on it, and a class assertion is all a test can ever hold.
 - **Do not aim `hover` at the card's `<li>` — aim at its marks strip.** `cdp.mjs hover` targets
   an element's box **centre**, and a card is 295px tall in a stack that advances 34px, so the
   centre of card 2 is painted over by card 6. The strip to aim at is the `absolute inset-x-0

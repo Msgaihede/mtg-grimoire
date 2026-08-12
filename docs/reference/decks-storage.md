@@ -222,11 +222,28 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   switching never shows a closed frame. **No new hit target was needed**: a closed card is
   overlapped 261px by its successor, which is later in DOM order and therefore paints over it,
   so the only hittable part of a closed card already _is_ its 34px reveal strip.
-  `LAYER.raisedOnHover`/`raisedOnFocus` are **gone** — the open card takes `LAYER.raised` from
-  state — and `data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards,
-  which the CSS lift was observable from neither. **The margin is no longer a Tailwind literal
-  either**: `motion` writes it as an inline style, so the constants are the only place these
-  numbers live, and the note about spelling them out for the source scanner no longer applies.
+  `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**, and `data-stack-open` exists so a test or a
+  `cdp.mjs --probe` can _count_ open cards, which the CSS lift was observable from neither.
+  **The margin is no longer a Tailwind literal either**: `motion` writes it as an inline style,
+  so the constants are the only place these numbers live, and the note about spelling them out
+  for the source scanner no longer applies.
+- **The stack comes forward; a card in it never does — no card in a stack carries a z-index at
+  all.** The list takes `LAYER.raised` while anything is open, because the cards it pushes down
+  leave its box on purpose and the next group in the column would otherwise paint over them.
+  A **card** takes nothing. They are `relative` siblings, so painting order is document order:
+  every card is drawn over the one before it, and that _is_ the stacked look — the reveal strip
+  a reader runs down is the top 34px of a card its successor has not covered. Raising the open
+  card inverts that against the whole tail of the stack, and it does it on the **first frame**,
+  while the cards after it are still 269px from where they are going, so the card appears to
+  jump in front of the stack and then have the stack catch up around it. Letting them uncover it
+  is the whole fix, and once they settle nothing is over it anyway: an open card's bottom is
+  `N·34 + 295` and its successor's top is `N·34 + 303`, 8px clear.
+  **Measured in the shipped window 2026-08-12** with `document.elementFromPoint` at a point both
+  cards cover (y=541): mid-tween the painted card is **6** — the successors have not moved and
+  the open card is correctly behind them — and settled it is **2**. Every card reads
+  `z-index: auto` in both samples and the list reads `10`; before the fix the same probe
+  answered `2` in both. **jsdom lays nothing out and paints nothing**, so a test can only hold
+  the class assertion and the paint order is the live pass's to prove.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
   and is load-bearing: `DeckCardControls` is a _sibling_ of the button, so a caret stepping into
   the stepper would otherwise collapse the card out from under itself. The keyboard opens with

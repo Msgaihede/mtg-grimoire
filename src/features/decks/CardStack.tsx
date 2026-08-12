@@ -461,9 +461,24 @@ function StackedCard({
       className={cn(
         // `group`, so the controls below are revealed by the pointer and the caret. Nothing
         // else in a stack carries one, so the unqualified variant is unambiguous.
+        //
+        // **No z-index here, deliberately, and an open card is no exception.** These are
+        // `relative` siblings with a negative bottom margin, so painting order is document
+        // order: every card is drawn over the one before it, and that *is* the stacked look —
+        // the reveal strip a reader runs down is the top 34px of a card its successor has not
+        // covered. Raising the open card inverts that for the whole tail of the stack, and it
+        // does it at the worst moment: `LAYER.raised` lands on the first frame while the cards
+        // after it are still 269px from where they are going, so the card appears to jump in
+        // front of the stack and then have the stack catch up around it.
+        //
+        // Doing nothing is the fix. The cards after it move out of the way and uncover it, and
+        // once they have settled nothing is over it anyway — an open card's bottom is
+        // `N·34 + 295` and its successor's top is `N·34 + 303`, 8px clear. The list keeps its
+        // own `LAYER.raised` (see `CardStack`): that one lifts the *group* over the groups
+        // below it in the column, which is a different question and still needs answering,
+        // because the cards it pushes down leave the box on purpose.
         "group relative block overflow-hidden rounded-md border",
         open ? "shadow-2xl" : "shadow-lg",
-        open && LAYER.raised,
         // A card that breaks a rule is outlined in the destructive colour — the loudest of the
         // three signals it can carry, and the only one that changes the card's own edge.
         ruleBreakText ? "border-destructive" : "border-border",
