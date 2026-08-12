@@ -35,9 +35,12 @@ describe("parseDecklist", () => {
     ]);
   });
 
+  /** The pair is a real one — `ltc` 284 *is* Sol Ring — for `MOXFIELD_LIST`'s reason: a made-up
+   *  hint in this repo teaches a false shape even where only the parsing is under test. (`ltc`
+   *  285 is Talisman of Conviction, which is what this line used to say.) */
   it("takes a printing hint and uppercases the set", () => {
-    const out = parseDecklist("1 Sol Ring (ltc) 285\n1 Arcane Signet (eld)");
-    expect(out.lines[0]).toMatchObject({ setCode: "LTC", collectorNumber: "285" });
+    const out = parseDecklist("1 Sol Ring (ltc) 284\n1 Arcane Signet (eld)");
+    expect(out.lines[0]).toMatchObject({ setCode: "LTC", collectorNumber: "284" });
     expect(out.lines[1]).toMatchObject({ setCode: "ELD", collectorNumber: null });
   });
 

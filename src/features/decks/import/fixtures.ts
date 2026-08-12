@@ -117,19 +117,35 @@ export const REFERENCE_LIST = `1 Aerith Gainsborough
 1 Yeva, Nature's Herald
 1 Yoshimaru, Ever Faithful`;
 
-/** Moxfield's export: a Commander header, a blank line, then the deck. */
-export const MOXFIELD_LIST = `1 Captain Sisay (BRC) 132
+/**
+ * Moxfield's export: a Commander header, a blank line, then the deck.
+ *
+ * **Every `(SET) number` here is a real printing of the card beside it**, verified against the
+ * live 116 695-row corpus (Scryfall data of 2026-08-10) by reverse lookup — each pair names one
+ * paper English row, and that row's name is the line's. That was not true until 2026-08-12:
+ * five of the six lines carried an invented pair, and each named a *different* card —
+ * `(BRC) 132` is Arcane Signet, `(LTC) 285` Talisman of Conviction, `(UNF) 235` Plains,
+ * `(2X2) 21` Monastery Mentor, and Captain Sisay has no `brc` printing at all. So the repo's
+ * own Moxfield fixture demonstrated the trap `hint_names_the_card` now closes rather than a
+ * Moxfield export.
+ *
+ * **Nothing in CI would have caught it**, which is why this paragraph is here: the parser tests
+ * assert *parsing*, and Storybook carries its own corpus, so no green check ever resolves a
+ * fixture against real data. A hint that cannot be verified is **dropped from its line** rather
+ * than guessed at — a line with no hint is an ordinary decklist line and teaches nothing false.
+ */
+export const MOXFIELD_LIST = `1 Captain Sisay (INV) 237
 
 Commander
-1 Captain Sisay (BRC) 132
+1 Captain Sisay (INV) 237
 
 Deck
-1 Sol Ring (LTC) 285
+1 Sol Ring (LTC) 284
 1 Arcane Signet (ELD) 331
-6 Forest (UNF) 235
+6 Forest (UNF) 239
 
 Sideboard
-1 Path to Exile (2X2) 21`;
+1 Path to Exile (2X2) 23`;
 
 /** Arena's export: an About block with the deck's name, then Deck and Sideboard. */
 export const ARENA_LIST = `About
