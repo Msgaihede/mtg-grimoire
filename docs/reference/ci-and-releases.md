@@ -4,9 +4,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
 - Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
-  job (`npm run build`/`lint`/`test:run`) and a `rust` matrix over `windows-latest` +
+  job (`npm run build`/`lint`/`test:run`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
-  on both, everything `--locked`). **`ci-ok` is the one protected check** — branch protection
+  on both, everything `--locked`), and a `powershell` job (below).
+  **`ci-ok` is the one protected check** — branch protection
   pins names by string and a matrix job's name embeds its matrix values, so the aggregator is
   what has teeth and the matrix underneath stays free. `enforce_admins` is **false**: a red PR
   cannot merge, a direct push to `main` still can, so "Work on `main`" below stays true.
@@ -16,11 +17,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`git diff --name-only --no-renames`, so it needs `fetch-depth: 0`) and routes each path:
   `src-tauri/**` → `rust`; `src/**`, `public/**`, `index.html`, the lockfiles and the
   frontend's configs, plus **`scripts/` because `eslint .` lints it** (its ignore list is
-  `dist/`, `src-tauri/`, `node_modules/` and nothing else) → `frontend`; `ci.yml` itself →
-  both; prose and editor/release bookkeeping → neither; and **anything unrecognised → both**.
+  `dist/`, `src-tauri/`, `node_modules/` and nothing else) → `frontend`;
+  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → **all three**;
+  prose and editor/release bookkeeping → neither; and **anything unrecognised → both**
+  build jobs.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
   direction — a new root config file or a new top-level directory gets full CI until someone
   narrows it deliberately. Only the "neither" arm can wrongly skip work, so it stays small.
+- **The `powershell` job runs `.claude/skills/running-the-app/lock.test.ps1` on
+  `windows-latest`, and its routing arm has two constraints that are not stylistic.**
+  It must sit **above** `src-tauri/*` and `scripts/*` in the `case`, which is first-match-wins:
+  `scripts/` is on the frontend list solely because `eslint .` lints it, which is untrue of a
+  `.ps1`, so a `scripts/*.ps1` would otherwise run the wrong job and skip this one. And it
+  matches `.psm1`/`.psd1` as well as `.ps1`, because **the `*)` fail-safe does not set
+  `powershell`** — a module `lock.ps1` imported would otherwise fall through to it, running
+  the two build jobs and skipping the only job that would have tested the change. Windows is
+  not a preference: `lock.ps1` identifies a lock's holder by pid + process name +
+  `StartTime`, which `Get-Process` does not expose portably, and it exists for
+  `tauri-plugin-single-instance` on WebView2. The job needs no `npm ci` and no toolchain —
+  the test sets its own `MTG_LOCK_DIR` and spawns short-lived `pwsh` sleepers as fixtures.
+  **19 routing cases were driven through the shipped `ci.yml` text** (not a copy) before this
+  landed; two of them failed on first run against the author's own wrong expectations, and the
+  workflow was right both times.
+  Before this job existed those 17 checks ran nowhere in CI — measured on PR #28, where
+  `lock.ps1` hit the fail-safe and ran `frontend` plus the full `rust` matrix, proving nothing
+  about either.
 - **Three traps in that routing, all measured 2026-08-10 against a fixture repo** (24 path
   cases + 11 gate combinations, driven through the shipped script text, not a copy of it):
   (1) a workflow-level `paths:` filter is the obvious implementation and is **wrong** — it
