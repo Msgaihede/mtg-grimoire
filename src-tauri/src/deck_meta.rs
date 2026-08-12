@@ -165,6 +165,14 @@ pub struct DeckCategoryRow {
     /// which is what makes an all-unpriced category (or an empty one) read `None` rather than
     /// `Some(0.0)` with no extra branch: a sum of zero NULL-or-priced rows is NULL either way.
     pub total_price_usd: Option<f64>,
+    /// The same in EUR, from `$.eur`, over the same rows.
+    ///
+    /// **Legitimately lower than converting the dollar total would suggest**, and not by a
+    /// rounding: a category holding etched printings sums *fewer cards* here, because
+    /// Scryfall publishes no `eur_etched` and those copies are unpriced rather than valued at
+    /// the nonfoil rate. `sum()` skips the NULLs, so the number is honest about a smaller
+    /// population rather than quietly inventing prices for it.
+    pub total_price_eur: Option<f64>,
 }
 
 /// One tag of one deck.
@@ -344,6 +352,9 @@ const CATEGORY_SELECT: &str = "SELECT cat.id, cat.deck_id, cat.name, cat.kind, c
             (SELECT sum(dc.quantity * CAST(json_extract(c.prices, '$.usd') AS REAL))
                FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
               WHERE dc.category_id = cat.id AND dc.variant = ?2),
+            (SELECT sum(dc.quantity * CAST(json_extract(c.prices, '$.eur') AS REAL))
+               FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
+              WHERE dc.category_id = cat.id AND dc.variant = ?2),
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                        WHERE dc.category_id = cat.id), 0)
        FROM deck_categories cat";
@@ -358,9 +369,10 @@ fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
         sort_order: r.get(5)?,
         card_count: r.get(6)?,
         total_price_usd: r.get(7)?,
+        total_price_eur: r.get(8)?,
         // No `?2` in this one's subquery, and that is the whole of the difference: the CASCADE
         // this number exists to describe does not know what variant anybody is looking at.
-        card_count_all_variants: r.get(8)?,
+        card_count_all_variants: r.get(9)?,
     })
 }
 
@@ -1796,6 +1808,97 @@ mod tests {
         let row = rows.iter().find(|c| c.id == empty).unwrap();
         assert_eq!(row.card_count, 0);
         assert_eq!(row.total_price_usd, None);
+        assert_eq!(row.total_price_eur, None);
+    }
+
+    /// A `cards` row carrying both currencies, written out so the euro total has something
+    /// to disagree with the dollar one about.
+    fn priced_card_both(conn: &Connection, id: &str, prices: &str) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                                 prices, raw)
+             VALUES (?1, 'o-' || ?1, ?1, 'lea', '161', 'en', 'normal', ?2, '{}')",
+            params![id, prices],
+        )
+        .unwrap();
+    }
+
+    /// The euro total is the dollar total's rule over `$.eur`, and it is **legitimately taken
+    /// over fewer cards**: `sum()` skips NULLs, so a printing Cardmarket does not quote drops
+    /// out of the euro figure while staying in the dollar one. Never converted, never filled
+    /// in from the nonfoil rate — the two numbers describe two marketplaces.
+    #[test]
+    fn total_price_eur_sums_the_same_rule_over_eur_and_skips_what_cardmarket_does_not_quote() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "commander", "Commander");
+        priced_card_both(&conn, "both", r#"{"usd":"2.00","eur":"1.50"}"#);
+        // Etched-only: a dollar price through `usd_etched`, and no euro key of any kind,
+        // because `eur_etched` does not exist in Scryfall's data.
+        priced_card_both(
+            &conn,
+            "etched",
+            r#"{"usd":"5.00","usd_etched":"25.00","eur":null}"#,
+        );
+        deck_card(&conn, deck_id, "both", cat, 3);
+        deck_card(&conn, deck_id, "etched", cat, 2);
+
+        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let row = rows.iter().find(|c| c.id == cat).unwrap();
+        assert_eq!(
+            row.total_price_usd,
+            Some(3.0 * 2.00 + 2.0 * 5.00),
+            "both printings have a nonfoil dollar price"
+        );
+        assert_eq!(
+            row.total_price_eur,
+            Some(3.0 * 1.50),
+            "and only one of them has a euro one"
+        );
+    }
+
+    /// A category whose every card is unpriced in euros reads `None` there while reading a
+    /// real number in dollars — the two totals are independent, and neither stands in for the
+    /// other.
+    #[test]
+    fn a_category_priced_only_in_dollars_has_no_euro_total_at_all() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "commander", "Commander");
+        priced_card(&conn, "usd-only", "2.00");
+        deck_card(&conn, deck_id, "usd-only", cat, 4);
+
+        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let row = rows.iter().find(|c| c.id == cat).unwrap();
+        assert_eq!(row.total_price_usd, Some(8.0));
+        assert_eq!(row.total_price_eur, None, "never 0.00, and never converted");
+    }
+
+    /// The hand-mirrored wire contract for the category row, pinned so a field added here and
+    /// never mirrored in `src/lib/ipc.ts` fails the suite rather than rendering `undefined`.
+    #[test]
+    fn category_row_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(DeckCategoryRow {
+            id: 3,
+            deck_id: 7,
+            name: "Ramp".to_owned(),
+            kind: "custom".to_owned(),
+            is_active: true,
+            sort_order: 2,
+            card_count: 5,
+            card_count_all_variants: 12,
+            total_price_usd: Some(41.5),
+            total_price_eur: Some(33.25),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": 3, "deckId": 7, "name": "Ramp", "kind": "custom", "isActive": true,
+                "sortOrder": 2, "cardCount": 5, "cardCountAllVariants": 12,
+                "totalPriceUsd": 41.5, "totalPriceEur": 33.25
+            })
+        );
     }
 
     // -- Rule 1: a predefined category cannot be renamed or deleted; is_active can be set --

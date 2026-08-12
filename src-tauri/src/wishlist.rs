@@ -54,6 +54,10 @@ pub struct WishlistQuery {
     /// breaking its ties. Empty or absent is name order. Keys outside [`WISHLIST_SORTS`]
     /// are dropped, never interpolated.
     pub sort: Option<Vec<crate::sorting::SortTerm>>,
+    /// Which currency the `cost` and `price` sorts order by. Absent — or anything this build
+    /// does not recognise — means `usd`. [`crate::collection::CollectionQuery`]'s field,
+    /// verbatim; see [`crate::sorting::Currency`].
+    pub currency: crate::sorting::Currency,
     pub limit: u32,
     pub offset: u32,
 }
@@ -146,11 +150,9 @@ const OWNED_SQL: &str = "coalesce((
 /// any-printing wish names no set, and a list where half the rows sort under the same blank
 /// is not an order.
 ///
-/// `cost` is what finishing the wish still costs — unit price over the copies *missing*,
-/// which is the figure the Cost cell prints and which is zero for a fulfilled wish however
-/// dear the card is. `price` is what one copy costs, and stays reachable from the select.
-/// Both order by output aliases rather than by any column of either table, so a rename
-/// there is a `prepare` error at run time; `every_sort_key_prepares…` is what catches it.
+/// `cost` and `price` are not here — they are the two keys whose SQL depends on the reader's
+/// marketplace, so they live in [`WISHLIST_PRICE_SORTS`] and are appended by
+/// [`crate::sorting::sorts_for`].
 const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
     crate::sorting::SortColumn {
         key: "name",
@@ -167,16 +169,6 @@ const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
         asc: "w.quantity ASC",
         desc: "w.quantity DESC",
     },
-    crate::sorting::SortColumn {
-        key: "cost",
-        asc: "unit_price_usd * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
-        desc: "unit_price_usd * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
-    },
-    crate::sorting::SortColumn {
-        key: "price",
-        asc: "unit_price_usd ASC NULLS LAST",
-        desc: "unit_price_usd DESC NULLS LAST",
-    },
     // The id carries the rest of the answer, and it is not the builder's tiebreak doing it:
     // `created_at` is whole seconds, so a handful of wishes made in one go all share one,
     // and the appended `w.id ASC` would read them out oldest-first under a heading that
@@ -186,6 +178,44 @@ const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
         key: "added",
         asc: "w.created_at ASC, w.id ASC",
         desc: "w.created_at DESC, w.id DESC",
+    },
+];
+
+/// `cost` and `price`, in each currency.
+///
+/// `cost` is what finishing the wish still costs — unit price over the copies *missing*,
+/// which is the figure the Cost cell prints and which is zero for a fulfilled wish however
+/// dear the card is. `price` is what one copy costs, and stays reachable from the select.
+///
+/// All four order by **output aliases** rather than by any column of either table, so a
+/// rename there is a `prepare` error at run time; `every_sort_key_prepares…` is what catches
+/// it, and it now runs every key in both currencies. The euro pair carries the hole the data
+/// has: a wish for the *etched* printing is NULL in euros and sorts last, because there is no
+/// `eur_etched` key to quote it from.
+const WISHLIST_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
+    crate::sorting::PricedSort {
+        usd: crate::sorting::SortColumn {
+            key: "cost",
+            asc: "unit_price_usd * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
+            desc: "unit_price_usd * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
+        },
+        eur: crate::sorting::SortColumn {
+            key: "cost",
+            asc: "unit_price_eur * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
+            desc: "unit_price_eur * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
+        },
+    },
+    crate::sorting::PricedSort {
+        usd: crate::sorting::SortColumn {
+            key: "price",
+            asc: "unit_price_usd ASC NULLS LAST",
+            desc: "unit_price_usd DESC NULLS LAST",
+        },
+        eur: crate::sorting::SortColumn {
+            key: "price",
+            asc: "unit_price_eur ASC NULLS LAST",
+            desc: "unit_price_eur DESC NULLS LAST",
+        },
     },
 ];
 
@@ -427,8 +457,12 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         )
         .map_err(|e| e.to_string())?;
 
-    let order =
-        crate::sorting::order_by(q.sort.as_deref(), WISHLIST_SORTS, "w.name ASC", "w.id ASC");
+    let order = crate::sorting::order_by(
+        q.sort.as_deref(),
+        &crate::sorting::sorts_for(WISHLIST_SORTS, WISHLIST_PRICE_SORTS, q.currency),
+        "w.name ASC",
+        "w.id ASC",
+    );
     let sql = format!(
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
@@ -1581,5 +1615,148 @@ mod tests {
             .items
             .iter()
             .all(|r| r.unit_price_eur.is_none() && r.unit_price_usd.is_none()));
+    }
+
+    /// Three wishes whose dollar order and euro order disagree on every pair, one of them for
+    /// the **etched** printing — whose blob names a `$.eur` that the etched wish must not
+    /// take. Quantities differ too, so `cost` and `price` cannot agree by accident.
+    fn seeded_currencies() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        for (id, prices) in [
+            ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
+            ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),
+            ("etched", r#"{"usd":"9.00","usd_etched":"9.00","eur":"7.00"}"#),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    prices,raw)
+                 VALUES (?1,?1,?1,'tst','1','en','normal',?2,'{}')",
+                rusqlite::params![id, prices],
+            )
+            .unwrap();
+        }
+        for (card, finish, quantity) in [
+            ("cheap-usd", None, 10),
+            ("dear-usd", None, 1),
+            ("etched", Some("etched"), 2),
+        ] {
+            add_wish(
+                &conn,
+                &WishInput {
+                    card_id: Some(card.to_owned()),
+                    preferred_finish: finish.map(str::to_owned),
+                    quantity,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// Ordering happens inside SQLite, so the chosen marketplace has to reach it. Both keys,
+    /// both directions, both currencies — and the etched wish, unpriced on Cardmarket, stays
+    /// last whichever way the euro sort runs.
+    #[test]
+    fn the_cost_and_price_sorts_order_by_the_currency_they_are_asked_for() {
+        let conn = seeded_currencies();
+        let names = |key: &str, dir: &str, currency| -> Vec<String> {
+            list_wishes(
+                &conn,
+                &WishlistQuery {
+                    sort: Some(vec![term(key, dir)]),
+                    currency,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|r| r.name)
+            .collect()
+        };
+        let (usd, eur) = (crate::sorting::Currency::Usd, crate::sorting::Currency::Eur);
+
+        // Per copy: $1 / $50 / $9 against €90 / €2 / —.
+        assert_eq!(
+            names("price", "asc", usd),
+            ["cheap-usd", "etched", "dear-usd"]
+        );
+        assert_eq!(
+            names("price", "asc", eur),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
+        assert_eq!(
+            names("price", "desc", usd),
+            ["dear-usd", "etched", "cheap-usd"]
+        );
+        assert_eq!(
+            names("price", "desc", eur),
+            ["cheap-usd", "dear-usd", "etched"]
+        );
+
+        // × the copies still missing, and nothing is owned: $10 / $50 / $18 against
+        // €900 / €2 / —.
+        assert_eq!(names("cost", "asc", usd), ["cheap-usd", "etched", "dear-usd"]);
+        assert_eq!(names("cost", "asc", eur), ["dear-usd", "cheap-usd", "etched"]);
+        assert_eq!(
+            names("cost", "desc", usd),
+            ["dear-usd", "etched", "cheap-usd"]
+        );
+        assert_eq!(
+            names("cost", "desc", eur),
+            ["cheap-usd", "dear-usd", "etched"]
+        );
+    }
+
+    /// The euro orders are *different strings* over a second select alias, so each is its own
+    /// chance to fail at **prepare** time — the whole list, and only ever on Cardmarket.
+    #[test]
+    fn every_sort_key_prepares_in_euros_too() {
+        let conn = seeded_currencies();
+        for key in ["name", "owned", "quantity", "cost", "price", "added", "nope"] {
+            for dir in ["asc", "desc"] {
+                let page = list_wishes(
+                    &conn,
+                    &WishlistQuery {
+                        sort: Some(vec![term(key, dir)]),
+                        currency: crate::sorting::Currency::Eur,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("sorting by `{key}` {dir} in euros failed: {e}"));
+                assert_eq!(page.items.len(), 3);
+            }
+        }
+    }
+
+    /// Absent means dollars — the order every caller had before there was a picker — and so
+    /// does a currency this build has never heard of.
+    #[test]
+    fn a_query_with_no_currency_sorts_in_dollars() {
+        let conn = seeded_currencies();
+        let names = |json: &str| -> Vec<String> {
+            let q: WishlistQuery = serde_json::from_str(json).unwrap();
+            list_wishes(&conn, &q)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| r.name)
+                .collect()
+        };
+        let sort = r#""sort":[{"key":"price","dir":"asc"}]"#;
+
+        let dollars = ["cheap-usd", "etched", "dear-usd"];
+        assert_eq!(names(&format!("{{{sort}}}")), dollars, "absent");
+        assert_eq!(
+            names(&format!(r#"{{{sort},"currency":"gbp"}}"#)),
+            dollars,
+            "and a currency this build has never heard of"
+        );
+        assert_eq!(
+            names(&format!(r#"{{{sort},"currency":"eur"}}"#)),
+            ["dear-usd", "cheap-usd", "etched"]
+        );
     }
 }
