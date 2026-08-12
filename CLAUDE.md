@@ -6,7 +6,8 @@ Scryfall as the only external dependency.
 
 ## Commands
 
-- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild)
+- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
+  one app runs across every worktree. See the `running-the-app` skill.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
@@ -37,6 +38,23 @@ on — do not work from this page alone.
 | [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
+
+## Project skills (`.claude/skills/`)
+
+Three skills carry the worktree workflow and are the authority on it — this file does not
+repeat them:
+
+- **`worktree-setup`** — first thing in a fresh worktree. `npm install` inside it (without
+  which three suites fail on Vite's `fs.allow` and it reads as your regression), the
+  base-branch check, and what is not shared with the main checkout.
+- **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
+  and both collisions are silent. Two locks in `locks/` under the git **common** dir
+  (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a
+  directory), claimed and released through
+  `.claude/skills/running-the-app/lock.ps1`. Ports stay 1420/6006/9222; they are hardcoded
+  in tracked files and must not be remapped.
+- **`shipping-a-branch`** — `npm run verify` → PR → merge `main` in (never rebase) →
+  wait for `ci-ok`. The agent does not press Merge.
 
 ## Reference docs
 
