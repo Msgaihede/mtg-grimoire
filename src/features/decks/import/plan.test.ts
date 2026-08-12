@@ -3,7 +3,14 @@ import type { FormatSpec, ImportMatch, ImportResolveRow } from "@/lib/ipc";
 import { PREDEFINED_CATEGORY_NAMES } from "../autoCategory";
 import { spec } from "../validation/fixtures";
 import { parseDecklist } from "./parse";
-import { SECTION_CATEGORY, buildImportPlan, toImportItems, type ImportPlan } from "./plan";
+import {
+  SECTION_CATEGORY,
+  buildImportPlan,
+  tallyOf,
+  toImportItems,
+  type CategoryTally,
+  type ImportPlan,
+} from "./plan";
 
 /**
  * One resolved printing, with everything the plan does not read filled in as nothing.
@@ -54,6 +61,12 @@ function planFor(
     hintMissed: false,
   }));
   return buildImportPlan(parsed, rows, format);
+}
+
+/** The piles a preview would draw for this plan and this commander choice — the two calls the
+ *  dialog makes, in the order it makes them, because the tally is a fact about the items. */
+function tallyFor(plan: ImportPlan, commanderIds: readonly string[] = []): CategoryTally[] {
+  return tallyOf(toImportItems(plan, commanderIds));
 }
 
 const SOL_RING = match({ name: "Sol Ring", typeLine: "Artifact" });
@@ -179,8 +192,9 @@ Maybeboard
       },
     );
 
-    expect(plan.categories.filter((c) => c.inactive).map((c) => c.name)).toEqual(["Maybeboard"]);
-    expect(plan.categories.filter((c) => !c.inactive)).toHaveLength(3);
+    const categories = tallyFor(plan);
+    expect(categories.filter((c) => c.inactive).map((c) => c.name)).toEqual(["Maybeboard"]);
+    expect(categories.filter((c) => !c.inactive)).toHaveLength(3);
   });
 
   it("orders the tally: sections first, then the type buckets in reading order", () => {
@@ -219,7 +233,7 @@ Maybeboard
       },
     );
 
-    expect(plan.categories.map((c) => c.name)).toEqual([
+    expect(tallyFor(plan).map((c) => c.name)).toEqual([
       "Commander",
       "Sideboard",
       "Companion",
@@ -298,9 +312,90 @@ Maybeboard
   it("sums the quantities of a card named twice into one tally", () => {
     const plan = planFor("4 Forest\n2 Forest", { Forest: FOREST });
 
-    expect(plan.categories).toEqual([{ name: "Land", cards: 6, inactive: false }]);
+    expect(tallyFor(plan)).toEqual([{ name: "Land", cards: 6, inactive: false }]);
     expect(plan.cards).toHaveLength(2);
     expect(plan.totalCards).toBe(6);
+  });
+});
+
+/**
+ * The bug the live pass found: the preview counted the piles **before** the commander was
+ * chosen and never again, so its two headline numbers described an import nobody asked for.
+ * Measured against the reference list (**debug** build, 2026-08-12): the step read
+ * `117 cards · 6 categories` with `Creature 56`, and the deck it wrote had **7** categories,
+ * `Creature 55` and `Commander 1`.
+ *
+ * All three arms that can move a card are covered, because the old shape got exactly one of
+ * them right by accident.
+ */
+describe("the tally over what will actually be written", () => {
+  it("moves a chosen commander out of its type-line pile", () => {
+    const plan = planFor(
+      "1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring",
+      { "Captain Sisay": SISAY, "Kenrith, the Returned King": KENRITH, "Sol Ring": SOL_RING },
+      spec("commander"),
+    );
+
+    // Nothing picked yet: both legends are creatures, which is what the reader is choosing over.
+    expect(tallyFor(plan)).toEqual([
+      { name: "Creature", cards: 2, inactive: false },
+      { name: "Artifact", cards: 1, inactive: false },
+    ]);
+    expect(tallyFor(plan, [SISAY.cardId])).toEqual([
+      { name: "Commander", cards: 1, inactive: false },
+      { name: "Creature", cards: 1, inactive: false },
+      { name: "Artifact", cards: 1, inactive: false },
+    ]);
+  });
+
+  /** **The worst arm, because the reader presses nothing.** The dialog states "«card» goes in
+   *  the command zone" and the tally has to agree with the sentence directly above it. */
+  it("counts an automatic commander in the command zone", () => {
+    const plan = planFor(
+      "1 Captain Sisay\n1 Sol Ring\n6 Forest",
+      { "Captain Sisay": SISAY, "Sol Ring": SOL_RING, Forest: FOREST },
+      spec("commander"),
+    );
+
+    expect(plan.commander).toEqual({ kind: "automatic", cardIds: [SISAY.cardId] });
+    expect(tallyFor(plan, [SISAY.cardId])).toEqual([
+      { name: "Commander", cards: 1, inactive: false },
+      { name: "Artifact", cards: 1, inactive: false },
+      { name: "Land", cards: 6, inactive: false },
+    ]);
+  });
+
+  /** The one arm that was right before, and it stays right: the card already carries the
+   *  Commander category name, so there is nothing for the choice to move. */
+  it("leaves a from-file commander where the file filed it", () => {
+    const plan = planFor(
+      `Commander
+1 Captain Sisay
+
+Deck
+1 Sol Ring`,
+      { "Captain Sisay": SISAY, "Sol Ring": SOL_RING },
+      spec("commander"),
+    );
+
+    expect(plan.commander).toEqual({ kind: "fromFile" });
+    expect(tallyFor(plan)).toEqual([
+      { name: "Commander", cards: 1, inactive: false },
+      { name: "Artifact", cards: 1, inactive: false },
+    ]);
+  });
+
+  /** A partner pair is two commanders and one pile — the sum, not two rows. */
+  it("sums a partner pair into the one Commander pile", () => {
+    const plan = planFor(
+      "1 Captain Sisay\n1 Kenrith, the Returned King",
+      { "Captain Sisay": SISAY, "Kenrith, the Returned King": KENRITH },
+      spec("commander"),
+    );
+
+    expect(tallyFor(plan, [SISAY.cardId, KENRITH.cardId])).toEqual([
+      { name: "Commander", cards: 2, inactive: false },
+    ]);
   });
 });
 

@@ -208,6 +208,23 @@ async function preview(list: string) {
   return screen.findByRole("button", { name: "Import" });
 }
 
+/**
+ * The tally, as `[pile, copies]` read straight off its `<dl>`.
+ *
+ * By structure and not by text, because **`Commander` is also the heading of the section above
+ * it** — a `getByText("Commander")` on this step finds two nodes and would pass on the wrong
+ * one. Reading the list also asserts its order, which is the order a deck seeds and then files
+ * its piles.
+ */
+async function piles(): Promise<[string, string][]> {
+  const list = (await panel()).querySelector("dl");
+  if (list === null) return [];
+  return [...list.children].map((row) => [
+    row.querySelector("dt")?.textContent ?? "",
+    row.querySelector("dd")?.textContent ?? "",
+  ]);
+}
+
 beforeEach(() => {
   deckImportResolve
     .mockReset()
@@ -320,6 +337,56 @@ describe("the import deck dialog", () => {
 
     expect(await screen.findByText("2 cards")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Commander" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The preview has to describe what Import will write — that is the whole job of a
+   * preview-then-commit screen, and it did not.** Measured live 2026-08-12 on a **debug**
+   * build: the reference list previewed as `117 cards · 6 categories` with `Creature 56` and
+   * no Commander row, while `deck_get` after the import read 7 categories, `Creature 55` and
+   * `Commander 1`. The tally was computed once, from `autoCategoryFor`'s answer, before the
+   * reader had chosen anything.
+   *
+   * So: press a candidate, and both the headline and the piles must move with it.
+   */
+  it("counts the commander in the pile the import will actually use", async () => {
+    wrap(<Harness target={INTO_DECK} />);
+    await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
+
+    // A regex, because the count sits in its own `<span>` beside a separator and `getByText`
+    // matches an element's own text nodes — here " · 2 categories".
+    expect(await screen.findByText(/2 categories/)).toBeInTheDocument();
+    expect(await piles()).toEqual([
+      ["Creature", "2"],
+      ["Artifact", "1"],
+    ]);
+
+    await userEvent.click(screen.getByRole("button", { name: /Captain Sisay/ }));
+
+    await waitFor(async () =>
+      expect(await piles()).toEqual([
+        ["Commander", "1"],
+        ["Creature", "1"],
+        ["Artifact", "1"],
+      ]),
+    );
+    expect(screen.getByText(/3 categories/)).toBeInTheDocument();
+  });
+
+  /** The `automatic` arm, which is worse because the reader presses nothing: the dialog states
+   *  the commander in words, and a tally that filed him under Creature contradicted the
+   *  sentence directly above it. */
+  it("counts an automatic commander the reader was never asked about", async () => {
+    wrap(<Harness target={INTO_DECK} />);
+    await preview("1 Captain Sisay\n1 Sol Ring");
+
+    expect(
+      await screen.findByText("Captain Sisay goes in the command zone."),
+    ).toBeInTheDocument();
+    expect(await piles()).toEqual([
+      ["Commander", "1"],
+      ["Artifact", "1"],
+    ]);
   });
 
   it("sends the chosen commander in the Commander category", async () => {

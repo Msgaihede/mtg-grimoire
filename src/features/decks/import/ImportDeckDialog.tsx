@@ -22,7 +22,13 @@ import { DEFAULT_FORMAT, FormatSelect } from "../FormatSelect";
 import { DEFAULT_VARIANT, useDeck } from "../useDeck";
 import { useFormatSpecs } from "../useFormatSpecs";
 import { parseDecklist } from "./parse";
-import { buildImportPlan, toImportItems, type ImportPlan } from "./plan";
+import {
+  buildImportPlan,
+  tallyOf,
+  toImportItems,
+  type CategoryTally,
+  type ImportPlan,
+} from "./plan";
 import { useDeckImport } from "./useDeckImport";
 
 /** The extensions the picker offers. A decklist is text; the other three are what the desktop
@@ -240,6 +246,16 @@ function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialog
     () => (plan === null ? [] : toImportItems(plan, commanderIds)),
     [plan, commanderIds],
   );
+
+  /**
+   * The piles, counted over the items that are about to be sent and **not** over the plan.
+   *
+   * This is the whole of the tally fix: `commanderIds` is a dependency of `items`, so pressing
+   * a candidate recomputes both, and the two numbers on this step describe what Import will
+   * write rather than what the type-line rule filed before anybody chose. See {@link tallyOf}
+   * for what the old shape put on screen.
+   */
+  const categories = useMemo(() => tallyOf(items), [items]);
 
   /** Back to the box, and the resolved rows go with it. They are addressed by **index** into
    *  `parsed.lines`, so rows kept across an edit of the text would file the whole list by line
@@ -533,8 +549,8 @@ function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialog
               className="flex min-h-0 flex-1 flex-col"
             >
               <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-                <Headline plan={plan} />
-                <Tally plan={plan} />
+                <Headline totalCards={plan.totalCards} categories={categories} />
+                <Tally categories={categories} />
                 <Commander
                   plan={plan}
                   picked={picked}
@@ -609,12 +625,23 @@ function variantName(variant: DeckVariant): string {
   return variant === "live" ? "Live" : "Theory";
 }
 
-/** What the import comes to, in one line: copies first, because that is what a reader counts. */
-function Headline({ plan }: { plan: ImportPlan }) {
+/**
+ * What the import comes to, in one line: copies first, because that is what a reader counts.
+ *
+ * Both numbers are handed in rather than read off the plan, because the pile count moves with
+ * the commander choice and the copy count does not — see the `categories` memo above.
+ */
+function Headline({
+  totalCards,
+  categories,
+}: {
+  totalCards: number;
+  categories: readonly CategoryTally[];
+}) {
   return (
     <p className="font-mono text-sm tabular-nums">
-      {plural(plan.totalCards, "card")}
-      <span className="text-dim"> · {categoryCount(plan.categories.length)}</span>
+      {plural(totalCards, "card")}
+      <span className="text-dim"> · {categoryCount(categories.length)}</span>
     </p>
   );
 }
@@ -627,12 +654,15 @@ function Headline({ plan }: { plan: ImportPlan }) {
  * a description list is. `(inactive)` is drawn on the pile that counts toward nothing — the
  * Maybeboard as seeded — because "these cards will land somewhere that counts toward nothing"
  * is worth saying before the import rather than after it.
+ *
+ * It is handed the tally rather than the plan, which is what makes the Commander pile appear
+ * the moment a candidate is pressed.
  */
-function Tally({ plan }: { plan: ImportPlan }) {
-  if (plan.categories.length === 0) return null;
+function Tally({ categories }: { categories: readonly CategoryTally[] }) {
+  if (categories.length === 0) return null;
   return (
     <dl className="divide-y divide-border rounded-md border border-border">
-      {plan.categories.map((category) => (
+      {categories.map((category) => (
         <div key={category.name} className="flex items-baseline gap-3 px-3 py-1.5">
           <dt className="min-w-0 flex-1 truncate text-sm">
             {category.name}

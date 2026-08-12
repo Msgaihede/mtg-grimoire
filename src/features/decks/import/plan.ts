@@ -139,14 +139,23 @@ export type CommanderChoice =
   | { kind: "automatic"; cardIds: string[] }
   | { kind: "ask"; candidates: ImportMatch[] };
 
-/** Everything the preview draws, and everything {@link toImportItems} needs. */
+/**
+ * Everything the preview draws, and everything {@link toImportItems} needs.
+ *
+ * **There is deliberately no `categories` here.** The piles are a fact about the *items being
+ * sent*, not about the plan — the commander choice moves a card between piles and is applied in
+ * {@link toImportItems} — so the tally is {@link tallyOf} over those items, and a preview that
+ * read it off the plan would describe an import nobody asked for. It did: see that function.
+ *
+ * {@link totalCards} stays, because the commander choice changes *which pile* a card lands in
+ * and never *how many copies* land.
+ */
 export interface ImportPlan {
   cards: PlannedCard[];
   unmatched: UnmatchedLine[];
   hintMisses: HintMiss[];
   /** {@link ParsedList.issues} verbatim — the lines the parser could not read at all. */
   parseIssues: ParseIssue[];
-  categories: CategoryTally[];
   commander: CommanderChoice;
   /** Copies that will actually land. **Not {@link ParsedList.totalCards}**, which counts every
    *  line the parser read, including the ones nothing resolved. */
@@ -267,23 +276,37 @@ export function buildImportPlan(
     unmatched,
     hintMisses,
     parseIssues: parsed.issues,
-    categories: tallyOf(cards),
     commander: commanderChoice(cards, spec),
     totalCards: cards.reduce((sum, card) => sum + card.quantity, 0),
   };
 }
 
 /**
- * The piles, with a copy count each.
+ * The piles, with a copy count each — **over the items an import is actually sending**.
  *
  * Summed rather than counted, and summed **per pile name**: a list naming a card on two lines
- * is one row in the deck (the grain folds it) and two lines here, and the tally has to agree
+ * is one row in the deck (the grain folds it) and two items here, and the tally has to agree
  * with the deck rather than with the file.
+ *
+ * **It takes {@link ImportItem}s and not {@link ImportPlan} on purpose, and that is a bug
+ * fix.** It used to run over `plan.cards`, which carries only {@link autoCategoryFor}'s answer,
+ * and it ran once when the plan was built — before the reader had chosen a commander and never
+ * again after. So the preview's two headline numbers disagreed with what was written. Measured
+ * live 2026-08-12 (a **debug** build, the 105-line reference list into a Commander deck): the
+ * step read **`117 cards · 6 categories`** with `Creature 56` and no Commander row, and
+ * `deck_get` after the import read **7 categories**, `Creature 55`, `Commander 1`. It was worst
+ * on the `automatic` arm, where the reader presses nothing: the dialog printed *"Krenko, Mob
+ * Boss goes in the command zone"* directly above a tally filing him under `Creature`.
+ *
+ * The split {@link toImportItems}' doc calls deliberate is still right — the plan is what the
+ * preview draws *while* they are still choosing. What was missing is that the tally is not part
+ * of the plan: it describes the items, so it is derived where they are, from the same call, and
+ * recomputes with every press.
  */
-function tallyOf(cards: readonly PlannedCard[]): CategoryTally[] {
+export function tallyOf(items: readonly ImportItem[]): CategoryTally[] {
   const copies = new Map<string, number>();
-  for (const card of cards) {
-    copies.set(card.categoryName, (copies.get(card.categoryName) ?? 0) + card.quantity);
+  for (const item of items) {
+    copies.set(item.categoryName, (copies.get(item.categoryName) ?? 0) + item.quantity);
   }
   return [...copies]
     .map(([name, count]) => ({ name, cards: count, inactive: name === SEEDED_INACTIVE }))
@@ -336,6 +359,10 @@ function commanderChoice(cards: readonly PlannedCard[], spec: FormatSpec | null)
  * pick out of `candidates`), and it moves those cards into the Commander pile wherever the
  * type-line rule had filed them. It is applied here and not in the plan because the plan is
  * what the preview draws *while* they are still choosing.
+ *
+ * **Which is exactly why the tally is {@link tallyOf} over this function's answer** rather than
+ * a field on the plan: this is the one place the commander choice is applied, so it is the only
+ * place a preview of it can be counted.
  */
 export function toImportItems(plan: ImportPlan, commanderIds: readonly string[]): ImportItem[] {
   const chosen = new Set(commanderIds);
