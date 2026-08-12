@@ -269,12 +269,36 @@ const MATCH_COLUMNS: &str = "SELECT c.id, c.name, c.set_code, c.collector_number
 /// The five SQL arms' tail: their source, and the count only they compute.
 const FROM_CARDS: &str = ",\n        count(*) OVER () AS printing_count\n   FROM cards c";
 
-/// The order every arm shares: a printing you own, then the newest, then the id.
+/// The order every arm shares: a printing you own, then an English one, then the newest, then
+/// the id.
 ///
 /// The `id` tie-break is not decoration — it is what makes an import **deterministic**, so
 /// the same list pasted twice puts the same printings in the deck.
-const MATCH_ORDER: &str =
-    " ORDER BY owned_quantity DESC, coalesce(c.released_at, '0000-00-00') DESC, c.id DESC";
+///
+/// **The language term is third-from-last and its position is the whole decision.** Without it
+/// a name-only line lands on whatever paper printing is newest, and 5 of the reference list's
+/// 105 lines landed on one that is not English — measured 2026-08-12 in the shipped window over
+/// the live corpus: `Akroma's Will → soa 131 [ja]`, `Arcane Signet → hoc 95 [dw]`,
+/// `Mox Amber → hoc 96 [dw]`, `Elesh Norn, Mother of Machines → one 418 [ph]`,
+/// `The Wandering Rescuer → pwcs 2026-3 [ja]`. Re-measured with this term through `node:sqlite`
+/// against the same corpus, driving these statements' own text: **105 of 105 English**, those
+/// five and no others moved.
+///
+/// * **Behind `owned_quantity`**, because a Japanese Sol Ring you own is a Sol Ring you own —
+///   the whole promise of that first key is that a list you have the cards for puts *your*
+///   copies in the deck, and an English printing you have not got claims nothing from the
+///   binder.
+/// * **Ahead of the date**, because "newest" is a tie-break for which printing looks current
+///   and is precisely the key that produced those five. A reader pasting an English decklist
+///   asked for those cards, not for the most recent language they were printed in.
+///
+/// `cards.lang` is `TEXT NOT NULL` (`schema.rs`) holding Scryfall's own codes — 19 of them in
+/// the live corpus, 0 NULL, measured — so this is a plain equality and never a three-valued
+/// one, and no wider locale notion is invented: English or not.
+///
+/// [`fold_match`] repeats these keys in Rust and must carry this one in this position too.
+const MATCH_ORDER: &str = " ORDER BY owned_quantity DESC, (c.lang = 'en') DESC,
+        coalesce(c.released_at, '0000-00-00') DESC, c.id DESC";
 
 /// The printing hint at full strength: a set code and a collector number name one printing,
 /// and the reader who wrote them down meant them. No name is consulted **in the SQL**, so a
@@ -510,10 +534,13 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
         .filter_map(|(m, rel)| Some((fold_rank(&m.name, &wanted)?, m, rel)))
         .collect();
     let count = i64::try_from(kept.len()).unwrap_or(i64::MAX);
-    // The whole name ahead of a front face, then `MATCH_ORDER`'s three keys in its own order.
+    // The whole name ahead of a front face, then `MATCH_ORDER`'s four keys in its own order.
+    // `false < true`, so comparing `b` to `a` puts English first exactly as `DESC` does.
+    let english = |m: &ImportMatch| m.lang == "en";
     kept.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| b.1.owned_quantity.cmp(&a.1.owned_quantity))
+            .then_with(|| english(&b.1).cmp(&english(&a.1)))
             .then_with(|| b.2.cmp(&a.2))
             .then_with(|| b.1.card_id.cmp(&a.1.card_id))
     });
@@ -938,13 +965,18 @@ pub async fn deck_import_read_file(path: String) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// Eleven printings, shaped around the questions this module has to answer.
+    /// Twelve printings, shaped around the questions this module has to answer.
     ///
-    /// Four **paper** Sol Rings and one digital one, because every ordering rule needs more
+    /// Five **paper** Sol Rings and one digital one, because every ordering rule needs more
     /// than one printing of a name to order and `printing_count` needs a digital printing to
     /// leave out. `40k` and `clb` are given the **same** `released_at` deliberately — the real
     /// corpus is full of sets that share a release date, and without a tie the `id` tie-break
     /// that makes an import deterministic has nothing to break.
+    ///
+    /// **`sol-ja` is the newest paper Sol Ring and it is Japanese**, which is the shape
+    /// [`MATCH_ORDER`]'s language term exists for: 5 of the reference list's 105 lines landed
+    /// on a `ja`/`dw`/`ph` printing for exactly this reason. It is deliberately newer than
+    /// every English one, so the date key alone would choose it.
     ///
     /// Three are one each: a double-faced card written the way a decklist writes it (front face
     /// only), a name with a diacritic in it, and an Arena-only card whose *only* printing is
@@ -983,6 +1015,10 @@ mod tests {
                   'uncommon','{1}',1.0,'Artifact','{T}: Add {C}{C}.','','',
                   '{"vintage":"restricted","commander":"legal"}',NULL,NULL,
                   '{"usd":"1.75"}','{}'),
+                 ('sol-ja','o-sol','Sol Ring','sjr','1','ja','2023-05-01',1,'normal',
+                  'uncommon','{1}',1.0,'Artifact','{T}: Add {C}{C}.','','',
+                  '{"vintage":"restricted","commander":"legal"}',NULL,NULL,
+                  '{"usd":"4.25"}','{}'),
                  ('sol-ana','o-sol','Sol Ring','ana','1','en','2021-01-01',0,'normal',
                   'uncommon','{1}',1.0,'Artifact','{T}: Add {C}{C}.','','',
                   '{"vintage":"restricted","commander":"legal"}',NULL,NULL,NULL,'{}'),
@@ -1112,15 +1148,46 @@ mod tests {
         assert_eq!(m.owned_quantity, 1);
     }
 
+    /// The date key, with the language term settled above it: `sol-ja` is newer than every
+    /// English printing and must not win, and among the English ones the two that share
+    /// 2022-10-07 are separated by the id.
     #[test]
-    fn with_nothing_owned_the_newest_paper_printing_wins() {
+    fn with_nothing_owned_the_newest_english_paper_printing_wins() {
         let conn = seeded();
         let m = resolve_one(&conn, line("Sol Ring")).matched.unwrap();
         assert_eq!(
             m.card_id, "sol-clb",
-            "2022-10-07, and `clb` > `40k` on the id"
+            "2022-10-07, and `clb` > `40k` on the id — not `sol-ja`, which is newer and Japanese"
         );
         assert_eq!(m.owned_quantity, 0);
+    }
+
+    /// **The language term's position, which is the half of it that had to be decided.** A
+    /// copy you own in any language is still a copy you own — the whole promise of the first
+    /// key is that a list you have the cards for puts *your* copies in the deck, and an
+    /// English printing you have not got claims nothing from the binder.
+    #[test]
+    fn a_printing_you_own_outranks_the_language_preference() {
+        let conn = seeded();
+        own(&conn, "sol-ja", 2);
+        let m = resolve_one(&conn, line("Sol Ring")).matched.unwrap();
+        assert_eq!(
+            m.card_id, "sol-ja",
+            "owned beats English, and English beats newest"
+        );
+        assert_eq!(m.owned_quantity, 2);
+    }
+
+    /// The fold arm re-implements [`MATCH_ORDER`] in Rust and may never disagree with it, so
+    /// every key it carries needs pinning there too. Lower-casing is what routes a line through
+    /// that arm at all, now that the SQL arms are binary.
+    #[test]
+    fn the_fold_arm_prefers_english_as_well() {
+        let conn = seeded();
+        assert_eq!(matched_id(&conn, line("sol ring")), "sol-clb");
+        // And the same key sits behind `owned_quantity` there as it does in the SQL.
+        own(&conn, "sol-ja", 1);
+        assert_eq!(matched_id(&conn, line("sol ring")), "sol-ja");
     }
 
     #[test]
@@ -1261,7 +1328,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            the_old_hole, 9,
+            the_old_hole, 10,
             "every single-faced row in the fixture — which is what the guard was found by"
         );
     }
@@ -1951,13 +2018,16 @@ mod tests {
     /// `printing_count` is how many rows *this line's rule* found, which through the bare-name
     /// arm is the card's paper printings — and through the other arms is not. Both halves are
     /// asserted, because the field's doc is what Task 6 will build an affordance on.
+    ///
+    /// It is **language-blind**: the count is what the reader is choosing between, and a
+    /// Japanese printing is one of them even though [`MATCH_ORDER`] will not pick it.
     #[test]
     fn printing_count_is_the_number_of_paper_printings_of_that_name() {
         let conn = seeded();
         let m = resolve_one(&conn, line("Sol Ring")).matched.unwrap();
         assert_eq!(
-            m.printing_count, 4,
-            "four paper printings, and Arena's is not one"
+            m.printing_count, 5,
+            "five paper printings, Japanese included — and Arena's is not one"
         );
         let hinted_row = resolve_one(&conn, hinted("Sol Ring", "c21", Some("263")))
             .matched
