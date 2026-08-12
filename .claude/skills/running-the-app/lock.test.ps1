@@ -139,29 +139,45 @@ try {
     }
 
     # CreateNew only guards free -> claimed; a stale takeover is Remove-Item THEN
-    # CreateNew, so a second agent's file can land on top of ours. A spin-watcher
-    # overwrites the lock the instant it appears - the interleaving CreateNew cannot see.
+    # CreateNew, so a second agent's file can land on top of ours.
+    #
+    # The watcher must overwrite AFTER `acquire` has written, not merely after the file
+    # exists - `CreateNew` makes it exist while it is still empty. Waiting on our own
+    # marker is what orders the two writes; MTG_LOCK_TEST_READBACK_DELAY_MS then holds the
+    # readback open long enough for the watcher to get in. Without both, the outcome is
+    # scheduler luck: this passed locally and failed on a windows-latest runner, where the
+    # watcher wrote into the empty file and `acquire` then landed on top of it.
+    #
+    # try/finally, because a throw here used to leave the usurper's lock file behind and
+    # every later Check inherited it - one real failure reported as four.
     Check 'acquire refuses when someone else lock is what actually landed on disk' {
         Remove-Item $appLock -Force -ErrorAction SilentlyContinue
-        $watcher = Start-Job -ScriptBlock {
-            param($path)
-            $usurper = @{ worktree = 'usurper'; pid = $null; process = $null; started = $null
-                          what = 'usurper'; since = [DateTimeOffset]::UtcNow.ToString('o') } | ConvertTo-Json -Compress
-            $deadline = [datetime]::UtcNow.AddSeconds(30)
-            while ([datetime]::UtcNow -lt $deadline) {
-                if (Test-Path $path) {
-                    try { [System.IO.File]::WriteAllText($path, $usurper); return 'overwrote' } catch {}
+        $env:MTG_LOCK_TEST_READBACK_DELAY_MS = '3000'
+        try {
+            $watcher = Start-Job -ScriptBlock {
+                param($path)
+                $usurper = @{ worktree = 'usurper'; pid = $null; process = $null; started = $null
+                              what = 'usurper'; since = [DateTimeOffset]::UtcNow.ToString('o') } | ConvertTo-Json -Compress
+                $deadline = [datetime]::UtcNow.AddSeconds(30)
+                while ([datetime]::UtcNow -lt $deadline) {
+                    # Only once our own content is on disk, so the overwrite is ordered
+                    # after it rather than racing it.
+                    if ((Test-Path $path) -and ((Get-Content -Raw $path -ErrorAction SilentlyContinue) -match 'victim')) {
+                        try { [System.IO.File]::WriteAllText($path, $usurper); return 'overwrote' } catch {}
+                    }
                 }
-            }
-            return 'timeout'
-        } -ArgumentList $appLock
-        $r = Run acquire app -What 'victim'
-        $w = $watcher | Wait-Job | Receive-Job
-        $watcher | Remove-Job
-        Assert ($w -eq 'overwrote') 'the watcher never got in - inconclusive, not a pass'
-        Assert ($r.code -eq 1) "acquire claimed a lock it had lost: exit $($r.code): $($r.out)"
-        Assert ($r.out -match 'HELD') "no HELD line: $($r.out)"
-        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+                return 'timeout'
+            } -ArgumentList $appLock
+            $r = Run acquire app -What 'victim'
+            $w = $watcher | Wait-Job | Receive-Job
+            $watcher | Remove-Job
+            Assert ($w -eq 'overwrote') 'the watcher never got in - inconclusive, not a pass'
+            Assert ($r.code -eq 1) "acquire claimed a lock it had lost: exit $($r.code): $($r.out)"
+            Assert ($r.out -match 'HELD') "no HELD line: $($r.out)"
+        } finally {
+            Remove-Item Env:\MTG_LOCK_TEST_READBACK_DELAY_MS -ErrorAction SilentlyContinue
+            Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+        }
     }
 
     # pid + name buys nothing for `storybook`: Storybook, Vite, vitest and the MCP server

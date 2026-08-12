@@ -175,6 +175,16 @@ function Invoke-Acquire {
     # told HELD and exits 1, which is what they would have been told anyway.
     # (Compared as instants, because ConvertFrom-Json hands `since` back as a DateTime
     # rather than as the string that was written.)
+    #
+    # MTG_LOCK_TEST_READBACK_DELAY_MS is for lock.test.ps1 only, like MTG_LOCK_DIR, and is
+    # a no-op unless set. It widens this window on purpose: the loser of this race is
+    # whoever wrote first, so a test that merely spins a second writer decides the outcome
+    # by scheduler luck — it passed locally and failed on a GitHub windows-latest runner,
+    # where the watcher landed its file before `acquire` had written its own at all.
+    if ($env:MTG_LOCK_TEST_READBACK_DELAY_MS) {
+        Start-Sleep -Milliseconds ([int]$env:MTG_LOCK_TEST_READBACK_DELAY_MS)
+    }
+
     $landed = Read-Lock $path
     $landedSince = $null
     if ($landed -and $landed.since) {
