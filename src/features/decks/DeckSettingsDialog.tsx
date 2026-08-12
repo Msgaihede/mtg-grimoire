@@ -36,7 +36,7 @@ import { useFormatSpecs } from "./useFormatSpecs";
 /** A field's label: 11px and dim, the direction's caption size, used for every one here. */
 const CAPTION = "block text-[0.6875rem] text-dim";
 
-/** A text field, the shape `CreateDeckForm` set for this app's inputs. */
+/** A text field, the shape `CreateDeckDialog` set for this app's inputs. */
 const FIELD = cn(
   "w-full rounded-md border border-border bg-bg px-2.5 text-sm text-text",
   "focus:border-accent focus:outline-none",

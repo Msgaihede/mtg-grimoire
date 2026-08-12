@@ -435,12 +435,13 @@ describe("DecksPage", () => {
    * covers the three writes a *tile* makes, not this one, and reopening the form resets the
    * mutation. So the form has to outlive the press.
    *
-   * The press is what puts it at risk: `Create deck` disables itself, and a browser blurs a
-   * disabled control **with no `relatedTarget` at all** — which the click-away handler reads as
-   * the reader leaving. That blur is the one event jsdom will not produce on its own (it does
-   * not blur a control that becomes disabled, and a `userEvent.click` elsewhere then finds
-   * nothing to move the caret *from*), so it is dispatched here directly. Delivered any other
-   * way this test passes over a missing guard — it was written that way first, and did.
+   * The press used to put it at risk: `Create deck` disables itself, a browser blurs a disabled
+   * control **with no `relatedTarget` at all**, and the anchored form's click-away handler read
+   * that as the reader leaving — closing the form *as if the write had worked*. The modal has
+   * no such handler, so the `focusOut` below now proves the opposite of what it once did:
+   * **focus leaving a modal is not a dismissal.** It is dispatched directly because jsdom will
+   * not produce it on its own (it does not blur a control that becomes disabled, and a
+   * `userEvent.click` elsewhere then finds nothing to move the caret *from*).
    */
   it("keeps the create form open while the write is in flight, so a refusal has somewhere to land", async () => {
     let refuse!: (reason: string) => void;
@@ -572,17 +573,29 @@ describe("DecksPage", () => {
     expect(deckDelete).not.toHaveBeenCalled();
   });
 
-  /** Every other popup in the app closes when the reader looks away; this one too. */
-  it("closes the create form on a click away, without handing the caret back", async () => {
+  /**
+   * The dialog's pointer way out, and the one thing that separates it from every anchored
+   * popup in this app: a press **on the scrim**, not a press anywhere outside.
+   *
+   * The form used to close on a blur, which is right for a popup and wrong for a modal — the
+   * caret cannot leave a trapped layer, so nothing outside it can be pressed by accident. All
+   * three ways out therefore mean the same thing and hand the caret back to the same button.
+   */
+  it("closes the create form on a press on the scrim, and hands the caret back", async () => {
     wrap(<DecksPage />);
     const newDeck = await screen.findByRole("button", { name: "New deck" });
     await userEvent.click(newDeck);
     await screen.findByLabelText("Name");
 
-    await userEvent.click(document.body);
+    // A press inside the panel is not a dismissal, whatever it lands on.
+    const panel = screen.getByRole("dialog", { name: "New deck" });
+    fireEvent.mouseDown(panel);
+    expect(screen.getByLabelText("Name")).toBeInTheDocument();
 
-    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
-    expect(newDeck).not.toHaveFocus();
+    fireEvent.mouseDown(panel.parentElement as HTMLElement);
+
+    await waitFor(() => expect(screen.queryByLabelText("Name")).not.toBeInTheDocument());
+    expect(newDeck).toHaveFocus();
   });
 
   /**
