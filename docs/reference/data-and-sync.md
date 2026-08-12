@@ -1,0 +1,250 @@
+# Data, schema and sync
+
+Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
+
+- Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
+  **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
+  `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
+  folder to force a clean first-run sync. All three locations are gitignored.
+  **The fallback's folder name is the Tauri `identifier`, and the rename changed it** —
+  `com.mtgcollection.tracker` → `com.mtggrimoire.app`. A machine that ran the v0.2.0
+  _installer_ still has the old folder and its database; nothing migrates it, deliberately
+  (portable copies keep `data/` beside the exe and are untouched). So "my collection is
+  gone" after upgrading an installed 0.2.0 has exactly one cause and one fix: copy the old
+  folder across.
+- A sync yields ~116.6 k cards / ~1 050 sets from a 77 MB download. **Timings, measured
+  2026-08-05 over three live forced syncs (debug build):** `checking` <1 s · `downloading`
+  ~2.5 s · `ingesting` **~81 s** · `reclaiming` ~6 s · `sets` ~5 s — **92–99 s end to end**.
+  Re-measured 2026-08-06 on the day's rotated bulk file: **93 s**, corpus **116,590**
+  unchanged. Scryfall regenerates "once every 12–24 hours" in a 21:00–21:45 UTC window
+  (`default_cards` at ~21:16), so a forced Refresh finds a genuinely new file about once a
+  day; after that the ETag answers 304 until the next rotation, and the only way to make it
+  ingest again is the `sync_meta` reset below.
+  The old **44.8 s** figure predates schema v3: the ingest now gzips `raw` on the way in,
+  and that is where the extra minute went. A run that finds nothing new is **1.8 s**.
+- `mtg.db` was **2.02 GB** and is **547 MB** after the two things Plan 3 added: the one-time
+  `compacting` conversion (which reclaimed a 996 MB freelist) and gzip `raw`
+  (**622 MB → 235 MB**, 38 % of the original — not the quarter that was estimated). A
+  full re-ingest afterwards leaves the file within 0.03 % of that and the freelist at **0**,
+  which is the post-swap `incremental_vacuum` doing its job.
+- The app never closes its SQLite connection, so a `mtg.db-wal` the size of the ingest
+  (~857 MB) used to outlive the process. `RunEvent::Exit` now runs
+  `PRAGMA wal_checkpoint(TRUNCATE)`, and `journal_size_limit` caps the file at 64 MB.
+- A second launch inside 24 h makes **no network call at all** — the throttle returns
+  before the ETag check and writes nothing, so `last_check_at` does not move.
+- A **forced** Refresh skips only the throttle, not the ETag/`updated_at` check: if the
+  bulk file has not changed it answers "Already up to date" in well under a second and
+  emits nothing but a `checking` phase. To exercise a real ingest out of turn, clear
+  `bulk_etag` _and_ `bulk_updated_at` from `sync_meta` — clearing the etag alone still
+  short-circuits. That reset works, and it is the right tool for developing an ingest; it is
+  the wrong tool inside a **smoke**, because a hand-written `sync_meta` makes every timing
+  and every "what the app did on its own" claim afterwards a fiction. A smoke takes the
+  ingest the day offers it, or does without one and says so.
+- **The two halves of the reconciler run on different schedules, and that decides how a
+  fixture is staged.** `reconcile::apply` — the `/migrations` poll — runs on _every_ finished
+  run, the "already up to date" path included (`finish_unchanged` calls it deliberately: 304
+  is the answer most runs get). `reconcile::sweep_orphans` runs **only after a real ingest**.
+  So a merge can be exercised any time by deleting its `card_migrations` bookkeeping row and
+  forcing a Refresh; an orphan flag needs the day's ingest.
+- Searches keep answering through every second of a sync — 20 timed searches across one,
+  every one correct, none stalled (that is what `db_read` bought).
+- **A header press now costs _hundreds_ of milliseconds more than doing nothing, and
+  `idx_cards_collapse` is why the gap grew.** Re-measured 2026-08-11 end to end through
+  `invoke` on a **release** build over the live 107 346-row paper corpus, medians of five,
+  collapsed (the app's own default) — with the uncollapsed figure beside it:
+
+  | order                         | collapsed    | uncollapsed |
+  | ----------------------------- | ------------ | ----------- |
+  | **name** (the default browse) | **134.6 ms** | 32.3 ms     |
+  | **price**                     | 134.8 ms     | 26.0 ms     |
+  | `set`                         | **524.2 ms** | 609.0 ms    |
+  | `rarity`                      | **489.7 ms** | 570.2 ms    |
+  | `rarity+price`                | **512.4 ms** | 529.8 ms    |
+
+  **The split is whether the sort's column is in the index.** `name` and `price_usd` are, and
+  cost the browse and nothing more; `set_code` and `rarity` are not, and cost ~490–610 ms —
+  which is `schema.rs`'s own note that widening the index with those two "left the sorts it
+  was meant to help unchanged, because those cost row lookups rather than index reads".
+  The 2026-08-09 table (`set` 313 · `rarity` 325 · `rarity+price` 339 · `price` 345 against
+  **277 ms**) predates the index and **every number in it is superseded**, in both directions:
+  the browse got ~2× cheaper and the two uncovered sorts got ~1.6× dearer, so a press that
+  used to cost +36 ms now costs +390 ms. The earlier claim that this was a "fraction more"
+  survived one rewrite of this bullet on nothing but plausibility; it was false when written.
+
+- **"A text filter makes every sort cheap" is only true of a _narrow_ term**, and the old
+  12–15 ms figure named none. Measured the same way, collapsed, over three breadths:
+  `bolt` (45 matches) **4.4–4.5 ms** and the three orders indistinguishable; `dragon` (722)
+  **68.7–77.6 ms**; `a` (capped at 5 000) **2 077–2 432 ms**. FTS narrowing first is real, but
+  what it buys scales with how much it narrowed. No index was added _for sorting_: a
+  multi-term sort cannot use one past its leading column, and `schema::swap_staging` drops and
+  replays every index on `cards` on each sync. (**That sync's ~93 s is a debug figure**,
+  measured 2026-08-05 under `tauri dev`; the one release first-run measured 2026-08-11 had the
+  facet index answering `ready: true` 21 s after launch, which puts the whole opening sync
+  inside ~20 s. Every "~93 s sync" in this file is the debug number until someone times a
+  release sync end to end.)
+- **The browse today: 27.4 ms uncollapsed, 131.8 ms collapsed.** Measured 2026-08-11 end to
+  end through the shipped window over the live 107 346-row paper corpus — a **release** build,
+  `invoke("search_cards")` from the webview, medians of nine after two warm-ups — which puts
+  the IPC hop and the DTO serialisation inside the figure, unlike the `run_search` numbers
+  below (25 ms / 145 ms). The two **corroborate** each other rather than decompose into each
+  other: they are different sessions on different corpus days, and the pair straddles the
+  `run_search` figures in _both_ directions (27.4 > 25, 131.8 < 145), so no per-call overhead
+  can be read out of the difference. `idx_cards_collapse` is why both are what
+  they are, and the stale 277 ms is what the uncollapsed one replaces.
+  **Name the build**: the identical measurement on a _debug_ build is 38.4 ms / 181.6 ms.
+  The gap is only ~1.4× because the work is inside SQLite, which is C compiled with
+  optimisations either way — but a figure with no build named is still not a figure.
+  **The collapsed browse's cost is the count, not the page**: at `limit: 1` it is 119.9 ms of
+  the 131.8, because `TOTAL_CAP` walks the grouping until it has 5 000 cards.
+- **The search collapses printings into one row per card, and `idx_cards_collapse` is what
+  pays for it.** Measured 2026-08-11 through `run_search` itself (release build, read-only
+  copy of the live corpus, medians of five): **today's un-indexed browse 397 ms** (`SCAN c`,
+  a full table scan) → **25 ms uncollapsed** and **145 ms collapsed** with the index. The
+  index is worth more than the feature it was added for — every uncollapsed search gets that
+  16× for nothing — while grouping 107 337 rows into 37 553 costs ~120 ms on top. 14 MB,
+  0.7 s per sync, and it lives in `schema::CARDS_INDEXES` like every other index on `cards`.
+- **Time the query the app runs, not a transcription of it — and when a change adds an index,
+  measure the before-state with the index too.** The first draft of that table was wrong in
+  exactly that way: the uncollapsed baseline was taken before the index existed and the
+  collapsed figures after, which credited the grouping with a 2.3× win the index had paid
+  for. A `#[test]` calling `run_search` found it in one run.
+- **v9 widened `idx_cards_collapse` to carry `legal_mask`, `cmc` and `color_identity`, and a
+  filtered collapsed browse went 505 ms → 41 ms for it.** Measured 2026-08-11 over the live
+  corpus: 455–505 ms without the three columns against 22–47 ms with them, because without
+  them the filter predicate knocks the group scan off the index and into per-row lookups. The
+  cost is **+0.89 MB** and **4 ms** on the unfiltered browse, which the paragraph above is
+  about.
+- **That win exists only because `filters.rs` stopped parsing JSON, and the index alone made
+  things _worse_.** With the widened index in place, the same format-filtered collapsed browse
+  is **40.6 ms** through `legal_mask` and **591 ms** through `json_extract` — slightly worse
+  than the 505 ms before widening, because a wider index is a larger thing to scan when the
+  predicate cannot use it. An index and the query that reads it are one change; shipping the
+  first without the second buys the whole cost and none of the benefit.
+- **The collapsed shape is a `GROUP BY` step that also computes the representative's id, then
+  a primary-key join back.** `substr(max(coalesce(released_at,'0000-00-00') || id), 11)` is
+  the newest printing's id — the date is fixed-width, so the concatenation orders as
+  `released_at DESC, id DESC` and the id starts at character 11. That is 108 ms against
+  767 ms for joining on the group key, and against **2 486 ms** for the obvious
+  `row_number() OVER (PARTITION BY …)`, which stays slow even with the index.
+- **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must _not_ be.**
+  `oracle_id` is nullable, so a bare `GROUP BY c.oracle_id` merges every null-oracle printing
+  into one card — silently, with a printing count and price range spanning unrelated cards.
+  Null-safety costs 69 ms and no live row needs it (0 of 116 590); it is spent because the
+  failure is invisible. But `owned`/`wishlisted` probe **`c.oracle_id` on the joined
+  representative row**: written against the group key instead they cost **1 514 ms** on the
+  browse and **12 729 ms** on the rarity sort, because `coalesce(…)` is not indexable and all
+  37 553 groups then re-scan `cards`. An _expression_ index does not rescue it either —
+  SQLite scans one but will not treat it as covering (700 ms).
+- **`bm25()` cannot be aggregated.** `min(bm25(…))`, the same expression in a subquery, and an
+  ordinary CTE all fail with _"unable to use function bm25 in the requested context"_; only
+  `WITH … AS MATERIALIZED` works, so that keyword is load-bearing syntax. FTS5's `rank` column
+  _does_ aggregate and carries the table's default weights, which would silently discard this
+  app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
+  unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
+- Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
+  gives up its `LIMIT` and the sort runs after the join; name and price are answered by the
+  grouping itself. The mechanism stands; **its numbers are superseded and must not be quoted**
+  — the 670 ms unfiltered figure by the end-to-end table above (collapsed `set` 524.2 ms,
+  `rarity` 489.7 ms), and "88 ms with any text" by the breadth bullet above, which is the
+  finding that a text filter's help scales with how far it narrowed (4.4 ms on `bolt`, 69–78 ms
+  on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is not "any text".
+- **Art series outrank the card they depict, and collapse does not fix it.**
+  `Lightning Bolt // Lightning Bolt` (`astx 76s`, `layout='art_series'`) held the phrase twice
+  in its name field and bm25 rewarded it; art series carry their own `oracle_id`, so grouping
+  leaves them as their own rows. One `CASE` term at the front of the **relevance fallback
+  only** fixes it at 0.2 ms — a ranking nudge, never a filter, and an explicit sort is left
+  exactly as the reader asked for it. `min()` over that term is exact because no oracle group
+  mixes the two kinds: 3 610 groups are represented by an art or token row and **0** of them
+  also contains a real printing.
+- **The default browse used to be a full table scan, and one `DESC` was why.** (Superseded as
+  a _number_ — it was the 277 ms above, and `idx_cards_collapse` has since taken the
+  uncollapsed browse to 27.4 ms — but the mechanism is unchanged and still decides the sort.)
+  `ORDER_NAME`
+  is `c.name ASC, c.released_at DESC` — `idx_cards_name` can satisfy a leading `c.name` and
+  block-sort **one** trailing term within each group of identically-named printings, and with
+  two it gives up and sorts all 107 k rows through a temp b-tree. Measured against
+  `c.name ASC, c.id ASC`, which is what the Name column's own header sends: **0.1 ms, using
+  the index**. The `released_at` term is kept deliberately — dropping it changes which
+  printing of a card the browse opens on, which is a product decision and not a performance
+  one — and `search::tests::the_default_browse_puts_the_newest_printing_of_a_name_first`
+  pins the behaviour it buys.
+- The page query keeps its flat shape. The two correlated status subqueries
+  (`owned_quantity`, `wishlisted`) do run once per _matching_ row under an unindexed sort,
+  but that is only ~35 ms of it (313 ms full vs 280 ms lean) — and the two-step form that
+  would avoid them **does not preserve the sort's order**: `row_number() OVER ()` numbers
+  rows before the `ORDER BY`, measured rather than read.
+- The ingest **commits every 2 000 rows and releases the write connection between batches**,
+  so a collection edit during a sync waits one batch, not one sync. `ingest_gz` takes
+  `&Mutex<Connection>` for exactly that reason. **Measured mid-ingest: 10 `collection_add`
+  calls, 4–7 ms each, 0 `BUSY` refusals.** A killed ingest therefore leaves a _committed_
+  `cards_staging`; `prepare_database` drops it at the next launch, because the ETag that
+  would short-circuit the next check is written only after a _successful_ ingest.
+- `cards.raw` is a **gzip BLOB** from schema v3 (the column is still _declared_ `TEXT` — v1
+  is frozen — and SQLite's TEXT affinity leaves a BLOB alone). `json_extract` over it is a
+  hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
+  Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
+  **not** rewrite existing rows — the corpus converts on the next sync's swap.
+- **Schema is v10.** v10 adds `cards.legal_mask`, backfills it, and widens
+  `idx_cards_collapse` to carry the filter columns. **Our step sits _below_ main's v8 and v9
+  in the ladder deliberately** — it has now been renumbered **twice**, from v8 when main's
+  deck-category step landed and from v9 when main's error log did, and each time it had to
+  move _down_ the file as well as up in number. `migrate` reads `user_version` **once** and
+  then walks every block above it, so a higher-numbered block placed above a lower one commits
+  its version and then has the lower block write back over it. Position in the file is the
+  order of execution; the number is only the gate. **Expect a third renumber**, and treat
+  "renumber, then move to the bottom, then re-point the fixtures" as one operation.
+  v9 adds `error_log` — see [scryfall.md](scryfall.md). v8 replaced `deck_cards.zone` with a
+  user-owned category and added the deck's four new tables —
+  [decks-storage.md](decks-storage.md) describes it.
+  v7 is the collapse index's version and has **no statements of its own**: `CARDS_INDEXES`
+  describes the table _at head_ and now names `legal_mask`, so **only the newest step may
+  create from that list**, and every step below v10 creates no index at all. Every statement
+  in it is `IF NOT EXISTS`, which is what makes v10's replay "bring the index list up to date"
+  rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
+  widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
+  paragraph below describes v5.)
+- **`legal_mask` is Scryfall's `legalities` object as one integer, and its key order is
+  frozen.** `legalities::LEGALITY_KEYS` is 23 keys and bit _k_ is `LEGALITY_KEYS[k]` — **bit
+  positions are stored data**, held in every `cards` row, so reordering the list silently
+  reinterprets the whole corpus. Keys may only ever be **appended**: a key Scryfall removes
+  keeps its bit and stops being set, a key Scryfall adds sets no bit until it is appended
+  _and_ a sync has run. `restricted` counts as playable alongside `legal` — a Vintage search
+  that hid Black Lotus would be wrong. It buys two things: a facet pass over the live corpus
+  is **16.8 ms against 695 ms** for 23 `json_extract`s per row, and a JSON path cannot be
+  indexed while a bitwise test on a column can. **Name the build**: that pair, and every
+  other SQL figure this branch added (`filters.rs`'s 40.6/591 ms, `schema.rs`'s 455–505 →
+  22–47 ms and +0.89 MB, `index/mod.rs`'s 2 238/62/106–167 ms) was timed 2026-08-11 through
+  `node:sqlite` against a **page-for-page online backup** of the live database — SQLite's own
+  C, which is compiled the same whether the caller is a debug or a release crate, so the
+  fixture is the thing worth naming and a cargo profile would say nothing. It is derived natively by `card_row` from the
+  next sync on, so the v9 backfill's `legalities::mask_sql` is the only time it is ever
+  computed in SQL. **Verified live 2026-08-11 over the whole 116 695-row corpus**, both ways
+  in: the migration backfill and a full fresh ingest each agree with `json_extract` on all 23
+  keys, 0 rows disagreeing and 0 NULL masks.
+- **Our `legal_mask` migration on a real database is ~7 s of launch, before there is a window
+  to say so in.** Measured 2026-08-11 on the live 563 MB / 116 695-row file (debug build,
+  67 MB WAL to replay), when the step was still numbered v9: `user_version` flipped **7.0 s**
+  after the process started, and the app
+  came up on the corpus rather than on "move `mtg.db` aside". That is process start, WAL
+  recovery, the `ALTER`, the full-table backfill and the index rebuild together — the
+  synthetic 469 MB stand-in the step's own comment quotes measured the backfill alone at
+  2.9–5.0 s in a release build, and this is the first time the step has run against real data.
+- **A migration that touches `cards` must take the `CARDS_INDEXES` replay from the step below
+  it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
+  what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
+  `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
+  `idx_cards_collapse` share a name. **The v9 fixture is "head minus one" and is renamed on
+  every renumber** (`v8_database` → `v9_database` so far) — it means "the version below ours",
+  never a fixed number. It is also why a rewind fixture may only undo the steps
+  _above_ where it claims to sit: `migrate` reads `user_version` once and walks every step
+  above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
+  tables and dies on a duplicate column — a failure no real upgrade can produce.
+- v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
+  and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
+  (2026) makes a commander out of a Vehicle or Spacecraft _with a P/T box_, and that is
+  unanswerable without them. Its backfill reads `raw` through `schema::json_raw` exactly as
+  v3's `artist` did, so it could only recover the **1 510 of 116 590** rows that keep a
+  `card_faces` array; everything else fills on the next sync's swap. Until then **both
+  columns NULL means unknown, never "no P/T box"**, and `deck::get_deck` repairs the rows
+  that ask (`fill_unknown_power_toughness`, gunzipped in Rust, gated on a type line that
+  could have one).
