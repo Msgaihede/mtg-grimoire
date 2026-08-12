@@ -124,8 +124,7 @@ function category(
     sortOrder: id - 1,
     // The heading counts the rows it was handed, so these three are read by nothing here.
     cardCount: 0,
-    totalPriceUsd: null,
-    totalPriceEur: null,
+    totalPrice: null,
     cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
@@ -166,7 +165,7 @@ function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
     name: "Lightning Bolt",
     typeLine: "Instant",
     quantity: 4,
-    unitPriceUsd: 4.5,
+    unitPrice: 4.5,
     ownedQuantity: 3,
     ...overrides,
   });
@@ -183,18 +182,15 @@ function found(name: string): CardSummary {
     rarity: "rare",
     typeLine: "Creature — Goblin",
     manaCost: "{R}",
-    priceUsd: 1.5,
-    priceEur: 1.2,
+    price: 1.5,
     layout: "normal",
     oracleId: `o-${name}`,
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,
     printings: 1,
-    priceLowUsd: 1.5,
-    priceHighUsd: 1.5,
-    priceLowEur: 1.2,
-    priceHighEur: 1.2,
+    priceLow: 1.5,
+    priceHigh: 1.5,
   };
 }
 
@@ -1425,7 +1421,7 @@ describe("DeckEditor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Theory" }));
 
-    await waitFor(() => expect(deckGet).toHaveBeenCalledWith(4, "theory"));
+    await waitFor(() => expect(deckGet).toHaveBeenCalledWith(4, "theory", "tcgplayer"));
     // The card the plan adds is on screen, and the pane context it writes says which list.
     await userEvent.click(await screen.findByRole("button", { name: /^Bear/ }));
     expect(useAppStore.getState().paneDeckContext?.variant).toBe("theory");

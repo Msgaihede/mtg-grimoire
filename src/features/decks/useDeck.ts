@@ -9,6 +9,7 @@ import {
   type DeckVariant,
 } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor } from "./autoCategory";
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
@@ -95,20 +96,30 @@ export function opened(id: number | null): number {
  * on every gallery render.
  *
  * **Switching variant is a query-key change, not a refetch.** `["decks", "detail", id,
- * variant]`, so Live and Theory are two cached answers rather than one that is thrown away
- * and re-read every time the reader flips the switch — flipping back is instant, and each
- * list keeps its own freshness. It also means the optimistic patch below is addressing the
- * right list by construction: the cache it writes into holds one variant's cards and no
- * other.
+ * variant, marketplace]`, so Live and Theory are two cached answers rather than one that is
+ * thrown away and re-read every time the reader flips the switch — flipping back is instant,
+ * and each list keeps its own freshness. It also means the optimistic patch below is
+ * addressing the right list by construction: the cache it writes into holds one variant's
+ * cards and no other.
+ *
+ * **The marketplace is in the key for a different reason, and it is not free.** `deck_get`
+ * prices every row and every category heading with it, so two marketplaces are two answers —
+ * switching re-reads the deck. That is the trade the singular-price shape makes deliberately:
+ * one number per row rather than one per marketplace per row. The read is local SQLite over a
+ * deck-sized list, and flipping back finds the previous answer still cached.
  */
 export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIANT) {
   const queryClient = useQueryClient();
+  // Read here rather than passed in: every caller of this hook would otherwise have to thread
+  // it through, and one that forgot would silently read a deck priced at the default while the
+  // heading beside it named something else.
+  const { marketplace } = useMarketplace();
 
-  const detailKey = ["decks", "detail", id, variant];
+  const detailKey = ["decks", "detail", id, variant, marketplace.id];
 
   const query = useQuery({
     queryKey: detailKey,
-    queryFn: () => ipc.deckGet(opened(id), variant),
+    queryFn: () => ipc.deckGet(opened(id), variant, marketplace.id),
     enabled: id !== null,
   });
 

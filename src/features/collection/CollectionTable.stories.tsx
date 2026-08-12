@@ -55,13 +55,12 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     condition: "NM",
     quantity: 1,
     tradelistQuantity: 0,
-    unitPriceUsd: finishPrice(card.prices, finish, "usd"),
-    // `collection::FINISH_PRICE_EUR`, hole and all — and now through the same function, which
-    // takes a currency and knows the hole: **`eur_etched` does not exist in Scryfall's data**,
-    // so an etched card comes back `null` here rather than valued at the nonfoil rate. That is
-    // no longer invisible in this file: the Value column reads whichever of these two the
-    // selected marketplace names, so an etched row draws an em dash on Cardmarket.
-    unitPriceEur: finishPrice(card.prices, finish, "eur"),
+    // **One price, and it is what a TCGplayer read answers**: the marketplace is a query
+    // parameter now, so a row carries the figure the backend already chose rather than a pair
+    // for a cell to pick between. A story about another marketplace overrides this field with
+    // that marketplace's number — see `InEuros` below, where the etched row is `null` because
+    // `eur_etched` does not exist in Scryfall's data at all.
+    unitPrice: finishPrice(card.prices, finish, "usd"),
     purchasePrice: null,
     purchaseCurrency: null,
     acquiredAt: null,
@@ -313,8 +312,7 @@ export const Orphan: Story = {
         manaCost: null,
         typeLine: null,
         layout: null,
-        unitPriceUsd: null,
-        unitPriceEur: null,
+        unitPrice: null,
         needsReview: MISSING,
       }),
       // Deliberately **not** `ROWS.slice(0, 3)`, which the other stories use: that slice holds
@@ -392,26 +390,35 @@ export const EveryFinish: Story = {
  *
  * `usd_etched` exists and is $2.07 for this printing (Assassin's Creed 211, the fixture's one
  * **etched-only** card: its `finishes` is `["etched"]`, and its `usd` and `usd_foil` are both
- * null). `eur_etched` does **not** exist in Scryfall's data at all, so `unitPriceEur` is `null`
- * for every etched row in the app.
+ * null). `eur_etched` does **not** exist in Scryfall's data at all, so the same row read at
+ * Cardmarket comes back unpriced — see `InEuros`, which is that read.
  */
 export const Etched: Story = {
   args: { rows: [entry(printing("acr", "211"), "etched")], total: 1 },
 };
 
 /**
- * The same table, quoted on Cardmarket — and **the hole above, made visible**.
+ * The same table as a **Cardmarket read answers it** — and the hole above, made visible.
  *
- * The Value column reads whichever of a row's two unit prices the selected marketplace names,
- * so the etched row here is an em dash while the same row draws $2.07 on TCGplayer. That em
- * dash is the correct answer and not a gap to be filled: `eur_etched` is not a key Scryfall
- * has, so quoting the nonfoil euro rate — or the dollar figure with a euro sign on it — would
- * be inventing a price nobody offered, in a currency the reader chose precisely so they would
- * be told this marketplace's number.
+ * The rows here carry what `collection_list` would have returned with `marketplace:
+ * "cardmarket"`: the nonfoil row's `eur` figure, and `null` for the etched one. That em dash is
+ * the correct answer and not a gap to be filled — `eur_etched` is not a key Scryfall has, so
+ * quoting the nonfoil euro rate, or the dollar figure with a euro sign on it, would be
+ * inventing a price nobody offered.
+ *
+ * **The prices are computed rather than typed**, through the same `finishPrice` the fake uses,
+ * so the story stays honest about what a real read would answer the day the fixture changes.
  */
 export const InEuros: Story = {
   args: {
-    rows: [entry(printing("sta", "105"), "nonfoil"), entry(printing("acr", "211"), "etched")],
+    rows: [
+      entry(printing("sta", "105"), "nonfoil", {
+        unitPrice: finishPrice(printing("sta", "105").prices, "nonfoil", "eur"),
+      }),
+      entry(printing("acr", "211"), "etched", {
+        unitPrice: finishPrice(printing("acr", "211").prices, "etched", "eur"),
+      }),
+    ],
     total: 2,
     marketplace: MARKETPLACES.cardmarket,
   },
@@ -513,7 +520,7 @@ export const SortedByValue: Story = {
   args: {
     rows: [...ROWS].sort((a, b) => {
       const value = (r: CollectionRow) =>
-        r.unitPriceUsd === null ? null : r.unitPriceUsd * r.quantity;
+        r.unitPrice === null ? null : r.unitPrice * r.quantity;
       const x = value(a);
       const y = value(b);
       if (x === null) return y === null ? a.id - b.id : 1;

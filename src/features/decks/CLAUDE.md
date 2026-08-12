@@ -63,8 +63,12 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
-- **A deck card's unit price is the nonfoil `usd` key of that printing's `prices` blob** — a deck
-  names a printing, not a finish. `cards.price_usd` is a fallback chain and is never summed.
+- **A deck card's unit price is that printing's nonfoil price at the selected marketplace** — a
+  deck names a printing, not a finish. `cards.price_usd` is a fallback chain across finishes and
+  is never summed. **One `unitPrice` per row, not a pair**: the marketplace is in `useDeck`'s
+  query key, so switching re-reads the deck, and `deckStats`, `buildGroups`, `sortCards` and
+  `diffTotals` take no `Currency` at all any more — a heading, the rows under it and the strip
+  above them cannot be about different money, by construction.
 
 ## Views and interaction
 

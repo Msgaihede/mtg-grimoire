@@ -21,29 +21,30 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
  * not shopping in. The label still names the currency, because a bare "Value" over a figure
  * that changes denomination in Settings would be a number with no units.
  *
- * **The unpriced count moves with it, and it has to.** The two currencies do not have the same
- * holes: `eur_etched` does not exist in Scryfall's data at all, so an etched printing is
- * priced in dollars and unpriced in euros at the same time. Rust counts both
- * (`unpricedUsd`/`unpricedEur`) precisely so this note can be about the figure beside it
- * rather than about the other one.
+ * **The unpriced count travels with the figure, and it has to.** No two marketplaces have the
+ * same holes: `eur_etched` does not exist in Scryfall's data at all, so an etched printing is
+ * priced on TCGplayer and unpriced on Cardmarket at the same time, and a card a bulk feed has
+ * never listed is unpriced on that feed alone. `unpriced` is counted at the marketplace
+ * `value` was summed at, so this note is about the number beside it and never about another.
  *
  * `undefined` while the first answer is in flight, and an em dash rather than a zero: a
  * collection that briefly claims to be worth nothing is a worse sentence than one that has
- * not said yet.
+ * not said yet. That gap is now real on a *switch* as well as on first paint — the summary is
+ * keyed on the marketplace and genuinely re-runs — which is why the placeholder is the whole
+ * row's rule rather than a first-load special case.
  */
 export function CollectionSummaryHeader({
   summary,
   marketplace,
 }: {
   summary: Summary | undefined;
-  /** Which marketplace's prices this row totals. Its currency picks the twin field; its label
-   *  is the as-of sentence. */
+  /** Which marketplace's prices this row totals: its currency writes the figure, its label is
+   *  the as-of sentence. The figure itself was summed by the query. */
   marketplace: Marketplace;
 }) {
   const n = (value: number) => value.toLocaleString("en-US");
-  const eur = marketplace.currency === "eur";
-  const value = summary ? (eur ? summary.valueEur : summary.valueUsd) : null;
-  const unpriced = summary ? (eur ? summary.unpricedEur : summary.unpricedUsd) : 0;
+  const value = summary ? summary.value : null;
+  const unpriced = summary ? summary.unpriced : 0;
   return (
     <FigureRow>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}

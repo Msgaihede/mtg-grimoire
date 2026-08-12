@@ -32,8 +32,7 @@ function row(over: Partial<TheoryDiffRow> = {}): TheoryDiffRow {
     name: "Lightning Bolt",
     categoryName: "Removal",
     quantity: 2,
-    unitPriceUsd: 400,
-    unitPriceEur: 320,
+    unitPrice: 400,
     setCode: "lea",
     collectorNumber: "161",
     ownedSpare: 0,
@@ -47,7 +46,7 @@ const SOL_RING = row({
   name: "Sol Ring",
   categoryName: "Ramp",
   quantity: 3,
-  unitPriceUsd: 1.5,
+  unitPrice: 1.5,
   setCode: "c21",
   collectorNumber: "263",
   ownedSpare: 1,
@@ -59,7 +58,7 @@ const UNPRICED = row({
   name: "Serra Angel",
   categoryName: "Creatures",
   quantity: 1,
-  unitPriceUsd: null,
+  unitPrice: null,
   setCode: "lea",
   collectorNumber: "175",
 });
@@ -134,7 +133,7 @@ describe("the theory difference dialog", () => {
     expect(bolt).toHaveTextContent("$400.00");
     // The unpriced printing gets an em dash and never `$0.00`, which is a price nobody quoted.
     expect(await rowFor("Serra Angel")).toHaveTextContent("—");
-    expect(deckTheoryDiff).toHaveBeenCalledWith(4);
+    expect(deckTheoryDiff).toHaveBeenCalledWith(4, "tcgplayer");
   });
 
   /**
@@ -183,7 +182,7 @@ describe("the theory difference dialog", () => {
     // Three wanted, three loose in the box. The plan still needs three: `quantity` has already
     // had the live list taken out of it and `ownedSpare` has not, so netting them counts the
     // live list twice.
-    const totals = diffTotals([row({ quantity: 3, ownedSpare: 3, unitPriceUsd: 2 })], "usd");
+    const totals = diffTotals([row({ quantity: 3, ownedSpare: 3, unitPrice: 2 })]);
 
     expect(totals.copies).toBe(3);
     expect(totals.cost).toBe(6);
@@ -193,26 +192,31 @@ describe("the theory difference dialog", () => {
   /**
    * The shopping list's total is quoted in the marketplace the reader picked, and it is a
    * *different sum* rather than the same sum with a different symbol — nothing in this app
-   * converts.
+   * converts. The rows arrive priced, so a second marketplace is a second set of rows.
    *
-   * The second half is the etched hole where it costs a reader money: a card with a dollar
-   * price and no euro one is left out of the euro sum and counted in `unpriced`, never charged
-   * at its dollar rate. A "cost to build" that quietly borrowed the other currency's figure
-   * would be the most expensive lie this dialog could tell.
+   * The second half is the hole where it costs a reader money: a card the selected marketplace
+   * does not list is left out of the sum and **counted** in `unpriced`, never charged at
+   * anything. A "cost to build" that quietly borrowed another marketplace's figure would be the
+   * most expensive lie this dialog could tell — and there is no longer a field on the row it
+   * could borrow from.
    */
-  it("sums the currency it is given, and counts that currency's own gaps", () => {
-    const rows = [
-      row({ cardId: "a", quantity: 2, unitPriceUsd: 10, unitPriceEur: 8 }),
-      row({ cardId: "b", quantity: 1, unitPriceUsd: 50, unitPriceEur: null }),
+  it("sums what the rows cost and counts what it could not price", () => {
+    const priced = [
+      row({ cardId: "a", quantity: 2, unitPrice: 10 }),
+      row({ cardId: "b", quantity: 1, unitPrice: 50 }),
     ];
+    const whole = diffTotals(priced);
+    expect(whole.cost).toBe(70);
+    expect(whole.unpriced).toBe(0);
 
-    const usd = diffTotals(rows, "usd");
-    expect(usd.cost).toBe(70);
-    expect(usd.unpriced).toBe(0);
-
-    const eur = diffTotals(rows, "eur");
-    expect(eur.cost).toBe(16);
-    expect(eur.unpriced).toBe(1);
+    // The same two cards, read at a marketplace that lists only the first.
+    const gappy = [
+      row({ cardId: "a", quantity: 2, unitPrice: 8 }),
+      row({ cardId: "b", quantity: 1, unitPrice: null }),
+    ];
+    const partial = diffTotals(gappy);
+    expect(partial.cost).toBe(16);
+    expect(partial.unpriced).toBe(1);
   });
 
   /**

@@ -192,16 +192,11 @@ export function TableView({
         headerLabel: `Price. ${pricesAsOf(marketplace)}`,
         headerClassName: "text-right",
         cellClassName: "text-right font-mono text-xs tabular-nums",
-        // The twin field the selected currency names, never a chain across the two: a deck
-        // card is priced at its printing's nonfoil rate, and Scryfall has a `eur` key for
-        // that — so this is an em dash only where the printing itself is unpriced.
+        // The one price the read answered with, at the selected marketplace, and never a
+        // chain to another one's: a deck card is priced at its printing's nonfoil rate, so
+        // this is an em dash exactly where that marketplace does not quote that printing.
         cell: (row) =>
-          row.kind === "card"
-            ? formatPrice(
-                marketplace.currency === "eur" ? row.card.unitPriceEur : row.card.unitPriceUsd,
-                marketplace.currency,
-              )
-            : null,
+          row.kind === "card" ? formatPrice(row.card.unitPrice, marketplace.currency) : null,
       },
       {
         key: "owned",

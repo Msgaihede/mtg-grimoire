@@ -17,10 +17,8 @@ const SUMMARY: CollectionSummary = {
   uniqueCards: 742,
   entries: 806,
   tradelistCards: 0,
-  valueUsd: 4182.55,
-  valueEur: 3640.18,
-  unpricedUsd: 0,
-  unpricedEur: 0,
+  value: 4182.55,
+  unpriced: 0,
   needsReview: 0,
 };
 
@@ -87,20 +85,21 @@ export const Full: Story = {
 /**
  * The same collection, quoted on Cardmarket.
  *
- * The whole of what the marketplace setting does to this row, and the reason `valueEur` is on
- * the DTO at all: **the same query answer, a different field read**. Switching is a re-render
- * off the cache the page already has — no refetch, no spinner, no gap — and the label moves
- * with the figure, because a bare "Value" over a number that changes denomination in Settings
- * is a number with no units.
+ * **A different answer to the same query, not a different field of one answer.** The
+ * marketplace is a parameter of `collection_summary` and part of its key, so switching re-runs
+ * the aggregate and this row is handed a new `value` — which is why the fixture below is a
+ * euro figure rather than `SUMMARY` with a second key on it. The label moves with the figure,
+ * because a bare "Value" over a number that changes denomination in Settings is a number with
+ * no units.
  */
 export const InEuros: Story = {
-  args: { summary: SUMMARY, marketplace: MARKETPLACES.cardmarket },
+  args: { summary: { ...SUMMARY, value: 3610.2 }, marketplace: MARKETPLACES.cardmarket },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Value (EUR)")).toBeInTheDocument();
-    await expect(canvas.getByText(formatPrice(SUMMARY.valueEur, "eur"))).toBeInTheDocument();
+    await expect(canvas.getByText(formatPrice(3610.2, "eur"))).toBeInTheDocument();
     // The dollar total is not on screen at all — one answer, not two.
-    await expect(canvas.queryByText(formatPrice(SUMMARY.valueUsd, "usd"))).toBeNull();
+    await expect(canvas.queryByText(formatPrice(SUMMARY.value, "usd"))).toBeNull();
   },
 };
 
@@ -119,10 +118,8 @@ export const Empty: Story = {
       uniqueCards: 0,
       entries: 0,
       tradelistCards: 0,
-      valueUsd: 0,
-      valueEur: 0,
-      unpricedUsd: 0,
-      unpricedEur: 0,
+      value: 0,
+      unpriced: 0,
       needsReview: 0,
     },
     marketplace: MARKETPLACES.tcgplayer,
@@ -140,32 +137,32 @@ export const Empty: Story = {
  * The copies the sum could not price, beside the sum.
  *
  * A total that silently omits 200 cards is a number that lies by rounding down, so the count
- * travels with the value — **and it is the count for the currency on screen**, which is why
- * Rust answers `unpricedUsd` and `unpricedEur` separately rather than one number.
+ * travels with the value — **and it is the count for the marketplace on screen**, which is why
+ * Rust counts it at the marketplace it summed at rather than answering one number for all.
  *
- * The two genuinely disagree, in both directions: **etched printings have no EUR price in
- * Scryfall's data at all** — `eur_etched` is documented and absent — so an etched copy can be
- * priced in USD and unpriced in EUR; and the reverse is just as real, with Black Lotus's Alpha
- * printing carrying `"eur": "38719.86"` against `usd`, `usd_foil` and `usd_etched` all null
- * (`.storybook/fake/cards.ts`, `lea 232`). A shared count would have to be wrong about
- * whichever figure it was not describing.
+ * No two marketplaces have the same holes, in both directions: **etched printings have no EUR
+ * price in Scryfall's data at all** — `eur_etched` is documented and absent — so an etched copy
+ * can be priced on TCGplayer and unpriced on Cardmarket; the reverse is just as real, with
+ * Black Lotus's Alpha printing carrying `"eur": "38719.86"` against `usd`, `usd_foil` and
+ * `usd_etched` all null (`.storybook/fake/cards.ts`, `lea 232`); and a bulk feed simply not
+ * listing a printing is a third shape again. A count carried across a switch would be wrong
+ * about exactly the rows it is for.
  */
 export const WithUnpriced: Story = {
   args: {
-    summary: { ...SUMMARY, unpricedUsd: 412, unpricedEur: 486 },
+    summary: { ...SUMMARY, unpriced: 412 },
     marketplace: MARKETPLACES.tcgplayer,
   },
   play: async ({ canvasElement }) => {
-    // The dollar count, because the dollar figure is the one beside it.
     await expect(within(canvasElement).getByText("412 unpriced")).toBeInTheDocument();
-    await expect(within(canvasElement).queryByText("486 unpriced")).toBeNull();
   },
 };
 
-/** The same answer on Cardmarket, where the *other* count is the one that belongs. */
+/** The same collection on Cardmarket, where a **different** set of copies goes unpriced — the
+ *  answer to a second query rather than a second field of the first. */
 export const WithUnpricedInEuros: Story = {
   args: {
-    summary: { ...SUMMARY, unpricedUsd: 412, unpricedEur: 486 },
+    summary: { ...SUMMARY, value: 3610.2, unpriced: 486 },
     marketplace: MARKETPLACES.cardmarket,
   },
   play: async ({ canvasElement }) => {

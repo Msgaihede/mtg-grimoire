@@ -39,8 +39,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     isActive: true,
     sortOrder: 1,
     cardCount: 0,
-    totalPriceUsd: null,
-    totalPriceEur: null,
+    totalPrice: null,
     cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
@@ -57,19 +56,19 @@ const MAYBE = category({
 });
 
 const CARDS: DeckCard[] = [
-  card({ name: "Sol Ring", quantity: 2, unitPriceUsd: 1.99, gameChanger: true }),
+  card({ name: "Sol Ring", quantity: 2, unitPrice: 1.99, gameChanger: true }),
   card({
     name: "Arcane Signet",
-    unitPriceUsd: 0.99,
+    unitPrice: 0.99,
     tagId: 1,
     tagName: "Ramp piece",
     tagColor: "moss",
   }),
-  { ...card({ name: "Serah Farron", categoryKind: "commander" }), unitPriceUsd: 4.93 },
+  { ...card({ name: "Serah Farron", categoryKind: "commander" }), unitPrice: 4.93 },
   {
     ...card({ name: "Avacyn", categoryKind: "maybe" }),
     quantity: 4,
-    unitPriceUsd: null,
+    unitPrice: null,
   },
 ];
 
@@ -87,7 +86,6 @@ const GROUPS: CardGroup[] = buildGroups(
   [COMMANDER, RAMP, MAYBE],
   "category",
   "alphabetical",
-  "usd",
 );
 
 /**
@@ -155,23 +153,26 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
   });
 
   /**
-   * **Every view, one claim: switching marketplace changes what is on screen.**
+   * **Every view, one claim: the money on screen is the selected marketplace's.**
    *
-   * Written as a sweep across all four because the currency reaches each of them by a
+   * Written as a sweep across all four because the marketplace reaches each of them by a
    * different route — a band's heading, a stacked heading, a tight one, a table column — and a
-   * view that quietly kept its own dollars would pass every other assertion in this file.
+   * view that quietly formatted in dollars would pass every other assertion in this file.
    *
-   * The Ramp pile is the anchor: two Sol Rings at €1 and one Signet at €0.50, so the euro
-   * total is a number the dollar figures could not produce by rounding.
+   * The rows here are what a **Cardmarket** read answers: two Sol Rings at €1 and one Signet at
+   * €0.50. That is the shape the whole feature turns on — a switch changes the rows, not which
+   * field a cell reads — so the fixture is a different set of numbers rather than a second
+   * column, and `$4.97` (what the TCGplayer rows would have summed to) is asserted absent
+   * because a view that ignored its `marketplace` prop would print exactly that.
    */
   it("quotes the selected marketplace, and the previous one disappears", () => {
     const priced: DeckCard[] = [
-      card({ name: "Sol Ring", quantity: 2, unitPriceUsd: 1.99, unitPriceEur: 1 }),
-      card({ name: "Arcane Signet", unitPriceUsd: 0.99, unitPriceEur: 0.5 }),
+      card({ name: "Sol Ring", quantity: 2, unitPrice: 1 }),
+      card({ name: "Arcane Signet", unitPrice: 0.5 }),
     ];
     render(
       renderView({
-        groups: buildGroups(priced, [RAMP], "category", "alphabetical", "eur"),
+        groups: buildGroups(priced, [RAMP], "category", "alphabetical"),
         marketplace: MARKETPLACES.cardmarket,
       }),
     );
@@ -394,7 +395,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
   it("makes no drop target of a derived group", () => {
     render(
       renderView({
-        groups: buildGroups(CARDS, [COMMANDER, RAMP, MAYBE], "manaValue", "alphabetical", "usd"),
+        groups: buildGroups(CARDS, [COMMANDER, RAMP, MAYBE], "manaValue", "alphabetical"),
         marketplace: TCG,
         actions: actions(),
       }),
@@ -506,7 +507,7 @@ describe("the views that are not the table", () => {
       "StackView",
       <StackView
         key="s"
-        groups={buildGroups([], [RAMP], "category", "alphabetical", "usd")}
+        groups={buildGroups([], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
       />,
     ],
@@ -514,7 +515,7 @@ describe("the views that are not the table", () => {
       "TextView",
       <TextView
         key="t"
-        groups={buildGroups([], [RAMP], "category", "alphabetical", "usd")}
+        groups={buildGroups([], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
       />,
     ],
@@ -522,7 +523,7 @@ describe("the views that are not the table", () => {
       "GridView",
       <GridView
         key="g"
-        groups={buildGroups([], [RAMP], "category", "alphabetical", "usd")}
+        groups={buildGroups([], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
       />,
     ],
@@ -562,7 +563,6 @@ describe("StackView columns", () => {
           [COMMANDER, RAMP, MAYBE],
           "category",
           "alphabetical",
-          "usd",
         )}
         // Exactly two three-card groups tall, and **derived rather than typed**: a group is
         // `46 + stackHeight(n) + 20` (header and padding, the stack, the gap), and a card's height
@@ -598,7 +598,6 @@ describe("StackView columns", () => {
           [RAMP],
           "category",
           "alphabetical",
-          "usd",
         )}
         marketplace={TCG}
         columnHeight={4000}
@@ -782,7 +781,6 @@ describe("TableView", () => {
           [MAYBE],
           "category",
           "alphabetical",
-          "usd",
         )}
         marketplace={TCG}
       />,

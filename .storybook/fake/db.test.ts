@@ -25,6 +25,7 @@ import type {
   WishlistPage,
   WishlistSortKey,
 } from "@/lib/ipc";
+import type { MarketplaceId } from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
 
 const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
@@ -483,7 +484,7 @@ describe("a row whose card is gone", () => {
     const page = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } });
     expect(page.items[0].name).toBeNull();
     expect(page.items[0].rarity).toBeNull();
-    expect(page.items[0].unitPriceUsd).toBeNull();
+    expect(page.items[0].unitPrice).toBeNull();
     expect(page.items[0].setCode).toBe("lea");
     expect(page.items[0].lang).toBe("en");
   });
@@ -515,12 +516,48 @@ describe("prices", () => {
         entry({ id: 3, cardId: sta.id, finish: "etched" }),
       ],
     });
-    const page = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } });
-    const usd = page.items.map((i) => i.unitPriceUsd);
+    const handlers = readHandlers(db);
+    const usd = handlers
+      .collection_list({ query: { limit: 10, offset: 0 } })
+      .items.map((i) => i.unitPrice);
     expect(new Set(usd).size).toBe(3);
-    // `eur_etched` does not exist, so the etched row is unpriced in euros rather than
-    // quoted at the nonfoil rate.
-    expect(page.items.find((i) => i.finish === "etched")!.unitPriceEur).toBeNull();
+    // `eur_etched` does not exist, so the same read at Cardmarket leaves the etched row
+    // unpriced rather than quoting it at the nonfoil rate — the hole, at the grain it happens.
+    const eur = handlers.collection_list({
+      query: { marketplace: "cardmarket", limit: 10, offset: 0 },
+    });
+    expect(eur.items.find((i) => i.finish === "etched")!.unitPrice).toBeNull();
+    expect(eur.items.find((i) => i.finish === "nonfoil")!.unitPrice).not.toBeNull();
+  });
+
+  /**
+   * **A downloaded feed prices from its own table, and its holes are its own.**
+   *
+   * The two Scryfall-backed marketplaces read `cards.prices`; Card Kingdom and Mana Pool read
+   * `marketplace_prices`, joined on `(marketplace, card_id, finish)` with no foreign key — so a
+   * printing a feed has never listed is unpriced *there* while every other marketplace quotes
+   * it. That is the case no amount of currency arithmetic can produce, and it is the one the em
+   * dash rule exists for.
+   */
+  it("prices a feed-backed marketplace from marketplace_prices, holes and all", () => {
+    const sta = CARDS.find((c) => c.setCode === "sta" && c.name === "Lightning Bolt")!;
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: sta.id, finish: "nonfoil" })],
+      marketplacePrices: [
+        { marketplace: "cardkingdom", cardId: sta.id, finish: "nonfoil", price: 19.64 },
+      ],
+    });
+    const handlers = readHandlers(db);
+    const at = (marketplace: MarketplaceId) =>
+      handlers.collection_list({ query: { marketplace, limit: 10, offset: 0 } }).items[0]
+        .unitPrice;
+
+    expect(at("cardkingdom")).toBe(19.64);
+    // Listed by one feed and not by the other: unpriced at Mana Pool, and never filled in from
+    // Card Kingdom's row or from Scryfall's blob.
+    expect(at("manapool")).toBeNull();
+    // And the Scryfall-backed one is untouched by either.
+    expect(at("tcgplayer")).toBe(17.85);
   });
 
   it("counts a zero row in uniqueCards and not in totalCards", () => {
@@ -1066,7 +1103,7 @@ describe("the deck read", () => {
     ]);
     // `sum(quantity)` and the nonfoil `usd` × copies over the variant asked for — `lea 161`
     // is 620.00 — and `null` rather than 0 where there is nothing to price.
-    expect(detail.categories.map((c) => c.totalPriceUsd)).toEqual([null, 1860, null, null, 620]);
+    expect(detail.categories.map((c) => c.totalPrice)).toEqual([null, 1860, null, null, 620]);
     expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2].cardCount).toBe(
       9,
     );
@@ -1126,7 +1163,7 @@ describe("the deck read", () => {
     });
     const detail = liveDeck(db)!;
     // `lea 161`'s blob is `usd` 620.00 with both foil keys null.
-    expect(detail.cards[0].unitPriceUsd).toBe(620);
+    expect(detail.cards[0].unitPrice).toBe(620);
     // CR 100.4a for the sideboard, EDH's "effectively a 101st card" for the companion.
     expect(detail.deck.cardCount).toBe(4);
   });
@@ -1913,13 +1950,15 @@ describe("the busy fault", () => {
       parentId: null,
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
+      marketplace: "cardkingdom",
     };
-    // 40 commands in the table, the five above excluded: 35 that really take the lock —
-    // re-counted 2026-08-12 with `set_marketplace`, which is the newest of them. Like
-    // `error_log_clear` before it, it takes `AppState.db` through `lock_for` and is therefore
-    // refusable, where its own read half (`get_marketplace`, on `db_read`) is not.
+    // 41 commands in the table, the five above excluded: 36 that really take the lock —
+    // re-counted 2026-08-12 with `marketplace_feed_refresh`, which is the newest of them. It
+    // rewrites `marketplace_prices` through `lock_for` like every other write here, where its
+    // two read halves (`marketplace_feed_status` and `get_marketplace`, on `db_read`) are not
+    // refusable at all.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(35);
+    expect(names).toHaveLength(36);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -1981,6 +2020,73 @@ describe("the whole command table", () => {
     );
     // Refused, and the row it would have overwritten is still the one that was chosen.
     expect(db.marketplace).toBe("cardmarket");
+  });
+
+  /**
+   * The feed status, including the row for a feed **nothing has ever fetched**.
+   *
+   * `marketplace_feed_meta` has no row for such a feed at all, and the command answers one
+   * anyway with `fetchedAt: null` — because "never fetched" is the state a first selection acts
+   * on, and a command that simply omitted it would leave a panel unable to tell it from "not
+   * read yet". Only the two feed-backed marketplaces appear: TCGplayer and Cardmarket arrive
+   * with the card data, and Card trader has nothing to fetch.
+   */
+  it("answers a row for every downloaded feed, fetched or not", () => {
+    const db = makeDb();
+    const status = readHandlers(db).marketplace_feed_status();
+
+    expect(status.map((s) => s.marketplace)).toEqual(["cardkingdom", "manapool"]);
+    // `null` rather than `0`, and **stale by definition** — which is what makes the backend's
+    // start-up pass collect a feed nobody has ever fetched.
+    expect(status.every((s) => s.fetchedAt === null && s.rowCount === null)).toBe(true);
+    expect(status.every((s) => s.stale && !s.refreshing)).toBe(true);
+  });
+
+  /**
+   * A refresh writes the feed's rows and its stamp — and **Card Kingdom publishes a build date
+   * where Mana Pool publishes none**, which is the difference the panel draws two lines for.
+   */
+  it("fills one feed's prices without touching the other's", () => {
+    const db = seed("starter");
+    db.marketplacePrices = [];
+    db.marketplaceFeeds = [];
+
+    const answer = writeHandlers(db).marketplace_feed_refresh({ marketplace: "cardkingdom" });
+
+    expect(answer.rowCount).toBeGreaterThan(0);
+    expect(answer.feedBuiltAt).toBe("2026-08-11 21:07:02");
+    expect(db.marketplacePrices.every((p) => p.marketplace === "cardkingdom")).toBe(true);
+    // Mana Pool is untouched, and still says so.
+    const status = readHandlers(db).marketplace_feed_status();
+    expect(status.find((s) => s.marketplace === "manapool")!.fetchedAt).toBeNull();
+    expect(status.find((s) => s.marketplace === "cardkingdom")!.rowCount).toBe(answer.rowCount);
+  });
+
+  /** A marketplace with no feed has nothing to refresh, and is refused in words rather than
+   *  quietly doing nothing — the same rule `set_marketplace` follows one row up. */
+  it("refuses a refresh for a marketplace whose prices are not downloaded", () => {
+    expect(() =>
+      writeHandlers(makeDb()).marketplace_feed_refresh({ marketplace: "tcgplayer" }),
+    ).toThrow(/has no price feed to refresh/);
+  });
+
+  /**
+   * **A failed fetch leaves the previous prices in place**, which is the whole of why the
+   * backend refuses a feed that parsed to zero rows rather than writing it: an error page must
+   * not be able to wipe a working price table. Stale prices under an honest as-of line beat no
+   * prices at all.
+   */
+  it("keeps the prices it already had when a fetch fails, and writes the reason down", () => {
+    const db = seed("starter");
+    const before = db.marketplacePrices.length;
+    db.fault = "feedFetchError";
+
+    expect(() =>
+      writeHandlers(db).marketplace_feed_refresh({ marketplace: "cardkingdom" }),
+    ).toThrow(/could not be downloaded/);
+
+    expect(db.marketplacePrices).toHaveLength(before);
+    expect(db.errorLog[db.errorLog.length - 1].operation).toBe("marketplace_feed");
   });
 
   it("answers a sync run without touching the store", () => {
@@ -2129,7 +2235,7 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(ramp(theory).cardCount).toBe(5);
     // A pile holding nothing priced reads `null` and not `0`: SQL's `sum()` of no non-NULL
     // terms is NULL, and "nothing here has a price" is a different statement from "free".
-    expect(live.find((c) => c.name === "Cut list")!.totalPriceUsd).toBeNull();
+    expect(live.find((c) => c.name === "Cut list")!.totalPrice).toBeNull();
   });
 
   it("refuses to rename or delete a predefined category and switches every one of them off", () => {
@@ -2319,7 +2425,7 @@ describe("categories, tags, folders, history and the plan", () => {
       ["Urza's Saga", 1],
       ["Jace, the Mind Sculptor", 1],
     ]);
-    expect(diff[0].unitPriceUsd).toBeNull();
+    expect(diff[0].unitPrice).toBeNull();
     // The deck holds two Sol Rings and the plan wants one. A cut is not a purchase, so there
     // is no row for it in either direction.
     expect(diff.some((d) => d.name === "Sol Ring")).toBe(false);

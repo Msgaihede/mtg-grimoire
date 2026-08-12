@@ -73,8 +73,7 @@ const MAIN: DeckCategory = {
   isActive: true,
   sortOrder: 0,
   cardCount: 4,
-  totalPriceUsd: 18,
-  totalPriceEur: 14,
+  totalPrice: 18,
   cardCountAllVariants: 4,
 };
 const SIDE: DeckCategory = {
@@ -85,8 +84,7 @@ const SIDE: DeckCategory = {
   isActive: true,
   sortOrder: 1,
   cardCount: 0,
-  totalPriceUsd: null,
-  totalPriceEur: null,
+  totalPrice: null,
   cardCountAllVariants: 0,
 };
 const MAYBE: DeckCategory = {
@@ -97,8 +95,7 @@ const MAYBE: DeckCategory = {
   isActive: false,
   sortOrder: 2,
   cardCount: 0,
-  totalPriceUsd: null,
-  totalPriceEur: null,
+  totalPrice: null,
   cardCountAllVariants: 0,
 };
 
@@ -137,8 +134,7 @@ const BOLT: DeckCard = {
   gameChanger: false,
   finishes: null,
   everUncommon: false,
-  unitPriceUsd: 4.5,
-  unitPriceEur: 3.5,
+  unitPrice: 4.5,
   ownedQuantity: 2,
 };
 
@@ -180,13 +176,13 @@ describe("useDeck", () => {
     // `live` is the **default argument**, not a constant: a caller with no Live/Theory control
     // gets the deck as it stands. The variant scopes the **cards** — the categories and tags
     // come back either way.
-    expect(deckGet).toHaveBeenCalledWith(4, "live");
+    expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
     expect(result.current.cards).toEqual([BOLT]);
     // Every category, including the two holding nothing: the editor's columns are this list
     // rather than the piles that happen to be full.
     expect(result.current.categories).toEqual([MAIN, SIDE, MAYBE]);
     expect(result.current.tags).toEqual([]);
-    expect(client.getQueryData(["decks", "detail", 4, "live"])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
   });
 
   /**
@@ -211,11 +207,11 @@ describe("useDeck", () => {
     rerender({ variant: "theory" });
 
     await waitFor(() => expect(result.current.cards).toEqual([PLAN]));
-    expect(deckGet).toHaveBeenCalledWith(4, "theory");
+    expect(deckGet).toHaveBeenCalledWith(4, "theory", "tcgplayer");
     // Both answers are still there. Nothing was invalidated and nothing was re-read to get
     // here — a switch is a different question, not a stale answer to the same one.
-    expect(client.getQueryData(["decks", "detail", 4, "live"])).toEqual(DETAIL);
-    expect(client.getQueryData(["decks", "detail", 4, "theory"])).toEqual({
+    expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "theory", "tcgplayer"])).toEqual({
       ...DETAIL,
       cards: [PLAN],
     });
@@ -425,7 +421,7 @@ describe("useDeck", () => {
     // Mid-flight, and the deck on screen is still the deck that was read: no guess was
     // written. This is what "no optimism" costs and buys — a beat of the old printing rather
     // than a line that disappears and comes back.
-    expect(client.getQueryData(["decks", "detail", 4, "live"])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
 
     answer({ folded: true, quantity: 7 });
 

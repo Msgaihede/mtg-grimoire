@@ -12,6 +12,10 @@ const onSyncProgress = vi.hoisted(() => vi.fn());
 // the reconcile event on the way up. Mocked because a `.catch` cannot catch the
 // synchronous `TypeError` of calling `undefined`.
 const onCollectionReconciled = vi.hoisted(() => vi.fn());
+/** The third event this window subscribes to, and the one this file is most about: the ribbon
+ *  describes a price-feed fetch the same way it describes a sync, and the fetch can be started
+ *  by the backend at app start rather than by anything on screen. */
+const onMarketplaceProgress = vi.hoisted(() => vi.fn());
 /** The two writes a card dropped on the sidebar means, and the read that names the open
  *  deck — the sidebar borrows `useDeck`, so the shell asks for a deck like the editor does. */
 const deckAddCard = vi.hoisted(() => vi.fn());
@@ -24,6 +28,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncRun,
     onSyncProgress,
     onCollectionReconciled,
+    onMarketplaceProgress,
+    // The shell reads the feeds' state to describe a running fetch. Empty is "nothing known
+    // yet", which is what every test in this file is standing in.
+    marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
+    getMarketplace: vi.fn().mockResolvedValue("tcgplayer"),
     searchCards: vi.fn(),
     // The filter row asks for facet counts beside the page. Answered **cold** — `ready:
     // false`, every map empty — so nothing greys and every control keeps its plain name.
@@ -121,6 +130,7 @@ beforeEach(() => {
   syncRun.mockReset().mockResolvedValue({ updated: false, cardCount: 116_568, updatedAt: null });
   onSyncProgress.mockReset().mockResolvedValue(() => {});
   onCollectionReconciled.mockReset().mockResolvedValue(() => {});
+  onMarketplaceProgress.mockReset().mockResolvedValue(() => {});
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   deckGet.mockReset().mockResolvedValue(null);

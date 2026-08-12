@@ -56,16 +56,27 @@ Every one of these has its measurement and its story in
 - **An anchored popup near the right of a row is pinned to its trigger's _right_ edge** —
   nothing clips these popups, so one that overflows scrolls the whole app sideways.
 - **Money is drawn with `formatPrice(value, currency)` and the currency comes from
-  `useMarketplace()`** — never a bare `Intl.NumberFormat`, and never a hardcoded `priceUsd`.
-  A marketplace is a label; **`Currency` is the axis every price function turns on**, so
-  nothing downstream of `src/lib/marketplace.ts` branches on a marketplace id. Rust ships both
-  currencies on every priced row, so switching is a re-render off the cache — sending
-  `currency` on a query that is not sorted by money would turn that back into a refetch.
-- **A null euro price is the answer, never a reason to reach for the dollar one.**
-  `eur_etched` does not exist in Scryfall's data, so an etched card on a euro marketplace
-  renders an em dash. `unpriced` counts stay per-currency and travel with their own figure —
-  the same card is priced in dollars and unpriced in euros at once. The collection's stored
-  `purchase_price` never converts and never moves with this setting: it is what was paid.
+  `useMarketplace()`** — never a bare `Intl.NumberFormat`. **The marketplace is a query
+  parameter and Rust answers one price per row**, so a cell renders the number it was given and
+  nothing downstream of `src/lib/marketplace.ts` picks between fields. Every price-bearing query
+  carries `marketplace` and has it **in its key**, so switching refetches — against local
+  SQLite, which is what every other filter here already does. (It used to be a re-render off
+  twin `*Usd`/`*Eur` fields; that shape did not survive a third source, because Card Kingdom's
+  and Mana Pool's prices live in `marketplace_prices` rather than in `cards.prices`.) The one
+  field anything may branch on is `Marketplace.feed`, and only to talk *about* a feed — when it
+  was pulled, that a refresh is running — never to decide what a price is.
+- **A `null` price is the answer, never a reason to reach for another marketplace's.** No two
+  marketplaces have the same holes: `eur_etched` does not exist in Scryfall's data, so an etched
+  card on Cardmarket renders an em dash, and a printing a bulk feed has never listed renders one
+  there. `unpriced` counts are summed at the same marketplace as the figure they sit beside and
+  never travel across a switch. The collection's stored `purchase_price` never converts and
+  never moves with this setting: it is what was paid.
+- **The card pane is the one price surface the marketplace does not reach**, and it says so.
+  `card_detail` and `card_printings` answer a card rather than a priced list, so they take no
+  marketplace — the per-finish prices there come out of Scryfall's blob, and on a feed-backed
+  marketplace every one of them is an em dash with a line saying why. Quoting TCGplayer's
+  dollars under a "Card Kingdom prices" heading would be the cross-marketplace fallback this
+  whole feature refuses, and it would be invisible.
 - **Dim text is `text-dim`, never `text-muted`** — the latter still compiles and now paints text
   in the surface colour, i.e. very nearly invisible. `src/lib/tokens.test.ts` guards it.
 - **Tailwind scans source text for whole class names**, so a class built by interpolation emits

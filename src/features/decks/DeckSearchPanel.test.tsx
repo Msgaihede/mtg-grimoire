@@ -49,18 +49,15 @@ const BOLT: CardSummary = {
   rarity: "common",
   typeLine: "Instant",
   manaCost: "{R}",
-  priceUsd: 400.5,
-  priceEur: 320.25,
+  price: 400.5,
   layout: "normal",
   oracleId: "o-bolt",
   finishes: `["nonfoil","foil"]`,
   ownedQuantity: 3,
   wishlisted: false,
   printings: 1,
-  priceLowUsd: 400.5,
-  priceHighUsd: 400.5,
-  priceLowEur: 320.25,
-  priceHighEur: 320.25,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 const page = (items: CardSummary[]): SearchResponse => ({
@@ -121,8 +118,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     isActive: true,
     sortOrder: 0,
     cardCount: 0,
-    totalPriceUsd: null,
-    totalPriceEur: null,
+    totalPrice: null,
     cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };

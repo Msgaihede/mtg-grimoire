@@ -116,6 +116,7 @@ import type {
   EntryPatch,
   FacetResponse,
   InstallKind,
+  MarketplaceFeedStatus,
   Printing,
   ReleaseInfo,
   SearchRequest,
@@ -133,7 +134,13 @@ import type {
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
-import { DEFAULT_MARKETPLACE, MARKETPLACE_IDS, isMarketplaceId } from "@/lib/marketplace";
+import {
+  DEFAULT_MARKETPLACE,
+  FEED_MARKETPLACES,
+  MARKETPLACE_IDS,
+  isMarketplaceId,
+  type MarketplaceId,
+} from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
 
 /* ------------------------------------------------------------------ the rows ---------- */
@@ -415,6 +422,12 @@ export interface FakeUpdate {
  * that the fake answers those commands at all. Deliberately **not** `deck_get` or `deck_list`:
  * those are the deck, and a screen that could not read the deck would not be showing a panel
  * about it.
+ *
+ * **`feedFetchError`** is the network at the other end of a price feed. `marketplace_feed_refresh`
+ * refuses, and — the whole point — **the rows already in `marketplace_prices` stay**, because a
+ * failed fetch leaves the previous prices in place and writes the reason to `error_log`. It is
+ * the only way a story can stand in the feed state that has prices *and* a failure, which is the
+ * state the panel's wording is hardest to get right in.
  */
 export type Fault =
   | "busy"
@@ -425,7 +438,8 @@ export type Fault =
   | "deckMeta"
   | "updateAvailable"
   | "updateError"
-  | "errorLog";
+  | "errorLog"
+  | "feedFetchError";
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -456,7 +470,43 @@ export interface FakeDb {
    * reached from a story.
    */
   marketplace: string | null;
+  /**
+   * `marketplace_prices` — the table that made a third and fourth marketplace possible.
+   *
+   * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
+   * reason: `cards` is dropped and recreated by every sync, so a price stored on it would be
+   * destroyed by the next one. Deliberately no foreign key against a card either — a feed and
+   * the corpus are collected on different days, so a price for a card this corpus does not have
+   * (and the reverse) is expected rather than an error, and {@link marketplaceFeedPrices} leaves
+   * genuine holes in on purpose.
+   */
+  marketplacePrices: FakeMarketplacePrice[];
+  /** `marketplace_feed_meta` — one row per feed that has ever been fetched, and **no row at
+   *  all** for one that has not, which is the state a first selection acts on. */
+  marketplaceFeeds: FakeFeedMeta[];
   fault: Fault | null;
+}
+
+/** One row of `marketplace_prices`: what one feed quotes for one printing in one finish. */
+export interface FakeMarketplacePrice {
+  /** `cardkingdom` | `manapool` — the two marketplaces whose prices are downloaded. */
+  marketplace: string;
+  /** A `scryfall_id`. Softly referenced: no card row need exist. */
+  cardId: string;
+  finish: string;
+  /** Near Mint, in the marketplace's own currency — Card Kingdom's `price_retail`, Mana Pool's
+   *  `price_cents_nm` already divided by 100. Both feeds are USD. */
+  price: number;
+}
+
+/** One row of `marketplace_feed_meta`. Absent means the feed has never been fetched. */
+export interface FakeFeedMeta {
+  marketplace: string;
+  /** Unix seconds. */
+  fetchedAt: number;
+  /** The feed's own stamp — Card Kingdom publishes one, Mana Pool publishes none. */
+  feedBuiltAt: string | null;
+  rowCount: number;
 }
 
 /**
@@ -532,6 +582,11 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
+    // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
+    // table with rows in it, and "no rows" is the honest state of an install that has never
+    // chosen Card Kingdom. `starterSeed` fills both from the corpus.
+    marketplacePrices: [],
+    marketplaceFeeds: [],
     fault: null,
     ...init,
   };
@@ -605,6 +660,175 @@ function finishPriceEur(card: FakeCard | null, finish: string): number | null {
  */
 function priceEurColumn(card: FakeCard | null): number | null {
   return priceKey(card, "eur") ?? priceKey(card, "eur_foil");
+}
+
+/* ------------------------------------------------------ price_expr(marketplace) -------- */
+
+/**
+ * Which marketplace a query is pricing at — `resolveMarketplace` on the Rust side of the wire.
+ *
+ * An absent or unknown value is `tcgplayer`, which is what every one of these commands answered
+ * before the parameter existed, and is the same fallback `marketplace.ts` makes on this side for
+ * the same reason: a query is not the place to fail over a setting.
+ */
+function marketplaceOf(id: string | null | undefined): MarketplaceId {
+  return id && isMarketplaceId(id) ? id : DEFAULT_MARKETPLACE;
+}
+
+/** Whether this marketplace's prices come out of `marketplace_prices` rather than out of
+ *  `cards.prices`. The one branch in this file that knows a marketplace by name, and it is the
+ *  same branch `price_expr` is. */
+function isFeed(mp: MarketplaceId): boolean {
+  return mp === "cardkingdom" || mp === "manapool";
+}
+
+/** One `(marketplace, cardId, finish)` row of `marketplace_prices`, or `null` for the LEFT
+ *  JOIN that found nothing — a card that feed has never listed. */
+function feedPrice(db: FakeDb, cardId: string | null, finish: string, mp: MarketplaceId) {
+  if (cardId === null) return null;
+  const row = db.marketplacePrices.find(
+    (p) => p.marketplace === mp && p.cardId === cardId && p.finish === finish,
+  );
+  return row ? row.price : null;
+}
+
+/**
+ * `price_expr(marketplace)` at the **finish** grain — what one copy of one printing in one
+ * finish costs, which is the collection's and the wishlist's figure.
+ *
+ * Three arms and the hole in the middle one is the data rather than an omission: Scryfall has
+ * no `eur_etched` key at all, so an etched card is unpriced on Cardmarket and is never valued at
+ * the nonfoil rate instead. A feed's arm has its own holes — a printing it has never listed — and
+ * they are answered the same way, with `null`.
+ */
+function finishPriceAt(
+  db: FakeDb,
+  card: FakeCard | null,
+  finish: string,
+  mp: MarketplaceId,
+): number | null {
+  if (isFeed(mp)) return feedPrice(db, card?.id ?? null, finish, mp);
+  if (mp === "cardmarket") return finishPriceEur(card, finish);
+  return finishPriceUsd(card, finish);
+}
+
+/**
+ * `price_expr(marketplace)` at the **nonfoil** grain — a deck card's and a theory row's figure.
+ *
+ * A deck names a printing and not a finish, so there is no chain here and never has been:
+ * `deck.rs` reads `$.usd`/`$.eur` flat, and the feed arm reads the nonfoil row flat beside it.
+ */
+function nonfoilPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
+  if (isFeed(mp)) return feedPrice(db, card?.id ?? null, "nonfoil", mp);
+  return priceKey(card, mp === "cardmarket" ? "eur" : "usd");
+}
+
+/**
+ * `price_expr(marketplace)` at the **display column** grain — the search row's price, which is a
+ * fallback chain across finishes (nonfoil → foil → etched) and must never be summed.
+ *
+ * `cards.price_usd` is that chain precomputed; the euro column is two links because there is no
+ * third key; a feed's is the same three links over its own rows.
+ */
+function priceColumnAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
+  if (isFeed(mp)) {
+    const id = card?.id ?? null;
+    return (
+      feedPrice(db, id, "nonfoil", mp) ??
+      feedPrice(db, id, "foil", mp) ??
+      feedPrice(db, id, "etched", mp)
+    );
+  }
+  if (mp === "cardmarket") return priceEurColumn(card);
+  return card?.priceUsd ?? null;
+}
+
+/**
+ * A feed's rows, derived from the corpus a world was seeded with.
+ *
+ * **Derived rather than hand-written**, for `priceEurColumn`'s reason: `cards.ts` is generated
+ * wholesale, so a literal price here would be a number nothing regenerates. Each feed is a fixed
+ * multiple of the printing's own Scryfall figure — Card Kingdom a little dearer, Mana Pool a
+ * little cheaper, which is roughly how the two sit against TCGplayer in the live data — so a
+ * story that switches marketplace shows *different numbers* rather than the same ones under a
+ * new label, which is the only thing a reader could check.
+ *
+ * **Two deliberate holes**, because they are the states the em-dash rule exists for:
+ *
+ * * a printing with no Scryfall price at all is skipped, so nothing is invented;
+ * * **every fourth printing is skipped outright for Mana Pool**, standing in for the card a feed
+ *   has simply never listed — the case where one marketplace quotes a card and another does not,
+ *   which no amount of currency arithmetic can produce.
+ */
+export function marketplaceFeedPrices(cards: readonly FakeCard[]): FakeMarketplacePrice[] {
+  const rows: FakeMarketplacePrice[] = [];
+  cards.forEach((card, index) => {
+    for (const finish of ["nonfoil", "foil", "etched"] as const) {
+      const usd = finishPriceUsd(card, finish);
+      if (usd === null) continue;
+      rows.push({
+        marketplace: "cardkingdom",
+        cardId: card.id,
+        finish,
+        price: Math.round(usd * 1.1 * 100) / 100,
+      });
+      if (index % 4 === 3) continue;
+      rows.push({
+        marketplace: "manapool",
+        cardId: card.id,
+        finish,
+        price: Math.round(usd * 0.92 * 100) / 100,
+      });
+    }
+  });
+  return rows;
+}
+
+/**
+ * `marketplace_feed::REFRESH_INTERVAL_SECS` — 24 h, Card Kingdom's own regeneration cadence.
+ *
+ * Mirrored rather than imported for the reason every constant in this file is: the fake is a
+ * *second implementation* of the backend's rules, and one that read the app's own copy would
+ * agree with it by construction rather than by being right.
+ */
+const FEED_REFRESH_INTERVAL_SECS = 86_400;
+
+/** `marketplace_feed::is_stale` — never fetched is stale by definition, and a stamp in the
+ *  future (a clock that moved) counts as stale rather than underflowing. */
+function isFeedStale(fetchedAt: number | null, now: number): boolean {
+  if (fetchedAt === null) return true;
+  return fetchedAt > now || now - fetchedAt >= FEED_REFRESH_INTERVAL_SECS;
+}
+
+/**
+ * What each feed weighs, measured live on 2026-08-12 — 66 787 283 B for Card Kingdom and
+ * 50 741 864 B for Mana Pool.
+ *
+ * Here so a `downloading` event carries a real denominator: the ribbon prints whole megabytes,
+ * and a story showing `0 / 64 MB` is showing the figure the app will actually show.
+ */
+const FEED_BYTES: Record<string, number> = {
+  cardkingdom: 66_787_283,
+  manapool: 50_741_864,
+};
+
+/** `marketplace_feed_meta` for a set of rows: what a fetch that landed them would have written.
+ *  Card Kingdom publishes a build stamp and Mana Pool publishes none, which is the difference
+ *  the panel has to draw. */
+export function marketplaceFeedMeta(
+  rows: readonly FakeMarketplacePrice[],
+  fetchedAt: number,
+): FakeFeedMeta[] {
+  const count = (mp: string) => rows.filter((r) => r.marketplace === mp).length;
+  return [
+    {
+      marketplace: "cardkingdom",
+      fetchedAt,
+      feedBuiltAt: "2026-08-11 21:07:02",
+      rowCount: count("cardkingdom"),
+    },
+    { marketplace: "manapool", fetchedAt, feedBuiltAt: null, rowCount: count("manapool") },
+  ];
 }
 
 /** A filter the user actually set — `filters::nonblank`. A picker's "Any set" sends `""`,
@@ -963,7 +1187,11 @@ function wishlisted(db: FakeDb, card: FakeCard): boolean {
   );
 }
 
-function toCardSummary(db: FakeDb, c: FakeCard): CardSummary {
+function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary {
+  // The display **column** at the marketplace the request named: a fallback chain across
+  // finishes, never summed, and one number rather than a pair — the backend has already
+  // decided whose price this is, so the row carries no second figure to pick between.
+  const price = priceColumnAt(db, c, mp);
   return {
     id: c.id,
     name: c.name,
@@ -973,11 +1201,7 @@ function toCardSummary(db: FakeDb, c: FakeCard): CardSummary {
     rarity: c.rarity,
     typeLine: c.typeLine,
     manaCost: c.manaCost,
-    // The `price_usd` **column**: a display and sort fallback chain, never summed. Its euro
-    // twin arrives on every row whether or not the reader is on Cardmarket, which is what
-    // makes switching marketplace a re-render instead of a refetch.
-    priceUsd: c.priceUsd,
-    priceEur: priceEurColumn(c),
+    price,
     layout: c.layout,
     oracleId: c.oracleId,
     finishes: c.finishes,
@@ -986,10 +1210,8 @@ function toCardSummary(db: FakeDb, c: FakeCard): CardSummary {
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
     // price. One shape for both modes, exactly as `search.rs` returns it.
     printings: 1,
-    priceLowUsd: c.priceUsd,
-    priceHighUsd: c.priceUsd,
-    priceLowEur: priceEurColumn(c),
-    priceHighEur: priceEurColumn(c),
+    priceLow: price,
+    priceHigh: price,
   };
 }
 
@@ -1018,7 +1240,7 @@ function collapseKey(c: FakeCard): string {
  * * `ownedQuantity` sums copies of **every** printing of the card, because "do I have this
  *   card" is the question a collapsed row asks. Uncollapsed it stays per printing.
  */
-function collapseToCards(db: FakeDb, matched: FakeCard[]): CardSummary[] {
+function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): CardSummary[] {
   const groups = new Map<string, FakeCard[]>();
   for (const c of matched) {
     const key = collapseKey(c);
@@ -1030,20 +1252,19 @@ function collapseToCards(db: FakeDb, matched: FakeCard[]): CardSummary[] {
   return [...groups.values()].map((group) => {
     // `released_at DESC, id DESC` — the real pick, ties to the greatest id.
     const rep = [...group].sort((a, b) => cmp(b.releasedAt, a.releasedAt) || cmp(b.id, a.id))[0];
-    // **A span per currency, each over the printings priced *in that currency*.** Not one span
-    // and a conversion, and not the dollar-priced printings' euro figures either: a group whose
-    // only priced printing is etched has a dollar span and no euro one at all, which is the
-    // etched hole showing up as an absent range rather than as a narrower one.
-    const pricedUsd = group.map((c) => c.priceUsd).filter((p): p is number => p !== null);
-    const pricedEur = group.map(priceEurColumn).filter((p): p is number => p !== null);
+    // **The span covers the printings this marketplace prices**, and no others. Not one span
+    // converted: a group whose only priced printing is etched has a TCGplayer span and no
+    // Cardmarket one at all, and a group a feed has never listed has none there — the hole
+    // showing up as an absent range rather than as a narrower one.
+    const priced = group
+      .map((c) => priceColumnAt(db, c, mp))
+      .filter((p): p is number => p !== null);
     return {
-      ...toCardSummary(db, rep),
+      ...toCardSummary(db, rep, mp),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
       printings: group.length,
-      priceLowUsd: pricedUsd.length > 0 ? Math.min(...pricedUsd) : null,
-      priceHighUsd: pricedUsd.length > 0 ? Math.max(...pricedUsd) : null,
-      priceLowEur: pricedEur.length > 0 ? Math.min(...pricedEur) : null,
-      priceHighEur: pricedEur.length > 0 ? Math.max(...pricedEur) : null,
+      priceLow: priced.length > 0 ? Math.min(...priced) : null,
+      priceHigh: priced.length > 0 ? Math.max(...priced) : null,
       ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id), 0),
       wishlisted: group.some((c) => wishlisted(db, c)),
     };
@@ -1124,7 +1345,12 @@ function toPrinting(c: FakeCard): Printing {
   };
 }
 
-function toCollectionRow(e: FakeEntry, card: FakeCard | null): CollectionRow {
+function toCollectionRow(
+  db: FakeDb,
+  e: FakeEntry,
+  card: FakeCard | null,
+  mp: MarketplaceId,
+): CollectionRow {
   return {
     id: e.id,
     cardId: e.cardId,
@@ -1142,8 +1368,7 @@ function toCollectionRow(e: FakeEntry, card: FakeCard | null): CollectionRow {
     condition: e.condition,
     quantity: e.quantity,
     tradelistQuantity: e.tradelistQuantity,
-    unitPriceUsd: finishPriceUsd(card, e.finish),
-    unitPriceEur: finishPriceEur(card, e.finish),
+    unitPrice: finishPriceAt(db, card, e.finish, mp),
     purchasePrice: e.purchasePrice,
     purchaseCurrency: e.purchaseCurrency,
     acquiredAt: e.acquiredAt,
@@ -1231,7 +1456,7 @@ function ownedAgainstWish(db: FakeDb, w: FakeWish): number {
     .reduce((n, e) => n + e.quantity, 0);
 }
 
-function toWishRow(db: FakeDb, w: FakeWish): WishRow {
+function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
   const card = wishCard(db, w);
   // The cheapest way to satisfy the wish: the preferred finish's price, else nonfoil's.
   const finish = w.preferredFinish ?? "nonfoil";
@@ -1252,8 +1477,7 @@ function toWishRow(db: FakeDb, w: FakeWish): WishRow {
     typeLine: card?.typeLine ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
-    unitPriceUsd: finishPriceUsd(card, finish),
-    unitPriceEur: finishPriceEur(card, finish),
+    unitPrice: finishPriceAt(db, card, finish, mp),
     ownedQuantity: ownedAgainstWish(db, w),
     notes: w.notes,
     needsReview: w.needsReview,
@@ -1416,10 +1640,11 @@ function toDeckAudit(a: FakeDeckAudit): DeckAuditEntry {
  * at the moment it is drawn.
  *
  * Both are scoped to the **variant that was asked for** and neither is a row count:
- * `card_count` is `sum(quantity)` over the copies filed here, and `total_price_usd` is the
- * nonfoil `usd` key of each printing's blob times its copies. A category holding nothing (or
- * nothing priced) reads `null` rather than `0`, because SQL's `sum()` of no non-NULL terms is
- * NULL — and "nothing here has a price" is a different statement from "this is free".
+ * `card_count` is `sum(quantity)` over the copies filed here, and `total_price` is each
+ * printing's nonfoil price **at the marketplace the read named** times its copies. A category
+ * holding nothing (or nothing that marketplace prices) reads `null` rather than `0`, because
+ * SQL's `sum()` of no non-NULL terms is NULL — and "nothing here has a price" is a different
+ * statement from "this is free".
  *
  * `cardCountAllVariants` is the **third** number and the one that is not scoped: a category is
  * not per-variant, and `deck_cards.category_id` is `ON DELETE CASCADE`, so a delete reaches
@@ -1427,21 +1652,25 @@ function toDeckAudit(a: FakeDeckAudit): DeckAuditEntry {
  * DTO field in this file — a stored copy is a number that can disagree with the rows it claims
  * to count, which is the whole reason this fake keeps table rows and derives DTOs.
  */
-function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): DeckCategory {
+function toDeckCategory(
+  db: FakeDb,
+  c: FakeDeckCategory,
+  variant: DeckVariant,
+  mp: MarketplaceId,
+): DeckCategory {
   const filed = db.deckCards.filter((dc) => dc.categoryId === c.id);
   const rows = filed.filter((dc) => dc.variant === variant);
-  // `deck_meta.rs:352-356`: one rule, run twice over two keys. **Each sum skips what its own
-  // currency does not quote**, so a category can total in dollars and be `null` in euros — and
-  // neither figure is ever the other converted.
-  const totalOf = (key: string): number | null => {
+  // One sum, at one marketplace, **skipping what that marketplace does not quote** — so two
+  // marketplaces' totals over one pile are two honest partial sums rather than a conversion.
+  const totalPrice = ((): number | null => {
     const priced = rows
       .map((dc) => {
-        const unit = priceKey(cardById(db, dc.cardId), key);
+        const unit = nonfoilPriceAt(db, cardById(db, dc.cardId), mp);
         return unit === null ? null : unit * dc.quantity;
       })
       .filter((n): n is number => n !== null);
     return priced.length === 0 ? null : priced.reduce((n, p) => n + p, 0);
-  };
+  })();
   return {
     id: c.id,
     deckId: c.deckId,
@@ -1450,8 +1679,7 @@ function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): 
     isActive: c.isActive,
     sortOrder: c.sortOrder,
     cardCount: rows.reduce((n, dc) => n + dc.quantity, 0),
-    totalPriceUsd: totalOf("usd"),
-    totalPriceEur: totalOf("eur"),
+    totalPrice,
     cardCountAllVariants: filed.reduce((n, dc) => n + dc.quantity, 0),
   };
 }
@@ -1677,6 +1905,7 @@ function toDeckCard(
   dc: FakeDeckCard,
   category: FakeDeckCategory,
   ownedQuantity: number,
+  mp: MarketplaceId,
 ): DeckCard {
   const card = cardById(db, dc.cardId);
   const tag = dc.tagId === null ? undefined : db.deckTags.find((t) => t.id === dc.tagId);
@@ -1726,12 +1955,10 @@ function toDeckCard(
     // recomputation answers `false` and a legal commander renders ineligible. `false` for an
     // orphan, because nothing is known about a card that is not there.
     everUncommon: card?.everUncommon ?? false,
-    // The nonfoil key in each currency: a deck names a printing, not a finish, and nonfoil is
-    // the cheapest way to satisfy it. Never the `price_usd` column, and never `eur_foil` —
-    // `deck.rs:1836-1837` reads `$.usd` and `$.eur` flat, so there is no finish branch here and
-    // therefore no etched case to hole.
-    unitPriceUsd: priceKey(card, "usd"),
-    unitPriceEur: priceKey(card, "eur"),
+    // The nonfoil price at the marketplace this read named: a deck names a printing, not a
+    // finish, and nonfoil is the cheapest way to satisfy it. Never the `price_usd` column,
+    // which is a chain across finishes and must not be summed.
+    unitPrice: nonfoilPriceAt(db, card, mp),
     ownedQuantity,
   };
 }
@@ -1745,22 +1972,30 @@ function toDeckCard(
  * table has no Released column to press and the frontend has never sent one, so the order
  * `search.rs` used to carry is gone rather than renamed.
  */
-const SEARCH_SORTS: Readonly<Record<SearchSortKey, SortColumn<FakeCard>>> = {
-  name: reversible((a, b) => cmp(a.name, b.name)),
-  // Binder order: set code, then the natural collector number, then the raw string, which
-  // breaks the ties the CAST leaves (`5` against `5s`).
-  set: reversible(
-    (a, b) =>
-      cmp(a.setCode, b.setCode) ||
-      castInteger(a.collectorNumber) - castInteger(b.collectorNumber) ||
-      cmp(a.collectorNumber, b.collectorNumber),
-  ),
-  type: nullsLast((c) => c.typeLine, cmp),
-  rarity: reversible((a, b) => rarityRank(a.rarity) - rarityRank(b.rarity)),
-  // The `price_usd` **column** — the fallback chain a search row shows — never a finish's
-  // price out of the `prices` blob. `search.rs` selects the column and does not read the blob.
-  price: nullsLast((c) => c.priceUsd, numeric),
-};
+function searchSorts(
+  db: FakeDb,
+  mp: MarketplaceId,
+): Readonly<Record<SearchSortKey, SortColumn<FakeCard>>> {
+  return {
+    name: reversible((a, b) => cmp(a.name, b.name)),
+    // Binder order: set code, then the natural collector number, then the raw string, which
+    // breaks the ties the CAST leaves (`5` against `5s`).
+    set: reversible(
+      (a, b) =>
+        cmp(a.setCode, b.setCode) ||
+        castInteger(a.collectorNumber) - castInteger(b.collectorNumber) ||
+        cmp(a.collectorNumber, b.collectorNumber),
+    ),
+    type: nullsLast((c) => c.typeLine, cmp),
+    rarity: reversible((a, b) => rarityRank(a.rarity) - rarityRank(b.rarity)),
+    // The display **column** at the marketplace the request named — the same fallback chain
+    // across finishes the Price cell prints, never a finish's own price. A function of the
+    // marketplace rather than a module constant, because the order and the figure have to be
+    // the same number: this is what the `currency` sort parameter used to guard, now made
+    // structural.
+    price: nullsLast((c) => priceColumnAt(db, c, mp), numeric),
+  };
+}
 
 /** `search::ORDER_NAME`, the default for a browse: the card, then its newest printing. */
 const SEARCH_BROWSE_ORDER: Compare<FakeCard> = (a, b) =>
@@ -1778,13 +2013,16 @@ function collectionOrder(
   db: FakeDb,
   rows: readonly FakeEntry[],
   spec: SortSpec<CollectionSortKey> | undefined,
+  mp: MarketplaceId,
 ): Compare<FakeEntry> {
   const cards = new Map(rows.map((e) => [e.id, cardById(db, e.cardId)]));
   /** `coalesce(c.name, e.card_id)`: an orphan sorts under its card id rather than at the top
    *  under an empty string. */
   const name = (e: FakeEntry) => cards.get(e.id)?.name ?? e.cardId;
-  /** `FINISH_PRICE_USD`: this row's finish, out of the blob. */
-  const unitPrice = (e: FakeEntry) => finishPriceUsd(cards.get(e.id) ?? null, e.finish);
+  /** `price_expr(marketplace)` at this row's finish — the same number the Value cell prints,
+   *  which is what stops a column being ordered in one marketplace's money while showing
+   *  another's. */
+  const unitPrice = (e: FakeEntry) => finishPriceAt(db, cards.get(e.id) ?? null, e.finish, mp);
   return orderBy(
     spec,
     {
@@ -1844,10 +2082,14 @@ function wishlistOrder(
   db: FakeDb,
   rows: readonly FakeWish[],
   spec: SortSpec<WishlistSortKey> | undefined,
+  mp: MarketplaceId,
 ): Compare<FakeWish> {
   const ownedBy = new Map(rows.map((w) => [w.id, ownedAgainstWish(db, w)]));
   const priceBy = new Map(
-    rows.map((w) => [w.id, finishPriceUsd(wishCard(db, w), w.preferredFinish ?? "nonfoil")]),
+    rows.map((w) => [
+      w.id,
+      finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp),
+    ]),
   );
   const owned = (w: FakeWish) => ownedBy.get(w.id) ?? 0;
   /** The cheapest way to satisfy the wish, per copy: the preferred finish's price if it names
@@ -2092,6 +2334,9 @@ export function readHandlers(db: FakeDb) {
     /** `search::run_search`. */
     search_cards: (args: { req: SearchRequest }) => {
       const req = args.req;
+      // Absent means `tcgplayer`, which is what this command answered before the parameter
+      // existed — the one place the whole marketplace decision enters a search.
+      const mp = marketplaceOf(req.marketplace);
       const limit = pageLimit(req.limit, SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT);
       const text = nonblank(req.text);
       const matched = db.cards.filter((c) => {
@@ -2111,7 +2356,7 @@ export function readHandlers(db: FakeDb) {
       // fallback under text is `bm25(cards_fts, 10.0, 1.0, 1.0) ASC, c.name ASC`, and there
       // is no FTS index here to rank with, so a text search lands in the browse's name order.
       const sorted = [...matched].sort(
-        orderBy(req.sort, SEARCH_SORTS, SEARCH_BROWSE_ORDER, (a, b) => cmp(a.id, b.id)),
+        orderBy(req.sort, searchSorts(db, mp), SEARCH_BROWSE_ORDER, (a, b) => cmp(a.id, b.id)),
       );
 
       // Collapsed, the rows are cards and so is the denominator: the pager divides by
@@ -2119,8 +2364,8 @@ export function readHandlers(db: FakeDb) {
       // be a lie in both places. Grouping *after* the sort keeps the representative-picking
       // and the ordering independent, which is what the two-step SQL does too.
       const rows: CardSummary[] = req.collapse
-        ? collapseToCards(db, sorted)
-        : sorted.map((c) => toCardSummary(db, c));
+        ? collapseToCards(db, sorted, mp)
+        : sorted.map((c) => toCardSummary(db, c, mp));
       // The count stops at the cap rather than walking the table on every keystroke.
       const counted = Math.min(rows.length, TOTAL_CAP + 1);
       return {
@@ -2318,13 +2563,14 @@ export function readHandlers(db: FakeDb) {
     /** `collection::list_entries`. */
     collection_list: (args: { query: CollectionQuery }) => {
       const q = args.query;
+      const mp = marketplaceOf(q.marketplace);
       const rows = collectionScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const sorted = [...rows].sort(collectionOrder(db, rows, q.sort));
+      const sorted = [...rows].sort(collectionOrder(db, rows, q.sort, mp));
       return {
         items: sorted
           .slice(q.offset, q.offset + limit)
-          .map((e) => toCollectionRow(e, cardById(db, e.cardId))),
+          .map((e) => toCollectionRow(db, e, cardById(db, e.cardId), mp)),
         // Counted in full: a collection is thousands of rows, not the 116 k the search caps.
         total: rows.length,
       };
@@ -2341,11 +2587,12 @@ export function readHandlers(db: FakeDb) {
      * whole reason the stories go through `ipc.ts` instead of past it.
      */
     collection_summary: (args: { query: CollectionQuery }): CollectionSummary => {
+      const mp = marketplaceOf(args.query.marketplace);
       const rows = collectionScope(db, args.query);
-      const priced = rows.map((e) => {
-        const card = cardById(db, e.cardId);
-        return { e, usd: finishPriceUsd(card, e.finish), eur: finishPriceEur(card, e.finish) };
-      });
+      const priced = rows.map((e) => ({
+        e,
+        unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+      }));
       const sum = (f: (r: (typeof priced)[number]) => number) =>
         priced.reduce((n, r) => n + f(r), 0);
       return {
@@ -2355,12 +2602,11 @@ export function readHandlers(db: FakeDb) {
         uniqueCards: new Set(rows.map((e) => e.cardId)).size,
         entries: rows.length,
         tradelistCards: sum((r) => r.e.tradelistQuantity),
-        valueUsd: sum((r) => r.e.quantity * (r.usd ?? 0)),
-        valueEur: sum((r) => r.e.quantity * (r.eur ?? 0)),
-        // Copies with no price for their finish: a total that silently omits 400 cards is a
-        // number that lies by rounding down.
-        unpricedUsd: sum((r) => (r.usd === null ? r.e.quantity : 0)),
-        unpricedEur: sum((r) => (r.eur === null ? r.e.quantity : 0)),
+        value: sum((r) => r.e.quantity * (r.unit ?? 0)),
+        // Copies with no price for their finish **at this marketplace**: a total that silently
+        // omits 400 cards is a number that lies by rounding down, and the count travels with
+        // its own figure because no two marketplaces have the same holes.
+        unpriced: sum((r) => (r.unit === null ? r.e.quantity : 0)),
         needsReview: rows.filter((e) => e.needsReview !== null).length,
       };
     },
@@ -2368,11 +2614,12 @@ export function readHandlers(db: FakeDb) {
     /** `wishlist::list_wishes`. */
     wishlist_list: (args: { query: WishlistQuery }) => {
       const q = args.query;
+      const mp = marketplaceOf(q.marketplace);
       const rows = wishlistScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const sorted = [...rows].sort(wishlistOrder(db, rows, q.sort));
+      const sorted = [...rows].sort(wishlistOrder(db, rows, q.sort, mp));
       return {
-        items: sorted.slice(q.offset, q.offset + limit).map((w) => toWishRow(db, w)),
+        items: sorted.slice(q.offset, q.offset + limit).map((w) => toWishRow(db, w, mp)),
         total: rows.length,
       };
     },
@@ -2398,8 +2645,11 @@ export function readHandlers(db: FakeDb) {
      * card goes, and an inactive one always draws, because that is the affordance for
      * switching it back on. Only their two numbers follow the variant that was asked for.
      */
-    deck_get: (args: { id: number; variant: DeckVariant }) => {
+    deck_get: (args: { id: number; variant: DeckVariant; marketplace?: string }) => {
       const variant = validVariant(args.variant);
+      // Prices every card and every category heading in the answer, which is why it is part
+      // of the caller's query key rather than of its presentation.
+      const mp = marketplaceOf(args.marketplace);
       if (db.fault === "gone") return null;
       const deck = db.decks.find((d) => d.id === args.id);
       if (!deck) return null;
@@ -2418,12 +2668,12 @@ export function readHandlers(db: FakeDb) {
         // row: `flatMap` is what drops one, and nothing in this fake can produce it.
         .flatMap((dc) => {
           const category = categoryById(db, dc.categoryId);
-          return category ? [toDeckCard(db, dc, category, owned.get(dc.id) ?? 0)] : [];
+          return category ? [toDeckCard(db, dc, category, owned.get(dc.id) ?? 0, mp)] : [];
         });
       const categories: DeckCategory[] = db.deckCategories
         .filter((c) => c.deckId === deck.id)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
-        .map((c) => toDeckCategory(db, c, variant));
+        .map((c) => toDeckCategory(db, c, variant, mp));
       const tags: DeckTag[] = db.deckTags
         .filter((t) => t.deckId === deck.id)
         .sort((a, b) => cmp(a.name, b.name) || a.id - b.id)
@@ -2439,13 +2689,18 @@ export function readHandlers(db: FakeDb) {
      * does not depend on which list is showing, which is what keeps the columns still while the
      * reader switches between Live and Theory.
      */
-    deck_category_list: (args: { deckId: number; variant: DeckVariant }): DeckCategory[] => {
+    deck_category_list: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      marketplace?: string;
+    }): DeckCategory[] => {
       const variant = validVariant(args.variant);
+      const mp = marketplaceOf(args.marketplace);
       refuseIfMetaUnreadable(db, CATEGORIES_UNREADABLE);
       return db.deckCategories
         .filter((c) => c.deckId === args.deckId)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
-        .map((c) => toDeckCategory(db, c, variant));
+        .map((c) => toDeckCategory(db, c, variant, mp));
     },
 
     /** `deck_meta::list_tags` — `ORDER BY t.name`, and the count scoped to the same variant a
@@ -2520,9 +2775,9 @@ export function readHandlers(db: FakeDb) {
 
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
      *  {@link theoryDiff} for the direction, the grouping and the two exclusions. */
-    deck_theory_diff: (args: { deckId: number }): TheoryDiffRow[] => {
+    deck_theory_diff: (args: { deckId: number; marketplace?: string }): TheoryDiffRow[] => {
       refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
-      return theoryDiff(db, args.deckId).map((g) => g.row);
+      return theoryDiff(db, args.deckId, marketplaceOf(args.marketplace)).map((g) => g.row);
     },
 
     /**
@@ -2572,6 +2827,37 @@ export function readHandlers(db: FakeDb) {
       db.marketplace !== null && isMarketplaceId(db.marketplace)
         ? db.marketplace
         : DEFAULT_MARKETPLACE,
+
+    /**
+     * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
+     * has ever been fetched.
+     *
+     * A row for a feed with no `marketplace_feed_meta` entry too, with `fetchedAt: null` and a
+     * `rowCount` counted straight off `marketplace_prices` — because "never fetched" is the
+     * state a first selection acts on, and a command that simply omitted the row would leave a
+     * panel unable to tell it from "not read yet".
+     *
+     * A read: no network, two small tables, cheap enough to poll while a refresh is running.
+     */
+    marketplace_feed_status: (): MarketplaceFeedStatus[] =>
+      FEED_MARKETPLACES.map((m) => {
+        const meta = db.marketplaceFeeds.find((f) => f.marketplace === m.id);
+        return {
+          marketplace: m.id,
+          fetchedAt: meta?.fetchedAt ?? null,
+          feedBuiltAt: meta?.feedBuiltAt ?? null,
+          // `null` and not `0` for a feed never fetched: "nothing downloaded" and "a fetch that
+          // landed nothing" are two states, and only the first is one a first selection acts on.
+          rowCount: meta ? db.marketplacePrices.filter((p) => p.marketplace === m.id).length : null,
+          // **The backend's own answer, and never fetched is stale by definition** — that is
+          // what makes the start-up pass fetch a feed that has never been pulled. A stamp in
+          // the future (a clock that moved) counts as stale rather than underflowing.
+          stale: meta === undefined || isFeedStale(meta.fetchedAt, CLOCK_BASE),
+          // The fake's refreshes are synchronous, so nothing is ever in flight *between* two
+          // commands here. A story that wants the state emits `marketplace:progress`.
+          refreshing: false,
+        };
+      }),
 
     /**
      * `error_log_list` — newest first, clamped exactly as the Rust does.
@@ -3239,7 +3525,7 @@ interface GroupedDiff {
  * ordered by where that representative row falls in the editor's own reading order, so the
  * shopping list runs down the deck the way the deck is drawn.
  */
-function theoryDiff(db: FakeDb, deckId: number): GroupedDiff[] {
+function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[] {
   const rows = db.deckCards
     .filter((dc) => {
       if (dc.deckId !== deckId) return false;
@@ -3268,9 +3554,8 @@ function theoryDiff(db: FakeDb, deckId: number): GroupedDiff[] {
           categoryName: categoryById(db, dc.categoryId)?.name ?? "",
           // Filled below, once both sides are summed.
           quantity: 0,
-          // `deck_theory.rs:114-115` — the same flat pair the deck read uses.
-          unitPriceUsd: priceKey(card, "usd"),
-          unitPriceEur: priceKey(card, "eur"),
+          // The same flat nonfoil price the deck read uses, at the same marketplace.
+          unitPrice: nonfoilPriceAt(db, card, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
           ownedSpare: 0,
@@ -4112,7 +4397,10 @@ export function writeHandlers(db: FakeDb) {
       db.deckCategories.push(category);
       recordCategory(db, deck.id, { action: "create", name });
       deck.updatedAt = stamp(db);
-      return toDeckCategory(db, category, LIVE);
+      // `LIVE` and the default marketplace, both for one reason: a category **write** carries
+      // neither, so the row it answers with is a courtesy rather than the read the panel then
+      // does. Every caller invalidates and re-reads through its own variant and marketplace.
+      return toDeckCategory(db, category, LIVE, DEFAULT_MARKETPLACE);
     },
 
     /**
@@ -4135,7 +4423,10 @@ export function writeHandlers(db: FakeDb) {
       category.name = name;
       recordCategory(db, deck.id, { action: "rename", name, previousName });
       deck.updatedAt = stamp(db);
-      return toDeckCategory(db, category, LIVE);
+      // `LIVE` and the default marketplace, both for one reason: a category **write** carries
+      // neither, so the row it answers with is a courtesy rather than the read the panel then
+      // does. Every caller invalidates and re-reads through its own variant and marketplace.
+      return toDeckCategory(db, category, LIVE, DEFAULT_MARKETPLACE);
     },
 
     /**
@@ -4161,7 +4452,10 @@ export function writeHandlers(db: FakeDb) {
         name: category.name,
       });
       deck.updatedAt = stamp(db);
-      return toDeckCategory(db, category, LIVE);
+      // `LIVE` and the default marketplace, both for one reason: a category **write** carries
+      // neither, so the row it answers with is a courtesy rather than the read the panel then
+      // does. Every caller invalidates and re-reads through its own variant and marketplace.
+      return toDeckCategory(db, category, LIVE, DEFAULT_MARKETPLACE);
     },
 
     /**
@@ -4188,7 +4482,7 @@ export function writeHandlers(db: FakeDb) {
       return db.deckCategories
         .filter((c) => c.deckId === deck.id)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
-        .map((c) => toDeckCategory(db, c, LIVE));
+        .map((c) => toDeckCategory(db, c, LIVE, DEFAULT_MARKETPLACE));
     },
 
     /**
@@ -4482,7 +4776,9 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (!db.decks.some((d) => d.id === args.deckId)) throw refuse(DECK_GONE);
       let touched = 0;
-      for (const grouped of theoryDiff(db, args.deckId)) {
+      // The marketplace decides no part of *which* rows are short — it only prices them — so
+      // the default is enough here, where nothing reads a price.
+      for (const grouped of theoryDiff(db, args.deckId, DEFAULT_MARKETPLACE)) {
         if (grouped.oracleId === null) continue;
         addWish(db, {
           oracleId: grouped.oracleId,
@@ -4548,6 +4844,97 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.marketplace = args.id;
+    },
+
+    /**
+     * `marketplace_feed::refresh` — download one feed and rewrite its rows.
+     *
+     * Three refusals, and they are three different sentences on purpose: a busy database (the
+     * ordinary write lock, like every other write here), a marketplace that has no feed to
+     * fetch, and the fetch itself failing.
+     *
+     * **The third one leaves the previous prices in place**, which is the behaviour the whole
+     * fault exists to make visible: stale prices under an honest as-of line beat an empty
+     * table, so nothing is deleted before the new rows are in hand and a failure writes to
+     * `error_log` rather than to `marketplace_prices`.
+     *
+     * A success rebuilds this feed's rows from the corpus — the fake's stand-in for 63.7 MiB of
+     * JSON — and stamps `marketplace_feed_meta`, which is what moves a feed from `never` to
+     * `fresh` while a story watches.
+     */
+    marketplace_feed_refresh: (args: { marketplace: string }): MarketplaceFeedStatus => {
+      refuseIfBusy(db);
+      const feed = FEED_MARKETPLACES.find((m) => m.id === args.marketplace);
+      if (!feed) {
+        throw refuse(
+          `"${args.marketplace}" has no price feed to refresh. ` +
+            `Expected one of: ${FEED_MARKETPLACES.map((m) => m.id).join(", ")}.`,
+        );
+      }
+      // The same two-frame arc `update_download` emits, and for its reason: the work here is
+      // synchronous, so a story cannot watch a bar move — what these prove is that the
+      // **wiring** is real, that a listener registered by `useMarketplaceProgress` hears the
+      // right event name with the right payload. A story that wants to *watch* a fetch emits
+      // `marketplace:progress` itself, which is also how it stands in for the refresh the
+      // backend starts at app start with nobody having pressed anything.
+      emitFake("marketplace:progress", {
+        marketplace: feed.id,
+        phase: "downloading",
+        done: 0,
+        total: FEED_BYTES[feed.id] ?? 0,
+      });
+      if (db.fault === "feedFetchError") {
+        db.errorLog = [
+          ...db.errorLog,
+          {
+            id: db.errorLog.length + 1,
+            firstAt: CLOCK_BASE,
+            lastAt: CLOCK_BASE,
+            source: "scryfall_api",
+            operation: "marketplace_feed",
+            kind: "timeout",
+            message: `${feed.label}'s price feed timed out after 30s`,
+            detail: null,
+            count: 1,
+          },
+        ];
+        emitFake("marketplace:progress", {
+          marketplace: feed.id,
+          phase: "error",
+          done: 0,
+          total: 0,
+        });
+        throw refuse(
+          `${feed.label}'s price feed could not be downloaded. The prices already here are ` +
+            `still being shown.`,
+        );
+      }
+      const fresh = marketplaceFeedPrices(db.cards).filter((p) => p.marketplace === feed.id);
+      db.marketplacePrices = [
+        ...db.marketplacePrices.filter((p) => p.marketplace !== feed.id),
+        ...fresh,
+      ];
+      const meta = marketplaceFeedMeta(fresh, CLOCK_BASE).find((m) => m.marketplace === feed.id)!;
+      db.marketplaceFeeds = [
+        ...db.marketplaceFeeds.filter((f) => f.marketplace !== feed.id),
+        meta,
+      ];
+      emitFake("marketplace:progress", {
+        marketplace: feed.id,
+        phase: "done",
+        done: meta.rowCount,
+        total: meta.rowCount,
+      });
+      return {
+        marketplace: feed.id,
+        fetchedAt: meta.fetchedAt,
+        feedBuiltAt: meta.feedBuiltAt,
+        rowCount: meta.rowCount,
+        // It has just been fetched, and it is no longer running: the command answers the state
+        // it *left* the feed in, which is the same shape `marketplace_feed_status` reads back.
+        stale: isFeedStale(meta.fetchedAt, CLOCK_BASE),
+        refreshing: false,
+      };
     },
 
     /**

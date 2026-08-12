@@ -7,7 +7,12 @@
  * and whatever comes next, all described the same way and ranked against each other.
  */
 import { createStore } from "zustand/vanilla";
-import type { SyncPhase, SyncProgressEvent, UpdateProgressEvent } from "@/lib/ipc";
+import type {
+  FeedProgressEvent,
+  SyncPhase,
+  SyncProgressEvent,
+  UpdateProgressEvent,
+} from "@/lib/ipc";
 import type { ManaLineSync } from "@/lib/mana";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 
@@ -41,6 +46,13 @@ export interface Activity extends ManaLineSync {
  */
 export const RANK = {
   sync: 0,
+  /**
+   * A price feed being downloaded. **Between** the two, which is what the gaps are for: it is
+   * quieter than a sync (which rewrites the corpus under every view and disables Refresh) and
+   * louder than an update download (which changes nothing until the reader restarts), because
+   * it is rewriting the numbers on the screen the reader is looking at right now.
+   */
+  marketplaceFeed: 5,
   update: 10,
 } as const;
 
@@ -153,6 +165,51 @@ function syncDetail(phase: SyncPhase, e: SyncProgressEvent): string | null {
   if (phase === "reclaiming" && e.total > 0) {
     return `${Math.min(100, Math.round((e.done / e.total) * 100))}%`;
   }
+  return null;
+}
+
+/**
+ * Fold a price-feed download into the job the ribbon describes.
+ *
+ * Takes the marketplace's label and the event rather than a hook's return type —
+ * `updateActivity`'s arrangement, for its reason. `label` is `null` when nothing is being
+ * fetched, and **it and not the event decides whether anything is running**: `syncActivity`'s
+ * rule, for `syncActivity`'s reason. A terminal `done`/`error` event outlives the run it
+ * describes, and the start-up refresh emits its first events before this window is listening —
+ * so a job built from the event alone would both linger and start late.
+ *
+ * Two phases count two different things and the detail says which: bytes while the 63.7 MiB is
+ * coming down, rows while it is being written. A phase with no denominator gets an
+ * indeterminate bar rather than an invented percentage.
+ */
+export function marketplaceFeedActivity(
+  label: string | null,
+  progress: FeedProgressEvent | null,
+): Activity | null {
+  if (label === null) return null;
+  const phase =
+    progress && progress.phase !== "done" && progress.phase !== "error" ? progress : null;
+  return {
+    key: "marketplace-feed",
+    rank: RANK.marketplaceFeed,
+    label:
+      phase?.phase === "ingesting"
+        ? `Importing ${label} prices`
+        : `Downloading ${label} prices`,
+    detail: feedDetail(phase),
+    value: phase && phase.total > 0 ? Math.min(1, phase.done / phase.total) : null,
+  };
+}
+
+/** Bytes while downloading, rows while ingesting, and nothing at all without a total — the
+ *  ingest's own count is real (it is rows written), so unlike the card sync's estimate it can
+ *  be printed as a figure. */
+function feedDetail(progress: FeedProgressEvent | null): string | null {
+  if (!progress) return null;
+  if (progress.phase === "downloading" && progress.total > 0) {
+    return megabytes(progress.done, progress.total);
+  }
+  if (progress.phase === "ingesting") return `${progress.done.toLocaleString("en-US")} prices`;
   return null;
 }
 

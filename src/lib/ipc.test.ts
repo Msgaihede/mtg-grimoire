@@ -5,7 +5,7 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
-import { ipc, ipcError, type SyncProgressEvent } from "@/lib/ipc";
+import { ipc, ipcError, type FeedProgressEvent, type SyncProgressEvent } from "@/lib/ipc";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -214,9 +214,15 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue(null);
     // The variant is a parameter of the command and not a filter this side applies: it scopes
     // the **cards** and nothing else, so a mirror that dropped it would not read the live deck
-    // by luck — Tauri refuses a call whose parameters it cannot fill.
-    await ipc.deckGet(3, "live");
-    expect(invoke).toHaveBeenCalledWith("deck_get", { id: 3, variant: "live" });
+    // by luck — Tauri refuses a call whose parameters it cannot fill. The marketplace is the
+    // same shape of fact one step over: it prices every card and every category heading in the
+    // answer, so a call that dropped it would read a deck quoted at somebody else's prices.
+    await ipc.deckGet(3, "live", "cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("deck_get", {
+      id: 3,
+      variant: "live",
+      marketplace: "cardkingdom",
+    });
 
     invoke.mockResolvedValue([]);
     await ipc.formatSpecs();
@@ -372,11 +378,16 @@ describe("ipc argument names match the Rust command signatures", () => {
    */
   it("sends every category command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
-    await ipc.deckCategoryList(4, "theory");
+    await ipc.deckCategoryList(4, "theory", "manapool");
     // The variant scopes the two **counts** on each row and nothing else — the list of
     // categories is the same either way, which is what keeps the editor's columns still while
-    // the reader switches lists.
-    expect(invoke).toHaveBeenCalledWith("deck_category_list", { deckId: 4, variant: "theory" });
+    // the reader switches lists. The marketplace scopes one of those two numbers: `totalPrice`
+    // is a sum *at* a marketplace, and two of them are not conversions of each other.
+    expect(invoke).toHaveBeenCalledWith("deck_category_list", {
+      deckId: 4,
+      variant: "theory",
+      marketplace: "manapool",
+    });
 
     invoke.mockResolvedValue({ id: 7 });
     await ipc.deckCategoryCreate(4, "Ramp");
@@ -509,8 +520,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("deck_audit_list", { deckId: 4, limit: 200 });
 
     invoke.mockResolvedValue([]);
-    await ipc.deckTheoryDiff(4);
-    expect(invoke).toHaveBeenCalledWith("deck_theory_diff", { deckId: 4 });
+    await ipc.deckTheoryDiff(4, "tcgplayer");
+    expect(invoke).toHaveBeenCalledWith("deck_theory_diff", {
+      deckId: 4,
+      marketplace: "tcgplayer",
+    });
 
     invoke.mockResolvedValue(12);
     const copied = await ipc.deckTheoryCopyFromLive(4);
@@ -543,6 +557,39 @@ describe("ipc argument names match the Rust command signatures", () => {
    * command that takes no arguments must be invoked with none, or Tauri answers a
    * deserialization error rather than a type error the compiler could have caught.
    */
+  /**
+   * The marketplace setting and the two price-feed commands.
+   *
+   * `set_marketplace` and `marketplace_feed_refresh` both take one argument and they spell it
+   * **differently** — `id` and `marketplace` — which is exactly the pair a copy-paste gets
+   * wrong, and Tauri matches by name. `marketplace_feed_status` takes none at all, which is
+   * `prewarm_collection`'s trap: an argument object there is a deserialization error rather
+   * than a type error the compiler could have caught.
+   */
+  it("sends the marketplace commands under the names they declare", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.setMarketplace("cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("set_marketplace", { id: "cardkingdom" });
+
+    invoke.mockResolvedValue({
+      marketplace: "cardkingdom",
+      fetchedAt: 1_800_000_000,
+      feedBuiltAt: "2026-08-11 21:07:02",
+      rowCount: 149_989,
+    });
+    const status = await ipc.marketplaceFeedRefresh("cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("marketplace_feed_refresh", {
+      marketplace: "cardkingdom",
+    });
+    // The feed's own build stamp, which is not `fetchedAt` and is `null` for Mana Pool — a
+    // mirror that dropped it would leave the panel unable to draw the difference at all.
+    expect(status.feedBuiltAt).toBe("2026-08-11 21:07:02");
+
+    invoke.mockResolvedValue([]);
+    await ipc.marketplaceFeedStatus();
+    expect(invoke).toHaveBeenCalledWith("marketplace_feed_status");
+  });
+
   it("reads the error log with a limit and clears it with nothing", async () => {
     invoke.mockResolvedValue([]);
     await ipc.errorLogList(50);
@@ -571,6 +618,39 @@ it("unwraps the sync:progress payload and returns the unlisten handle", async ()
 
   expect(listen).toHaveBeenCalledWith("sync:progress", expect.any(Function));
   expect(seen).toEqual([{ phase: "downloading", done: 5, total: 10, message: null }]);
+  expect(stop).toBe(unlisten);
+});
+
+/**
+ * `marketplace:progress` — its **own** event rather than a ninth `SyncPhase`.
+ *
+ * The name is the whole contract and there is nothing in the type system holding it: a
+ * subscriber spelling it `marketplace_feed:progress` hears nothing at all, forever, with no
+ * error anywhere. It follows `update:progress`'s precedent for a stated reason — `SyncPhase` is
+ * a closed union behind a total `PHASE_LABEL` map, so a phase added there would render
+ * `undefined` on the ribbon — and the payload carries `marketplace`, because two feeds exist
+ * and either can be the one running.
+ */
+it("unwraps the marketplace:progress payload and returns the unlisten handle", async () => {
+  const unlisten = vi.fn();
+  let emit: ((evt: { payload: FeedProgressEvent }) => void) | undefined;
+  listen.mockImplementation(
+    (_name: string, handler: (evt: { payload: FeedProgressEvent }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    },
+  );
+  const seen: FeedProgressEvent[] = [];
+
+  const stop = await ipc.onMarketplaceProgress((e) => seen.push(e));
+  emit?.({
+    payload: { marketplace: "cardkingdom", phase: "downloading", done: 5, total: 66_787_283 },
+  });
+
+  expect(listen).toHaveBeenCalledWith("marketplace:progress", expect.any(Function));
+  expect(seen).toEqual([
+    { marketplace: "cardkingdom", phase: "downloading", done: 5, total: 66_787_283 },
+  ]);
   expect(stop).toBe(unlisten);
 });
 

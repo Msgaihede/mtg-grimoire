@@ -736,12 +736,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [deck.cards, filter, tagIds]);
 
   const groups = useMemo(
-    // The currency is a grouping input because it decides two of the answers: what every
-    // heading's total is summed from, and how a `price` sort ranks the rows under it. Both
-    // change on a marketplace switch, and neither costs a refetch — the twin fields are
-    // already on the rows this recomputes over.
-    () => buildGroups(shown, categories, groupBy, sortBy, marketplace.currency),
-    [shown, categories, groupBy, sortBy, marketplace],
+    // No currency any more: the rows this groups arrived priced at the selected marketplace,
+    // because that marketplace is in `useDeck`'s query key. A switch therefore changes
+    // `deck.cards` itself and this recomputes over the new answer, rather than picking a
+    // different field out of the old one.
+    () => buildGroups(shown, categories, groupBy, sortBy),
+    [shown, categories, groupBy, sortBy],
   );
 
   /**

@@ -21,6 +21,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // The shell listens for the reconcile event too, and a `.catch` cannot catch the
     // synchronous `TypeError` of calling `undefined`.
     onCollectionReconciled: vi.fn().mockResolvedValue(() => {}),
+    // And for a price feed's progress, which is the third event this window subscribes to —
+    // the backend refreshes the selected feed at start-up, so a window that was not listening
+    // would show a fetch nobody could see. Same reason it must be mocked rather than left off.
+    onMarketplaceProgress: vi.fn().mockResolvedValue(() => {}),
+    marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -129,18 +134,15 @@ const BOLT: CardSummary = {
   rarity: "common",
   typeLine: "Instant",
   manaCost: "{R}",
-  priceUsd: 400.5,
-  priceEur: 320.25,
+  price: 400.5,
   layout: "normal",
   oracleId: "o1",
   finishes: '["nonfoil"]',
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
-  priceLowUsd: 400.5,
-  priceHighUsd: 400.5,
-  priceLowEur: 320.25,
-  priceHighEur: 320.25,
+  priceLow: 400.5,
+  priceHigh: 400.5,
 };
 
 /**
@@ -160,8 +162,7 @@ const MAIN: DeckCategory = {
   isActive: true,
   sortOrder: 0,
   cardCount: 0,
-  totalPriceUsd: null,
-  totalPriceEur: null,
+  totalPrice: null,
   cardCountAllVariants: 0,
 };
 
@@ -247,8 +248,7 @@ const BOLT_ENTRY: CollectionRow = {
   condition: "NM",
   quantity: 2,
   tradelistQuantity: 0,
-  unitPriceUsd: 400.5,
-  unitPriceEur: 350,
+  unitPrice: 400.5,
   purchasePrice: null,
   purchaseCurrency: null,
   acquiredAt: null,
@@ -280,8 +280,7 @@ const BOLT_WISH: WishRow = {
   typeLine: "Instant",
   quantity: 2,
   preferredFinish: null,
-  unitPriceUsd: 400.5,
-  unitPriceEur: 350,
+  unitPrice: 400.5,
   ownedQuantity: 0,
   notes: null,
   needsReview: null,
@@ -343,10 +342,8 @@ beforeEach(() => {
     uniqueCards: 2,
     entries: 2,
     tradelistCards: 0,
-    valueUsd: 801,
-    valueEur: 700,
-    unpricedUsd: 0,
-    unpricedEur: 0,
+    value: 801,
+    unpriced: 0,
     needsReview: 0,
   });
   syncStatus.mockReset().mockResolvedValue({
@@ -403,7 +400,7 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
   await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
 
   expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
-  expect(deckGet).toHaveBeenCalledWith(4, "live");
+  expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
 
   await userEvent.click(screen.getByRole("button", { name: /back to decks/i }));
 

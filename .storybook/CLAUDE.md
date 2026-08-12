@@ -20,14 +20,20 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **nine** faults
+  Four seeds (`empty`/`starter`/`needsReview`/`large`), **ten** faults
   (`busy`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
-  `updateError`/`errorLog`); saying nothing gets `starter` with no fault. A fault is set on the
-  _world_, so a story shows what the **app** does with a refusal rather than what one mocked
-  call returns.
+  `updateError`/`errorLog`/`feedFetchError`); saying nothing gets `starter` with no fault. A
+  fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
+  what one mocked call returns.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
+- **`starter` seeds both price feeds**, derived from the corpus rather than written out:
+  `marketplacePrices` is the fake's `marketplace_prices`, so a story can select Card Kingdom or
+  Mana Pool and see *different numbers* rather than the same ones under a new label. Every
+  fourth printing is left out of Mana Pool's on purpose — a card one feed lists and another does
+  not is the state no amount of currency arithmetic could produce, and it is the one the em-dash
+  rule exists for.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.

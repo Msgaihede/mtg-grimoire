@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MARKETPLACE,
+  FEED_MARKETPLACES,
   MARKETPLACES,
   MARKETPLACE_IDS,
   MARKETPLACE_LIST,
@@ -43,12 +44,39 @@ describe("the marketplace table", () => {
   });
 
   /**
-   * Exactly the two Scryfall feeds. This is the assertion that fails the day someone wires up
-   * a third feed and forgets to flip `priced` — or, worse, flips `priced` without wiring one.
+   * **Four priced, and Card trader is the one that is not.**
+   *
+   * This assertion was written to fail exactly when a third source landed, and it did: two
+   * marketplaces came out of Scryfall's `prices` blob, and Card Kingdom and Mana Pool now come
+   * out of their own public bulk feeds — keyed by `scryfall_id`, so the join is exact rather
+   * than fuzzy, which is the fact that made them possible at all.
+   *
+   * It still fails the day someone flips `priced` without wiring a feed, or wires one and
+   * forgets to flip it. Card trader stays out for a reason that is not a matter of effort: its
+   * API needs a per-user JWT and publishes no bulk download, so there is nothing this app could
+   * sync on the reader's behalf.
    */
-  it("can only quote the two marketplaces Scryfall supplies", () => {
+  it("can quote the four with a feed, and not the one without", () => {
     const priced = MARKETPLACE_LIST.filter((m) => m.priced).map((m) => m.id);
-    expect(priced).toEqual(["tcgplayer", "cardmarket"]);
+    expect(priced).toEqual(["tcgplayer", "cardmarket", "cardkingdom", "manapool"]);
+    expect(MARKETPLACES.cardtrader.priced).toBe(false);
+  });
+
+  /**
+   * **Which prices are downloaded, and which arrive with the card data** — the one thing
+   * outside this module anything is allowed to branch on, and only ever to talk *about* a feed.
+   *
+   * `feed` is not `priced`: TCGplayer and Cardmarket are quotable and have no download of their
+   * own, so they have no age, no refresh and no state to show. Card trader is neither, because
+   * "no feed" and "a feed we have not built" are the same thing from here.
+   */
+  it("knows which two marketplaces it downloads prices for", () => {
+    expect(FEED_MARKETPLACES.map((m) => m.id)).toEqual(["cardkingdom", "manapool"]);
+    expect(MARKETPLACES.tcgplayer.feed).toBe(false);
+    expect(MARKETPLACES.cardmarket.feed).toBe(false);
+    expect(MARKETPLACES.cardtrader.feed).toBe(false);
+    // Every feed-backed one is quotable: a feed nobody may select is a download nobody wants.
+    for (const m of FEED_MARKETPLACES) expect(m.priced).toBe(true);
   });
 
   it("defaults to the one every price in the app used to be", () => {

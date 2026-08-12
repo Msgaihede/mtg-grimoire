@@ -239,12 +239,12 @@ export function WishlistPage() {
    *
    * **One figure, not the pair this used to draw.** Two totals over one shopping list was two
    * answers to the question the header exists to answer, and the setting is now the way to
-   * say which one is wanted. The unpriced counter moves with it and is not shared, because
-   * the two currencies do not have the same holes: `eur_etched` does not exist in Scryfall's
-   * data at all, so a wish for the etched printing is priced in dollars and unpriced in euros
-   * at the same time — and a count borrowed from the other currency would be wrong about
-   * exactly the rows this note is for. Nothing falls back: an unpriced wish is left out of
-   * the sum and counted, never quoted at the nonfoil rate.
+   * say which one is wanted. The unpriced counter is summed from the same rows and is never
+   * carried across a switch, because no two marketplaces have the same holes: `eur_etched`
+   * does not exist in Scryfall's data at all, so a wish for the etched printing is priced on
+   * TCGplayer and unpriced on Cardmarket at once, and a card a bulk feed has never listed is
+   * unpriced on that feed alone. Nothing falls back: an unpriced wish is left out of the sum
+   * and counted, never quoted at another marketplace's rate.
    */
   const currency = marketplace.currency;
   const cost = useMemo(() => {
@@ -253,12 +253,11 @@ export function WishlistPage() {
     for (const row of rows) {
       const missing = missingOf(row);
       if (missing === 0) continue;
-      const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
-      if (unit === null) unpriced += 1;
-      else total += unit * missing;
+      if (row.unitPrice === null) unpriced += 1;
+      else total += row.unitPrice * missing;
     }
     return { total, unpriced };
-  }, [rows, currency]);
+  }, [rows]);
 
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write, not either of them: with `isError` on both, a refused stepper press
@@ -614,13 +613,14 @@ function columnsFor(
       // number the stepper moves, so the two can never disagree on screen. A wish with no
       // price for its finish has no cost either: that is a hole in the data, not a zero, and
       // an etched wish on Cardmarket is exactly that hole (`eur_etched` does not exist), so
-      // it is an em dash rather than the nonfoil rate wearing a euro sign.
+      // it is an em dash rather than another marketplace's rate wearing a euro sign.
       //
-      // The header sorts by *this*, in *this* currency — which is why the query carries one —
-      // and why a fulfilled wish sorts to the bottom of a cost order however dear the card is.
+      // The header sorts by *this*, at the marketplace the query named — which is why the
+      // query carries one — and why a fulfilled wish sorts to the bottom of a cost order
+      // however dear the card is.
       cell: (row) => {
         const missing = missingOf(row);
-        const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
+        const unit = row.unitPrice;
         return (
           <>
             {formatPrice(unit === null ? null : unit * missing, currency)}

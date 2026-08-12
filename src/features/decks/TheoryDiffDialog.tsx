@@ -7,7 +7,7 @@ import { Figure } from "@/components/Figure";
 import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
-import type { Currency, Marketplace } from "@/lib/marketplace";
+import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { dialog, scrim } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { trapTab } from "@/lib/trapTab";
@@ -54,17 +54,18 @@ const ONE_DIRECTION =
  * button nobody has pressed should not pay for it, and unmounting says that more plainly than a
  * flag does.
  */
-function useTheoryDiff(deckId: number) {
+function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
   const queryClient = useQueryClient();
 
   /**
-   * `["decks", "theoryDiff", deckId]` — under the `["decks"]` root, which is the whole of how
-   * this stays fresh: every deck write in the app invalidates that prefix, and a theory edit
-   * changes this answer. No variant in the key, because the diff *is* the pair.
+   * `["decks", "theoryDiff", deckId, marketplace]` — under the `["decks"]` root, which is the
+   * whole of how this stays fresh: every deck write in the app invalidates that prefix, and a
+   * theory edit changes this answer. No variant in the key, because the diff *is* the pair; a
+   * marketplace, because it prices every row of the shopping list this draws.
    */
   const query = useQuery({
-    queryKey: ["decks", "theoryDiff", deckId],
-    queryFn: () => ipc.deckTheoryDiff(deckId),
+    queryKey: ["decks", "theoryDiff", deckId, marketplace],
+    queryFn: () => ipc.deckTheoryDiff(deckId, marketplace),
   });
 
   /**
@@ -136,9 +137,8 @@ function useTheoryDiff(deckId: number) {
 interface Totals {
   /** Copies, not rows: a card wanted three more times counts three. */
   copies: number;
-  /** The shown printings' nonfoil unit price **in the currency {@link diffTotals} was given**,
-   *  times the copies wanted. Unsuffixed, for {@link CardGroup.totalPrice}'s reason: the
-   *  currency belongs to the call rather than to the field. */
+  /** The shown printings' nonfoil unit price at the marketplace the diff was read at, times
+   *  the copies wanted. */
   cost: number;
   /** Copies the sum above could not price, so the total never lies by rounding down. */
   unpriced: number;
@@ -149,11 +149,11 @@ interface Totals {
 /**
  * The strip's arithmetic, and the one line of it worth reading twice.
  *
- * `cost` sums **the row's own printing's** price, which is what `unitPrice*` is: the nonfoil
- * `usd`/`eur` key of that printing's `prices` blob, never `cards.price_usd`, which is a display
- * fallback chain and must not be summed. Whichever of the two the currency names, and never the
- * other one as a stand-in — an unpriced row is counted rather than charged at the other
- * currency's rate.
+ * `cost` sums **the row's own printing's** price, which is what `unitPrice` is: that printing's
+ * nonfoil price at the marketplace the diff was read at, never `cards.price_usd`, which is a
+ * display fallback chain and must not be summed. A row that marketplace does not quote is
+ * *counted* as unpriced rather than charged at anything — there is no second number to reach
+ * for, and reaching to another marketplace for one is the thing this whole shape forbids.
  *
  * `spare` is a **plain sum** of a display field. It is deliberately not `min(spare, quantity)`, not
  * subtracted from `copies`, and not netted against anything: the moment it enters an arithmetic
@@ -161,16 +161,15 @@ interface Totals {
  * `ipc.ts` exists to prevent. A reader may well own five spare Sol Rings while needing one; the
  * figure says so, and says nothing else.
  */
-export function diffTotals(rows: readonly TheoryDiffRow[], currency: Currency): Totals {
+export function diffTotals(rows: readonly TheoryDiffRow[]): Totals {
   let copies = 0;
   let cost = 0;
   let unpriced = 0;
   let spare = 0;
   for (const row of rows) {
     copies += row.quantity;
-    const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
-    if (unit === null) unpriced += row.quantity;
-    else cost += unit * row.quantity;
+    if (row.unitPrice === null) unpriced += row.quantity;
+    else cost += row.unitPrice * row.quantity;
     spare += row.ownedSpare;
   }
   return { copies, cost, unpriced, spare };
@@ -255,8 +254,8 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
   // open, already holds a query client of its own, and a shopping list is exactly the surface
   // a reader would open *because* they have just changed which shop they are pricing against.
   const { marketplace } = useMarketplace();
-  const { query, rows, wishAll, wishRow } = useTheoryDiff(deckId);
-  const totals = useMemo(() => diffTotals(rows, marketplace.currency), [rows, marketplace]);
+  const { query, rows, wishAll, wishRow } = useTheoryDiff(deckId, marketplace.id);
+  const totals = useMemo(() => diffTotals(rows), [rows]);
 
   /**
    * The rows a press has already put on the wishlist, so the button can say so.
@@ -513,8 +512,7 @@ function Row({
   onWishlist,
 }: {
   row: TheoryDiffRow;
-  /** Which of the row's two unit prices the line prints — the strip's total is the sum of
-   *  exactly these, so they take the same argument. */
+  /** How the row's one unit price is written. Which price it *is* was decided by the query. */
   currency: Currency;
   sent: boolean;
   pending: boolean;
@@ -564,7 +562,7 @@ function Row({
       </span>
 
       <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">
-        {formatPrice(currency === "eur" ? row.unitPriceEur : row.unitPriceUsd, currency)}
+        {formatPrice(row.unitPrice, currency)}
       </span>
 
       <button

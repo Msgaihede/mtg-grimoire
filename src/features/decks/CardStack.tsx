@@ -281,9 +281,9 @@ export interface CardStackProps {
    */
   label: string;
   /**
-   * Which of a row's two unit prices the card's data line prints — the selected marketplace's
-   * currency, passed in rather than read here so a stack and the heading above it cannot
-   * quote two different marketplaces for the same pile.
+   * How a card's data line writes its unit price — the selected marketplace's currency,
+   * passed in rather than read here so a stack and the heading above it cannot quote two
+   * different marketplaces for the same pile. *Which* price it is was decided by the read.
    */
   currency: Currency;
   /**
@@ -418,7 +418,7 @@ function StackedCard({
   actions,
 }: {
   card: DeckCard;
-  /** Which of the row's two unit prices the data line prints. */
+  /** How the data line writes the row's one unit price. */
   currency: Currency;
   /** Its place in the stack, which is the whole of its identity to {@link useFlipThrough}. */
   index: number;
@@ -580,7 +580,7 @@ function StackedCard({
               {card.setCode.toUpperCase()} · {card.collectorNumber}
             </span>
             <span className="shrink-0 tabular-nums text-text">
-              {formatPrice(currency === "eur" ? card.unitPriceEur : card.unitPriceUsd, currency)}
+              {formatPrice(card.unitPrice, currency)}
             </span>
             {/* Drawn only where it says something: a fully covered card prints nothing at all,
                 because sixty ticks are sixty things to read past on the way to the three that

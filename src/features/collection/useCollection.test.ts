@@ -108,10 +108,8 @@ describe("useCollection", () => {
       uniqueCards: 0,
       entries: 0,
       tradelistCards: 0,
-      valueUsd: 0,
-      valueEur: 0,
-      unpricedUsd: 0,
-      unpricedEur: 0,
+      value: 0,
+      unpriced: 0,
       needsReview: 0,
     });
   });

@@ -42,7 +42,7 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  */
 function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
   const asOf = pricesAsOf(marketplace);
-  const eur = marketplace.currency === "eur";
+  const currency = marketplace.currency;
   return [
     {
       key: "name",
@@ -119,17 +119,14 @@ function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
       headerLabel: `Price. ${asOf}`,
       headerClassName: "text-right",
       cellClassName: "text-right font-mono tabular-nums",
-      // The spread across the printings the row stands for, in the selected marketplace's own
-      // currency. Uncollapsed both ends are the row's own price, so this renders exactly what
-      // `formatPrice(card.price…)` would.
+      // The spread across the printings the row stands for. Uncollapsed both ends are the
+      // row's own price, so this renders exactly what `formatPrice(card.price, …)` would.
       //
-      // Each pair spans the printings that have a price **in that currency**, so a collapsed
-      // row's euro span can be narrower than its dollar one — or absent while the dollar one
-      // exists, which is an etched-only group and is an em dash rather than a borrowed number.
-      cell: (card) =>
-        eur
-          ? priceRange(card.priceLowEur, card.priceHighEur, "eur")
-          : priceRange(card.priceLowUsd, card.priceHighUsd, "usd"),
+      // The span covers the printings that have a price **at the marketplace the query named**,
+      // so the same collapsed row's range is legitimately narrower at one marketplace than at
+      // another — or absent at one and present at another, which is an em dash rather than a
+      // borrowed number.
+      cell: (card) => priceRange(card.priceLow, card.priceHigh, currency),
     },
     {
       key: "actions",

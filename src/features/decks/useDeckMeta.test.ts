@@ -43,8 +43,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     isActive: true,
     sortOrder: 0,
     cardCount: 0,
-    totalPriceUsd: null,
-    totalPriceEur: null,
+    totalPrice: null,
     // Both lists, defaulting to the one-list count — the shape the backend can produce. Only
     // the delete confirmation reads it.
     cardCountAllVariants: over.cardCount ?? 0,
@@ -96,8 +95,7 @@ function card(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     gameChanger: null,
     finishes: null,
     everUncommon: false,
-    unitPriceUsd: null,
-    unitPriceEur: null,
+    unitPrice: null,
     ownedQuantity: 0,
     ...over,
   };
@@ -142,7 +140,7 @@ describe("useDeckMeta", () => {
     const { result } = renderHook(() => useDeckMeta(4), { wrapper });
 
     await waitFor(() => expect(result.current.categories).toEqual([MAIN, REMOVAL, MAYBE]));
-    expect(deckCategoryList).toHaveBeenCalledWith(4, "live");
+    expect(deckCategoryList).toHaveBeenCalledWith(4, "live", "tcgplayer");
     expect(result.current.tags).toEqual([CUT]);
     expect(deckTagList).toHaveBeenCalledWith(4, "live");
     // Global: the palette a "New tag" dialog completes from is a property of the app's whole
@@ -158,7 +156,7 @@ describe("useDeckMeta", () => {
    * answers are cached side by side rather than one replacing the other.
    *
    * Which categories a deck has, what they are called and what order they are in are facts
-   * about the *deck*; only `cardCount` and `totalPriceUsd` are about one of its two lists. So a
+   * about the *deck*; only `cardCount` and `totalPrice` are about one of its two lists. So a
    * Live/Theory switch changes the numbers in the headings, never the headings.
    */
   it("caches each variant's counts under its own key", async () => {
@@ -175,10 +173,10 @@ describe("useDeckMeta", () => {
     rerender({ variant: "theory" });
 
     await waitFor(() => expect(result.current.categories).toEqual(theory));
-    expect(deckCategoryList).toHaveBeenCalledWith(4, "theory");
+    expect(deckCategoryList).toHaveBeenCalledWith(4, "theory", "tcgplayer");
     // Both answers are still there: flipping back is a cache hit, not a re-read.
-    expect(client.getQueryData(["decks", "categories", 4, "live"])).toEqual([MAIN, REMOVAL, MAYBE]);
-    expect(client.getQueryData(["decks", "categories", 4, "theory"])).toEqual(theory);
+    expect(client.getQueryData(["decks", "categories", 4, "live", "tcgplayer"])).toEqual([MAIN, REMOVAL, MAYBE]);
+    expect(client.getQueryData(["decks", "categories", 4, "theory", "tcgplayer"])).toEqual(theory);
   });
 
   it("sends every category write to the command that owns it", async () => {

@@ -60,7 +60,7 @@ import {
   type TagColor,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
-import type { Currency, Marketplace } from "@/lib/marketplace";
+import type { Marketplace } from "@/lib/marketplace";
 import { drawerRight, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -272,7 +272,7 @@ const NO_CARDS: never[] = [];
  * call a pile of their own "Sideboard" — the grain allows it, because the predefined Sideboard
  * was never named by the user — and that one is theirs to rename and delete like any other.
  */
-function groupOf(category: DeckCategory, currency: Currency): CardGroup {
+function groupOf(category: DeckCategory): CardGroup {
   return {
     key: `cat-${category.id}`,
     name: category.name,
@@ -282,10 +282,10 @@ function groupOf(category: DeckCategory, currency: Currency): CardGroup {
     isPredefined: category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
     cards: NO_CARDS,
     count: category.cardCount,
-    // Rust sums both currencies per category, so this is a field pick rather than a refetch —
-    // and never a chain across the two: a pile whose printings are etched has a dollar total
-    // and no euro one at all, which is an em dash rather than the dollar figure in disguise.
-    totalPrice: currency === "eur" ? category.totalPriceEur : category.totalPriceUsd,
+    // Rust summed this at the marketplace the category list was read at, so it is carried
+    // across rather than chosen here. `null` is a pile nothing in which that marketplace
+    // quotes — an em dash, never another marketplace's figure in disguise.
+    totalPrice: category.totalPrice,
   };
 }
 
@@ -479,7 +479,7 @@ function CategoryRow({
   const deleteRef = useRef<HTMLButtonElement>(null);
   const owedFocus = useRef(false);
   const [over, setOver] = useState(false);
-  const group = groupOf(category, marketplace.currency);
+  const group = groupOf(category);
 
   // The other end of the hand-back, and it has to be an effect for `DecksPage`'s
   // `refocusFolderRef` reason: the trigger is **disabled** while the question is up, so

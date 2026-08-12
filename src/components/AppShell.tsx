@@ -19,10 +19,16 @@ import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { readDragData } from "@/features/decks/dnd";
-import { ACTIVITY_DELAY_MS, syncActivity, updateActivity } from "@/lib/activity";
+import {
+  ACTIVITY_DELAY_MS,
+  marketplaceFeedActivity,
+  syncActivity,
+  updateActivity,
+} from "@/lib/activity";
 import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
+import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
@@ -101,15 +107,29 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
   useSyncInvalidation(progress);
+  // The one `marketplace:progress` subscription in the app, for `useSyncProgress`' reason.
+  // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
+  // observer — including the one two lines below — reads it back from there.
+  useMarketplaceProgress();
 
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.
   const busy = refreshing || status?.syncing === true;
 
-  // The two long jobs this window can be running. Both are registered from here because both
-  // are already owned here — the sync by this component, the update by `App`, which hands it
-  // down — and the registry is what lets the ribbon describe either without knowing which.
+  // The three long jobs this window can be running. All are registered from here — the sync by
+  // this component, the update by `App`, which hands it down — and the registry is what lets
+  // the ribbon describe any of them without knowing which.
+  //
+  // **The feed fetch is started somewhere else entirely** — Settings, or the moment a reader
+  // picks a marketplace whose prices are not downloaded yet — and is visible here because
+  // `useMarketplace` reads its state out of the *mutation cache* rather than out of one
+  // observer's `useMutation`. A mutation's state is shared with nobody; a keyed one can be read
+  // from anywhere, which is what lets a sibling component describe a job this one never started.
+  const { refreshing: refreshingFeed, feeds, progress: feedProgress } = useMarketplace();
+  const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace
+    .label;
   useRegisterActivity(syncActivity(progress, busy));
+  useRegisterActivity(marketplaceFeedActivity(refreshingLabel ?? null, feedProgress));
   useRegisterActivity(updateActivity(update.progress, update.status?.available?.version ?? null));
   const activity = useTopActivity();
   // The line moves the moment a job starts; the sentence waits, so a sub-second `checking`

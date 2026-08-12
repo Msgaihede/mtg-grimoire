@@ -26,25 +26,19 @@ const CARDS: DeckCard[] = [
     name: "Sol Ring",
     quantity: 2,
     ownedQuantity: 1,
-    unitPriceUsd: 1.99,
-    // Deliberately not a conversion of the dollar figure: nothing in this app converts, and a
-    // euro price that happened to be `usd × rate` would make a currency mix-up read as
-    // arithmetic rather than as the wrong field.
-    unitPriceEur: 1.5,
+    unitPrice: 1.99,
     rarity: "uncommon",
   }),
   card({
     name: "Arcane Signet",
     ownedQuantity: 1,
-    unitPriceUsd: 0.99,
-    unitPriceEur: 0.75,
+    unitPrice: 0.99,
     colorIdentity: null,
   }),
   card({
     name: "The Great Henge",
     ownedQuantity: 1,
-    unitPriceUsd: 38.5,
-    unitPriceEur: 30,
+    unitPrice: 38.5,
     colorIdentity: "G",
     gameChanger: true,
   }),
@@ -510,25 +504,35 @@ describe("CardStack cards", () => {
   });
 
   /**
-   * The data line's price follows the marketplace, and the dollar figure goes away with it —
-   * this line is the only place a deck card states a number of its own, so a stale currency
-   * here would be a card claiming a price the strip above it does not agree with.
+   * The data line writes its price in the marketplace's currency — this line is the only place
+   * a deck card states a number of its own, so a stale currency here would be a card claiming
+   * a price the strip above it does not agree with.
+   *
+   * The row is what a **Cardmarket** read answers, because that is the shape the whole feature
+   * turns on: switching changes the rows rather than which field a cell reads.
    */
   it("prices a card in the currency it is given", () => {
-    render(<CardStack cards={CARDS} label="Ramp" currency="eur" />);
+    render(
+      <CardStack
+        cards={[card({ name: "Sol Ring", unitPrice: 1.5 })]}
+        label="Ramp"
+        currency="eur"
+      />,
+    );
 
     expect(screen.getByText("€1.50")).toBeInTheDocument();
-    expect(screen.queryByText("$1.99")).not.toBeInTheDocument();
+    expect(screen.queryByText("$1.50")).not.toBeInTheDocument();
   });
 
   /**
-   * An etched printing has no euro price at all — `eur_etched` is not a key Scryfall's data
-   * has — so it draws an em dash rather than borrowing the dollar figure it does carry.
+   * A card the selected marketplace does not quote — an etched printing on Cardmarket, where
+   * `eur_etched` is not a key Scryfall's data has — arrives with a `null` price and draws an em
+   * dash. There is no second number on the row to borrow.
    */
   it("draws an em dash for a card unpriced in this currency", () => {
     render(
       <CardStack
-        cards={[card({ name: "Etched Bomb", unitPriceUsd: 38.5, unitPriceEur: null })]}
+        cards={[card({ name: "Etched Bomb", unitPrice: null })]}
         label="Ramp"
         currency="eur"
       />,

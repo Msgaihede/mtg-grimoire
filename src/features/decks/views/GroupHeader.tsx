@@ -65,7 +65,7 @@ export function GroupHeader({
 }: {
   group: CardGroup;
   /**
-   * Which marketplace {@link CardGroup.totalPrice} was summed in — its currency formats the
+   * Which marketplace {@link CardGroup.totalPrice} was summed at — its currency formats the
    * figure, its label is the as-of sentence.
    *
    * Passed rather than read here, and required rather than defaulted, because this heading is
