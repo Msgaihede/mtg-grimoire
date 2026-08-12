@@ -85,7 +85,9 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 Start-Process npm.cmd -ArgumentList "run","tauri","dev" -WindowStyle Hidden `
     -RedirectStandardOutput ".claude\skills\running-the-app\tauri-dev.stdout.local" `
     -RedirectStandardError ".claude\skills\running-the-app\tauri-dev.stderr.local"
-do { Start-Sleep 5; $app = Get-Process mtg-grimoire -ErrorAction SilentlyContinue } until ($app)
+$deadline = (Get-Date).AddMinutes(8)
+do { Start-Sleep 5; $app = Get-Process mtg-grimoire -ErrorAction SilentlyContinue } until ($app -or (Get-Date) -gt $deadline)
+if (-not $app) { Get-Content ".claude\skills\running-the-app\tauri-dev.stderr.local"; pwsh -NoProfile -File $L release app; throw "tauri dev never came up in 8 minutes" }
 pwsh -NoProfile -File $L adopt app -ProcessId $app.Id
 ```
 
@@ -100,13 +102,19 @@ wrapper only: cargo and the app keep running while the lock file is deleted, the
 agent acquires cleanly, launches, and gets **exit code 0 with no window** — the exact
 failure this lock exists to prevent. **Adopt the `mtg-grimoire` process instead**, which
 is the loop above and the same shape as Storybook's. It can legitimately run for minutes
-on a cold cargo build, which is why the grace window is ten.
+on a cold cargo build, which is why the grace window is ten — the loop's own 8-minute
+deadline sits inside that window, so a compile that is merely slow still finishes before
+the lock could go stale out from under it. If the deadline wins instead, a failed compile
+leaves no `mtg-grimoire` process for the loop to ever find, so it reads
+`tauri-dev.stderr.local` and releases the lock itself rather than spin silently for the
+rest of the grace window.
 
 `Get-Process` with `-ErrorAction SilentlyContinue` returns `$null` when nothing matches
-(so `until ($app)` is the whole loop) and a single `Process` when one does — single-
-instance guarantees there is never a second, **which is exactly why the emptiness check
-above the loop is not optional**: a `mtg-grimoire` already running from another checkout
-is the one thing that makes `$app.Id` the wrong pid.
+(so `$app -or (Get-Date) -gt $deadline` is what ends the loop, on success or on timeout)
+and a single `Process` when one does — single-instance guarantees there is never a
+second, **which is exactly why the emptiness check above the loop is not optional**: a
+`mtg-grimoire` already running from another checkout is the one thing that makes
+`$app.Id` the wrong pid.
 
 After `release`, check `Get-Process mtg-grimoire` is empty and close the `tauri dev`
 window if it survived its child.
@@ -134,7 +142,9 @@ pwsh -NoProfile -File $L acquire storybook -What "component work"
 Start-Process npm.cmd -ArgumentList "run","storybook" -WindowStyle Hidden `
     -RedirectStandardOutput ".claude\skills\running-the-app\storybook.stdout.local" `
     -RedirectStandardError ".claude\skills\running-the-app\storybook.stderr.local"
-do { Start-Sleep 2; $c = Get-NetTCPConnection -LocalPort 6006 -State Listen -ErrorAction SilentlyContinue } until ($c)
+$deadline = (Get-Date).AddMinutes(3)
+do { Start-Sleep 2; $c = Get-NetTCPConnection -LocalPort 6006 -State Listen -ErrorAction SilentlyContinue } until ($c -or (Get-Date) -gt $deadline)
+if (-not $c) { Get-Content ".claude\skills\running-the-app\storybook.stderr.local"; pwsh -NoProfile -File $L release storybook; throw "storybook never bound 6006 in 3 minutes" }
 pwsh -NoProfile -File $L adopt storybook -ProcessId $c.OwningProcess
 # ... use the mtg-grimoire-sb-mcp tools ...
 pwsh -NoProfile -File $L release storybook
@@ -142,7 +152,9 @@ pwsh -NoProfile -File $L release storybook
 
 No console window pops; Storybook's own stdout/stderr — including a boot failure — land in
 `storybook.stdout.local` / `storybook.stderr.local` beside this file, same reasoning as the
-dev-mode recipe above.
+dev-mode recipe above. The loop gives up after 3 minutes — comfortably past the ~70s this
+machine measured to bind the port — and on expiry reads `storybook.stderr.local` and
+releases the lock the same way.
 
 `npm` resolves to a `.ps1` wrapper on this machine that `Start-Process` cannot launch —
 use `npm.cmd`. It also spawns Storybook as a **child** process, so adopt the pid actually
