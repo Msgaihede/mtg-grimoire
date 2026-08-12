@@ -68,7 +68,7 @@ Three traps, all measured:
 
 ## Driving it
 
-`scripts/cdp.mjs`. CLAUDE.md's "Verifying UI in the real app" is the command vocabulary
+`scripts/cdp.mjs`. `docs/reference/live-ui-verification.md` is the command vocabulary
 and the trap list; this skill does not repeat it.
 
 **Run cdp.mjs through the PowerShell tool.** Bash refuses
