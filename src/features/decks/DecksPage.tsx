@@ -627,6 +627,7 @@ export function DecksPage() {
                 open={panel?.kind === "createDeck"}
                 onOpen={openCreate}
                 onDismiss={dismiss}
+                onClose={close}
                 create={decks.create}
                 onCreated={onCreated}
               />
@@ -1395,15 +1396,17 @@ function NewDeck({
   open,
   onOpen,
   onDismiss,
+  onClose,
   create,
   onCreated,
 }: {
   buttonRef: RefObject<HTMLButtonElement | null>;
   open: boolean;
   onOpen: () => void;
-  /** Escape, the scrim, the dialog's ✕ and the trigger pressed a second time: the caret comes
-   *  back here. */
+  /** Escape, the dialog's ✕ and the trigger pressed a second time: the caret comes back here. */
   onDismiss: () => void;
+  /** A press on the scrim: the dialog goes, the caret stays where the reader put it. */
+  onClose: () => void;
   create: Decks["create"];
   onCreated: (deck: DeckRow) => void;
 }) {
@@ -1433,6 +1436,7 @@ function NewDeck({
         open={open}
         onCreated={onCreated}
         onDismiss={onDismiss}
+        onClose={onClose}
       />
     </div>
   );

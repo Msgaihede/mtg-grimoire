@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { ipcError, type DeckRow } from "@/lib/ipc";
@@ -8,22 +8,8 @@ import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
+import { DEFAULT_FORMAT, FormatSelect } from "./FormatSelect";
 import type { Decks } from "./useDecks";
-import { useFormatSpecs } from "./useFormatSpecs";
-
-/**
- * What a new deck's format is until the reader says otherwise — `decks.format_key`'s own DDL
- * default and `deck::DEFAULT_FORMAT`, spelled here because the picker has to *select*
- * something before the seeded table has answered.
- *
- * Casual rather than the first row of the list: Casual caps nothing and is judged against no
- * card pool, so a deck that has not been given a format yet is not a deck full of complaints.
- *
- * It lives beside the one control that reads it rather than in `DecksPage`, where it used to:
- * the gallery has no format of its own to default, and a constant exported from a 1 500-line
- * view is a constant nobody finds.
- */
-export const DEFAULT_FORMAT = "casual";
 
 export interface CreateDeckDialogProps {
   /**
@@ -47,17 +33,23 @@ export interface CreateDeckDialogProps {
    *  look at a tile of it. */
   onCreated: (deck: DeckRow) => void;
   /**
-   * Escape, the scrim and the header's ✕: close, and hand the caret back to whatever opened
-   * this.
+   * Escape, the header's ✕ and the trigger pressed again: close, and hand the caret back to
+   * whatever opened this.
    *
-   * **One callback where `TheoryDiffDialog` has two**, and the difference is the dialog rather
-   * than a drift. That surface is a shopping list a reader consults and may well leave for
-   * something they saw behind it, so its scrim press moves no focus. This one is a two-field
-   * question with a single trigger, and a scrim press on it is the reader saying *not now* —
-   * there is nowhere behind the scrim they can have already gone to, because a pointer cannot
-   * cross one. So all three ways out mean the same thing and hand the caret to the same button.
+   * Stable, please — {@link useDismissOnEscape} takes it as a dependency, so a function rebuilt
+   * on every render of the opener re-registers the window listener just as often.
    */
   onDismiss: () => void;
+  /**
+   * A press on the scrim: close without moving focus.
+   *
+   * **Two callbacks, and it used to be one.** The single one handed the caret back on every way
+   * out, which reads reasonable and is the opposite of the rule every other layer in this app
+   * follows: Escape is the reader saying *put me back*, and a click outside is the reader
+   * already being somewhere else. `TheoryDiffDialog` and `DeckSettingsDialog` are the precedent
+   * and this now agrees with them.
+   */
+  onClose: () => void;
 }
 
 /**
@@ -89,6 +81,7 @@ export function CreateDeckDialog({
   open,
   onCreated,
   onDismiss,
+  onClose,
 }: CreateDeckDialogProps): React.JSX.Element {
   // `useCallback`, because `onDismiss` is a dependency of the hook's effect and an unstable one
   // re-registers the window listener on every render of the gallery.
@@ -97,23 +90,21 @@ export function CreateDeckDialog({
 
   return (
     <AnimatePresence>
-      {open && <Panel key="create-deck" create={create} onCreated={onCreated} onDismiss={onDismiss} />}
+      {open && (
+        <Panel
+          key="create-deck"
+          create={create}
+          onCreated={onCreated}
+          onDismiss={onDismiss}
+          onClose={onClose}
+        />
+      )}
     </AnimatePresence>
   );
 }
 
 /** The dialog itself, mounted only while it is open — see {@link CreateDeckDialog}. */
-function Panel({ create, onCreated, onDismiss }: Omit<CreateDeckDialogProps, "open">) {
-  /**
-   * The format list is the seeded `format_specs` table read in its own `sort_order`, filtered
-   * to `enabled_in_picker` — which is the whole of why Future Standard, a format you can test
-   * a card against but cannot build for, is not offered here.
-   *
-   * Read one component down rather than in {@link CreateDeckDialog}, so a button nobody has
-   * pressed does not mount a query. It is cached for the session, so reopening costs nothing.
-   */
-  const { specs } = useFormatSpecs();
-  const picker = useMemo(() => specs.filter((s) => s.enabledInPicker), [specs]);
+function Panel({ create, onCreated, onDismiss, onClose }: Omit<CreateDeckDialogProps, "open">) {
   const [name, setName] = useState("");
   const [formatKey, setFormatKey] = useState(DEFAULT_FORMAT);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -154,7 +145,7 @@ function Panel({ create, onCreated, onDismiss }: Omit<CreateDeckDialogProps, "op
       // on the name field and ends past the panel's edge is a "click" on the scrim, and the
       // dialog would vanish under a reader who was selecting the word they had just typed.
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onDismiss();
+        if (e.target === e.currentTarget) onClose();
       }}
     >
       <motion.div
@@ -222,36 +213,7 @@ function Panel({ create, onCreated, onDismiss }: Omit<CreateDeckDialogProps, "op
             />
           </div>
           <div>
-            <label htmlFor={`${id}-format`} className="mb-1 block text-xs text-dim">
-              Format
-            </label>
-            <select
-              id={`${id}-format`}
-              value={formatKey}
-              onChange={(e) => setFormatKey(e.target.value)}
-              // The seeded table is read once per session and is normally already in hand by
-              // the time this opens; on the one launch where it is not, the select still has
-              // to *say* something, and what it would create is what it shows. The one place a
-              // real `disabled` is right on a control that greys: there is no reader input to
-              // make it grey, and a select with a single option is not a choice to keep in the
-              // tab order.
-              disabled={picker.length === 0}
-              className={cn(
-                "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-                "disabled:opacity-60",
-                FOCUS,
-              )}
-            >
-              {picker.length === 0 ? (
-                <option value={DEFAULT_FORMAT}>Casual</option>
-              ) : (
-                picker.map((s) => (
-                  <option key={s.key} value={s.key}>
-                    {s.displayName}
-                  </option>
-                ))
-              )}
-            </select>
+            <FormatSelect id={`${id}-format`} value={formatKey} onChange={setFormatKey} />
           </div>
 
           {/* No wrapper here, for a reason worth stating: this line carries no padding and no

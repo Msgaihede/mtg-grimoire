@@ -74,6 +74,8 @@ function Dialog({
           onDismiss();
           setOpen(false);
         }}
+        // The scrim's way out, which moves no focus — the gallery's `close`.
+        onClose={() => setOpen(false)}
       />
     </div>
   );

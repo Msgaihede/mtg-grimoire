@@ -578,10 +578,14 @@ describe("DecksPage", () => {
    * popup in this app: a press **on the scrim**, not a press anywhere outside.
    *
    * The form used to close on a blur, which is right for a popup and wrong for a modal — the
-   * caret cannot leave a trapped layer, so nothing outside it can be pressed by accident. All
-   * three ways out therefore mean the same thing and hand the caret back to the same button.
+   * caret cannot leave a trapped layer, so nothing outside it can be pressed by accident.
+   *
+   * **It does not hand the caret back, and Escape does.** That is CLAUDE.md's rule for every
+   * layer in this app: Escape is the reader saying "put me back", and a press outside is the
+   * reader already being somewhere else. This dialog handed it back either way until the
+   * import dialog was built beside it and the two were made to agree.
    */
-  it("closes the create form on a press on the scrim, and hands the caret back", async () => {
+  it("closes the create form on a press on the scrim, and leaves the caret alone", async () => {
     wrap(<DecksPage />);
     const newDeck = await screen.findByRole("button", { name: "New deck" });
     await userEvent.click(newDeck);
@@ -595,7 +599,7 @@ describe("DecksPage", () => {
     fireEvent.mouseDown(panel.parentElement as HTMLElement);
 
     await waitFor(() => expect(screen.queryByLabelText("Name")).not.toBeInTheDocument());
-    expect(newDeck).toHaveFocus();
+    expect(newDeck).not.toHaveFocus();
   });
 
   /**

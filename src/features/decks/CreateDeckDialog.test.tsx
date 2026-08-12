@@ -51,6 +51,7 @@ const MADE: DeckRow = {
 
 const onCreated = vi.fn();
 const onDismiss = vi.fn();
+const onClose = vi.fn();
 
 /**
  * The dialog with its `create` mutation, exactly as the gallery mounts it: `useDecks()` up
@@ -83,6 +84,12 @@ function Harness({ startOpen = true }: { startOpen?: boolean }) {
           screen.getByTestId("trigger").focus();
           setOpen(false);
         }}
+        // The gallery's own `close`: the layer goes and the caret is left where the reader put
+        // it — no `focus()` call anywhere in here, which is the half the assertions below check.
+        onClose={() => {
+          onClose();
+          setOpen(false);
+        }}
       />
     </div>
   );
@@ -109,6 +116,7 @@ beforeEach(() => {
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   onCreated.mockReset();
   onDismiss.mockReset();
+  onClose.mockReset();
 });
 
 describe("the create deck dialog", () => {
@@ -195,6 +203,11 @@ describe("the create deck dialog", () => {
    * a click fires on the nearest common ancestor of press and release, so a drag that starts
    * in the name field and ends past the panel's edge is a "click" on the scrim — and the
    * dialog would vanish under a reader who was selecting the word they had just typed.
+   *
+   * **The scrim calls `onClose`, never `onDismiss`.** Escape is the reader saying "put me
+   * back"; a press outside is the reader already being somewhere else, so nothing moves the
+   * caret. This dialog used to hand it back either way, which is the rule the rest of the app's
+   * layers follow inverted.
    */
   it("closes on a press on the scrim and not on a press inside the panel", async () => {
     wrap(<Harness />);
@@ -202,12 +215,15 @@ describe("the create deck dialog", () => {
 
     fireEvent.mouseDown(dialog);
     fireEvent.mouseDown(within(dialog).getByLabelText("Name"));
-    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(dialog.parentElement as HTMLElement);
 
-    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByLabelText("Name")).not.toBeInTheDocument());
+    // The caret stayed where the reader left it rather than jumping back to the trigger.
+    expect(screen.getByTestId("trigger")).not.toHaveFocus();
   });
 
   /**
