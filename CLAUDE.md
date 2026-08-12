@@ -5,11 +5,13 @@ Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite stor
 Scryfall as the only external dependency.
 
 ## Commands
+
 - `npm run tauri dev` — run the app (Vite HMR + Rust rebuild)
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 
 ## CI and releases (measured live 2026-08-09)
+
 - Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
   job (`npm run build`/`lint`/`test:run`) and a `rust` matrix over `windows-latest` +
@@ -34,7 +36,7 @@ Scryfall as the only external dependency.
   (1) a workflow-level `paths:` filter is the obvious implementation and is **wrong** — it
   skips the whole workflow, `ci-ok` included, and a required check that never reports leaves
   every PR merge-blocked forever; the filter has to be a per-job `if:`. (2) `git diff
-  --name-only` has rename detection on by default, and it reports a file moved out of `src/`
+--name-only` has rename detection on by default, and it reports a file moved out of `src/`
   as the **destination path only** — so the move would skip the very job whose file just
   vanished. `--no-renames` reports both ends. (3) **`ci-ok` reads a `skipped` build job as a
   pass, so `changes` itself may never be one**: if the router dies both build jobs skip, and
@@ -63,7 +65,7 @@ Scryfall as the only external dependency.
   1.0 is a deliberate `Release-As: 1.0.0` footer, never something a stray `!` does.
 - **The `Cargo.lock` selector must read `@.name.value`, never `@.name`.** release-please
   parses TOML into tagged nodes, so every scalar is an object and the obvious form matches
-  nothing — and a non-match is a *warning*, not an error. Measured against the real lockfile
+  nothing — and a non-match is a _warning_, not an error. Measured against the real lockfile
   2026-08-09: `.value` changes exactly one line and leaves the `version = 4` lockfile-format
   key alone; the bare form changes nothing at all. **`--locked` on every cargo call in both
   workflows is what converts that silence into a failed check on the release PR itself**,
@@ -81,13 +83,13 @@ Scryfall as the only external dependency.
   approve pull requests". Everything looks healthy right up until it doesn't.
 - **Every release PR opens in `action_required` and must be approved before CI runs.** This
   is the same recursion guard as above wearing its other face: a `pull_request` run from a
-  `GITHUB_TOKEN`-authored PR is queued but *not started*. The run shows `action_required`
+  `GITHUB_TOKEN`-authored PR is queued but _not started_. The run shows `action_required`
   with **zero jobs**, which reads like a broken workflow and is not. So a release is: PR
   opens → `gh api -X POST repos/…/actions/runs/<id>/approve` (or the Approve button) →
   `ci-ok` passes → merge. Handing release-please a PAT or App token would remove the click
   at the cost of a stored credential; for one maintainer the click is the better trade.
 - **Tags are plain `v0.2.0`, and that needs `include-component-in-tag: false`.** Setting
-  `package-name` gives release-please a *component*, and the default is to put it in the
+  `package-name` gives release-please a _component_, and the default is to put it in the
   tag — the first release landed as `mtg-collection-tracker-v0.2.0` (the app's former name)
   before this was set.
   `pull-request-title-pattern` drops it from the PR title for the same reason. Both `gh`
@@ -120,8 +122,9 @@ Scryfall as the only external dependency.
   installer, which is why the compiled app goes to Releases instead.
 
 ## In-app updates (`src-tauri/src/update.rs`, measured live 2026-08-09)
+
 - **`tauri-plugin-updater` is deliberately NOT used, and cannot be.** It updates a Windows
-  app by downloading and running its *installer*, and has no path for replacing a bare
+  app by downloading and running its _installer_, and has no path for replacing a bare
   portable exe — pointing it at one installs a **second** copy into Program Files and leaves
   the portable copy and its `data/` behind. So the updater is hand-written.
 - What that gives up is minisign. What replaces it is measured: **every GitHub release asset
@@ -134,18 +137,18 @@ Scryfall as the only external dependency.
   is `application/zip` on **all five**, the `.exe`, `.msi` and `.deb` included, so it
   discriminates nothing.
 - Install kind is decided once at startup: `<exe dir>\uninstall.exe` → **NSIS**; else a
-  *probed* writable exe dir → **portable**; else **other**. An MSI install and every Linux
+  _probed_ writable exe dir → **portable**; else **other**. An MSI install and every Linux
   build land on `other` and get the release page — an MSI major upgrade is unverified and
   nobody has ever run a Linux build.
 - **The portable swap: rename the running exe aside, never overwrite it.** Windows permits
   renaming a running image and refuses to replace one. If the second rename fails the first is
   undone, so a failure leaves a working app.
 - **The successor waits on the predecessor's process handle** (`--await-predecessor <pid>`,
-  `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject`), *before* `Builder::default()`. Without
+  `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject`), _before_ `Builder::default()`. Without
   the wait `tauri-plugin-single-instance` gives it **exit code 0, no window, no stderr** and
   the update looks corrupt. **The first version waited by deleting the renamed image and that
   was wrong**: Rust's `fs::remove_file` uses POSIX-semantics deletion on current Windows, so
-  it *succeeds* against a running exe — measured as "let go after 0 ms" with 200 ms of
+  it _succeeds_ against a running exe — measured as "let go after 0 ms" with 200 ms of
   predecessor still to live. With the process wait: **231 ms**, window back, PID changed.
   `update::tests::deleting_a_file_that_is_still_open_succeeds_on_windows` pins the false
   premise.
@@ -164,6 +167,7 @@ Scryfall as the only external dependency.
   exercise download → verify → swap → relaunch for real.
 
 ## Verifying UI in the real app (do this, not just tests)
+
 Every UI task in Plans 2–3 found something the suite could not: a clipped reason line, a
 tile that said nothing until you searched again, a header behind the scroller. Drive the
 real window over CDP.
@@ -191,7 +195,7 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
 
 - **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
   `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
-  index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
+index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
   the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
   "live" **twice** against a binary that did not contain it, and the tell is cheap —
   `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
@@ -201,20 +205,20 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   exactly why it is the command above — a worktree pass that builds instead inherits the trap.
   And stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
 - **`key` and `press` are two commands because Enter is two things.** `key` sends a
-  `rawKeyDown`, which carries no `text` — the page *hears* the key and Chromium activates
+  `rawKeyDown`, which carries no `text` — the page _hears_ the key and Chromium activates
   nothing, so `key Enter` on a focused button is a keydown and not a click (measured live
   2026-08-06: the nav button stayed unpressed). `press Enter|Space [selector]` carries the
   text, focuses the selector first if given, and is what a keyboard pass wants. **A keypress
   is `keyDown`-with-text plus `keyUp` and nothing else**: Chromium synthesises the keypress
-  from the keydown, so adding an explicit `char` sends a *second* one — measured on a deck
+  from the keydown, so adding an explicit `char` sends a _second_ one — measured on a deck
   stepper, one `press Enter` moved it 1 → 2 and the three-event form moved it 2 → 4 while
   reporting a single press. **When a live pass checks a key that activates something, count
   the activations, not whether one happened** — Space activates on keyup and hides this
   entirely.
-- **`media` and `size` take a trailing expression and it is evaluated *in that session*.** A
+- **`media` and `size` take a trailing expression and it is evaluated _in that session_.** A
   separate `eval` after them measures nothing: `setEmulatedMedia` is reverted the instant its
   socket closes, and every invocation of the script is its own socket. Worse, WebView2 ignores
-  a features-only override entirely, so `media` has to send `"screen"` *with* the feature —
+  a features-only override entirely, so `media` has to send `"screen"` _with_ the feature —
   which is why "reduced motion verified over CDP" was a claim nobody had measured until this
   contract landed (Plan 4, Task 11). `setDeviceMetricsOverride` is the opposite and **survives
   detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
@@ -247,7 +251,7 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   below the fold starts nothing, which is what `--press`/`--from` are for, and a scroller left
   scrolled hides rows from `click` the same way. **The target has the same problem and a
   worse failure**: `boxOf` reads a layout rectangle, and a drop target scrolled out of its own
-  scroller's clip still reports coordinates *inside* the window — so a drop dispatched there
+  scroller's clip still reports coordinates _inside_ the window — so a drop dispatched there
   lands on whatever is painted at that point, which during a deck-card drag was the remove
   tray. Measured 2026-08-06 **against the zone-column editor Plan 8 replaced**: a column
   wrapped onto the editor's second, scrolled-away line took the drop, and a card aimed at the
@@ -262,7 +266,7 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   was left, so a move onto an element it is already inside crosses no boundary and fires no
   enter — a hover command that silently does nothing on its second run), and **its probe is
   read twice in the one session**, on arrival and again after `--rest`, because that pair is
-  what a dwell looks like from outside. A dwell measured from the *last* move undercounts by
+  what a dwell looks like from outside. A dwell measured from the _last_ move undercounts by
   up to **~32 ms**: the approach is three steps 16 ms apart and the enter that arms the timer
   can land on the first of them.
 - **A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
@@ -274,6 +278,7 @@ the user's, and it is never committed. Seed **user tables only**: `cards` and `s
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.
 
 ## Storybook (measured 2026-08-09/10, counts re-measured 2026-08-12)
+
 `npm run storybook` · `npm run build-storybook`. **337 stories across 44 story files, 43 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 45th `importPath` is the `.mdx`).
@@ -281,7 +286,7 @@ pages** — counted off `storybook-static/index.json`, which is the only place t
 worth of drift and then took three more without noticing, because a prose-only edit routes to
 neither CI job — the same rot that left the fault list below saying four. **It had rotted
 again by 2026-08-12**: it read 43 story files when 44 were on disk, and the motion branch that
-found it added *no* story file, so the drift predates that branch entirely. Count the files
+found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
 **42 of the 44 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
@@ -294,7 +299,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   regression, deliberately**: no screenshots are stored, so nothing here can fail because a
   font rendered a pixel differently on a different machine.
 - **`.storybook/main.ts` aliases three specifiers** — `@tauri-apps/api/core`,
-  `@tauri-apps/api/event` and `@/lib/images` — to `.storybook/fake/`. **The fake sits *under*
+  `@tauri-apps/api/event` and `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_
   `src/lib/ipc.ts`, not in place of it**, and that is the point: `ipc.ts` is a hand-written
   mirror of the Rust structs and is exactly the thing that can drift from them, so a fake
   beneath it means every story exercises the mirror too. Aliasing `ipc.ts` itself would story
@@ -308,15 +313,15 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   seeds `empty`/`starter`/`needsReview`/`large`, **eight** faults — `busy`/`syncError`/
   `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`. Saying nothing
   gets `starter` with no
-  fault. A fault is set on the world, so a story about `BUSY` shows what the *app* does with a
+  fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
   refusal rather than what one mocked call returns. **`indexCold` is the one that is not a
   failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
   with every map **empty** rather than zeroed, and the filter row leaves every control live on
   it. The fake has no warm-up of its own, so it is the only way a story can stand there.
-  Counting the list is worth doing when one is added: this line said *four* for three faults'
+  Counting the list is worth doing when one is added: this line said _four_ for three faults'
   worth of drift, because a prose-only edit routes to neither CI job and nothing goes red.
   **`deckMeta` is the one that refuses
-  *reads*** — the six a deck screen makes *beside* the deck (`deck_category_list`,
+  _reads_** — the six a deck screen makes _beside_ the deck (`deck_category_list`,
   `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
   `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
   `deck_list`: a screen that could not read the deck would not be showing a panel about it.
@@ -346,7 +351,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
-  for *no such printing*. Lookup is the union of the live worlds' cards over `CARDS`.
+  for _no such printing_. Lookup is the union of the live worlds' cards over `CARDS`.
 - **A fixture more than one story file needs lives in `.storybook/fake/fixtures.ts`.** A CSF
   file cannot own one — every non-default export is indexed as a story — but a non-CSF module
   can, and `printing()` had been written out eleven times before it had a home. Not in
@@ -357,7 +362,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   committed.**
 - **`.storybook` is type-checked by its own program** — `tsc -p .storybook`, run by
   `npm run build` — so the fake is checked against `ipc.ts` by `verify` like the app is. And
-  **`@types/node` must never be installed**: `types: []` blocks only the *automatic* include,
+  **`@types/node` must never be installed**: `types: []` blocks only the _automatic_ include,
   not a transitive `/// <reference types="node" />`, and `vitest` and `vite` each carry one. Its
   mere presence in the tree leaks Node types into the **app** program, which type-checks
   `process.env` in webview code and retypes `setTimeout` from `number` to `NodeJS.Timeout`.
@@ -365,13 +370,13 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
   (**247** plays today, in a file of **250** tests — the other three are its own; `grep -rE
-  "^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
+"^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.
 - It `vi.mock`s two of the three aliases, and **the third (`@/lib/images`) must never be
-  mocked.** `vi.mock` matches the *resolved id*, so it resolves to the same `src/lib/images.ts`
+  mocked.** `vi.mock` matches the _resolved id_, so it resolves to the same `src/lib/images.ts`
   that the fake's own `export *` resolves to, and the factory imports the module it stands in
   for. **The symptom is a silent 300-second hang with no output and no failing test** — if the
   suite goes quiet, this is why.
@@ -383,7 +388,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
 - **Every drag in a story is held in `try { … } finally { await held.cancel(); }`, and every
   assertion about a drag's result goes through `waitFor`.** pdnd schedules its drop-target
   change on a rAF and React's commit is a second hop, so one frame is not enough; and a throw
-  mid-drag leaks pdnd's one global drag flag into the *next* story, which is why one broken
+  mid-drag leaks pdnd's one global drag flag into the _next_ story, which is why one broken
   assertion reported two failures. Measured on `AppShell.stories.tsx`: **5 of 10 runs red
   before, 12 of 12 green after.**
 - **Storybook CSS is `.storybook/preview.css`, never `src/index.css` directly.** That file
@@ -407,6 +412,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   of the story runner, whose drags are synthetic events in jsdom.
 
 ## Talking to Scryfall — the rules, and where they are enforced (read live 2026-08-11)
+
 The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocked" FAQ. Both
 **403 a default HTTP client**, which is itself the first rule: read them with an explicit
 `User-Agent`. What they require, and what already satisfies it:
@@ -415,7 +421,7 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   `scryfall::Client::api_send` is the only way this module issues an API request: it refuses
   inside a lockout, waits out the endpoint's interval, adds `Accept`, and retries. The
   interval table is transcribed from the doc — **500 ms** for `/cards/search|named|random|
-  collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — and is keyed on
+collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — and is keyed on
   the **path**, because Scryfall hands back absolute `next_page` URLs and a page 2 must take
   the same budget as the page 1 we built. Only the last arm is used today; the other two are
   written down and tested so a future call site cannot quietly take five times its budget.
@@ -425,11 +431,10 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
 - **A 429 is remembered across a restart.** `rate_limit_penalty` clamps to 30–300 s (one
   definition, shared with the image cache's gate), `max` never assignment, persisted to
   `app_meta.scryfall_penalty_until` and restored in `init_state`. Scryfall limits the
-  *application*, not the process — "It is not acceptable to ignore HTTP 429 responses", and
+  _application_, not the process — "It is not acceptable to ignore HTTP 429 responses", and
   repeat offenders are banned — so restarting must not be a way back in.
 - **Retry is for what is nobody's answer**: 5xx, timeouts, connect failures, 3 attempts,
-  exponential backoff with jitter. **Never a 429** (the docs forbid exactly that) and never a
-  404.
+  exponential backoff with jitter. **Never a 429** (the docs forbid exactly that) and never a 404.
 - **Bulk data is already the only card source, and that is the compliance story.**
   `default_cards` JSONL.gz feeds the 116 k corpus; there is no per-card API lookup anywhere.
   `/sets` and `/migrations` stay API calls because neither has a bulk equivalent, and both are
@@ -446,7 +451,7 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   only `eprintln!` (reconcile, orphan sweep, page reclaim, compaction, image store), which in a
   release build has no console to print to.
 - **An image's bookkeeping row is owed, not optional.** It used to be written under a
-  zero-wait `try_lock` and *dropped* when the write connection was busy — which during an
+  zero-wait `try_lock` and _dropped_ when the write connection was busy — which during an
   ingest it is, for all but the gaps between its 2 000-row batches. Nothing retried it, so the
   bytes sat on disk that `is_current` would never vouch for and **every later request refetched
   them for the life of the installation**. The row is now queued in `Cache::pending` and paid
@@ -463,7 +468,7 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   card and the screen then fetches every tile cold anyway, each variant being a different URL on
   the CDN. Measured against the live database 2026-08-11, when the deck arm was warming `grid`
   and every deck surface drew `art`: all 17 deck cards had a `grid` row, **12** had an `art` one,
-  and with an empty collection and wishlist the `deck_cards` arm was the *only* work there was —
+  and with an empty collection and wishlist the `deck_cards` arm was the _only_ work there was —
   a 100 %-warm cache that bought nothing, from plain scrollers that mount every row at once
   against 16 permits, which on a slow link reads as timeouts.
   **Both arms are `Grid` since the deck's stack and grid views draw the whole card**, so a card
@@ -473,13 +478,14 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   warms **covers**, which are 626×457 by construction.
 
 ## Data & sync (measured against the live Scryfall API, 2026-08-04/05)
+
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
   `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
   folder to force a clean first-run sync. All three locations are gitignored.
   **The fallback's folder name is the Tauri `identifier`, and the rename changed it** —
   `com.mtgcollection.tracker` → `com.mtggrimoire.app`. A machine that ran the v0.2.0
-  *installer* still has the old folder and its database; nothing migrates it, deliberately
+  _installer_ still has the old folder and its database; nothing migrates it, deliberately
   (portable copies keep `data/` beside the exe and are untouched). So "my collection is
   gone" after upgrading an installed 0.2.0 has exactly one cause and one fix: copy the old
   folder across.
@@ -506,31 +512,31 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
 - A **forced** Refresh skips only the throttle, not the ETag/`updated_at` check: if the
   bulk file has not changed it answers "Already up to date" in well under a second and
   emits nothing but a `checking` phase. To exercise a real ingest out of turn, clear
-  `bulk_etag` *and* `bulk_updated_at` from `sync_meta` — clearing the etag alone still
+  `bulk_etag` _and_ `bulk_updated_at` from `sync_meta` — clearing the etag alone still
   short-circuits. That reset works, and it is the right tool for developing an ingest; it is
   the wrong tool inside a **smoke**, because a hand-written `sync_meta` makes every timing
   and every "what the app did on its own" claim afterwards a fiction. A smoke takes the
   ingest the day offers it, or does without one and says so.
 - **The two halves of the reconciler run on different schedules, and that decides how a
-  fixture is staged.** `reconcile::apply` — the `/migrations` poll — runs on *every* finished
+  fixture is staged.** `reconcile::apply` — the `/migrations` poll — runs on _every_ finished
   run, the "already up to date" path included (`finish_unchanged` calls it deliberately: 304
   is the answer most runs get). `reconcile::sweep_orphans` runs **only after a real ingest**.
   So a merge can be exercised any time by deleting its `card_migrations` bookkeeping row and
   forcing a Refresh; an orphan flag needs the day's ingest.
 - Searches keep answering through every second of a sync — 20 timed searches across one,
   every one correct, none stalled (that is what `db_read` bought).
-- **A header press now costs *hundreds* of milliseconds more than doing nothing, and
+- **A header press now costs _hundreds_ of milliseconds more than doing nothing, and
   `idx_cards_collapse` is why the gap grew.** Re-measured 2026-08-11 end to end through
   `invoke` on a **release** build over the live 107 346-row paper corpus, medians of five,
   collapsed (the app's own default) — with the uncollapsed figure beside it:
 
-  | order | collapsed | uncollapsed |
-  |---|---|---|
-  | **name** (the default browse) | **134.6 ms** | 32.3 ms |
-  | **price** | 134.8 ms | 26.0 ms |
-  | `set` | **524.2 ms** | 609.0 ms |
-  | `rarity` | **489.7 ms** | 570.2 ms |
-  | `rarity+price` | **512.4 ms** | 529.8 ms |
+  | order                         | collapsed    | uncollapsed |
+  | ----------------------------- | ------------ | ----------- |
+  | **name** (the default browse) | **134.6 ms** | 32.3 ms     |
+  | **price**                     | 134.8 ms     | 26.0 ms     |
+  | `set`                         | **524.2 ms** | 609.0 ms    |
+  | `rarity`                      | **489.7 ms** | 570.2 ms    |
+  | `rarity+price`                | **512.4 ms** | 529.8 ms    |
 
   **The split is whether the sort's column is in the index.** `name` and `price_usd` are, and
   cost the browse and nothing more; `set_code` and `rarity` are not, and cost ~490–610 ms —
@@ -541,11 +547,12 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   the browse got ~2× cheaper and the two uncovered sorts got ~1.6× dearer, so a press that
   used to cost +36 ms now costs +390 ms. The earlier claim that this was a "fraction more"
   survived one rewrite of this bullet on nothing but plausibility; it was false when written.
-- **"A text filter makes every sort cheap" is only true of a *narrow* term**, and the old
+
+- **"A text filter makes every sort cheap" is only true of a _narrow_ term**, and the old
   12–15 ms figure named none. Measured the same way, collapsed, over three breadths:
   `bolt` (45 matches) **4.4–4.5 ms** and the three orders indistinguishable; `dragon` (722)
   **68.7–77.6 ms**; `a` (capped at 5 000) **2 077–2 432 ms**. FTS narrowing first is real, but
-  what it buys scales with how much it narrowed. No index was added *for sorting*: a
+  what it buys scales with how much it narrowed. No index was added _for sorting_: a
   multi-term sort cannot use one past its leading column, and `schema::swap_staging` drops and
   replays every index on `cards` on each sync. (**That sync's ~93 s is a debug figure**,
   measured 2026-08-05 under `tauri dev`; the one release first-run measured 2026-08-11 had the
@@ -558,10 +565,10 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   the IPC hop and the DTO serialisation inside the figure, unlike the `run_search` numbers
   below (25 ms / 145 ms). The two **corroborate** each other rather than decompose into each
   other: they are different sessions on different corpus days, and the pair straddles the
-  `run_search` figures in *both* directions (27.4 > 25, 131.8 < 145), so no per-call overhead
+  `run_search` figures in _both_ directions (27.4 > 25, 131.8 < 145), so no per-call overhead
   can be read out of the difference. `idx_cards_collapse` is why both are what
   they are, and the stale 277 ms is what the uncollapsed one replaces.
-  **Name the build**: the identical measurement on a *debug* build is 38.4 ms / 181.6 ms.
+  **Name the build**: the identical measurement on a _debug_ build is 38.4 ms / 181.6 ms.
   The gap is only ~1.4× because the work is inside SQLite, which is C compiled with
   optimisations either way — but a figure with no build named is still not a figure.
   **The collapsed browse's cost is the count, not the page**: at `limit: 1` it is 119.9 ms of
@@ -585,7 +592,7 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   cost is **+0.89 MB** and **4 ms** on the unfiltered browse, which the paragraph above is
   about.
 - **That win exists only because `filters.rs` stopped parsing JSON, and the index alone made
-  things *worse*.** With the widened index in place, the same format-filtered collapsed browse
+  things _worse_.** With the widened index in place, the same format-filtered collapsed browse
   is **40.6 ms** through `legal_mask` and **591 ms** through `json_extract` — slightly worse
   than the 505 ms before widening, because a wider index is a larger thing to scan when the
   predicate cannot use it. An index and the query that reads it are one change; shipping the
@@ -596,19 +603,19 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   `released_at DESC, id DESC` and the id starts at character 11. That is 108 ms against
   767 ms for joining on the group key, and against **2 486 ms** for the obvious
   `row_number() OVER (PARTITION BY …)`, which stays slow even with the index.
-- **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must *not* be.**
+- **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must _not_ be.**
   `oracle_id` is nullable, so a bare `GROUP BY c.oracle_id` merges every null-oracle printing
   into one card — silently, with a printing count and price range spanning unrelated cards.
   Null-safety costs 69 ms and no live row needs it (0 of 116 590); it is spent because the
   failure is invisible. But `owned`/`wishlisted` probe **`c.oracle_id` on the joined
   representative row**: written against the group key instead they cost **1 514 ms** on the
   browse and **12 729 ms** on the rarity sort, because `coalesce(…)` is not indexable and all
-  37 553 groups then re-scan `cards`. An *expression* index does not rescue it either —
+  37 553 groups then re-scan `cards`. An _expression_ index does not rescue it either —
   SQLite scans one but will not treat it as covering (700 ms).
 - **`bm25()` cannot be aggregated.** `min(bm25(…))`, the same expression in a subquery, and an
-  ordinary CTE all fail with *"unable to use function bm25 in the requested context"*; only
+  ordinary CTE all fail with _"unable to use function bm25 in the requested context"_; only
   `WITH … AS MATERIALIZED` works, so that keyword is load-bearing syntax. FTS5's `rank` column
-  *does* aggregate and carries the table's default weights, which would silently discard this
+  _does_ aggregate and carries the table's default weights, which would silently discard this
   app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
   unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
 - Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
@@ -627,7 +634,7 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   mixes the two kinds: 3 610 groups are represented by an art or token row and **0** of them
   also contains a real printing.
 - **The default browse used to be a full table scan, and one `DESC` was why.** (Superseded as
-  a *number* — it was the 277 ms above, and `idx_cards_collapse` has since taken the
+  a _number_ — it was the 277 ms above, and `idx_cards_collapse` has since taken the
   uncollapsed browse to 27.4 ms — but the mechanism is unchanged and still decides the sort.)
   `ORDER_NAME`
   is `c.name ASC, c.released_at DESC` — `idx_cards_name` can satisfy a leading `c.name` and
@@ -639,26 +646,26 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   one — and `search::tests::the_default_browse_puts_the_newest_printing_of_a_name_first`
   pins the behaviour it buys.
 - The page query keeps its flat shape. The two correlated status subqueries
-  (`owned_quantity`, `wishlisted`) do run once per *matching* row under an unindexed sort,
+  (`owned_quantity`, `wishlisted`) do run once per _matching_ row under an unindexed sort,
   but that is only ~35 ms of it (313 ms full vs 280 ms lean) — and the two-step form that
   would avoid them **does not preserve the sort's order**: `row_number() OVER ()` numbers
   rows before the `ORDER BY`, measured rather than read.
 - The ingest **commits every 2 000 rows and releases the write connection between batches**,
   so a collection edit during a sync waits one batch, not one sync. `ingest_gz` takes
   `&Mutex<Connection>` for exactly that reason. **Measured mid-ingest: 10 `collection_add`
-  calls, 4–7 ms each, 0 `BUSY` refusals.** A killed ingest therefore leaves a *committed*
+  calls, 4–7 ms each, 0 `BUSY` refusals.** A killed ingest therefore leaves a _committed_
   `cards_staging`; `prepare_database` drops it at the next launch, because the ETag that
-  would short-circuit the next check is written only after a *successful* ingest.
-- `cards.raw` is a **gzip BLOB** from schema v3 (the column is still *declared* `TEXT` — v1
+  would short-circuit the next check is written only after a _successful_ ingest.
+- `cards.raw` is a **gzip BLOB** from schema v3 (the column is still _declared_ `TEXT` — v1
   is frozen — and SQLite's TEXT affinity leaves a BLOB alone). `json_extract` over it is a
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
 - **Schema is v10.** v10 adds `cards.legal_mask`, backfills it, and widens
-  `idx_cards_collapse` to carry the filter columns. **Our step sits *below* main's v8 and v9
+  `idx_cards_collapse` to carry the filter columns. **Our step sits _below_ main's v8 and v9
   in the ladder deliberately** — it has now been renumbered **twice**, from v8 when main's
   deck-category step landed and from v9 when main's error log did, and each time it had to
-  move *down* the file as well as up in number. `migrate` reads `user_version` **once** and
+  move _down_ the file as well as up in number. `migrate` reads `user_version` **once** and
   then walks every block above it, so a higher-numbered block placed above a lower one commits
   its version and then has the lower block write back over it. Position in the file is the
   order of execution; the number is only the gate. **Expect a third renumber**, and treat
@@ -667,18 +674,18 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   user-owned category and added the deck's four new tables — the paragraph under "Hard rules
   — decks" describes it.
   v7 is the collapse index's version and has **no statements of its own**: `CARDS_INDEXES`
-  describes the table *at head* and now names `legal_mask`, so **only the newest step may
+  describes the table _at head_ and now names `legal_mask`, so **only the newest step may
   create from that list**, and every step below v10 creates no index at all. Every statement
   in it is `IF NOT EXISTS`, which is what makes v10's replay "bring the index list up to date"
-  rather than a rebuild — but a step that *changes* a definition must `DROP` it first, or the
+  rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
 - **`legal_mask` is Scryfall's `legalities` object as one integer, and its key order is
-  frozen.** `legalities::LEGALITY_KEYS` is 23 keys and bit *k* is `LEGALITY_KEYS[k]` — **bit
+  frozen.** `legalities::LEGALITY_KEYS` is 23 keys and bit _k_ is `LEGALITY_KEYS[k]` — **bit
   positions are stored data**, held in every `cards` row, so reordering the list silently
   reinterprets the whole corpus. Keys may only ever be **appended**: a key Scryfall removes
   keeps its bit and stops being set, a key Scryfall adds sets no bit until it is appended
-  *and* a sync has run. `restricted` counts as playable alongside `legal` — a Vintage search
+  _and_ a sync has run. `restricted` counts as playable alongside `legal` — a Vintage search
   that hid Black Lotus would be wrong. It buys two things: a facet pass over the live corpus
   is **16.8 ms against 695 ms** for 23 `json_extract`s per row, and a JSON path cannot be
   indexed while a bitwise test on a column can. **Name the build**: that pair, and every
@@ -702,16 +709,16 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
 - **A migration that touches `cards` must take the `CARDS_INDEXES` replay from the step below
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
   what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
-  `cards`' columns *and* its indexes — by stored SQL, since a narrow and a widened
+  `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
   `idx_cards_collapse` share a name. **The v9 fixture is "head minus one" and is renamed on
   every renumber** (`v8_database` → `v9_database` so far) — it means "the version below ours",
   never a fixed number. It is also why a rewind fixture may only undo the steps
-  *above* where it claims to sit: `migrate` reads `user_version` once and walks every step
+  _above_ where it claims to sit: `migrate` reads `user_version` once and walks every step
   above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
   tables and dies on a duplicate column — a failure no real upgrade can produce.
 - v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
   and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
-  (2026) makes a commander out of a Vehicle or Spacecraft *with a P/T box*, and that is
+  (2026) makes a commander out of a Vehicle or Spacecraft _with a P/T box_, and that is
   unanswerable without them. Its backfill reads `raw` through `schema::json_raw` exactly as
   v3's `artist` did, so it could only recover the **1 510 of 116 590** rows that keep a
   `card_faces` array; everything else fills on the next sync's swap. Until then **both
@@ -720,8 +727,9 @@ The two pages that bind this app are `/docs/api/rate-limits` and the "I'm blocke
   could have one).
 
 ## Search filter faceting (`src-tauri/src/index/`, driven live 2026-08-11)
+
 The filter bar greys the options this search cannot reach. **The rule is one sentence: an
-option greys when turning it on would not change the result set.** A *selected* option is
+option greys when turning it on would not change the result set.** A _selected_ option is
 never greyed — that is the way out of a dead end — and every failure fails **open**:
 not-greyed means "we don't know", greyed means "this is empty", and only one of those is safe
 to guess.
@@ -732,7 +740,7 @@ to guess.
   four-dimension pass costs **2 238 ms** against `cards` as it stands, 62 ms with a covering
   index and the mask, 106–167 ms over a rowid-aligned shadow table. **The in-memory column of
   that comparison is a projection** — the design doc's §3.2 says 0.31 ms and a 57 ms worst
-  case from a *JS harness* over a structure that did not exist yet, and its own header calls
+  case from a _JS harness_ over a structure that did not exist yet, and its own header calls
   that "a conservative bound on Rust". It was not one: the shipped `facets::compute` measures
   **1.8 ms** unfiltered (release, synthetic corpus, best of five), 5.8× the projection and
   still two orders inside the 100 ms budget. Quote `facets::compute` for what this costs;
@@ -762,7 +770,7 @@ to guess.
   `index_build` and `index_owned_refresh`) and it keeps the `eprintln!` beside it for a dev
   console. It takes the **write** lock, which is only safe because both call sites hold
   nothing: `spawn_build` is on its own thread, and `collection::with_write_owned` releases
-  its guard *before* calling `invalidate_owned`. The "build superseded" message stays an
+  its guard _before_ calling `invalidate_owned`. The "build superseded" message stays an
   `eprintln!` and is deliberately **not** recorded — it is an expected interleaving, not a
   failure, and whatever superseded it owes a rebuild of its own.
 - **The warm-up is ~767 ms** (median of five, 762–783, release build, warm page cache), so a
@@ -774,30 +782,30 @@ to guess.
   — polling only while cold, and switched off by the first ready answer. It is there because
   `sync.rs` calls `lifecycle::spawn_build` and `emit_done` on consecutive lines, and
   `spawn_build` runs its `clear` **synchronously on the caller's thread**, so `done` is
-  emitted over a cold index *by construction*. `useSyncInvalidation` invalidates `["cards"]`,
+  emitted over a cold index _by construction_. `useSyncInvalidation` invalidates `["cards"]`,
   which prefix-matches the facet key, so the one refetch a finished sync produces lands inside
   the ~767 ms build and caches `ready: false`: a success (no retry), same filters (no new key),
   inside `staleTime` (not stale). **Found in the shipped window 2026-08-11** — after a sync the
   unfiltered row showed no counts while `facet_cards` called directly answered `ready: true`.
   Touching any filter healed it instantly, which is what bounds the damage to the unfiltered
-  row. Gated on the *meaning* rather than on one cause, so it also covers the launch build, the
+  row. Gated on the _meaning_ rather than on one cause, so it also covers the launch build, the
   empty corpus, and a build that failed and will never announce anything.
   **Verified on a real first run, untouched**: chips plain through the whole opening sync, then
   captioned ("White — 30,223 printings") the moment the index published — and the query's
   `dataUpdateCount` stopped dead at 40 (≈40 × 500 ms over a ~20 s cold window) rather than
   climbing, which is the half of the claim that says it does not poll a healthy index forever.
-- **An index over an *empty* corpus answers `ready: false` too**, and that is the state a new
-  user is in for the whole of the opening sync — **~20 s** *inferred* on the release build this
+- **An index over an _empty_ corpus answers `ready: false` too**, and that is the state a new
+  user is in for the whole of the opening sync — **~20 s** _inferred_ on the release build this
   was driven on (2026-08-11: the index answered `ready: true` 21 s after launch, and a ready
   index needs an ingested, swapped corpus), against the ~93 s the Data & sync section quotes
-  from a *debug* run. Nobody has stopwatched a release sync end to end.
+  from a _debug_ run. Nobody has stopwatched a release sync end to end.
   Counted honestly every option is zero,
   the greying rule dims the entire row, and with no filter on there is no `Reset all` drawn to
   escape by. Verified in the shipped window 2026-08-11 against a cleared `data/`: **0 of 19
   chips greyed, 0 of 8 format options disabled, and no chip carrying a count in its name**,
   held for the whole sync.
 - **Greying on the real corpus, measured in the shipped window 2026-08-11.** A `Lightning
-  Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing in this
+Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing in this
   search", opacity 0.45); a `standard` format filter greys **26 of the 50 set rows on screen**
   out of 384–592 of the 1 047 codes the picker knows. (1 047 against the 986 quoted in
   `index/mod.rs`: that one is the **paper** corpus the index is built over, this one is every
@@ -817,17 +825,17 @@ to guess.
 - **A chip greyed by the previous search swallows a press for ~300–330 ms after the box is
   cleared, and the defect is the swallowed press — not "greying while not knowing".**
   Measured live: pressing "Mana value 7" 5, 167 and 288 ms after clearing `Lightning Bolt`
-  did nothing; at 336 ms and beyond it acted. The *trigger* is `DEBOUNCE_MS` (300). **The app
+  did nothing; at 336 ms and beyond it acted. The _trigger_ is `DEBOUNCE_MS` (300). **The app
   is not guessing during those 300 ms**: the search's query key and the facet request are
   both built from `debouncedText` (`useCardSearch.ts`) and both hold previous data, so the
-  counts describe *exactly* the search the results list is still showing — the caption still
+  counts describe _exactly_ the search the results list is still showing — the caption still
   reads "7 cards" and the chip agrees with every row on screen. What it disagrees with is the
   **box**, which is already empty. So the harm is narrow and real: a press is silently dropped
   on a control the reader can see is dim beside a search box they can see they have cleared.
   It is shipped deliberately, and the fix, when it is wanted, is **inside faceting** rather
   than in the search box. Note what one line buys: failing open while `text !== debouncedText`
   closes the debounce window and **not** the in-flight one — `keepPreviousData` holds the
-  previous *filter set's* answer for the ~32 ms a facet call is in flight (a format change
+  previous _filter set's_ answer for the ~32 ms a facet call is in flight (a format change
   swaps the counts within **6 ms** when the new filter set is already in React Query's cache),
   which is the same disagreement one filter wide instead of one search wide. Only
   `!query.isPlaceholderData` closes both, at the cost of the flicker `keepPreviousData` exists
@@ -835,6 +843,7 @@ to guess.
   blinks on every keystroke — not a debt someone forgot to pay.
 
 ## Image cache (measured 2026-08-04, live)
+
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`
   rows and files stay 1:1, and the row's `source_uri` — Scryfall's `?<epoch>` cache-buster
   — is the only invalidation signal. Deleting `data/images` is always safe.
@@ -849,17 +858,17 @@ to guess.
   `api.scryfall.com`'s ≤10/s rule charged to `cards.scryfall.io`, which the research doc
   records as having **no rate limit** — and `is_fetchable` guarantees an image can come from
   nowhere else. It capped the whole app at 10 images/s, which was most of the 2.4 s above.
-  `MAX_CONCURRENT_FETCHES` (**16**) is now the whole of the pacing and it bounds *this*
+  `MAX_CONCURRENT_FETCHES` (**16**) is now the whole of the pacing and it bounds _this_
   machine — sockets, worker threads, bodies in flight — not Scryfall's patience. The 429
   machinery is untouched: `Cache.gate` still carries a penalty deadline, still answers a
   request inside one at once with the time remaining, and `penalise` still takes the `max`.
   Measured over ~600 live images across two sessions: **zero** 429s, zero 502/503.
 - A page of search results warms itself: `images::prefetch_images` takes front faces only,
-  caps the batch at 100, and is fire-and-forget — it resolves when the work is *queued*.
+  caps the batch at 100, and is fire-and-forget — it resolves when the work is _queued_.
   It walks the page **in reading order**. It used to walk backwards so it would not collide
   with the tiles the grid had just mounted, on the premise that "nothing dedups a fetch that
   is already in flight" — which Plan 3's single-flight map made false. Colliding at the head
-  is now the *good* case (a wait on a request already going out); walking backwards spent
+  is now the _good_ case (a wait on a request already going out); walking backwards spent
   the permits on cards fifty rows below the fold.
 - A printing with no art anywhere (162 of them) is a **200 with an SVG placeholder** at the
   variant's exact dimensions, never a 404 and never a cache row. Only a real failure is an
@@ -886,20 +895,31 @@ to guess.
   by `images::encode_cover` (magic-number sniff, `resize_to_fill` to the `art` crop's **626×457**,
   lossless WEBP, source capped at `MAX_COVER_SOURCE_PIXELS`) and written to
   `<data dir>/covers/<deckId>.webp`. **The route resolves that directory itself** — `decks
-  .cover_image_path` is a record of what was written, not what is read, which is what keeps a
+.cover_image_path` is a record of what was written, not what is read, which is what keeps a
   portable install working after its folder moves. Served `no-store`, because it is the one image
-  URL whose content is *meant* to change under a fixed name; **404 when absent, never a
+  URL whose content is _meant_ to change under a fixed name; **404 when absent, never a
   placeholder**. The `i64` parse is the whole path-traversal fence, since the id becomes a
   filename (`a_cover_path_is_parsed_or_refused_and_never_repaired` pins `/cover/../../mtg.db`,
   `/cover/..%2fmtg.db`, `/cover/7/8`, `/cover/7.webp`).
 - **The CSP did not change for it, and that is the point.** `img-src 'self' data: mtgimg:
-  http://mtgimg.localhost` already covered a fifth *path*; a route is not a source.
+http://mtgimg.localhost` already covered a fifth _path_; a route is not a source.
   `images::tests::the_shipped_csp_is_untouched` asserts both the exact `img-src` and that the
   policy does not mention `cover` at all. Measured 2026-08-11 in the shipped window: with no file
   on disk the URL errors, and after one `deck_set_cover_image` the same URL loads **626×457 in
   2 ms**.
 
 ## Frontend design (binding)
+
+- When working on UI components, always use the `mtg-grimoire-sb-mcp` MCP tools to access Storybook's component and documentation knowledge before answering or taking any action.
+- **CRITICAL: Never hallucinate component properties!** Before using ANY property on a component from a design system (including common-sounding ones like `shadow`, etc.), you MUST use the MCP tools to check if the property is actually documented for that component.
+- Query `list-all-documentation` to get a list of all components
+- Query `get-documentation` for that component to see all available properties and examples
+- Only use properties that are explicitly documented or shown in example stories
+- If a property isn't documented, do not assume properties based on naming conventions or common patterns from other libraries. Check back with the user in these cases.
+- Use the `get-storybook-story-instructions` tool to fetch the latest instructions for creating or updating stories. This will ensure you follow current conventions and recommendations.
+- Check your work by running `run-story-tests`.
+  Remember: A story name might not reflect the property name correctly, so always verify properties through documentation or example stories before using them.
+
 - **All frontend work follows the `frontend-design` skill** (invoke it before UI tasks) and the
   visual direction doc: `docs/superpowers/specs/2026-08-04-visual-design-direction.md`.
   Implementers execute that direction (palette, type, mana line, filter chips) — they do not
@@ -919,14 +939,14 @@ to guess.
 - **The mana line reacts instantly and the sentence waits `ACTIVITY_DELAY_MS` (400 ms).**
   Measured in the shipped window 2026-08-11, sampling the row every 40 ms across a forced
   Refresh: **bar at 121 ms, sentence at 523 ms** — the gate, to 2 ms. The gate is on the
-  *slot*, not the job, so a sync handing over to an update download swaps the sentence
+  _slot_, not the job, so a sync handing over to an update download swaps the sentence
   without the row blinking. `useDelayedFlag` turns **off** by adjusting state during render
   rather than in an effect: an effect would clear it one commit late, and
   `react-hooks/set-state-in-effect` rejects the synchronous call outright — the lint rule and
   the correct behaviour agree here.
   **It does not suppress a no-op Refresh, and the design note claiming it would was wrong.**
   That whole run measured **1.4 s**, so "Checking for card data updates" was up for ~1.0 s
-  before "Already up to date" replaced it. 400 ms filters a *flash*, not a short run — and a
+  before "Already up to date" replaced it. 400 ms filters a _flash_, not a short run — and a
   second of the app naming what it is checking is the good case, not the one to design out.
 - **The live phase sequence, measured 2026-08-11 over a real ingest** (116,695 cards, bulk
   file of 2026-08-10): `Importing cards · 94,000 cards` → `Reclaiming disk space · 66%` (the
@@ -949,7 +969,7 @@ to guess.
 - **Card art is drawn with `components/CardImage`, never a bare `<img>`.** It keys the image
   on its own URL, and that key is the whole component. A browser keeps painting an `<img>`'s
   last decoded frame until the new `src` decodes, and every card frame here belongs to a
-  *slot* rather than to a card — grid tiles are keyed by position on purpose, a deck cover is
+  _slot_ rather than to a card — grid tiles are keyed by position on purpose, a deck cover is
   handed a new id, the pane reuses its art across a flip — so React hands one element a
   different card and the picture lags the caption by the length of the fetch. Measured over
   CDP on the commit before: a search change kept **all 20** tile elements, captions reading
@@ -957,7 +977,7 @@ to guess.
   **This is invisible to the DOM and therefore to the test suite in the obvious place** —
   setting `src` resets `complete` and `naturalWidth` while the old frame stays painted, so
   `naturalWidth === 0` is true in both the healthy and the broken case. What a test can see
-  is *element identity*, which is what `CardImage.test.tsx` and the two integration tests
+  is _element identity_, which is what `CardImage.test.tsx` and the two integration tests
   assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
   independently by keying its whole `Preview` on the printing.
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
@@ -985,7 +1005,7 @@ to guess.
   recolour or watermark a card image, and never crop off a printed credit.
 - **A quantity is `−` button, free-typed field, `+` button — and the field's own native spin
   buttons are suppressed.** `type="number"` is kept for the numeric keyboard and the `min`/`max`
-  it reports to assistive tech, and WebView2 charges for that by drawing ▲▼ *inside* the box: at
+  it reports to assistive tech, and WebView2 charges for that by drawing ▲▼ _inside_ the box: at
   the deck's `xs` size the field is 32×20px, so two native steps crowd the digits out of a box
   that has to hold "10" — three pixels from two controls that already do the job.
   `appearance: none` is **not enough on Chromium**; the spinner is a pseudo-element and needs
@@ -996,9 +1016,9 @@ to guess.
   no-art fallback and the foil marking, in one place. Five surfaces draw a card and each had
   rebuilt part of it. The card pane's main art is the deliberate exception: it keeps a flip
   fade, a bespoke "no image yet" panel and no retry hook, so it borrows only `FoilOverlay`.
-- **The foil marking states what the object *is*, never what it could have been.**
+- **The foil marking states what the object _is_, never what it could have been.**
   `soleFinish` marks a printing that leaves no choice — 12 366 foil-only and 892 etched-only
-  paper printings — and never the 53 224 that merely *have* a foil version, which would put a
+  paper printings — and never the 53 224 that merely _have_ a foil version, which would put a
   sheen on 61 % of every wall. A collection row passes its entry's own stored finish instead;
   a deck row gets the glyph rather than the sheen, because its picture is a 48×36 art crop
   where a gradient is a smudge.
@@ -1010,12 +1030,12 @@ to guess.
   What works is **`screen` with a specular band**: low-alpha rainbow stops (0.10–0.13) either
   side of one white stop at 0.34, 41 % along a 115° sweep — the streak is what the eye reads
   as "shiny", and being narrow it obscures almost nothing.
-- **A mark drawn *inside* the tile's button joins that button's accessible name.** The foil
+- **A mark drawn _inside_ the tile's button joins that button's accessible name.** The foil
   chip did, and a wall of foils became buttons called "Consecrated Sphinx Foil" — measured in
   the shipped window, where a tile button's name came back as bare "Foil". The whole
   `FoilOverlay` is `aria-hidden` now and the finish is stated in text where each surface has
   room (the wall's caption `sr-only`, the search table's Name cell, the pane's per-finish
-  prices). This is the same rule the owned badge follows by being a *sibling* of the button.
+  prices). This is the same rule the owned badge follows by being a _sibling_ of the button.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
@@ -1028,11 +1048,11 @@ to guess.
   inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
   phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
   bubble phase and returns early on `e.defaultPrevented`. Capture is load-bearing: two
-  `window` listeners for one event run in *registration* order, and the outer layer was
+  `window` listeners for one event run in _registration_ order, and the outer layer was
   mounted first, so in the bubble phase it would act before the popup and read
   `defaultPrevented` as false. Every new dismissible layer follows this or it will close
   something it did not open. Pinned by `App.test.tsx`'s Escape-stack test.
-- A layer that Escape dismissed hands focus back to whatever opened it, *before* React
+- A layer that Escape dismissed hands focus back to whatever opened it, _before_ React
   flushes the close (the element is still mounted). An outside-click deliberately does not
   — the reader is already somewhere else.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`, and `src/lib/layers.test.ts` sweeps
@@ -1044,13 +1064,13 @@ to guess.
   window: the popup and the header overlap by exactly 36px, and forcing the popup back to
   the header's layer moves what `elementFromPoint` finds there from `listbox` to `row`.
   The part a number cannot fix: a popup inside a virtualised row is capped by that row's
-  layer whatever it asks for, because the row is `absolute` *and* `transform`ed and is
+  layer whatever it asks for, because the row is `absolute` _and_ `transform`ed and is
   therefore its own stacking context. That is why the row lift exists and why it sits
-  *below* the header — a row has to scroll under one. Variant spellings
+  _below_ the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
 - **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
-  `layers.test.ts` asserts every link of it. **`overlay` is one rung for a drawer *and* a modal,
+  `layers.test.ts` asserts every link of it. **`overlay` is one rung for a drawer _and_ a modal,
   deliberately, where two looks more careful**: the deck editor's four full-window surfaces —
   Categories & tags, History, Theory diff, Deck settings — are held in **one** piece of state
   (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and two
@@ -1060,7 +1080,7 @@ to guess.
   effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
   `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
   and each hands focus back to the control that opened it.
-- **An anchored popup near the right of a row is pinned to its trigger's *right* edge.**
+- **An anchored popup near the right of a row is pinned to its trigger's _right_ edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
   picker did: 288px of listbox opening from a trigger at the end of the filter row put it
@@ -1074,7 +1094,7 @@ to guess.
   (the reconciler's flagged band). Its column template is an **inline style**, not a
   Tailwind arbitrary value, for the scanner reason above.
 - **Table headers sort, and Shift builds a multi-key sort.** A press cycles one column
-  `firstDir → the opposite → gone`; the modifier decides only what happens to the *other*
+  `firstDir → the opposite → gone`; the modifier decides only what happens to the _other_
   columns, so every single-column order is reachable without ever holding Shift. `firstDir`
   is descending on money and count columns. The whole interaction is one pure reducer,
   `applySort` in `src/lib/sort.ts`. `aria-sort` goes on **every** sorted column — the
@@ -1084,7 +1104,7 @@ to guess.
   `columnheader`, not on the button inside it: on the button the Price column read back as
   bare "Price", losing the sentence spec §5 says a price may never be shown without.
 - **A header sorts by what its column shows**, which is why the collection's Value column
-  orders by unit × copies and the wishlist's Cost by unit × copies *still missing* — not by
+  orders by unit × copies and the wishlist's Cost by unit × copies _still missing_ — not by
   the unit price. The orders with no column to press ("Recently added", and the unit price
   itself) stay on the filter bar's select, which drives the **same** state: picking there
   replaces the sort with that one term, and the control reads `Custom…` once the sort starts
@@ -1092,6 +1112,7 @@ to guess.
   sortable at all — an any-printing wish names no set.
 
 ## Motion (`motion@13.1.0`, added and driven live 2026-08-12)
+
 - **Timings live in `src/lib/motion.ts` and nowhere else.** `DURATION` is `fast` 120 · `base`
   180 · `slow` 260 ms, `EASE` is `standard`/`enter`/`exit`, and consumers import a **preset**
   (`scrim`, `drawerRight`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
@@ -1159,6 +1180,7 @@ to guess.
   byte-identical after `npm install motion` and before the first import.
 
 ## Architecture (read the spec first)
+
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
 - Research (live-verified facts, incl. Scryfall breaking changes): `docs/superpowers/research/`
 - Plans: `docs/superpowers/plans/` — execute in order, check off steps as you go.
@@ -1166,11 +1188,12 @@ to guess.
   logic** (deck validation, import/export parsing). Keep that boundary.
 
 ## Hard rules — database
+
 - **`cards` is dropped and recreated on every sync** (`schema::swap_staging`, with
   `foreign_keys=ON`). So: user tables reference `cards.id` **without an enforced foreign
   key** — a soft reference plus denormalized `set_code`/`collector_number`/`lang`
   (spec §6). A declared `REFERENCES cards(id)` aborts every sync; `ON DELETE CASCADE`
-  deletes the user's collection on the next refresh. Orphans are *flagged*, never deleted.
+  deletes the user's collection on the next refresh. Orphans are _flagged_, never deleted.
 - Every index on `cards` goes in `schema::CARDS_INDEXES` — the swap drops the table with
   its indexes and replays only that list.
 - `CARDS_COLUMNS` is **frozen**: it is what schema v1 created, not what `cards` is now.
@@ -1182,8 +1205,8 @@ to guess.
   `malformed JSON` and fails the whole migration for every user who has synced since v3.
   Any migration reading `raw` goes through **`schema::json_raw`** (Rust reads use
   `card_row::raw_json` with `CAST(raw AS BLOB)`). The guard must sit **inside** the
-  expression, wrapping the *argument* — never as a `WHERE` term, because the planner
-  orders `WHERE` terms as it likes and evaluating the unguarded one *is* the error. This
+  expression, wrapping the _argument_ — never as a `WHERE` term, because the planner
+  orders `WHERE` terms as it likes and evaluating the unguarded one _is_ the error. This
   is invisible to tests: fixture databases hold text `raw`, so an unguarded `if v < 4`
   passes every test and breaks only in the field. v2 and v3 are both guarded; the ladder
   is walked over a gzip row by
@@ -1206,6 +1229,7 @@ to guess.
   `init_state` turns any error into "move `mtg.db` aside", which that disk cannot do.
 
 ## Hard rules — user data
+
 - `collection_entries`/`wishlist_entries`/`card_migrations`/`deck_cards` reference `cards.id`
   **softly** and denormalize `set_code`/`collector_number`/`lang` (and `name`, on the wishlist
   and on deck cards) — as does `decks.cover_card_id`. A row whose card vanishes is **flagged**
@@ -1222,7 +1246,7 @@ to guess.
   (`quantity > 0`): a wish for none of something is not a wish, so zero removes it. Both
   refuse a negative through the one `collection::valid_quantity`.
 - Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
-  are CHECK-constrained in SQL *and* validated in Rust, and the imported string is kept in
+  are CHECK-constrained in SQL _and_ validated in Rust, and the imported string is kept in
   `condition_original`.
 - **A finish's price is a lookup in the `prices` blob** (`usd`/`usd_foil`/`usd_etched`;
   `eur_etched` does not exist, so etched is unpriced in EUR). `cards.price_usd` is a
@@ -1240,7 +1264,8 @@ to guess.
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
 
 ## Hard rules — decks
-- **Enforced foreign keys exist only *between user tables*, never against `cards.id`** — a
+
+- **Enforced foreign keys exist only _between user tables_, never against `cards.id`** — a
   declared `REFERENCES cards(id)` aborts every sync, because `swap_staging` drops the table.
   The `ON DELETE` action is chosen per delete-site, not fixed once. **CASCADE** on
   `deck_cards.deck_id`, `deck_cards.category_id`, `deck_allocations.deck_id`,
@@ -1252,7 +1277,7 @@ to guess.
   tag must never delete a card). `schema.rs`'s module doc carries this list; check it against
   the DDL rather than trusting either copy. CASCADE is also right at the app's one **non-user**
   delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
-  *before* the DELETE, so that cascade fires over nothing.
+  _before_ the DELETE, so that cascade fires over nothing.
 - **Schema v8 replaced the zone with a category the user owns.** `deck_cards.category_id`
   points at a `deck_categories` row they name, reorder, switch off and delete; the fixed word
   survives only as that row's **`kind`** — `main | side | commander | companion | maybe`,
@@ -1275,28 +1300,28 @@ to guess.
   **Nothing anywhere may branch on the kind being `maybe`** — that was measured: the old shape
   looked correct and was wrong the first time a user deactivated a pile of their own.
 - **Which totals a pile lands in: the switch decides whether it counts at all; the kind
-  decides only whether it is played *beside* the deck or *in* it, and only `side` and
+  decides only whether it is played _beside_ the deck or _in_ it, and only `side` and
   `companion` are beside it** (CR 100.4a; EDH's companion is "effectively a 101st card"). So
   `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in three places that must stay
   one rule: `engine.ts`'s constant, `deck.rs`'s `DECK_SELECT` subquery behind
   `DeckRow.card_count`, and the Storybook fake's copy. Leaving `maybe` out is the incoherent
-  version, not the smaller one: an *active* Maybeboard was then inside the format's card pool
+  version, not the smaller one: an _active_ Maybeboard was then inside the format's card pool
   and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
   a singleton error under a figure that still read 100.
 - **`allocate_deck` claims for the `live` variant only** — a plan reserves nothing. And
   **`deck_allocations` carries no variant column**, which is the trap: a `theory` read walks
-  the *live* deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
+  the _live_ deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
   Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
   perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
 - **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
   else.** All categories and all tags come back whatever the variant — an empty category still
-  draws its column, an inactive one always draws — but a category's *and a tag's* `card_count`
+  draws its column, an inactive one always draws — but a category's _and a tag's_ `card_count`
   read the variant asked for. Threading it into `list_categories` and not `list_tags` is
   exactly how they came to disagree once.
 - Category and tag writes live in **`deck_meta.rs`**, and **two of them reallocate**:
-  `set_category_active` (the flag is the whole of what the allocator allocates *for*) and
+  `set_category_active` (the flag is the whole of what the allocator allocates _for_) and
   `delete_category` (the cards leave, or land under a category with a different flag). A
-  rename, a reorder and every tag write change what a pile is *called* and claim exactly what
+  rename, a reorder and every tag write change what a pile is _called_ and claim exactly what
   they claimed before.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
@@ -1332,7 +1357,7 @@ to guess.
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
 - **The audit log records facts; TypeScript writes the sentence.** `deck_audit` has no `summary`
   column and never will — it holds `kind` (one of `add|remove|quantity|move|swap|tag|category|
-  folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a **JSON
+folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a **JSON
   `payload`** (`CHECK (json_valid(payload))`) and a signed `delta` for the day header's roll-up.
   `src/features/decks/auditText.ts` is the only thing that reads that payload, and it is the only
   thing that words it — because a sentence is domain logic and this table has to survive the day
@@ -1340,12 +1365,12 @@ to guess.
   `{"from":"Main deck","to":"Ramp"}` with `card_name` `"Vampiric Tutor"` and `delta` 0, and the
   drawer read back "Moved Vampiric Tutor / Main deck → Ramp".
 - **Writing history is not a command.** There is no IPC write — `deck_audit::record(tx, …)` is
-  called *inside the caller's already-open transaction*, which is what makes
+  called _inside the caller's already-open transaction_, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
-  behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
+behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
   **23** cases and asserts exactly one row each (count the list in `deck_audit.rs`, never a
   remembered number — it has been written down wrong twice). "Exactly one" is per
-  *command*, not per field: **`deck_update` records one row per changed field**
+  _command_, not per field: **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
   satisfies that test only because every one of its cases changes exactly one field. The only
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
@@ -1363,17 +1388,17 @@ to guess.
   or a name**, id wins when both arrive, neither is refused in words, and the name is
   found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
   pile a card belongs in is domain logic); `deck_set_card_quantity(deckId, cardId, categoryId,
-  variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId, variant)`,
+variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId, variant)`,
   which stays inside one variant; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
-  variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inactive
+variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inactive
   categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
-  variant must be one the schema knows, and the category must belong to *this* deck —
+  variant must be one the schema knows, and the category must belong to _this_ deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
 - **An add that names no category is filed by the card's type line; an add that names one is
-  untouched.** So every *drag* overrides the rule by construction — pointing at a column is
+  untouched.** So every _drag_ overrides the rule by construction — pointing at a column is
   naming a category — and nothing in the write path has to tell a gesture from a press. The rule
   is `autoCategoryFor` and it is applied on **`useDeck.addCard`'s single definition**, which takes
-  an optional `typeLine`; the *fact* travels from the call site, because that is where a type line
+  an optional `typeLine`; the _fact_ travels from the call site, because that is where a type line
   already exists. That arrangement is the whole point: the rule stays one TypeScript function
   (CLAUDE.md's boundary — Rust supplies facts, TS draws conclusions) and **no add pays a round
   trip to discover what it is adding**. `null` (an orphan, or a layout with no bucket word) is
@@ -1384,18 +1409,18 @@ to guess.
   replaced with `categories[0]` on the first render with a deck — and a deck's seeded categories
   are `PREDEFINED_CATEGORIES` in order, so **`categories[0]` is Commander**: on a fresh deck every
   quick add and every panel press landed in the Commander pile, with the field labelled "Quick add
-  a card to Commander". Zero now *means* auto, nothing overwrites it, and the clamp narrows to
+  a card to Commander". Zero now _means_ auto, nothing overwrites it, and the clamp narrows to
   what its own first sentence always claimed — repairing an id whose category has actually left
   the deck (which now falls back to auto, not to somebody else's first column). An explicit pick
   **stays** picked, so ten cards into the Sideboard is one choice and ten presses. Each tile's
   `+` names the pile it computed ("Add Sol Ring to Artifact"), which only works because
   `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
   promise the answer before the press.
-- **A write to what is *in* a deck goes through a `useDeck` mutation, and `DeckEditor`'s
+- **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
   add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
   mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
-  removes a deck row. The deck *row* is a different hook — the gallery's `useDecks` owns create,
+  removes a deck row. The deck _row_ is a different hook — the gallery's `useDecks` owns create,
   update, remove and duplicate, and `useDeck.update` is that same `deck_update` narrowed to the
   open deck, which is how the Built toggle is one of the six. A refused write re-reads the deck
   through whichever of the six answered last, so a sibling's GONE is what turns the columns
@@ -1403,7 +1428,7 @@ to guess.
   borrow a mutation whole rather than defining one — `useSwapFromPane` (the card pane) and
   `useSidebarDrops` (the sidebar's Decks entry) — and **the refusal rule lives on the single
   definition in `useDeck.ts`**, never on a call site: two definitions would be two places to
-  keep one rule. The borrowing site owns only its own *reporting* (per-call `mutate`
+  keep one rule. The borrowing site owns only its own _reporting_ (per-call `mutate`
   callbacks).
 - **`deck_swap_printing` is one transaction that folds on `DECK_CARD_GRAIN`.** Swapping a
   row to a printing the same category already holds is not an error and not two rows: the
@@ -1417,7 +1442,7 @@ to guess.
   become "swap this card".
 - **The deck has four views** — `Stacks | Table | Text | Grid`, `DeckEditor`'s `VIEWS`, crossed
   with three `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical |
-  manaCost | price | type`). All twelve combinations were driven live 2026-08-11; grouping and
+manaCost | price | type`). All twelve combinations were driven live 2026-08-11; grouping and
   sorting were correct in every one, and an **inactive category stays its own group in all three
   grouping modes** rather than being folded in by mana value or type. Only `Stacks` and `Grid`
   fetch a picture, and it is the **whole card** — `cardImageUrl(…, DECK_CARD_VARIANT)`, which is
@@ -1427,7 +1452,7 @@ to guess.
 - **A deck card is the whole card, and the app's marks are overlays on it.** Both picture views
   drew the 626×457 `art` crop inside three app-built bands until 2026-08-12, which showed the one
   part of a card that does not say what it is: no printed frame, no type line, no rules text, no
-  P/T. Now the picture *is* the card and the frame is gone — with it went `identityTint` (a
+  P/T. Now the picture _is_ the card and the frame is gone — with it went `identityTint` (a
   printed frame is already that colour) and the app-drawn name and mana cost, which is why
   `deckCardName` on the button is the **only** name a screen reader gets and the fallback writes
   the name in text. **The marks go right, never left**: a printed name is left-aligned and a
@@ -1435,7 +1460,7 @@ to guess.
   one thing identifying the card. It covers the printed mana cost instead — the table view, the
   pane and the curve all still carry that.
 - **`CardStack` is the signature interaction, and it is arithmetic, not taste — and the card's
-  height is now *derived* rather than chosen.** It is a Magic card's aspect (the `grid` image's own
+  height is now _derived_ rather than chosen.** It is a Magic card's aspect (the `grid` image's own
   488×680) applied to the 210px that `StackView`'s **fixed** `14rem` column leaves after its
   padding and the card's border: **295px**. Collapsed it carries a **−261px** bottom margin, so
   each card advances by **34px** — a legibility floor for the overlaid chip rather than a
@@ -1445,64 +1470,65 @@ to guess.
   box changing size.** The column is never measured, which is what keeps `stackHeight` a function
   of the count alone.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.** With
-  card *N* open, card *k*'s top is `k·34` for `k ≤ N` and `N·34 + 303 + (k−N−1)·34` for `k > N`;
-  open card *N+1* instead and every top is unchanged **except card N+1's**, which travels 269px
+  card _N_ open, card _k_'s top is `k·34` for `k ≤ N` and `N·34 + 303 + (k−N−1)·34` for `k > N`;
+  open card _N+1_ instead and every top is unchanged **except card N+1's**, which travels 269px
   up from `N·34 + 303` to `N·34 + 34`. So the reflow is one card sliding out of the stack, not a
   list resettling — and the pointer that armed it stays inside it for every frame, because the
-  card is 295px tall and slides up *underneath* a stationary pointer.
+  card is 295px tall and slides up _underneath_ a stationary pointer.
 - **The lift used to be pure CSS and is now state, because pure CSS could not be given hover
   intent** (changed 2026-08-12). The same arithmetic that makes one card move is what broke
-  selection: after the first step the *next* card's strip sits only ~34px below the pointer, so
+  selection: after the first step the _next_ card's strip sits only ~34px below the pointer, so
   one continuous downward sweep crossed four or five strips in ~60ms, armed every one, and left
   the reader several cards below the one they aimed at. `CardStack` now holds `openIndex`, armed
   by `pointerenter` on the `<li>` after a **70ms dwell** (`STACK_OPEN_DWELL_MS`) and closed after
   **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card cancels the pending close so
   switching never shows a closed frame. **No new hit target was needed**: a closed card is
   overlapped 261px by its successor, which is later in DOM order and therefore paints over it,
-  so the only hittable part of a closed card already *is* its 34px reveal strip.
+  so the only hittable part of a closed card already _is_ its 34px reveal strip.
   `LAYER.raisedOnHover`/`raisedOnFocus` are **gone** — the open card takes `LAYER.raised` from
-  state — and `data-stack-open` exists so a test or a `cdp.mjs --probe` can *count* open cards,
+  state — and `data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards,
   which the CSS lift was observable from neither. **The margin is no longer a Tailwind literal
   either**: `motion` writes it as an inline style, so the constants are the only place these
   numbers live, and the note about spelling them out for the source scanner no longer applies.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
-  and is load-bearing: `DeckCardControls` is a *sibling* of the button, so a caret stepping into
+  and is load-bearing: `DeckCardControls` is a _sibling_ of the button, so a caret stepping into
   the stepper would otherwise collapse the card out from under itself. The keyboard opens with
   **no dwell** — a caret is a deliberate act and a dwell would just be lag.
 - **React never listens for `pointerenter`.** It synthesises enter/leave from `pointerover`/
   `pointerout`, so `fireEvent.pointerEnter` fires an event the component cannot hear and the test
   passes having called nothing. Drive these with `fireEvent.pointerOver`/`pointerOut`. And
   `userEvent` cannot be driven under Vitest fake timers at all — RTL's `asyncWrapper` waits on a
-  real `setTimeout` it only knows how to advance through *Jest*, so such a test hangs to its
+  real `setTimeout` it only knows how to advance through _Jest_, so such a test hangs to its
   5s timeout rather than failing.
-- The 2026-08-06 removal of the *old* stacked mode is still not contradicted, and now for a
+- The 2026-08-06 removal of the _old_ stacked mode is still not contradicted, and now for a
   narrower reason: that one drew full card faces **at column width with no overlaid chrome and no
   34px reveal**, so a ten-card stack was ten full cards to scroll past rather than a column of
   reveal strips.
 - **A printings row in the card pane is clickable to view that printing** —
-  `store.viewPrinting` sets `selectedCardId` *without* clearing `paneDeckContext`, so the swap
+  `store.viewPrinting` sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap
   offers survive browsing; `setSelectedCardId` there instead silently kills the affordance at its
   one moment of use.
 - **Four card surfaces outside the editor are drag sources, all through the one
   `cardDraggable`**, and the payload they all carry is
   `{ kind: "card"; cardId; name; typeLine }` —
-  search tiles, collection *table* rows (the collection's **card** mode is not one: only the
+  search tiles, collection _table_ rows (the collection's **card** mode is not one: only the
   search wall is handed `CardGrid`'s `dragPayload`), **pinned** wishes only (an any-printing
   wish names no printing to drag), and the card pane's printings rows. The **`typeLine`** is
   carried by the two adding kinds and never by `"deck-card"`, and it is there for the one drop
   with no column to point at — the sidebar's Decks entry, which files by `autoCategoryFor`. It is
   **normalised rather than validated**: `readDragData` refuses a bad `cardId` or `name` (they
-  decide *what* is dropped) and turns anything unusable here into `null`, because the pile is all
+  decide _what_ is dropped) and turns anything unusable here into `null`, because the pile is all
   this decides and `Uncategorised` is already the answer for not knowing. The pane's rows carry
   the **card's** type line, not the printing's — a `Printing` has none, and which pile a card
   belongs in is a fact about the card. A category column treats `"card"` exactly as the panel's
   `"search-card"`: add one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
   it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
-  deck open, which — because `setActiveView` clears `openDeckId` — is *every* drag started
+  deck open, which — because `setActiveView` clears `openDeckId` — is _every_ drag started
   from Search, Collection or Wishlist. So the sidebar's Decks target is reachable only from
   inside the Decks view (the docked panel, a deck card, the card pane).
 
 ## Deck builder, driven in the shipped window (measured 2026-08-11)
+
 The whole rebuild had been proven by tests and by Storybook, and **neither runs in the window
 that ships**. This is what a CDP pass over the real WebView2 added, and the three bugs it found
 are all things no suite could have seen.
@@ -1511,11 +1537,11 @@ are all things no suite could have seen.
   and pushed every later card down by exactly **286px**, while the list's height stayed **490px**
   across the whole gesture. `stackHeight` matched the formula for every stack on screen.
   **Every number in that sentence is superseded by the 2026-08-12 geometry** (−261 → 8, a 269px
-  push-down) and the *finding* is not: what was measured is that the margin trick pushes cards
+  push-down) and the _finding_ is not: what was measured is that the margin trick pushes cards
   out of a box whose height does not change, and that is unchanged. Nobody has re-driven it.
-  **Hovering a *middle* card means pointing at its title bar** — the cards overlap, so at any y
+  **Hovering a _middle_ card means pointing at its title bar** — the cards overlap, so at any y
   the topmost card is the last one whose top is above it, and `hover`'s default approach (from
-  directly above the element) lands on the *first* card of the stack and lifts that instead. Aim
+  directly above the element) lands on the _first_ card of the stack and lifts that instead. Aim
   at `li > button > span:first-child` — **which the whole-card rewrite moved**: a card is one
   `<span>` holding the image now, so the strip to aim at is the card's own top ~34px rather than a
   first-child band. Approach sideways with `--from`.
@@ -1525,7 +1551,7 @@ are all things no suite could have seen.
   −261px, and tops at rest advanced by exactly 34px. Then, all in the shipped window:
   **opening from all-closed pushes every later card down 269px** (375 → 644); but **stepping
   from one open card to the next moves exactly one card** — card 3 travelled 467 → 198 while
-  cards 0–2 *and* cards 4–6 held their pixel positions to the unit, and the next strip stayed
+  cards 0–2 _and_ cards 4–6 held their pixel positions to the unit, and the next strip stayed
   put at 502. **`[data-stack-open]` counted exactly 1 at every sample**, including
   mid-transition, so switching never shows a closed frame. **A 384px continuous sweep down the
   whole stack landed on the card it aimed at** — the defect the rebuild existed to fix. And
@@ -1538,10 +1564,10 @@ are all things no suite could have seen.
 - **Do not aim `hover` at the card's `<li>` — aim at its marks strip.** `cdp.mjs hover` targets
   an element's box **centre**, and a card is 295px tall in a stack that advances 34px, so the
   centre of card 2 is painted over by card 6. The strip to aim at is the `absolute inset-x-0
-  top-0` span (25px, inside the 34px reveal); tag it per card and approach sideways with
+top-0` span (25px, inside the 34px reveal); tag it per card and approach sideways with
   `--from`. This is the same trap as the old `span:first-child` note, one rewrite later, and it
   gets worse as the card gets taller.
-- **`data-stack-open` exists so a probe can *count* open cards.** The CSS lift was observable
+- **`data-stack-open` exists so a probe can _count_ open cards.** The CSS lift was observable
   from neither a test nor `cdp.mjs` — `userEvent.hover` never engaged `:hover`, and nothing in
   the DOM said which card was up. Count activations, never whether one happened.
 - **Reduced motion holds**: `transitionProperty` is `none` on the view buttons under
@@ -1550,13 +1576,13 @@ are all things no suite could have seen.
   **The stack card is no longer part of that claim**: its lift is `motion`-driven, so there is
   no CSS transition to probe, and its opt-out is the `useReducedMotion()` described under
   Motion. That hook reads its value **once at mount**, so `media prefers-reduced-motion reduce`
-  emulated *after* the component mounted proves nothing about it — the surface has to be
+  emulated _after_ the component mounted proves nothing about it — the surface has to be
   remounted under the override, which is a live check nobody has run.
 - **Both drags work with a real Chromium drag**, carrying pdnd's `application/vnd.pdnd`: a card
   from one category to another (the target lit `border-accent` mid-flight; "Vampiric Tutor" moved
   Main deck 10→9, Ramp 6→7 and survived the re-read) and a **deck tile onto a sidebar folder**
   (folder 0→1, tile left "All decks"). **What that does not prove**: `Input.setInterceptDrags`
-  bypasses the OS drag loop entirely, so this is evidence about the app's own handlers and *not*
+  bypasses the OS drag loop entirely, so this is evidence about the app's own handlers and _not_
   about WRY's OLE drop target. `"dragDropEnabled": false` remains the load-bearing fact, it is
   embedded at **compile time**, and this exe was built from it.
 - **A category move is delete + insert, not an update** — the `deck_cards` row id changes. Worth
@@ -1572,6 +1598,7 @@ are all things no suite could have seen.
   unverified note below.
 
 **Three bugs found, all open** (none fixed in this pass):
+
 1. **The editor's title row collapses the deck name to 18px and overflows into the format
    select, at the app's own default window.** The row is `flex min-w-0 flex-1` holding the name
    input (`shrink: 1`) beside two `shrink-0` children — the Live/Theory group (102px) and the
@@ -1579,7 +1606,7 @@ are all things no suite could have seen.
    absorbs the entire deficit. Measured: name width **18px at 1100, 1200 and 1280**, and the
    container overflowing by **202px / 102px / 22px** respectively; `overflow` is `visible`, so at
    1280 the button's last **9.9px** is painted over by, and hit-tests to, `select[aria-label=
-   "Deck format"]`. Fine at 1360 (76px) and above, and fine at 1024 (459px) where the toolbar
+"Deck format"]`. Fine at 1360 (76px) and above, and fine at 1024 (459px) where the toolbar
    wraps — so the broken band is roughly **1060–1350px and the shipped 1280×800 sits inside it**.
    Only bites when `theory_enabled` is on, which is why nothing caught it.
 2. **A custom deck cover never appears in the gallery.** `DecksPage`'s `Cover` takes only
@@ -1593,19 +1620,20 @@ are all things no suite could have seen.
    truncating names to ~10 characters, while the empty Tags column holds 112px and Owned 64px.
 
 **Unverified, and not by choice:**
+
 - **Card art could not be rendered at all.** `cards.scryfall.io` was unreachable from this
   machine (a bare HTTPS HEAD times out; `api.scryfall.com` answers), so every fetch failed and
-  `data/images` was never created. What this *does* prove is that the `mtgimg://` handler is
+  `data/images` was never created. What this _does_ prove is that the `mtgimg://` handler is
   registered and routing — the failures were the app's own **502**, its documented "failed
   fetch", not a browser-level protocol error — and the `/cover/` route needs no network and was
   verified end to end. But **no card image has been seen decoding in this build.**
-  **Diagnosed 2026-08-11, and it is not the app: a path-MTU black hole.** The host is *not*
+  **Diagnosed 2026-08-11, and it is not the app: a path-MTU black hole.** The host is _not_
   unreachable — DNS answers (OVH, `57.130.33.1`/`15.204.104.240`, not Cloudflare like the API
   host) and the TCP connect completes in **51 ms**. The TLS handshake is what never finishes:
   `ping -f -l 1472` to it gets no reply where `-l 1440` does, so the path carries ~1 468 bytes
   and swallows the ICMP that would say so, and the server's certificate flight — a full-size
   segment — vanishes. curl, Node and reqwest all stall identically at the same point, after
-  ALPN and before ServerHello. **The tell is which half of the app breaks**: card *data* syncs
+  ALPN and before ServerHello. **The tell is which half of the app breaks**: card _data_ syncs
   fine because `api.scryfall.com` rides a different path, while every picture hangs. Before
   suspecting the image cache, probe the MTU. Nothing in this repo can fix it; lowering the
   interface MTU (or clamping MSS) can.
@@ -1614,7 +1642,7 @@ are all things no suite could have seen.
   path. The encode → write → serve → render half is measured; **the picker → path half is not.**
 - **The whole-card frame (2026-08-12) has never been seen painted.** Its geometry is pinned by
   `CardStack.test.tsx` — the derivation, the two Tailwind literals and the no-reflow property —
-  and its *pixels* are unproven for the reason directly above: no card image has decoded in this
+  and its _pixels_ are unproven for the reason directly above: no card image has decoded in this
   build on this machine. What a live pass would still have to answer is whether the printed name
   is legible in a 34px reveal at 210px card width, and whether the quantity chip over the printed
   mana cost reads as a badge rather than as damage.
@@ -1652,5 +1680,6 @@ are all things no suite could have seen.
 - Tests: cover logic that can break (parsers, validation, sync). No ceremony tests.
 
 ## Working style (user preferences)
+
 - Ultracode/dynamic workflows for large parallelizable work; subagents use Opus 5.
 - Superpowers flow: brainstorm → spec → plan → subagent-driven implementation.
