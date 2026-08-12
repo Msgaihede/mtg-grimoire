@@ -115,7 +115,14 @@ function CardSource() {
     if (!element) return;
     return cardDraggable({
       element,
-      payload: () => ({ kind: "card", cardId: BOLT.id, name: BOLT.name }),
+      payload: () => ({
+        kind: "card",
+        cardId: BOLT.id,
+        name: BOLT.name,
+        // What files the card when the Decks entry takes it: there is no column on a nav item
+        // to have pointed at, so `autoCategoryFor` reads this (`dnd.ts`).
+        typeLine: BOLT.typeLine,
+      }),
     });
   }, []);
   return (

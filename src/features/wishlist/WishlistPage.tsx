@@ -80,15 +80,23 @@ function missingOf(row: WishRow): number {
 function DraggableRow({
   cardId,
   name,
+  typeLine,
   children,
   ...rest
-}: { cardId: string | null; name: string } & ComponentProps<"div">) {
+}: {
+  cardId: string | null;
+  name: string;
+  typeLine: string | null;
+} & ComponentProps<"div">) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
     if (!element || !cardId) return;
-    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name }) });
-  }, [cardId, name]);
+    // The type line files the card if it is carried somewhere with no column to point at — the
+    // sidebar's Decks entry. It is the one thing `WishRow` carries that this list never draws,
+    // and it is carried for exactly this (`ipc.ts`).
+    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name, typeLine }) });
+  }, [cardId, name, typeLine]);
   return (
     <div ref={ref} {...rest}>
       {children}
@@ -721,6 +729,7 @@ function WishlistTable({
             {...props}
             cardId={row.cardId}
             name={row.name}
+            typeLine={row.typeLine}
             tabIndex={0}
             onClick={() => selectCard(row.cardId!)}
             onKeyDown={(e) => {

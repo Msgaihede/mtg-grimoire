@@ -282,7 +282,7 @@ describe("CollectionPage", () => {
     stop();
 
     expect(carried.map(readDragData)).toEqual([
-      { kind: "card", cardId: "c1", name: "Lightning Bolt" },
+      { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
 

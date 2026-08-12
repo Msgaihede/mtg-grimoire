@@ -7,8 +7,10 @@ import {
   CardStack,
   STACK_ADVANCE,
   STACK_CARD_HEIGHT,
+  STACK_CARD_WIDTH,
   STACK_CLOSE_DELAY_MS,
   STACK_COLLAPSED_MARGIN,
+  STACK_IMAGE_HEIGHT,
   STACK_LIFTED_MARGIN,
   STACK_OPEN_ATTR,
   STACK_OPEN_DWELL_MS,
@@ -65,22 +67,43 @@ const leaveStack = (from: Element) =>
 
 describe("CardStack geometry", () => {
   /**
-   * The four numbers have to agree or the trick does not work: a card advances the stack by
-   * exactly its title bar, and the list is the collapsed stack plus one lift's worth of
-   * slack. Written out here because they decide the whole interaction as well as the look —
-   * with card *N* open, card *k*'s top is `k·34` for `k ≤ N`, so stepping to card *N+1* moves
-   * exactly one card by 286px and leaves every other top alone.
+   * The numbers have to agree or the trick does not work: a card advances the stack by exactly
+   * one reveal strip, and the list is the collapsed stack plus one lift's worth of slack.
+   *
+   * **A card's height is now derived rather than chosen** — it is a Magic card's aspect applied
+   * to the width `StackView`'s fixed 14rem column leaves, since the card *is* a whole card image
+   * now. So this checks the derivation as well as the sums: get the width or the ratio wrong and
+   * every number below moves together, which is exactly the failure a single asserted constant
+   * would hide.
+   *
+   * They decide the whole interaction as well as the look: with card *N* open, card *k*'s top is
+   * `k·34` for `k ≤ N`, so stepping to card *N+1* moves exactly one card by 269px and leaves
+   * every other top alone.
+   *
+   * **None of them is a Tailwind literal any more.** The collapsed margin used to be written
+   * out as a negative arbitrary-value utility, because Tailwind scans source text and a class
+   * assembled at runtime emits no rule at all — so the number existed twice and only prose kept
+   * the two in step. `motion` writes the margin as an inline style now, which means the
+   * constants below are the only place these numbers live and arithmetic reaches every one of
+   * them. (Do not spell that old class here, even in a comment: this file is under `@source`,
+   * so naming it would emit a rule for a utility nothing uses.)
    */
-  it("advances by one title bar per card and leaves one lift of slack", () => {
+  it("advances by one reveal strip per card and leaves one lift of slack", () => {
+    // 210px of image at 488×680, rounded, plus the card's own 1px border top and bottom.
+    expect(STACK_CARD_WIDTH).toBe(210);
+    expect(STACK_IMAGE_HEIGHT).toBe(Math.round((STACK_CARD_WIDTH * 680) / 488));
+    expect(STACK_IMAGE_HEIGHT).toBe(293);
+    expect(STACK_CARD_HEIGHT).toBe(STACK_IMAGE_HEIGHT + 2);
+
     expect(STACK_CARD_HEIGHT + STACK_COLLAPSED_MARGIN).toBe(STACK_ADVANCE);
     expect(STACK_ADVANCE).toBe(34);
-    expect(STACK_COLLAPSED_MARGIN).toBe(-278);
+    expect(STACK_COLLAPSED_MARGIN).toBe(-261);
     expect(STACK_LIFTED_MARGIN).toBe(8);
     // What one step down the stack costs the one card that moves.
-    expect(STACK_LIFTED_MARGIN - STACK_COLLAPSED_MARGIN).toBe(286);
+    expect(STACK_LIFTED_MARGIN - STACK_COLLAPSED_MARGIN).toBe(269);
 
-    // The canvas's own formula, `34 * cards.length + 286`.
-    for (const n of [1, 2, 5, 17]) expect(stackHeight(n)).toBe(34 * n + 286);
+    // The canvas's own formula, `34 * cards.length + 269`.
+    for (const n of [1, 2, 5, 17]) expect(stackHeight(n)).toBe(34 * n + 269);
     // The last card's bottom edge, with the slack under it.
     expect(stackHeight(5) - (STACK_ADVANCE * 4 + STACK_CARD_HEIGHT)).toBe(STACK_LIFTED_MARGIN);
   });
@@ -447,18 +470,57 @@ describe("CardStack cards", () => {
     }
   });
 
-  it("draws the copies, the name, the cost, the rarity, the printing and its own price", () => {
+  it("draws the copies, the rarity, the printing and its own price over the card", () => {
     render(<CardStack cards={CARDS} label="Ramp" />);
 
-    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
     // The copies badge — 2 of the Sol Ring, and nothing else on screen is a bare "2".
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("$1.99")).toBeInTheDocument();
     expect(screen.getAllByText("LEA · 161")).toHaveLength(3);
     // `RarityGem` names the rarity even where it only draws a dot ("Rarity: uncommon").
     expect(screen.getAllByText(/uncommon/)).not.toHaveLength(0);
-    // The printed cost, through `ManaText` — real `mana-font` pills, never `{R}` typed out.
-    expect(document.querySelectorAll("i.ms-cost").length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **The name and the mana cost are on the picture now, and that is the change.**
+   *
+   * The card used to be three app-drawn bands with the name in text and the cost as `mana-font`
+   * pills; it is one whole `grid` image, so both are printed where every player already reads
+   * them. What must not go with them is the *accessible* name — a card whose only name is inside a
+   * decorative `<img alt="">` is a card a screen reader cannot tell from any other, so
+   * `deckCardName` carries it on the button and this is the test that says so.
+   */
+  it("leaves the name and cost to the printed card, but not the accessible name", () => {
+    render(<CardStack cards={CARDS} label="Ramp" />);
+
+    expect(screen.queryByText("Sol Ring")).not.toBeInTheDocument();
+    expect(document.querySelectorAll("i.ms-cost")).toHaveLength(0);
+
+    // The picture is the card, and it is decoration: the button beside it does the talking.
+    const art = document.querySelectorAll("img");
+    expect(art).toHaveLength(CARDS.length);
+    for (const image of art) expect(image).toHaveAttribute("alt", "");
+    expect(screen.getByRole("button", { name: SOL_RING })).toBeInTheDocument();
+  });
+
+  /**
+   * …and where the picture cannot be drawn, the name comes back in text.
+   *
+   * An orphan is the case that reaches it without a network: its printing has left `cards`, so
+   * nothing is fetched at all, and a tile reading only "No card" would be the one place in the app
+   * that shows a deck card without saying which card it is.
+   */
+  it("writes the name in the fallback when there is no picture to draw", () => {
+    render(
+      <CardStack
+        cards={[card({ name: "Gone Card", needsReview: "This printing has left the database." })]}
+        label="Ramp"
+      />,
+    );
+
+    expect(screen.getByText("Gone Card")).toBeInTheDocument();
+    expect(screen.getByText("No card")).toBeInTheDocument();
+    expect(document.querySelectorAll("img")).toHaveLength(0);
   });
 
   /**

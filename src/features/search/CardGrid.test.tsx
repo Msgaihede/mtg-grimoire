@@ -168,7 +168,12 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
-        dragPayload={(c) => ({ kind: "card", cardId: c.id, name: c.name })}
+        dragPayload={(c) => ({
+          kind: "card",
+          cardId: c.id,
+          name: c.name,
+          typeLine: c.typeLine,
+        })}
       />,
     );
 
@@ -183,7 +188,7 @@ describe("CardGrid", () => {
     stop();
 
     expect(carried.map(readDragData)).toEqual([
-      { kind: "card", cardId: "aaa", name: "Lightning Bolt" },
+      { kind: "card", cardId: "aaa", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
 

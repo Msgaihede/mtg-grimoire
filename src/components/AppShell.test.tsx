@@ -396,7 +396,12 @@ it("switches the active view", async () => {
  * is the live CDP pass's to prove.
  */
 describe("the sidebar's drop targets", () => {
-  const BOLT: DragPayload = { kind: "card", cardId: "c-bolt", name: "Lightning Bolt" };
+  const BOLT: DragPayload = {
+    kind: "card",
+    cardId: "c-bolt",
+    name: "Lightning Bolt",
+    typeLine: "Instant",
+  };
 
   /** A card that can be picked up, standing in for the four walls that carry one. */
   function CardSource({ payload }: { payload: DragPayload }) {
@@ -429,7 +434,15 @@ describe("the sidebar's drop targets", () => {
    * spells it is a test that notices the day it changes (which is the day `autoCategoryFor`
    * lands and this stops being one word at all).
    */
-  const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Main deck", "live", 1];
+  /**
+   * What the Decks entry writes: **no category id, and the name the card's own type line
+   * earned.**
+   *
+   * A nav item several views away from the deck has no column for the reader to have pointed at,
+   * so it files by `autoCategoryFor` — and both payloads these tests drop carry `Instant`, which
+   * is where the word comes from. It used to be a found-or-created "Main deck" for everything.
+   */
+  const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Instant", "live", 1];
 
   const entry = (label: string) => screen.getByRole("button", { name: label });
   /** The entry's own live region — the line under its button, where a drop reports. */
@@ -487,7 +500,12 @@ describe("the sidebar's drop targets", () => {
    *  Decks entry most often: the panel is the one card surface an open editor coexists with. */
   it("takes the docked panel's own payload", async () => {
     openDeck(7, "Burn");
-    const held = await pickUp({ kind: "search-card", cardId: "c-bolt", name: "Lightning Bolt" });
+    const held = await pickUp({
+      kind: "search-card",
+      cardId: "c-bolt",
+      name: "Lightning Bolt",
+      typeLine: "Instant",
+    });
 
     await held.over(entry("Decks"));
     await held.drop();
@@ -560,6 +578,31 @@ describe("the sidebar's drop targets", () => {
     await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
     expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /**
+   * A card dragged **out of the open deck** and back onto Decks keeps the pile it came from,
+   * because it has one: the rule is that a drag names its own destination, and `fromCategoryId`
+   * is a category of this very deck (a deck row exists only while its editor is mounted).
+   *
+   * The `null` type line is the point of the assertion as much as the id is: this payload carries
+   * none — a move or a removal has nothing to categorise — so a copy added from the Sideboard
+   * lands in the Sideboard rather than in a found-or-created pile named after its type, which is
+   * what the auto arm would have done with it.
+   */
+  it("keeps a deck row's own category when it is dropped back on Decks", async () => {
+    openDeck(7, "Burn");
+    const held = await pickUp({
+      kind: "deck-card",
+      cardId: "c-bolt",
+      name: "Lightning Bolt",
+      fromCategoryId: 2,
+    });
+
+    await held.over(entry("Decks"));
+    await held.drop();
+
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", 2, null, "live", 1));
   });
 
   /**

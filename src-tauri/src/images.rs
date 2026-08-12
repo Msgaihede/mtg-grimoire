@@ -1281,27 +1281,46 @@ pub const MAX_PREWARM: usize = 2_000;
 /// than a pre-warm.
 pub const COLLECTION_PREWARM: Variant = Variant::Grid;
 
-/// The variant every **deck** surface draws — and it is not the same one.
+/// The variant a **deck card** is drawn at — the two views that draw one as a picture, which is
+/// `CardStack` and `views/GridView`. Mirrored in TypeScript as `cardControl.tsx`'s
+/// `DECK_CARD_VARIANT`, and the two have to agree.
 ///
-/// `CardStack`, `views/GridView`, the gallery's deck tiles and folder strips, the theory
-/// diff and the cover picker all render `cardImageUrl(…, "art")`. This constant exists
-/// because getting it wrong is invisible: a pre-warm that fetched `grid` for deck cards
-/// would report itself as having warmed every one of them, and the deck builder would still
-/// fetch every tile cold, because `art` is a different URL on the CDN.
-///
-/// That is not hypothetical — it is what this app did. Measured against the live database
+/// This constant exists because getting it wrong is **invisible**: a pre-warm that fetched the
+/// variant no deck surface asks for reports itself as having warmed every deck card, and the
+/// builder then fetches every tile cold anyway, because each variant is a different URL on the
+/// CDN. That is not hypothetical — it is what this app did. Measured against the live database
 /// on 2026-08-11: all 17 deck cards had a `grid` row and only 12 had an `art` row, with an
 /// empty collection and wishlist, so the deck arm was the *only* work pre-warming had to do
-/// and it warmed a variant no deck surface asks for.
-pub const DECK_PREWARM: Variant = Variant::Art;
+/// and it warmed a variant no deck surface asked for.
+///
+/// **It is `Grid` now, which is [`COLLECTION_PREWARM`], and the two arms coalescing is the point
+/// rather than a coincidence to tidy away.** The deck's stack and grid views draw the whole card
+/// instead of the bare art crop, so a card that is both owned and in a deck is one cache key
+/// rather than two — half the bytes, and one warm picture serving both screens. They stay two
+/// named constants because they answer two questions and a future surface could move one without
+/// the other.
+///
+/// **Four deck surfaces are deliberately not covered by this and still draw `Art`**: the
+/// gallery's deck tiles and its folder strips, `DeckSettingsDialog`'s cover picker and preview —
+/// all three of which draw a *cover*, which is 626×457 by construction ([`COVER_VARIANT`], because
+/// [`encode_cover`] writes a user's own file at exactly that shape) — and the theory diff, whose
+/// picture is a 32×44 decoration in a list that spells the card's name out beside it. Those fetch
+/// on demand; a dialog the reader opens deliberately does not need warming, and the gallery warms
+/// its own covers in `DecksPage`.
+pub const DECK_PREWARM: Variant = Variant::Grid;
 
 /// The cards the user owns, wants, or has put in a deck, that have no cached image yet —
 /// **each paired with the variant the screen that shows it actually draws**.
 ///
 /// Three arms rather than two since the decks landed, because a user whose cards live only
 /// in decks would otherwise have nothing pre-warmed at all. The pairing is the part that
-/// has to stay right: `NOT EXISTS` is checked against *that arm's* variant, so a card that
-/// is both owned and in a deck is warmed twice, once per picture the app will ask for.
+/// has to stay right: `NOT EXISTS` is checked against *that arm's* variant, so a card is warmed
+/// once per picture the app will actually ask for.
+///
+/// Today [`COLLECTION_PREWARM`] and [`DECK_PREWARM`] are the same variant, so a card that is both
+/// owned and in a deck collapses to one row rather than two — the `UNION` (never `UNION ALL`) is
+/// what makes that automatic. The arms stay separate because the pairing, not the count, is the
+/// contract: the day a deck surface wants a different picture again, only its own arm moves.
 pub fn prewarm_keys(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<ImageKey>> {
     let mut stmt = conn.prepare(
         "WITH wanted(card_id, variant) AS (
@@ -3078,11 +3097,17 @@ mod tests {
         assert_eq!(keys.len(), 3, "owned, wished and decked, front faces only");
         assert!(keys.iter().all(|k| k.face == 0));
 
-        // **The pairing this whole function exists to get right.** The collection and the
-        // wishlist draw `grid`; every deck surface draws `art`. Warming the deck arm at
-        // `grid` is the bug this replaced, and it was invisible because the pre-warm then
-        // reported having warmed every deck card while the deck builder fetched every tile
-        // cold — `art` being a different URL on the CDN.
+        // **The pairing this whole function exists to get right**: each arm is warmed at the
+        // variant the screen showing it actually draws. All three are [`Variant::Grid`] today —
+        // the collection and the wishlist draw whole cards, and so do the deck's stack and grid
+        // views since they stopped drawing the bare art crop.
+        //
+        // Read off the constants rather than written out, because the *pairing* is the contract
+        // and the two constants agreeing is a fact about today. Spelling `Grid` three times here
+        // would make this test pass on the day one arm was pointed at the wrong picture — which
+        // is the failure this function exists to prevent, and it is invisible in the app: the
+        // pre-warm reports having warmed every card while the screen fetches every tile cold,
+        // each variant being a different URL on the CDN.
         let variant_of = |id: &str| {
             keys.iter()
                 .find(|k| k.card_id == id)
@@ -3091,23 +3116,24 @@ mod tests {
         };
         assert_eq!(
             variant_of("0000419b-0bba-4488-8f7a-6194544ce91d"),
-            Variant::Grid,
-            "an owned card is drawn by the collection, which shows `grid`"
+            COLLECTION_PREWARM,
+            "an owned card is warmed at the variant the collection draws"
         );
         assert_eq!(
             variant_of("11111111-1111-4111-8111-111111111111"),
-            Variant::Grid,
-            "a wished card is drawn by the wishlist, which shows `grid`"
+            COLLECTION_PREWARM,
+            "a wished card is warmed at the variant the wishlist draws"
         );
         assert_eq!(
             variant_of("ab000000-0000-0000-0000-000000000001"),
-            Variant::Art,
-            "a deck card is drawn by the deck builder, which shows `art`"
+            DECK_PREWARM,
+            "a deck card is warmed at the variant the deck's card views draw"
         );
 
-        // A card that is both owned and in a deck is **two** images, because the two screens
-        // that show it ask for two different pictures. (It was one key while both arms
-        // warmed `grid`, which is exactly why the deck builder never had its own.)
+        // A card that is both owned and in a deck is **one** image while the two arms want the
+        // same picture, and the `UNION` (never `UNION ALL`) is what makes that automatic rather
+        // than something this function has to notice. It was two when the deck builder drew the
+        // art crop — half the bytes for a collection that is mostly sleeved into decks.
         conn.execute(
             "INSERT INTO deck_cards
                 (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
@@ -3119,32 +3145,35 @@ mod tests {
         .unwrap();
         assert_eq!(
             prewarm_keys(&conn, 100).unwrap().len(),
-            4,
-            "owned and decked is one key per picture the app will ask for"
+            3,
+            "owned and decked is one key per picture the app will ask for, and that is one"
         );
 
         // Once the bytes are on disk the key is not selected again — which is the whole of
-        // "resumable", and it costs no bookkeeping of its own. Per variant: a cached `grid`
-        // must not mark the `art` the deck builder needs as done.
+        // "resumable", and it costs no bookkeeping of its own.
+        //
+        // **Per variant**, which is the half worth driving even though nothing pairs two variants
+        // today: a cached picture of a *different* shape must not mark a wanted one as done. So
+        // cache the crop nobody asked for first and check the card is still wanted.
         conn.execute(
             "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
-             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'grid','https://x?1',10,unixepoch())",
+             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'art','https://x?1',10,unixepoch())",
             [],
         )
         .unwrap();
-        let after_grid = prewarm_keys(&conn, 100).unwrap();
-        assert_eq!(after_grid.len(), 3);
+        let after_art = prewarm_keys(&conn, 100).unwrap();
+        assert_eq!(after_art.len(), 3);
         assert!(
-            after_grid
+            after_art
                 .iter()
                 .any(|k| k.card_id == "0000419b-0bba-4488-8f7a-6194544ce91d"
-                    && k.variant == Variant::Art),
-            "a cached `grid` must not stand in for the `art` the deck builder draws"
+                    && k.variant == COLLECTION_PREWARM),
+            "a cached `art` must not stand in for the whole card the screens draw"
         );
 
         conn.execute(
             "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
-             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'art','https://x?1',10,unixepoch())",
+             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'grid','https://x?1',10,unixepoch())",
             [],
         )
         .unwrap();
