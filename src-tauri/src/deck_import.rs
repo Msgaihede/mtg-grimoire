@@ -277,8 +277,11 @@ const MATCH_ORDER: &str =
     " ORDER BY owned_quantity DESC, coalesce(c.released_at, '0000-00-00') DESC, c.id DESC";
 
 /// The printing hint at full strength: a set code and a collector number name one printing,
-/// and the reader who wrote them down meant them. No name is consulted at all, so a list whose
-/// names are in another language still lands on the right cards.
+/// and the reader who wrote them down meant them. No name is consulted **in the SQL**, so a
+/// list whose names are in another language still lands on the right cards — but the row that
+/// comes back is checked against the line's name in Rust before it is kept, because a hint may
+/// only narrow *which printing of the named card* to take. See [`hint_names_the_card`], which
+/// is where that rule and the bug it closed are written down.
 ///
 /// `set_code` is bound binary — [`resolve_lines`] lower-cases it first, and **0 of the corpus's
 /// 116 695 rows carry a non-lowercase set code** (measured), so that is exactly the case the
@@ -446,6 +449,39 @@ fn fold_rank(card_name: &str, wanted: &str) -> Option<u8> {
         .map(|_| 1)
 }
 
+/// Does the printing a hint landed on **name the card the line named**?
+///
+/// **A hint narrows which printing of the named card to take; it never overrides which card.**
+/// [`BY_SET_AND_NUMBER`] consults no name at all — deliberately, and that is what lets a
+/// non-English list land on the right cards — but nothing downstream checked that the row it
+/// found had anything to do with the line, and `hint_missed` could not say so because the hint
+/// did not miss. Measured 2026-08-12 in the shipped window (a **debug** build) over the live
+/// 116 695-row corpus: `1 Captain Sisay (brc) 132` imported **Arcane Signet**, because `brc`
+/// 132 *is* Arcane Signet — `hint_missed: false`, and the preview drew no problem list at all.
+/// A stale collector number, a renumbered reprint or a hand-edited list all produce it.
+///
+/// This is [`crate::deck::swap_printing`]'s guard in a second place and for the same reason:
+/// "swap this printing" must never become "swap this card", and neither must "this printing,
+/// of this card".
+///
+/// **The test is the most permissive of the three the name arms use, which is what keeps the
+/// guard from refusing a hint the name rules would have honoured.** [`fold_rank`] accepts the
+/// whole folded name *and* the folded front face, and both binary arms imply their folded form
+/// — [`BY_NAME`]'s exact match and [`BY_FRONT_FACE`]'s range — because folding is a function,
+/// so equal names fold equal. A hint is therefore discarded only when **no** name arm could
+/// have reached that row either, which is exactly the case where the reader gets a card they
+/// did not ask for.
+///
+/// The set-with-name arms need no guard of their own: [`BY_SET_AND_NAME`] and
+/// [`BY_SET_AND_FRONT`] put the name in the `WHERE` clause, so a row they answer already bears
+/// it.
+///
+/// An empty name is not a disagreement. A line that gave only a printing gave no card name for
+/// that printing to contradict, and [`resolve_lines`] honours such a hint on purpose.
+fn hint_names_the_card(card_name: &str, wanted: &str) -> bool {
+    wanted.is_empty() || fold_rank(card_name, &fold_name(wanted)).is_some()
+}
+
 /// The last arm: fold both sides and compare in Rust.
 ///
 /// The comparison cannot be SQL — a fold is a 40-entry table, and SQLite's `lower()` is ASCII
@@ -491,7 +527,10 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
 /// Six statements, prepared once and reused down the list, tried in the order the reader's own
 /// intent runs out — **narrowest first, and the exact name always ahead of a front face**:
 ///
-/// 1. **A set and a collector number** name one printing, and are taken at their word.
+/// 1. **A set and a collector number** name one printing, and are taken at their word about
+///    *which printing* — never about *which card*, which is [`hint_names_the_card`]'s guard:
+///    a row whose name is not this line's is discarded exactly as a number that named nothing
+///    would be.
 /// 2. **The set, with the name** — because a hint whose *number* named nothing usually still
 ///    has the right set, and discarding it there throws away the reader's best information at
 ///    the moment it is most likely to be right.
@@ -544,7 +583,12 @@ pub fn resolve_lines(
             let set = set.to_lowercase();
             let number = given(&l.collector_number);
             if let Some(number) = number {
-                matched = one(&mut by_printing, params![&set, number]);
+                // Taken at its word about the *printing*, never about the *card* — see
+                // `hint_names_the_card`. A row whose name is not this line's is the same event
+                // as a number that named nothing: `hint_missed` below, and fall through to the
+                // arms that do consult the name.
+                matched = one(&mut by_printing, params![&set, number])
+                    .filter(|m| hint_names_the_card(&m.name, name));
             }
             // Set before the fallbacks below, so a number that named nothing stays reported
             // even when the set and name go on to answer.
@@ -1112,6 +1156,73 @@ mod tests {
             "sol-clb",
             "and the name rule answered anyway"
         );
+    }
+
+    /// **The bug the live pass found: `1 Captain Sisay (brc) 132` imported Arcane Signet.**
+    ///
+    /// `brc` 132 is a real printing and it is a different card, so the hint neither missed nor
+    /// named what the reader asked for — and with no name check the preview drew no problem at
+    /// all. Here `c21` 263 is Sol Ring and the line says Jötun Grunt; against the code before
+    /// the guard this test resolves to `sol-c21` with `hint_missed: false`.
+    ///
+    /// The fall-through is the second half of the claim: discarding the hint must cost the
+    /// reader the *printing*, never the card.
+    #[test]
+    fn a_hint_that_names_a_different_card_is_discarded_and_reported() {
+        let conn = seeded();
+
+        let row = resolve_one(&conn, hinted("Jotun Grunt", "c21", Some("263")));
+
+        assert!(
+            row.hint_missed,
+            "the hint resolved, but not to the card the line named"
+        );
+        assert_eq!(
+            row.matched.unwrap().card_id,
+            "jotun",
+            "and the name rules answered anyway — a wrong hint costs the printing, not the card"
+        );
+    }
+
+    /// The guard must be as permissive as the name arms it stands in for, or it would refuse
+    /// hints those arms would have honoured. Three shapes, one per arm:
+    ///
+    /// * the whole name, exactly — [`BY_NAME`];
+    /// * the **front face** of a `"A // B"` printing — [`BY_FRONT_FACE`], and the shape a
+    ///   naive `card.name == wanted` guard would break, since every DFC in every decklist is
+    ///   written this way;
+    /// * a **folded** name — [`fold_match`]'s rule, which is what `Jotun` for `Jötun` needs.
+    ///
+    /// And a line that gave only a printing gave no name to disagree with.
+    #[test]
+    fn a_hint_naming_the_card_by_a_front_face_or_a_fold_is_still_honoured() {
+        let conn = seeded();
+
+        let exact = resolve_one(&conn, hinted("Sol Ring", "c21", Some("263")));
+        assert!(!exact.hint_missed);
+        assert_eq!(exact.matched.unwrap().card_id, "sol-c21");
+
+        let front = resolve_one(&conn, hinted("Kolvori, God of Kinship", "khm", Some("216")));
+        assert!(
+            !front.hint_missed,
+            "the printing is `Kolvori … // The Ringhart Crest`"
+        );
+        assert_eq!(front.matched.unwrap().card_id, "kolvori");
+
+        let folded = resolve_one(&conn, hinted("Jotun Grunt", "csp", Some("8")));
+        assert!(!folded.hint_missed, "the printing is `Jötun Grunt`");
+        assert_eq!(folded.matched.unwrap().card_id, "jotun");
+
+        let nameless = resolve_one(
+            &conn,
+            ResolveLine {
+                name: String::new(),
+                set_code: Some("c21".to_owned()),
+                collector_number: Some("263".to_owned()),
+            },
+        );
+        assert!(!nameless.hint_missed, "there was no name to contradict");
+        assert_eq!(nameless.matched.unwrap().card_id, "sol-c21");
     }
 
     #[test]
