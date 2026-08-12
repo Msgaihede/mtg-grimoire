@@ -10,6 +10,10 @@ Scryfall as the only external dependency.
   one app runs across every worktree. See the `running-the-app` skill.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
+- `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
+  `cargo llvm-cov`'s**: that counts the inline `#[cfg(test)]` modules, where every line is
+  covered by definition, and reads ~14 points high. See
+  [test-coverage.md](docs/reference/test-coverage.md) before quoting either figure.
 - `npm run storybook` / `build-storybook` — the component workbench
 
 ## Architecture
@@ -72,6 +76,7 @@ number to compare against.
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
+| [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying
 
