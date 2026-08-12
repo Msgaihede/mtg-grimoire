@@ -1,6 +1,7 @@
 //! Importing a decklist: the one question TypeScript cannot answer.
 //!
-//! A reader pastes a list; [`crate::deck_import`]'s TypeScript half parses it into lines and
+//! A reader pastes a list; the TypeScript half (`src/features/decks/import/`, mirrored across
+//! IPC by `src/lib/ipc.ts`) parses it into lines and
 //! decides everything a *deck* decision is — which pile a card lands in, which card is the
 //! commander, what the format is. What it cannot decide is **which printing in this app's
 //! corpus a name means**, because that is a question about 116 k rows of data. So this module
@@ -23,6 +24,46 @@
 //!   `matched: None` — a line the preview quotes and the import proceeds without — and so is a
 //!   line whose SQL failed. [`resolve_lines`] answers `Err` only when a statement cannot be
 //!   *prepared*, which is a broken schema rather than a broken decklist.
+//!
+//! # Every arm is one indexed lookup, and `COLLATE NOCASE` is what stops it being one
+//!
+//! `cards.name`, `set_code` and `collector_number` are declared plain `TEXT`, so
+//! `idx_cards_name` and `idx_cards_set_cn` are BINARY, and a comparison naming a different
+//! collation cannot use them. Nor can an *expression* over a column, which is what
+//! `substr(name, 1, instr(name, ' // ') - 1)` is. Measured 2026-08-12 with
+//! `EXPLAIN QUERY PLAN` through `node:sqlite`, against a file copy of the live 116 695-row
+//! database with its real index set:
+//!
+//! | predicate | plan |
+//! |---|---|
+//! | `c.name = ?1 COLLATE NOCASE` | `SCAN c` |
+//! | `name = ?1 COLLATE NOCASE OR substr(name, …) = ?1 COLLATE NOCASE` | `SCAN c` |
+//! | `set_code = ?1 COLLATE NOCASE AND collector_number = ?2 COLLATE NOCASE` | `SCAN c` |
+//! | `c.name = ?1` | `SEARCH c USING INDEX idx_cards_name (name=?)` |
+//! | `c.name >= ?1 AND c.name < ?2` | `SEARCH c USING INDEX idx_cards_name (name>? AND name<?)` |
+//! | `set_code = ?1 AND collector_number = ?2` | `SEARCH c USING INDEX idx_cards_set_cn (set_code=? AND collector_number=?)` |
+//! | `set_code = ?1 AND collector_number = ?2 COLLATE NOCASE` | `SEARCH c USING INDEX idx_cards_set_cn (set_code=?)` |
+//!
+//! A `SCAN` per line is CLAUDE.md's 397 ms full-table figure *per line*, and the cost is not
+//! theoretical. Timed through [`resolve_lines`] itself on a **release** build over that same
+//! corpus, a 105-line commander list taken out of the corpus, medians of nine:
+//!
+//! | list | now | with the first version's one `OR`/`NOCASE` arm |
+//! |---|---|---|
+//! | names as printed | **11.5 ms** | **46 123 ms** |
+//! | the same list lower-cased | 31.6 ms | — |
+//! | every line with an upper-cased `(SET) N` hint | 51.9 ms | — |
+//!
+//! The two columns differ in the `WHERE` clause and nothing else — the old one was rebuilt by
+//! swapping that clause back into the shipped statement, same column list, same process, same
+//! file. That is a **4 000×** difference, and it is the difference between a feature and a
+//! hang; the plan's budget for this is "well under the 100 ms a preview can absorb".
+//!
+//! **Case-insensitivity is not lost — it moved to the fold arm**, which lowercases both sides
+//! in Rust and reaches its candidates through `cards_fts`, whose tokenizer is already
+//! case-insensitive and diacritic-folding. That is the 31.6 ms row above: all 105 lines still
+//! resolve, to the same printings, with the whole list lower-cased. So a dropped
+//! `COLLATE NOCASE` here reads like a regression and is not one; do not restore it.
 //!
 //! Nothing here reads `raw`: every fact an import needs has had a column since schema v5, and
 //! `raw` is a gzip BLOB that `json_extract` refuses (CLAUDE.md).
@@ -139,8 +180,19 @@ pub struct ImportMatch {
     /// allocation — nothing has been allocated yet — and it is here because it is the reason
     /// this printing won.
     pub owned_quantity: i64,
-    /// How many **paper** printings of this card the corpus has, so the preview can offer the
-    /// reader a choice without a second query per line.
+    /// **How many rows the rule that matched this line found** — not how many printings the
+    /// card has, which is a different number and one nothing here computes.
+    ///
+    /// It is per *arm*, and the three arms mean three things: through a set-and-number hint it
+    /// is how many printings that set and number named (1, in a corpus with no duplicates);
+    /// through a set-scoped name it is that name's printings **within that set**; through a
+    /// bare name it is that name's paper printings corpus-wide; and through the fold arm it is
+    /// how many candidates survived the fold comparison.
+    ///
+    /// Stated this narrowly on purpose. Nothing consumes the field yet, and buying a per-line
+    /// second query so that a "12 printings" affordance nobody has built could read a true
+    /// per-name count is the wrong trade — the arms are one indexed lookup each precisely
+    /// because they do not do that.
     pub printing_count: i64,
 }
 
@@ -175,10 +227,10 @@ pub struct ImportResolveRow {
 /// ORDER BY … LIMIT 1` answered one row carrying `n = 3`. So it counts every printing that
 /// matched rather than the one that won, which is what the preview needs to say "4 printings".
 ///
-/// It stops short of `FROM` because two different `FROM`s read it: the three SQL arms scan
-/// `cards`, and the fold arm reaches the same columns through `cards_fts`. One column list,
-/// two shapes — the alternative is two column lists, which is the drift this constant exists
-/// to prevent.
+/// It stops short of `FROM` and of `printing_count` because two different tails read it: the
+/// five SQL arms scan `cards` and count with a window function, and the fold arm reaches the
+/// same columns through `cards_fts` and counts in Rust. One column list, two shapes — the
+/// alternative is two column lists, which is the drift this constant exists to prevent.
 const MATCH_COLUMNS: &str = "SELECT c.id, c.name, c.set_code, c.collector_number, c.lang,
         c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
         c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
@@ -187,61 +239,118 @@ const MATCH_COLUMNS: &str = "SELECT c.id, c.name, c.set_code, c.collector_number
                 WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon,
         CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
         coalesce((SELECT sum(e.quantity) FROM collection_entries e
-                   WHERE e.card_id = c.id), 0) AS owned_quantity,
-        count(*) OVER () AS printing_count";
+                   WHERE e.card_id = c.id), 0) AS owned_quantity";
 
-/// The three SQL arms' source.
-const FROM_CARDS: &str = "\n   FROM cards c";
+/// The five SQL arms' tail: their source, and the count only they compute.
+const FROM_CARDS: &str = ",\n        count(*) OVER () AS printing_count\n   FROM cards c";
 
-/// The order every arm below shares: a printing you own, then the newest, then the id.
+/// The order every arm shares: a printing you own, then the newest, then the id.
 ///
 /// The `id` tie-break is not decoration — it is what makes an import **deterministic**, so
 /// the same list pasted twice puts the same printings in the deck.
 const MATCH_ORDER: &str =
-    " ORDER BY owned_quantity DESC, coalesce(c.released_at, '0000-00-00') DESC, c.id DESC LIMIT 1";
+    " ORDER BY owned_quantity DESC, coalesce(c.released_at, '0000-00-00') DESC, c.id DESC";
 
 /// The printing hint at full strength: a set code and a collector number name one printing,
 /// and the reader who wrote them down meant them. No name is consulted at all, so a list whose
 /// names are in another language still lands on the right cards.
+///
+/// `set_code` is bound binary — [`resolve_lines`] lower-cases it first, and **0 of the corpus's
+/// 116 695 rows carry a non-lowercase set code** (measured), so that is exactly the case the
+/// rows hold. `collector_number` keeps `COLLATE NOCASE` and is the one place it survives,
+/// because **7 083 rows carry an uppercase letter** (`8ed` `S1`, `S5a`, …) while **0 pairs in
+/// one set differ only by case** — so folding it in Rust would be wrong in both directions and
+/// case-insensitivity here is unambiguous. It stays indexed regardless: the set code alone
+/// carries `idx_cards_set_cn`, measured as
+/// `SEARCH c USING INDEX idx_cards_set_cn (set_code=?)`, which bounds the arm by the size of
+/// one set — 5 120 rows for `plst`, the largest in the corpus, and a few hundred for a normal
+/// one. 105 hinted lines cost **52.0 ms**.
 const BY_SET_AND_NUMBER: &str = " WHERE c.is_paper = 1
-      AND c.set_code = ?1 COLLATE NOCASE
+      AND c.set_code = ?1
       AND c.collector_number = ?2 COLLATE NOCASE";
 
-/// The name arm. **Both halves of a double-faced name match**: `cards.name` carries
-/// `"A // B"`, and a list naming only the front is the commonest way a DFC is written down.
-/// `instr` answers 0 for a single-faced name, so `substr(name, 1, -1)` is `''` and never
-/// equals a real name.
+/// The name, exactly.
 ///
-/// **`''` is not a real name, and that is load-bearing rather than obvious.** Measured
-/// 2026-08-12: `substr(name, 1, instr(name, ' // ') - 1) = ''` is *true* of every single-faced
-/// row, so an empty query name would resolve to an arbitrary card. [`resolve_lines`] never
-/// reaches this statement with one — that guard is the fence, not this comment.
-const BY_NAME: &str = " WHERE c.is_paper = 1
-      AND (c.name = ?1 COLLATE NOCASE
-           OR substr(c.name, 1, instr(c.name, ' // ') - 1) = ?1 COLLATE NOCASE)";
+/// **This is a separate statement from [`BY_FRONT_FACE`] and the split is a correctness fix,
+/// not a performance one.** The first version was one arm with an `OR`, which let
+/// [`MATCH_ORDER`] choose between a real card and a `"N // X"` row — and Scryfall's art series
+/// print exactly that, `"Dakkon, Shadow Slayer // Dakkon, Shadow Slayer"`, the trap CLAUDE.md
+/// already records for the search's relevance ranking. Measured 2026-08-12 over the live
+/// corpus: **51 names** have a `"N // X"` printing that outranks every real printing of `N`,
+/// and **3 of 105** lines of the reference list resolved to an art-series row instead of the
+/// card. `Dakkon` is the exact mechanism — `mh2` and `amh2` share a release date and the art
+/// series wins the `id` tie-break.
+///
+/// Sequenced, the exact name always wins, because it is asked first and answers before the
+/// front-face arm is reached. A `MULTI-INDEX OR` would be indexed (measured, it is) and still
+/// wrong.
+const BY_NAME: &str = " WHERE c.is_paper = 1 AND c.name = ?1";
 
-/// The half-hint arm: a set with no collector number beside it, which is what most exports
-/// that carry a set at all write. [`BY_NAME`]'s clause on `?2`, narrowed to one set.
-const BY_SET_AND_NAME: &str = " WHERE c.is_paper = 1
-      AND c.set_code = ?1 COLLATE NOCASE
-      AND (c.name = ?2 COLLATE NOCASE
-           OR substr(c.name, 1, instr(c.name, ' // ') - 1) = ?2 COLLATE NOCASE)";
+/// The front face of a double-faced card, as a **range** rather than a `substr` expression.
+///
+/// `cards.name` carries `"A // B"` and a list naming only the front is the commonest way a DFC
+/// is written down. The old form, `substr(c.name, 1, instr(c.name, ' // ') - 1) = ?1`, is an
+/// expression over a column and can never use an index; a range on `c.name` can, and does.
+/// See [`front_face_range`] for why the two bounds are exact.
+const BY_FRONT_FACE: &str = " WHERE c.is_paper = 1 AND c.name >= ?1 AND c.name < ?2";
 
-/// The fold arm's one extra column. [`MATCH_COLUMNS`] carries no `released_at` — the SQL arms
-/// order by it without selecting it — and the fold arm orders in Rust, so it has to be handed
+/// [`BY_NAME`], narrowed to the set the reader named.
+const BY_SET_AND_NAME: &str = " WHERE c.is_paper = 1 AND c.set_code = ?1 AND c.name = ?2";
+
+/// [`BY_FRONT_FACE`], narrowed to the set the reader named.
+const BY_SET_AND_FRONT: &str =
+    " WHERE c.is_paper = 1 AND c.set_code = ?1 AND c.name >= ?2 AND c.name < ?3";
+
+/// The fold arm's tail. Two differences from [`FROM_CARDS`], and both are the point:
+/// `printing_count` is a literal because [`fold_match`] overwrites it in Rust, and
+/// `released_at` is selected because that arm's ordering happens in Rust and has to be handed
 /// the key it orders on.
-const FTS_RELEASED: &str = ", coalesce(c.released_at, '0000-00-00') AS released";
+const FOLD_COLUMNS: &str =
+    ",\n        0 AS printing_count, coalesce(c.released_at, '0000-00-00') AS released";
 
-/// The fold arm's source and window.
+/// The fold arm's source, and a cap that is **ordered**, which is the whole of the fix.
 ///
-/// `cards_fts` narrows the candidate set so the fold never scans the corpus. The cap is
-/// deliberate and its cost is named: a phrase that appears in the indexed text of more than
-/// 200 paper cards could have the printing the reader meant fall outside the window, and the
-/// line then comes back unmatched. That is this module's failure mode everywhere else too —
-/// a line the preview quotes — and the arm only runs at all when the exact name matched
-/// nothing, so the candidate set is names that are *not* what was typed.
+/// `cards_fts` narrows the candidate set so the fold never scans the corpus. What the first
+/// version got wrong is the truncation: `LIMIT 200` with no `ORDER BY` keeps the 200 **lowest
+/// rowids**, and `cards` is dropped and recreated by every sync, which renumbers every rowid.
+/// So the arm answered a different card after a sync than before it, in a module whose
+/// headline rule is that the same list resolves the same way twice. The cap now keeps the 200
+/// rows [`MATCH_ORDER`] itself would have preferred, so truncation is deterministic and drops
+/// the candidates least likely to win.
+///
+/// It is not free and the cost is named. Measured 2026-08-12 over the live corpus, on the
+/// broadest phrase in the corpus (`"Island"`, 1 971 candidates): the old unordered form 377 ms,
+/// this one 1 149 ms, and no cap at all 4 481 ms. But a broad phrase is precisely what never
+/// reaches here — this arm runs only when the exact name and the front-face range both matched
+/// nothing, and `Island` is a card. The realistic figures are the ones that matter:
+/// `"jotun grunt"` 0.1 ms (3 candidates), `"sol ring"` 0.9 ms (136), `"swords to plowshares"`
+/// 1.0 ms (94).
+///
+/// **Filtering the `MATCH` to the `name` column was tried and is a loss** — `name : "Island"`
+/// cuts 1 971 candidates to 909 and costs *more* (927 ms against 377), because the column
+/// filter gives up FTS5's plain phrase iterator. Measured, not assumed.
 const FTS_FROM_AND_WHERE: &str = "\n   FROM cards_fts f JOIN cards c ON c.rowid = f.rowid
-  WHERE cards_fts MATCH ?1 AND c.is_paper = 1 LIMIT 200";
+  WHERE cards_fts MATCH ?1 AND c.is_paper = 1";
+
+/// How many FTS candidates the fold arm will judge. See [`FTS_FROM_AND_WHERE`].
+const FOLD_CANDIDATES: usize = 200;
+
+/// The half-open range of names whose **front face** is `name`: `["{name} // ", "{name} //!")`.
+///
+/// Exact, not a heuristic, and the argument is short enough to check. SQLite compares `TEXT`
+/// under BINARY as a byte-wise memcmp, the prefix every such name shares is `"{name} // "`,
+/// and the bound replaces that prefix's last byte — a space, `0x20` — with `!`, `0x21`. A
+/// string sorts inside the range exactly when it carries the prefix: anything sharing the
+/// first `"{name} //"` bytes must then hold a byte `>= 0x20` and `< 0x21`, which is the space
+/// itself, and anything differing earlier falls the same side of both bounds. So there is no
+/// sentinel to guess and no false positive to fear — measured against the live corpus, `"Sol"`
+/// returns 0 rows while `"Sol Ring"` has 136 printings, and `"Kolvori, God of Kinship"`,
+/// `"Fire"` and `"Bonecrusher Giant"` each return exactly their own split-name printings.
+///
+/// The `+ 1` on a byte can never overflow because the byte incremented is always `0x20`.
+fn front_face_range(name: &str) -> (String, String) {
+    (format!("{name} // "), format!("{name} //!"))
+}
 
 /// One [`ImportMatch`] out of a row of [`MATCH_COLUMNS`].
 fn read_match(r: &Row<'_>) -> rusqlite::Result<ImportMatch> {
@@ -290,16 +399,26 @@ fn given(hint: &Option<String>) -> Option<&str> {
     hint.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
-/// Does this card's name fold to what the reader typed — whole, or on its front face?
+/// How well this card's name folds to what the reader typed: `0` for the whole name, `1` for
+/// the front face only, `None` for neither.
 ///
-/// The Rust mirror of [`BY_NAME`]'s two clauses, and it has the same empty-string trap: a
-/// single-faced name has no front half, so `wanted` being `""` would match everything. Its
-/// one caller returns before this is ever reached with one.
-fn folded_matches(card_name: &str, wanted: &str) -> bool {
-    fold_name(card_name) == wanted
-        || card_name
-            .split_once(" // ")
-            .is_some_and(|(front, _)| fold_name(front) == wanted)
+/// **A rank rather than a bool, for [`BY_NAME`]'s reason one layer up.** The SQL arms keep the
+/// exact name ahead of a front-face match by asking in sequence; this arm asks once and sorts,
+/// so the same preference has to be a sort key or the art series wins here instead. It was
+/// measured winning: with a plain boolean filter, 3 of the reference list's 105 names came back
+/// as `"N // N"` art-series rows, the same three the `OR` arm lost.
+///
+/// The empty-string trap of [`BY_NAME`] lives here too — a single-faced name has no front half,
+/// so `wanted` being `""` would rank everything — and [`fold_match`] returns before this is
+/// ever reached with one.
+fn fold_rank(card_name: &str, wanted: &str) -> Option<u8> {
+    if fold_name(card_name) == wanted {
+        return Some(0);
+    }
+    card_name
+        .split_once(" // ")
+        .filter(|(front, _)| fold_name(front) == wanted)
+        .map(|_| 1)
 }
 
 /// The last arm: fold both sides and compare in Rust.
@@ -310,9 +429,10 @@ fn folded_matches(card_name: &str, wanted: &str) -> bool {
 /// printing [`MATCH_ORDER`] would, or an import stops being deterministic at exactly the names
 /// that needed the most help.
 ///
-/// `printing_count` is recomputed as the number of candidates that *kept*, because the
-/// `count(*) OVER ()` this arm's SQL carries counts everything FTS returned — the reader is
-/// choosing between the printings of their card, not between everything that mentioned it.
+/// `printing_count` is the number of candidates that survived the fold, computed here because
+/// this arm's SQL selects a literal `0` for it: a `count(*) OVER ()` would count everything FTS
+/// returned, and the reader is choosing between printings of *their* card rather than between
+/// everything that happened to mention it.
 fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
     let wanted = fold_name(name);
     if wanted.is_empty() {
@@ -322,35 +442,45 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
     // containing a quote is an FTS syntax error, not a miss. Measured 2026-08-12: a bare
     // `"one " two"` answers `unterminated string`, and the doubled form answers rows.
     let phrase = format!("\"{}\"", name.replace('"', "\"\""));
-    let mut kept: Vec<(ImportMatch, String)> = stmt
+    let mut kept: Vec<(u8, ImportMatch, String)> = stmt
         .query_map(params![phrase], |r| Ok((read_match(r)?, r.get(23)?)))
         .ok()?
         .filter_map(Result::ok)
-        .filter(|(m, _)| folded_matches(&m.name, &wanted))
+        .filter_map(|(m, rel)| Some((fold_rank(&m.name, &wanted)?, m, rel)))
         .collect();
     let count = i64::try_from(kept.len()).unwrap_or(i64::MAX);
+    // The whole name ahead of a front face, then `MATCH_ORDER`'s three keys in its own order.
     kept.sort_by(|a, b| {
-        b.0.owned_quantity
-            .cmp(&a.0.owned_quantity)
-            .then_with(|| b.1.cmp(&a.1))
-            .then_with(|| b.0.card_id.cmp(&a.0.card_id))
+        a.0.cmp(&b.0)
+            .then_with(|| b.1.owned_quantity.cmp(&a.1.owned_quantity))
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| b.1.card_id.cmp(&a.1.card_id))
     });
-    let mut winner = kept.into_iter().next()?.0;
+    let mut winner = kept.into_iter().next()?.1;
     winner.printing_count = count;
     Some(winner)
 }
 
 /// Every line of a parsed decklist, resolved to a printing this app has.
 ///
-/// Four statements, prepared once and reused down the list, tried in the order the reader's
-/// own intent runs out:
+/// Six statements, prepared once and reused down the list, tried in the order the reader's own
+/// intent runs out — **narrowest first, and the exact name always ahead of a front face**:
 ///
 /// 1. **A set and a collector number** name one printing, and are taken at their word.
-/// 2. **A set alone** narrows the name rule to that set.
-/// 3. A hint that was present and named nothing sets `hint_missed` and **falls through** —
-///    the reader wanting a printing this app has not got is not a reason to lose the card.
-/// 4. **The name**, exactly, either whole or as the front face of a double-faced card.
-/// 5. **The folded name**, through `cards_fts` — see [`fold_match`].
+/// 2. **The set, with the name** — because a hint whose *number* named nothing usually still
+///    has the right set, and discarding it there throws away the reader's best information at
+///    the moment it is most likely to be right.
+/// 3. **The set, with the name as a front face.**
+/// 4. **The name**, exactly.
+/// 5. **The name as a front face** of a `"A // B"` printing.
+/// 6. **The folded name**, through `cards_fts` — see [`fold_match`].
+///
+/// A hint that was present and was not honoured sets `hint_missed` and **falls through**: the
+/// reader wanting a printing this app has not got is never a reason to lose the card.
+/// `hint_missed` means *some part of what the reader wrote about the printing was not used* —
+/// so a collector number that named nothing sets it even when the set and name then answer,
+/// and a collector number with no set beside it sets it without being tried at all (a
+/// collector number is not unique across sets, so it can only ever narrow one).
 ///
 /// Only `prepare` can fail the call. Everything after it degrades to `matched: None`.
 pub fn resolve_lines(
@@ -362,32 +492,60 @@ pub fn resolve_lines(
         conn.prepare(sql)
             .map_err(|e| format!("the decklist could not be resolved: {e}"))
     };
-    let mut by_printing = prepare(&format!("{scan}{BY_SET_AND_NUMBER}{MATCH_ORDER}"))?;
-    let mut by_set_and_name = prepare(&format!("{scan}{BY_SET_AND_NAME}{MATCH_ORDER}"))?;
-    let mut by_name = prepare(&format!("{scan}{BY_NAME}{MATCH_ORDER}"))?;
+    let mut by_printing = prepare(&format!("{scan}{BY_SET_AND_NUMBER}{MATCH_ORDER} LIMIT 1"))?;
+    let mut by_set_and_name = prepare(&format!("{scan}{BY_SET_AND_NAME}{MATCH_ORDER} LIMIT 1"))?;
+    let mut by_set_and_front = prepare(&format!("{scan}{BY_SET_AND_FRONT}{MATCH_ORDER} LIMIT 1"))?;
+    let mut by_name = prepare(&format!("{scan}{BY_NAME}{MATCH_ORDER} LIMIT 1"))?;
+    let mut by_front = prepare(&format!("{scan}{BY_FRONT_FACE}{MATCH_ORDER} LIMIT 1"))?;
     let mut by_fold = prepare(&format!(
-        "{MATCH_COLUMNS}{FTS_RELEASED}{FTS_FROM_AND_WHERE}"
+        "{MATCH_COLUMNS}{FOLD_COLUMNS}{FTS_FROM_AND_WHERE}{MATCH_ORDER} LIMIT {FOLD_CANDIDATES}"
     ))?;
 
     let mut out = Vec::with_capacity(lines.len());
     for (index, l) in lines.iter().enumerate() {
-        // Trimmed, and an empty name is no name at all: `BY_NAME`'s front-face clause matches
-        // every single-faced card against `''` (measured — see that constant), so a blank line
-        // that reached the name arms would resolve to an arbitrary printing rather than to
-        // nothing. A hint needs no name and is still honoured.
+        // Trimmed, and an empty name is no name at all: the front-face *range* of `""` is
+        // `[" // ", " //!")`, which is a real range over real names, so a blank line reaching
+        // the name arms would resolve to an arbitrary printing rather than to nothing. A
+        // printing hint needs no name and is still honoured.
         let name = l.name.trim();
+        let front = (!name.is_empty()).then(|| front_face_range(name));
         let mut matched = None;
         let mut hint_missed = false;
+
         if let Some(set) = given(&l.set_code) {
-            matched = match given(&l.collector_number) {
-                Some(number) => one(&mut by_printing, params![set, number]),
-                None if !name.is_empty() => one(&mut by_set_and_name, params![set, name]),
-                None => None,
-            };
+            // Binary, so `idx_cards_set_cn` is usable — and lower-case, because 0 of the
+            // corpus's 116 695 rows carry a set code in any other case while a parser that
+            // upper-cases `(MH2)` is the ordinary source of one. See `BY_SET_AND_NUMBER`.
+            let set = set.to_lowercase();
+            let number = given(&l.collector_number);
+            if let Some(number) = number {
+                matched = one(&mut by_printing, params![&set, number]);
+            }
+            // Set before the fallbacks below, so a number that named nothing stays reported
+            // even when the set and name go on to answer.
             hint_missed = matched.is_none();
+            if matched.is_none() && !name.is_empty() {
+                matched = one(&mut by_set_and_name, params![&set, name]).or_else(|| {
+                    front
+                        .as_ref()
+                        .and_then(|(lo, hi)| one(&mut by_set_and_front, params![&set, lo, hi]))
+                });
+                if number.is_none() {
+                    hint_missed = matched.is_none();
+                }
+            }
+        } else if given(&l.collector_number).is_some() {
+            hint_missed = true;
         }
+
         if matched.is_none() && !name.is_empty() {
-            matched = one(&mut by_name, params![name]).or_else(|| fold_match(&mut by_fold, name));
+            matched = one(&mut by_name, params![name])
+                .or_else(|| {
+                    front
+                        .as_ref()
+                        .and_then(|(lo, hi)| one(&mut by_front, params![lo, hi]))
+                })
+                .or_else(|| fold_match(&mut by_fold, name));
         }
         out.push(ImportResolveRow {
             index,
@@ -400,9 +558,10 @@ pub fn resolve_lines(
 
 /// Every name in a pasted decklist, resolved to a printing this app has. **Read-only.**
 ///
-/// On the blocking pool against `db_read`, like every other read: a list of a few hundred
-/// names is four prepared statements and a few hundred index lookups, which is small but not
-/// free, and it must never queue behind an ingest.
+/// On the blocking pool against `db_read`, like every other read: a list of a few hundred names
+/// is six prepared statements and a few hundred index lookups — 11.6 ms for a 105-line
+/// commander list, measured over the live corpus — which is small but not free, and it must
+/// never queue behind an ingest.
 #[tauri::command]
 pub async fn deck_import_resolve(
     state: tauri::State<'_, Arc<AppState>>,
@@ -429,6 +588,13 @@ mod tests {
     /// The other three are one each: a double-faced card written the way a decklist writes it
     /// (front face only), a name with a diacritic in it, and an Arena-only card whose *only*
     /// printing is digital.
+    ///
+    /// **The Henzie pair is real and is the whole art-series trap in two rows.** Both printings
+    /// exist (`ncc` 102 and the `asnc` art series 40), both are paper, and both were released
+    /// **2022-04-29** — so nothing but the id separates them, and the id here is chosen to sort
+    /// the art series *above* the card exactly as the live corpus's uuids do. Its name also
+    /// carries real double quotes, which is what pins the FTS escaping: 28 cards in the corpus
+    /// have them, and an unescaped `"Henzie "Toolbox" Torre"` is an FTS **syntax error**.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
@@ -466,7 +632,14 @@ mod tests {
                   '{"usd":"0.60"}','{}'),
                  ('archive','o-arc','Key to the Archive','ha3','1','en','2021-12-09',0,'normal',
                   'rare','{3}',3.0,'Artifact','Draw a card.','','',
-                  '{"historic":"legal"}',NULL,NULL,NULL,'{}');"#,
+                  '{"historic":"legal"}',NULL,NULL,NULL,'{}'),
+                 ('henzie-ncc','o-hen','Henzie "Toolbox" Torre','ncc','102','en','2022-04-29',1,
+                  'normal','mythic','{1}{B}{R}{G}',4.0,'Legendary Creature — Human Warrior',
+                  'Blitz','BRG','BRG','{"commander":"legal"}','3','3','{"usd":"5.00"}','{}'),
+                 ('henzie-zart','o-hzt',
+                  'Henzie "Toolbox" Torre // Henzie "Toolbox" Torre','asnc','40','en',
+                  '2022-04-29',1,'art_series','common',NULL,NULL,'Art Series',NULL,'','',
+                  '{}',NULL,NULL,NULL,'{}');"#,
         )
         .unwrap();
         // `cards_fts` is external-content with no triggers, and the fold arm reads through it
@@ -633,18 +806,20 @@ mod tests {
         assert!(!rows[0].hint_missed);
     }
 
-    /// The trap [`BY_NAME`]'s doc records, pinned rather than trusted. `substr(name, 1,
-    /// instr(name, ' // ') - 1)` is `''` for every single-faced card and `'' = ''` is **true**,
-    /// so a blank name reaching the name arm would resolve to whichever printing the ordering
-    /// happened to put first — a wrong answer wearing a right one's clothes. Not in the brief's
-    /// list of twelve; it is here because the measurement that found it is what put the guard
-    /// in [`resolve_lines`], and an unpinned guard is a guard somebody deletes.
+    /// A blank name must resolve to nothing rather than to whatever sorts first.
+    ///
+    /// The guard predates the range arms and still earns its keep under them: the front-face
+    /// range of `""` is `[" // ", " //!")`, which is a perfectly real range over real names —
+    /// it just happens to select every card whose name begins with a space, and it would select
+    /// far more if a name ever did. Under the *original* SQL the hole was wider and is what
+    /// found the guard: `substr(name, 1, instr(name, ' // ') - 1) = ''` was **true of every
+    /// single-faced row**, measured.
     #[test]
     fn a_blank_name_resolves_to_nothing_rather_than_to_whatever_sorts_first() {
         let conn = seeded();
         assert!(resolve_one(&conn, line("   ")).matched.is_none());
         assert!(resolve_one(&conn, line("")).matched.is_none());
-        let would_have: i64 = conn
+        let the_old_hole: i64 = conn
             .query_row(
                 "SELECT count(*) FROM cards WHERE substr(name, 1, instr(name, ' // ') - 1) = ''",
                 [],
@@ -652,9 +827,128 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            would_have, 7,
-            "the clause the guard fences off matches every single-faced row in the fixture"
+            the_old_hole, 8,
+            "every single-faced row in the fixture — which is what the guard was found by"
         );
+    }
+
+    /// The trap that made splitting [`BY_NAME`] and [`BY_FRONT_FACE`] a correctness fix rather
+    /// than a tuning one. Scryfall's art series print `"N // N"`, those rows are paper, and
+    /// under the old single `OR` arm `MATCH_ORDER` was free to prefer one — which it did, for
+    /// **3 of 105** lines of the reference list, measured over the live corpus. Both fixture
+    /// rows share a release date, so only the id separates them and the art series wins it.
+    #[test]
+    fn a_real_card_beats_the_art_series_that_repeats_its_name() {
+        let conn = seeded();
+        assert_eq!(
+            matched_id(&conn, line("Henzie \"Toolbox\" Torre")),
+            "henzie-ncc",
+            "the card, not `Henzie \"Toolbox\" Torre // Henzie \"Toolbox\" Torre`"
+        );
+        // And the front-face arm is still reachable — it is second, not deleted.
+        assert_eq!(
+            matched_id(&conn, line("Kolvori, God of Kinship")),
+            "kolvori"
+        );
+    }
+
+    /// The same preference, one layer down. The fold arm asks once and sorts, so "whole name
+    /// beats front face" has to be a sort key there ([`fold_rank`]) rather than an order of
+    /// asking. Lower-casing is what forces this line through the fold arm at all, now that the
+    /// SQL arms are binary — which makes this the test that pins both halves of that trade.
+    #[test]
+    fn the_fold_arm_also_prefers_the_card_to_the_art_series() {
+        let conn = seeded();
+        assert_eq!(
+            matched_id(&conn, line("henzie \"toolbox\" torre")),
+            "henzie-ncc"
+        );
+    }
+
+    /// 28 real cards carry a double quote, and an unescaped one is an FTS *syntax error*
+    /// (`fts5: syntax error near "!"`, measured on `"Ach! Hans, Run!"`), not a miss. Fail-open
+    /// means a regression here would be silent — every quoted name would simply stop matching.
+    /// The lower-case spelling is deliberate: it is what routes the line through the fold arm,
+    /// which is the only arm that builds an FTS query.
+    #[test]
+    fn a_name_with_quotes_in_it_survives_the_fts_query() {
+        let conn = seeded();
+        assert_eq!(
+            matched_id(&conn, line("henzie \"toolbox\" torre")),
+            "henzie-ncc",
+            "the quotes are doubled, so FTS reads one literal phrase"
+        );
+        // A name that is nothing but hostile FTS syntax is a miss, never an error.
+        let rows = resolve_lines(&conn, &[line("\" AND NEAR( x:")]).expect("never an `Err`");
+        assert!(rows[0].matched.is_none());
+    }
+
+    /// [`given`]'s trim. A hint of `Some("  ")` is what a trailing tab in a pasted export
+    /// leaves behind, and bound into `c.set_code = ?1` it matches no set — so every line of
+    /// that paste would report a missed hint it never had.
+    #[test]
+    fn a_blank_hint_is_no_hint_and_is_not_reported_as_missed() {
+        let conn = seeded();
+        let row = resolve_one(
+            &conn,
+            ResolveLine {
+                name: "Sol Ring".to_owned(),
+                set_code: Some("   ".to_owned()),
+                collector_number: Some(String::new()),
+            },
+        );
+        assert!(!row.hint_missed, "there was no hint to miss");
+        assert_eq!(row.matched.unwrap().card_id, "sol-clb");
+    }
+
+    /// Three things about what `hint_missed` means, which is *some part of what the reader
+    /// wrote about the printing was not used*.
+    #[test]
+    fn a_hint_the_reader_wrote_and_did_not_get_is_always_reported() {
+        let conn = seeded();
+
+        // A collector number with no set cannot be used at all — a number is not unique across
+        // sets — but the reader still wrote one.
+        let bare = resolve_one(
+            &conn,
+            ResolveLine {
+                name: "Sol Ring".to_owned(),
+                set_code: None,
+                collector_number: Some("263".to_owned()),
+            },
+        );
+        assert!(bare.hint_missed);
+        assert_eq!(bare.matched.unwrap().card_id, "sol-clb");
+
+        // A wrong number in a right set keeps the set — and still reports the number.
+        let salvaged = resolve_one(&conn, hinted("Sol Ring", "c21", Some("9999")));
+        assert!(salvaged.hint_missed, "the number named nothing");
+        assert_eq!(
+            salvaged.matched.unwrap().card_id,
+            "sol-c21",
+            "and the set was still right"
+        );
+
+        // A set the reader wrote in upper case is the ordinary case, and is honoured.
+        let shouty = resolve_one(&conn, hinted("Sol Ring", "C21", None));
+        assert!(!shouty.hint_missed);
+        assert_eq!(shouty.matched.unwrap().card_id, "sol-c21");
+    }
+
+    /// The front-face range is a range, so it has to be exact at both ends: a query that is a
+    /// *prefix* of a real front face must not match it, and one that is a whole single-faced
+    /// name must not be dragged in either.
+    #[test]
+    fn the_front_face_range_catches_the_card_and_nothing_beside_it() {
+        assert_eq!(
+            front_face_range("Kolvori"),
+            ("Kolvori // ".to_owned(), "Kolvori //!".to_owned())
+        );
+        let conn = seeded();
+        // "Kolvori" alone is a prefix of the real front face and must not resolve to it.
+        assert!(resolve_one(&conn, line("Kolvori")).matched.is_none());
+        // Nor may a front-face query reach a single-faced card that merely starts the same way.
+        assert!(resolve_one(&conn, line("Sol")).matched.is_none());
     }
 
     #[test]
@@ -687,6 +981,9 @@ mod tests {
         );
     }
 
+    /// `printing_count` is how many rows *this line's rule* found, which through the bare-name
+    /// arm is the card's paper printings — and through the other arms is not. Both halves are
+    /// asserted, because the field's doc is what Task 6 will build an affordance on.
     #[test]
     fn printing_count_is_the_number_of_paper_printings_of_that_name() {
         let conn = seeded();
@@ -694,6 +991,13 @@ mod tests {
         assert_eq!(
             m.printing_count, 4,
             "four paper printings, and Arena's is not one"
+        );
+        let hinted_row = resolve_one(&conn, hinted("Sol Ring", "c21", Some("263")))
+            .matched
+            .unwrap();
+        assert_eq!(
+            hinted_row.printing_count, 1,
+            "through a printing hint it counts what the hint named, not the card's printings"
         );
     }
 }
