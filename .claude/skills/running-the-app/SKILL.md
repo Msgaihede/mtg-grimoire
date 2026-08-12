@@ -82,10 +82,17 @@ Three traps, all measured:
 ```powershell
 Get-Process mtg-grimoire -ErrorAction SilentlyContinue   # must be empty, or you adopt someone else's
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
-Start-Process npm.cmd -ArgumentList "run","tauri","dev"
+Start-Process npm.cmd -ArgumentList "run","tauri","dev" -WindowStyle Hidden `
+    -RedirectStandardOutput ".claude\skills\running-the-app\tauri-dev.stdout.local" `
+    -RedirectStandardError ".claude\skills\running-the-app\tauri-dev.stderr.local"
 do { Start-Sleep 5; $app = Get-Process mtg-grimoire -ErrorAction SilentlyContinue } until ($app)
 pwsh -NoProfile -File $L adopt app -ProcessId $app.Id
 ```
+
+No console window pops; `npm.cmd`'s own stdout/stderr — including a `tauri dev` compile
+error — land in `tauri-dev.stdout.local` / `tauri-dev.stderr.local` beside this file
+(`Start-Process` cannot redirect both streams to one file). Both match the repo's `*.local`
+gitignore rule, so they never dirty `git status`.
 
 `tauri dev` runs the exe as a **grandchild** (`npm.cmd` → cargo → `mtg-grimoire.exe`), so
 `Start-Process -PassThru` hands you `npm.cmd`'s pid. Adopt that and `release` stops the
@@ -124,12 +131,18 @@ lock, whatever port you drive it on.
 
 ```powershell
 pwsh -NoProfile -File $L acquire storybook -What "component work"
-Start-Process npm.cmd -ArgumentList "run","storybook"
+Start-Process npm.cmd -ArgumentList "run","storybook" -WindowStyle Hidden `
+    -RedirectStandardOutput ".claude\skills\running-the-app\storybook.stdout.local" `
+    -RedirectStandardError ".claude\skills\running-the-app\storybook.stderr.local"
 do { Start-Sleep 2; $c = Get-NetTCPConnection -LocalPort 6006 -State Listen -ErrorAction SilentlyContinue } until ($c)
 pwsh -NoProfile -File $L adopt storybook -ProcessId $c.OwningProcess
 # ... use the mtg-grimoire-sb-mcp tools ...
 pwsh -NoProfile -File $L release storybook
 ```
+
+No console window pops; Storybook's own stdout/stderr — including a boot failure — land in
+`storybook.stdout.local` / `storybook.stderr.local` beside this file, same reasoning as the
+dev-mode recipe above.
 
 `npm` resolves to a `.ps1` wrapper on this machine that `Start-Process` cannot launch —
 use `npm.cmd`. It also spawns Storybook as a **child** process, so adopt the pid actually

@@ -25,7 +25,7 @@ function Run() {
 
 $sleepers = @()
 function NewSleeper() {
-    $p = Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 300' -PassThru
+    $p = Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 300' -WindowStyle Hidden -PassThru
     $script:sleepers += $p
     return $p
 }
