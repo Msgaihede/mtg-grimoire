@@ -183,11 +183,13 @@ pub struct ImportMatch {
     /// **How many rows the rule that matched this line found** — not how many printings the
     /// card has, which is a different number and one nothing here computes.
     ///
-    /// It is per *arm*, and the three arms mean three things: through a set-and-number hint it
-    /// is how many printings that set and number named (1, in a corpus with no duplicates);
-    /// through a set-scoped name it is that name's printings **within that set**; through a
-    /// bare name it is that name's paper printings corpus-wide; and through the fold arm it is
-    /// how many candidates survived the fold comparison.
+    /// It is per *arm*, and [`resolve_lines`] has **six**, so this field means six things:
+    /// through a set-and-collector-number hint it is how many printings that pair named (1, in
+    /// a corpus with no duplicates); through a set-scoped name it is that name's printings
+    /// **within that set**, and through a set-scoped front face, that set's printings whose
+    /// front face is that name; through a bare name it is that name's paper printings
+    /// corpus-wide, and through a bare front face, the paper printings whose front face is
+    /// that name; through the fold arm it is how many candidates survived the fold comparison.
     ///
     /// Stated this narrowly on purpose. Nothing consumes the field yet, and buying a per-line
     /// second query so that a "12 printings" affordance nobody has built could read a true
@@ -577,7 +579,7 @@ pub async fn deck_import_resolve(
 mod tests {
     use super::*;
 
-    /// Eight printings, shaped around the four questions this module has to answer.
+    /// Eleven printings, shaped around the questions this module has to answer.
     ///
     /// Four **paper** Sol Rings and one digital one, because every ordering rule needs more
     /// than one printing of a name to order and `printing_count` needs a digital printing to
@@ -585,16 +587,19 @@ mod tests {
     /// corpus is full of sets that share a release date, and without a tie the `id` tie-break
     /// that makes an import deterministic has nothing to break.
     ///
-    /// The other three are one each: a double-faced card written the way a decklist writes it
-    /// (front face only), a name with a diacritic in it, and an Arena-only card whose *only*
-    /// printing is digital.
+    /// Three are one each: a double-faced card written the way a decklist writes it (front face
+    /// only), a name with a diacritic in it, and an Arena-only card whose *only* printing is
+    /// digital.
     ///
     /// **The Henzie pair is real and is the whole art-series trap in two rows.** Both printings
     /// exist (`ncc` 102 and the `asnc` art series 40), both are paper, and both were released
     /// **2022-04-29** — so nothing but the id separates them, and the id here is chosen to sort
-    /// the art series *above* the card exactly as the live corpus's uuids do. Its name also
-    /// carries real double quotes, which is what pins the FTS escaping: 28 cards in the corpus
-    /// have them, and an unescaped `"Henzie "Toolbox" Torre"` is an FTS **syntax error**.
+    /// the art series *above* the card exactly as the live corpus's uuids do.
+    ///
+    /// **`"Ach! Hans, Run!"` is the FTS-escaping fixture, and the quotes Scryfall prints around
+    /// it are the whole point** — see `a_name_with_quotes_in_it_survives_the_fts_query` for why
+    /// a name whose quotes sit in the *middle*, as Henzie's do, cannot pin that behaviour, and
+    /// why one that merely ends in a quote cannot either.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
@@ -639,7 +644,10 @@ mod tests {
                  ('henzie-zart','o-hzt',
                   'Henzie "Toolbox" Torre // Henzie "Toolbox" Torre','asnc','40','en',
                   '2022-04-29',1,'art_series','common',NULL,NULL,'Art Series',NULL,'','',
-                  '{}',NULL,NULL,NULL,'{}');"#,
+                  '{}',NULL,NULL,NULL,'{}'),
+                 ('ach','o-ach','"Ach! Hans, Run!"','ugl','3','en','1998-08-11',1,'normal',
+                  'rare','{2}{R}{R}',4.0,'Enchantment','At the beginning of your upkeep …',
+                  'R','R','{}',NULL,NULL,'{"usd":"9.00"}','{}');"#,
         )
         .unwrap();
         // `cards_fts` is external-content with no triggers, and the fold arm reads through it
@@ -827,7 +835,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            the_old_hole, 8,
+            the_old_hole, 9,
             "every single-faced row in the fixture — which is what the guard was found by"
         );
     }
@@ -865,18 +873,48 @@ mod tests {
         );
     }
 
-    /// 28 real cards carry a double quote, and an unescaped one is an FTS *syntax error*
-    /// (`fts5: syntax error near "!"`, measured on `"Ach! Hans, Run!"`), not a miss. Fail-open
-    /// means a regression here would be silent — every quoted name would simply stop matching.
+    /// 28 real cards carry a double quote, and an unescaped one can be an FTS **syntax error**
+    /// rather than a miss. Fail-open means a regression here would be silent — every such name
+    /// would simply stop matching, with nothing in the log to say why.
+    ///
+    /// **The fixture has to be a name whose quotes are at its *edges*, and finding that out is
+    /// the whole reason this test was rewritten.** The obvious fixture is
+    /// `Henzie "Toolbox" Torre`, and it does not discriminate: unescaped, [`fold_match`] wraps
+    /// it as `"henzie "toolbox" torre"`, which FTS5 reads as a phrase, a bareword and a second
+    /// phrase — an implicit AND that still returns the row. The earlier version of this test
+    /// used exactly that name and **passed with `.replace('"', "\"\"")` deleted**, pinning
+    /// nothing it claimed to.
+    ///
+    /// A trailing quote alone is not enough either, measured the same way 2026-08-12:
+    /// `Kongming, "Sleeping Dragon"` unescaped wraps to `"kongming, "sleeping dragon""`, whose
+    /// final `""` FTS5 accepts as an empty phrase — an AND again, and the row still came back.
+    /// **Every real card name carries an even number of quotes**, so the wrapper can never be
+    /// left unterminated by one; the error has to come from what the *barewords* between the
+    /// quoted runs turn out to be.
+    ///
+    /// `"Ach! Hans, Run!"` is that name — Scryfall's own spelling includes the quotation marks.
+    /// Unescaped it wraps to `""Ach! Hans, Run!""`, whose leading `""` closes an empty phrase
+    /// and leaves `Ach! Hans, Run!` as **bare** query text, where `!` is not a token FTS5 has a
+    /// rule for: `fts5: syntax error near "!"`, measured 2026-08-12 against this fixture.
+    /// FTS5 raises it while **stepping**, not while preparing, so [`fold_match`]'s fail-open
+    /// swallows it and the symptom is a card that is simply never found — which is exactly what
+    /// deleting the escaping and running this test produces (`resolved to nothing`).
+    ///
     /// The lower-case spelling is deliberate: it is what routes the line through the fold arm,
     /// which is the only arm that builds an FTS query.
     #[test]
     fn a_name_with_quotes_in_it_survives_the_fts_query() {
         let conn = seeded();
         assert_eq!(
-            matched_id(&conn, line("henzie \"toolbox\" torre")),
-            "henzie-ncc",
+            matched_id(&conn, line("\"ach! hans, run!\"")),
+            "ach",
             "the quotes are doubled, so FTS reads one literal phrase"
+        );
+        // Quotes in the middle of a name must keep working too — they are the common shape,
+        // and they are the shape that survives even an unescaped query.
+        assert_eq!(
+            matched_id(&conn, line("henzie \"toolbox\" torre")),
+            "henzie-ncc"
         );
         // A name that is nothing but hostile FTS syntax is a miss, never an error.
         let rows = resolve_lines(&conn, &[line("\" AND NEAR( x:")]).expect("never an `Err`");
