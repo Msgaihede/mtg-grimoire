@@ -6,6 +6,7 @@ import {
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
@@ -14,6 +15,7 @@ import {
 } from "@/components/FilterChips";
 import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { statusLine } from "@/lib/motion";
 import { PRICES_AS_OF } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -44,10 +46,15 @@ import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
 
 /** A header/toolbar control that is not a chip: a select, a field, a plain press. 32px, so the
- *  two rows read as rows rather than as a pile of differently sized boxes. */
+ *  two rows read as rows rather than as a pile of differently sized boxes. The property list is
+ *  written out because a colour utility and a transform one compile to the same CSS longhand,
+ *  so tailwind-merge would keep one and silently drop the other; the format select is
+ *  `disabled` when the specs have not answered and must not appear to depress. */
 const CONTROL =
   "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
-  "transition-colors duration-150 motion-reduce:transition-none";
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "disabled:active:scale-100 motion-reduce:transition-none";
 
 /**
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
@@ -1206,14 +1213,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {bannerFailure && (
-        <p
-          role="alert"
-          className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-        >
-          Could not change this deck — {bannerFailure}
-        </p>
-      )}
+      {/* The banner grows into place rather than shoving the whole desk down by its height the
+          instant a write is refused — which, with four surfaces writing through six mutations,
+          is a jump the reader sees while their eye is somewhere else entirely. The animated
+          element is the wrapper and carries only `overflow-hidden`: `statusLine` takes
+          `height` to 0, and under `box-sizing: border-box` a box with its own padding and
+          border can never be shorter than the two of them. */}
+      <AnimatePresence initial={false}>
+        {bannerFailure && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              Could not change this deck — {bannerFailure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Plus, Search } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { CardGrid } from "@/features/search/CardGrid";
@@ -7,6 +8,7 @@ import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import { useCardSearch } from "@/features/search/useCardSearch";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
+import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { autoCategoryFor } from "./autoCategory";
@@ -343,14 +345,24 @@ export function DeckSearchPanel({
         )}
       </div>
 
-      {shown && addFailure && (
-        <p
-          role="alert"
-          className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
-        >
-          Could not add that card — {addFailure}
-        </p>
-      )}
+      {/* Grown into place rather than shoved in: this panel is a fixed-width column of stacked
+          rows, so a banner appearing at the top of it pushes the filter row, the summary and
+          the whole wall of tiles down together. The animated element is the wrapper and carries
+          only `overflow-hidden` — `statusLine` takes `height` to 0, and under `box-sizing:
+          border-box` a box with its own padding and border can never be shorter than the two of
+          them. */}
+      <AnimatePresence initial={false}>
+        {shown && addFailure && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+            >
+              Could not add that card — {addFailure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {shown && <FilterBar search={search} layoutToggle={false} />}
 
@@ -369,30 +381,39 @@ export function DeckSearchPanel({
         </p>
       )}
 
-      {shown && !empty && failure && (
-        <div
-          role="alert"
-          className="flex shrink-0 items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
-        >
-          <span className="min-w-0">
-            {query.isFetchNextPageError ? "Could not load more cards" : "Could not refresh these"} —{" "}
-            {failure}
-          </span>
-          {query.isFetchNextPageError && (
-            <button
-              type="button"
-              onClick={() => void query.fetchNextPage()}
-              className={cn(
-                "ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-0.5",
-                "transition-colors duration-150 hover:bg-destructive/20 motion-reduce:transition-none",
-                FOCUS,
-              )}
+      {/* The wall below is what moves when this arrives, so it grows in for the reason the
+          add banner above it does. Same split for the same reason: padding and border on the
+          child, height and `overflow-hidden` on the animated wrapper. */}
+      <AnimatePresence initial={false}>
+        {shown && !empty && failure && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
             >
-              Try again
-            </button>
-          )}
-        </div>
-      )}
+              <span className="min-w-0">
+                {query.isFetchNextPageError
+                  ? "Could not load more cards"
+                  : "Could not refresh these"}{" "}
+                — {failure}
+              </span>
+              {query.isFetchNextPageError && (
+                <button
+                  type="button"
+                  onClick={() => void query.fetchNextPage()}
+                  className={cn(
+                    "ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-0.5",
+                    "transition-colors duration-150 hover:bg-destructive/20 motion-reduce:transition-none",
+                    FOCUS,
+                  )}
+                >
+                  Try again
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {shown && !empty && (
         <CardGrid

@@ -41,13 +41,14 @@ describe("the layer scale", () => {
   });
 
   /**
-   * The deck stack's two lifts, for the same reason and with the same trap — and they are a
-   * *pair* on purpose: focus does what hover does, so a stack read with the caret comes
-   * forward exactly as far as one read with the pointer.
+   * The deck stack's lift used to be two variant entries of its own, one for `hover:` and one
+   * for `focus-within:`. It is state now — `CardStack` knows which card is open and applies
+   * the plain class — so the pair is gone and this is what says so: a variant entry that
+   * nothing spells is a rule Tailwind still emits and a reader still has to account for.
    */
-  it("spells the stack lifts out whole, at the raised layer, and pairs them", () => {
-    expect(LAYER.raisedOnHover).toBe(`hover:${LAYER.raised}`);
-    expect(LAYER.raisedOnFocus).toBe(`focus-within:${LAYER.raised}`);
+  it("keeps no variant spelling for the stack lift, which is state now", () => {
+    expect(Object.keys(LAYER)).not.toContain("raisedOnHover");
+    expect(Object.keys(LAYER)).not.toContain("raisedOnFocus");
   });
 
   /**

@@ -354,7 +354,15 @@ export const FoldersUnavailable: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const tree = canvas.getByRole("navigation", { name: "Folders" });
-    await expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible();
+    // **`waitFor`, because the line grows into place.** It is wrapped in an `AnimatePresence`
+    // so it does not shove the whole tree down by its own height the moment a read is refused,
+    // which means its first painted frame is at `height: 0, opacity: 0` — and `toBeVisible`
+    // walks the ancestors. Under the suite's `MotionGlobalConfig.skipAnimations` the arrival
+    // lands one frame later rather than 180ms later, but `findBy*` resolves on the render
+    // before it. The claim is unchanged: a line that never arrived still times out here.
+    await waitFor(async () =>
+      expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible(),
+    );
 
     // Every live deck, at the top level, exactly as it would be with no folders at all —
     // including the one that *is* filed, whose drawer this screen cannot see.

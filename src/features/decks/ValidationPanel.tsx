@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ChevronRight } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
@@ -230,16 +232,23 @@ export function ValidationPanel({
         )}
       </button>
 
-      {open && (
-        <Findings
-          issues={issues}
-          cards={cards}
-          spec={spec}
-          bracket={bracket}
-          buttonRef={buttonRef}
-          onSelectCard={onSelectCard}
-        />
-      )}
+      {/* The panel's presence, and it is safe here in a way it is not on the editor's four
+          overlays: this component is already always mounted with its rung gated on `open`, so
+          the rung goes dead on the render that starts the exit rather than on the one that
+          ends it. Nothing about a longer-lived panel can outlive the flag. */}
+      <AnimatePresence>
+        {open && (
+          <Findings
+            key="findings"
+            issues={issues}
+            cards={cards}
+            spec={spec}
+            bracket={bracket}
+            buttonRef={buttonRef}
+            onSelectCard={onSelectCard}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -261,6 +270,9 @@ function Findings({
   onSelectCard: (cardId: string) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  /** False from the render that starts the exit, which is a state this panel has never been in
+   *  before: painted, laid out, and no longer the thing the chip is describing. */
+  const present = useIsPresent();
 
   // The caret moves into the layer, as it does for every other one in the app: the panel's own
   // controls are then the next thing Tab reaches, and Escape has something to hand back.
@@ -278,11 +290,16 @@ function Findings({
     });
 
   return (
-    <div
+    <motion.div
+      {...popup}
       ref={panelRef}
       tabIndex={-1}
       role="dialog"
       aria-label={`${spec.displayName} check`}
+      // On the way out it is a picture of a panel and nothing else — not clickable, and not in
+      // the accessibility tree, where a second copy of the chip's own findings would be. The
+      // caret was handed back to the chip before this render.
+      aria-hidden={present ? undefined : true}
       // Anchored rather than portalled, and not `aria-modal`: the shipped CSP is
       // `style-src 'self'` and every overlay primitive in reach injects a runtime `<style>` the
       // moment it opens (`SetCombobox`'s decision, for its reason). The editor behind it stays
@@ -290,6 +307,11 @@ function Findings({
       className={cn(
         "absolute left-0 top-11 w-80 max-w-[calc(100vw-2rem)] rounded-lg border",
         "border-border bg-bg/95 p-3 text-xs shadow-lg",
+        // The scale grows from the corner the panel is pinned by, which is the whole of what
+        // `popup` leaves to its consumer: a panel that grew from its own middle would read as
+        // unrelated to the chip it hangs off. `left-0` above is why this corner and not another.
+        "origin-top-left",
+        !present && "pointer-events-none",
         LAYER.popup,
         // The panel scrolls rather than the editor: a Standard deck full of cards from other
         // formats is sixty findings, and a layer taller than the window has no way back to its
@@ -355,7 +377,7 @@ function Findings({
       )}
 
       {bracket && <Bracket estimate={bracket} />}
-    </div>
+    </motion.div>
   );
 }
 

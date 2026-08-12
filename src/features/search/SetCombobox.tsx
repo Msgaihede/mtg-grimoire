@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { LAYER } from "@/lib/layers";
+import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { facetTitle, optionDisabled } from "./facets";
@@ -38,6 +40,36 @@ const optionId = (id: string, index: number) => `${id}-option-${index}`;
 /** Exact code, then code prefix, then a name match. Lower sorts first. */
 const rank = (code: string, needle: string): number =>
   code === needle ? 0 : code.startsWith(needle) ? 1 : 2;
+
+/**
+ * The listbox's own box, so that the fade-out has somewhere to be inert from.
+ *
+ * A component and not a `motion.div` written inline, and the reason is the whole of why this
+ * exists: `AnimatePresence` keeps the **element it was last handed** while that element leaves,
+ * so an exiting panel goes on rendering the props of the render in which it was still open —
+ * including its `className`. A flag read upstairs can therefore never reach it. `useIsPresent`
+ * is read *inside* the presence, which is the only place the answer changes, and children
+ * spread through untouched so nothing had to be threaded down to get it.
+ *
+ * What it buys is a state this control has never been in before. Its three dismissals are
+ * Escape, a `window` mousedown listener and an `onBlur`, and **all three come down with the
+ * flag** — so for the length of the fade the panel is painted, hit-testable, and watched by
+ * nothing at all. A press on it would land on a listbox that can no longer close itself.
+ */
+function Listbox({ className, children }: { className?: string; children: ReactNode }) {
+  const present = useIsPresent();
+  return (
+    <motion.div
+      {...popup}
+      // Not in the accessibility tree on the way out either: a second, stale copy of a set list
+      // is worse than none, and the caret left with the flag.
+      aria-hidden={present ? undefined : true}
+      className={cn(className, !present && "pointer-events-none")}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 /**
  * A searchable, multi-select set picker.
@@ -238,84 +270,92 @@ export function SetCombobox({
         <ChevronDown className="size-3.5" aria-hidden="true" />
       </button>
 
-      {open && (
-        <div
-          className={cn(
-            "absolute mt-1 w-72 rounded-md border border-border bg-surface p-2 shadow-lg",
-            // Over the results table's sticky header, which is a layer down. They used to
-            // share one, and a shared layer is resolved by document order — where the
-            // header, coming after this filter row, painted a grey band across the picker.
-            LAYER.popup,
-            // **Pinned to the trigger's right edge, not its left.** This control sits at the
-            // end of a wrapping filter row, so with the default `left: auto` — the static
-            // position, i.e. the trigger's left edge — 288px of listbox opened 174px past
-            // the window at 1280 (measured). Nothing clips it, so the *page* scrolled
-            // sideways to reveal it: the whole app slid left, sidebar and all, the moment
-            // the picker's own `scrollIntoView` ran. `AddToCollection`'s `align="end"` is
-            // the same decision for the same reason.
-            "right-0",
-          )}
-        >
-          <input
-            ref={inputRef}
-            type="text"
-            role="combobox"
-            aria-label="Search sets"
-            aria-expanded="true"
-            aria-controls={listboxId}
-            aria-activedescendant={options.length > 0 ? optionId(id, activeIndex) : undefined}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              // A new query is a new list, and the old cursor position means nothing in it.
-              setActive(0);
-            }}
-            onKeyDown={onListKeyDown}
-            placeholder="Name or code"
-            className="mb-2 h-8 w-full rounded-md border border-border bg-bg px-2 text-sm placeholder:text-dim focus:border-accent focus:outline-none"
-          />
-          <ul
-            id={listboxId}
-            role="listbox"
-            aria-multiselectable="true"
-            className="max-h-64 overflow-auto"
-          >
-            {options.length === 0 && (
-              // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
-              // options are allowed. `presentation` makes it the sentence it looks like.
-              <li role="presentation" className="px-2 py-3 text-center text-xs text-dim">
-                {sets.isPending
-                  ? "Loading sets…"
-                  : sets.isError
-                    ? "Could not read the set list — try Refresh data."
-                    : "No sets match that."}
-              </li>
+      <AnimatePresence>
+        {open && (
+          <Listbox
+            key="sets"
+            className={cn(
+              "absolute mt-1 w-72 rounded-md border border-border bg-surface p-2 shadow-lg",
+              // Over the results table's sticky header, which is a layer down. They used to
+              // share one, and a shared layer is resolved by document order — where the
+              // header, coming after this filter row, painted a grey band across the picker.
+              LAYER.popup,
+              // **Pinned to the trigger's right edge, not its left.** This control sits at the
+              // end of a wrapping filter row, so with the default `left: auto` — the static
+              // position, i.e. the trigger's left edge — 288px of listbox opened 174px past
+              // the window at 1280 (measured). Nothing clips it, so the *page* scrolled
+              // sideways to reveal it: the whole app slid left, sidebar and all, the moment
+              // the picker's own `scrollIntoView` ran. `AddToCollection`'s `align="end"` is
+              // the same decision for the same reason.
+              "right-0",
+              // And the corner it is pinned by is the corner it grows from, which is the one
+              // thing `popup` leaves to whoever anchors it: a listbox that grew from its own
+              // middle would read as unrelated to the button that opened it. Written out whole
+              // — Tailwind scans source text, so an interpolated class emits no rule.
+              "origin-top-right",
             )}
-            {options.map((s, i) => (
-              <Option
-                key={s.code}
-                id={optionId(id, i)}
-                set={s}
-                picked={selected.includes(s.code)}
-                active={i === activeIndex}
-                disabled={!canToggle(s.code)}
-                title={facetTitle(s.name, counts?.[s.code])}
-                onToggle={onToggle}
-              />
-            ))}
-          </ul>
-          {full && (
-            <p className="pt-2 text-center text-[0.7rem] text-dim">
-              {MAX_SETS} sets is the most one search can name — remove one to add another.
-            </p>
-          )}
-          {matches.length > options.length && (
-            <p className="pt-2 text-center text-[0.7rem] text-dim">
-              Showing {options.length} of {matches.length} — keep typing to narrow it down.
-            </p>
-          )}
-        </div>
-      )}
+          >
+            <input
+              ref={inputRef}
+              type="text"
+              role="combobox"
+              aria-label="Search sets"
+              aria-expanded="true"
+              aria-controls={listboxId}
+              aria-activedescendant={options.length > 0 ? optionId(id, activeIndex) : undefined}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                // A new query is a new list, and the old cursor position means nothing in it.
+                setActive(0);
+              }}
+              onKeyDown={onListKeyDown}
+              placeholder="Name or code"
+              className="mb-2 h-8 w-full rounded-md border border-border bg-bg px-2 text-sm placeholder:text-dim focus:border-accent focus:outline-none"
+            />
+            <ul
+              id={listboxId}
+              role="listbox"
+              aria-multiselectable="true"
+              className="max-h-64 overflow-auto"
+            >
+              {options.length === 0 && (
+                // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
+                // options are allowed. `presentation` makes it the sentence it looks like.
+                <li role="presentation" className="px-2 py-3 text-center text-xs text-dim">
+                  {sets.isPending
+                    ? "Loading sets…"
+                    : sets.isError
+                      ? "Could not read the set list — try Refresh data."
+                      : "No sets match that."}
+                </li>
+              )}
+              {options.map((s, i) => (
+                <Option
+                  key={s.code}
+                  id={optionId(id, i)}
+                  set={s}
+                  picked={selected.includes(s.code)}
+                  active={i === activeIndex}
+                  disabled={!canToggle(s.code)}
+                  title={facetTitle(s.name, counts?.[s.code])}
+                  onToggle={onToggle}
+                />
+              ))}
+            </ul>
+            {full && (
+              <p className="pt-2 text-center text-[0.7rem] text-dim">
+                {MAX_SETS} sets is the most one search can name — remove one to add another.
+              </p>
+            )}
+            {matches.length > options.length && (
+              <p className="pt-2 text-center text-[0.7rem] text-dim">
+                Showing {options.length} of {matches.length} — keep typing to narrow it down.
+              </p>
+            )}
+          </Listbox>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

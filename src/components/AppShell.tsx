@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Heart,
   Layers,
@@ -19,6 +20,7 @@ import { SyncProgress } from "@/components/SyncProgress";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { readDragData } from "@/features/decks/dnd";
 import { ACTIVITY_DELAY_MS, syncActivity, updateActivity } from "@/lib/activity";
+import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { statusLine, useSync } from "@/lib/useSync";
@@ -167,15 +169,29 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           onRetry={refresh}
         />
 
-        {error && (
-          <div
-            role="alert"
-            className="flex shrink-0 items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-sm text-destructive"
-          >
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <span className="min-w-0">{error}</span>
-          </div>
-        )}
+        {/* The banner grows into place rather than shoving the whole view down by its height
+            the instant a sync fails.
+
+            **Two elements, and the split is load-bearing.** `statusLine` animates `height` to
+            0, and Tailwind's `box-sizing: border-box` means a box with `py-2` and a `border-b`
+            can never be shorter than its own padding and border — so an animated element
+            carrying either would bottom out at 17px and jump the rest. The padding, the border
+            and the colours live on the child; the animated wrapper is height and
+            `overflow-hidden` and nothing else. It is also where `role="alert"` stays, on the
+            element that holds the sentence, so nothing about the announcement moved. */}
+        <AnimatePresence initial={false}>
+          {error && (
+            <motion.div {...statusLineMotion} className="shrink-0 overflow-hidden">
+              <div
+                role="alert"
+                className="flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-sm text-destructive"
+              >
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0">{error}</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <main className="min-h-0 flex-1 overflow-auto p-5">{children}</main>
       </div>

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { filterChipState } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
@@ -36,9 +38,22 @@ export const REVEAL_ON_HOVER =
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
-/** Small, quiet, and the same three sizes wherever they appear in the popup. */
-const CHIP =
-  "rounded-md border px-2 py-1 text-xs transition-colors duration-150 motion-reduce:transition-none";
+/**
+ * Small, quiet, and the same three sizes wherever they appear in the popup.
+ *
+ * The transition names its properties one by one rather than taking the colour shorthand,
+ * because the press feedback is a **transform** and a colour-only rule would leave the scale to
+ * snap. Same recipe as every other shared button constant in the app, verbatim, so a chip in
+ * here and a chip anywhere else are pressed with the same weight. (The shorthand is not spelled
+ * out in this sentence on purpose: `tokens.test.ts` sweeps prose as eagerly as code, and it
+ * caught this very line.)
+ */
+const CHIP = cn(
+  "rounded-md border px-2 py-1 text-xs",
+  "transition-[color,background-color,border-color,opacity,transform,scale]",
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
+  "motion-reduce:transition-none",
+);
 
 const MODES = ["collection", "wishlist"] as const;
 type Mode = (typeof MODES)[number];
@@ -87,6 +102,20 @@ export function AddToCollectionButton({
     buttonRef.current?.focus();
   }, []);
 
+  // The innermost open layer: capture phase, and the press is consumed so the card detail
+  // pane underneath does not close on the same one. See `useDismissOnEscape` — and note
+  // that two "inner" peers are *not* ordered by it, so this popup and the set picker must
+  // never be open at once. They share the search view, so what keeps them apart is not
+  // where they live: each closes when focus leaves its own root, and opening either moves
+  // focus into it, which closes the other on the way.
+  //
+  // **Registered out here, on the flag, rather than inside the popup on its mount.** The popup
+  // outlives `open` now by the length of its exit, and a rung that came down with the *element*
+  // would still be consuming Escape while the reader is somewhere else — with a second popup
+  // possibly already open, which is exactly the pair this protocol cannot order. Gated on the
+  // flag, it is dead on the render that starts the fade.
+  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
+
   return (
     <span
       ref={rootRef}
@@ -105,6 +134,11 @@ export function AddToCollectionButton({
       // control rather than the popup: on `relatedTarget` being this button — a second
       // click on it, or Escape's hand-back — closing here would race the toggle below and
       // leave the popup open forever.
+      //
+      // **The `open &&` is doing a second job now.** An exiting popup is still inside this
+      // root, so focus leaving it during the fade fires this handler again — and the flag is
+      // already false by then, which is what makes that press a no-op rather than a second
+      // close racing whatever the reader has moved on to.
       onBlur={(e) => {
         if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
       }}
@@ -127,15 +161,11 @@ export function AddToCollectionButton({
       >
         <Plus className="size-3.5" aria-hidden="true" />
       </button>
-      {open && (
-        <AddPopup
-          target={target}
-          align={align}
-          mode={mode}
-          onModeChange={setMode}
-          onDismiss={dismiss}
-        />
-      )}
+      <AnimatePresence>
+        {open && (
+          <AddPopup key="add" target={target} align={align} mode={mode} onModeChange={setMode} />
+        )}
+      </AnimatePresence>
     </span>
   );
 }
@@ -151,19 +181,17 @@ function AddPopup({
   align,
   mode,
   onModeChange,
-  onDismiss,
 }: {
   target: AddTarget;
   align: "start" | "end";
   /** Owned by the trigger, whose accessible name says it. */
   mode: Mode;
   onModeChange: (next: Mode) => void;
-  /** Escape: close *and* hand focus back. An outside click closes from the root's `onBlur`
-   *  and deliberately does not hand it back — the reader is already somewhere else. */
-  onDismiss: () => void;
 }) {
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  /** False from the render that starts the fade out. */
+  const present = useIsPresent();
   const finishes = target.finishes.length > 0 ? target.finishes : (["nonfoil"] as Finish[]);
   const [finish, setFinish] = useState<Finish>(finishes[0]);
   const [condition, setCondition] = useState<Condition>("NM");
@@ -178,14 +206,6 @@ function AddPopup({
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
-
-  // The innermost open layer: capture phase, and the press is consumed so the card detail
-  // pane underneath does not close on the same one. See `useDismissOnEscape` — and note
-  // that two "inner" peers are *not* ordered by it, so this popup and the set picker must
-  // never be open at once. They share the search view, so what keeps them apart is not
-  // where they live: each closes when focus leaves its own root, and opening either moves
-  // focus into it, which closes the other on the way.
-  useDismissOnEscape({ layer: "inner", onDismiss });
 
   const add = useMutation({
     mutationFn: () =>
@@ -248,11 +268,17 @@ function AddPopup({
   });
 
   return (
-    <div
+    <motion.div
+      {...popup}
       ref={panelRef}
       tabIndex={-1}
       role="dialog"
       aria-label={`Add ${target.name}`}
+      // On the way out it is a picture and nothing else: not pressable, and not a second copy
+      // of this card's add form in the accessibility tree. The caret has already gone back to
+      // the trigger (Escape) or moved on somewhere else (a click), so nothing focused is being
+      // hidden here.
+      aria-hidden={present ? undefined : true}
       // Anchored, not portalled: the shipped CSP is `style-src 'self'` and every overlay
       // primitive in reach injects a runtime <style> the moment it opens (fine under
       // `tauri dev`, blank in a packaged build). Same decision as `SetCombobox`. Not
@@ -266,6 +292,12 @@ function AddPopup({
         // row's own layer. See `LAYER`.
         LAYER.popup,
         align === "start" ? "left-0" : "right-0",
+        // The corner the popup is pinned by is the corner it grows from — `popup` leaves the
+        // origin to its consumer precisely because only the consumer knows which edge it hung
+        // itself off. Both spellings written out whole: Tailwind scans source text, so a class
+        // built by interpolation emits no rule at all.
+        align === "start" ? "origin-top-left" : "origin-top-right",
+        !present && "pointer-events-none",
         FOCUS,
       )}
     >
@@ -412,6 +444,6 @@ function AddPopup({
           </p>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }

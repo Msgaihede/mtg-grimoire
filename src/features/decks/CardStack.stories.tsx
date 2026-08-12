@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
-import { CardStack, stackHeight } from "./CardStack";
+import { CardStack, STACK_OPEN_ATTR, stackHeight } from "./CardStack";
 import type { ValidationIssue } from "./validation/types";
 
 /**
@@ -43,36 +43,80 @@ type Story = StoryObj<typeof meta>;
  * The collapsed stack: every card but the last shows only its 30px title bar, and the last is
  * drawn in full because nothing covers it.
  *
- * Run the pointer down it. Each card lifts clear and pushes the ones after it out of the
- * bottom of the group — **the group itself never resizes**, which is what lets a reader walk a
- * whole column without the page moving under them.
+ * Run the pointer down it. Each card opens where it stands and pushes the ones after it out of
+ * the bottom of the group — **the group itself never resizes**, which is what lets a reader
+ * walk a whole column without the page moving under them. Rest on a card for a moment before
+ * it opens: that dwell is the whole point, and moving straight past a card opens nothing.
  */
 export const Default: Story = {};
 
 /**
+ * The flip-through itself: dwell on a card and it opens, cross to the next and the stack hands
+ * over without closing, leave and it collapses after a beat.
+ *
+ * **This story could not exist before, and the reason it could not is worth keeping.** The lift
+ * used to be CSS `:hover`, and `userEvent.hover` dispatches pointer events without ever
+ * engaging the `:hover` state — in either runner. So the earlier version of the docblock in
+ * this slot recorded that *no story could assert the lift at all*, and the play here asserted
+ * the derived height instead, because a hover assertion would have been vacuous: nothing moved,
+ * so nothing could fail. That was honest and it was also a hole, on the headline interaction of
+ * the redesign.
+ *
+ * The trigger is `pointerenter` now, driven from state, and `userEvent.hover` fires exactly
+ * that. So the claim is checkable — here, in `CardStack.test.tsx` against a fake clock, and in
+ * the shipped WebView2 over CDP, which is still the only one of the three that can see the
+ * paint.
+ *
+ * What is asserted: the open card is the one dwelt on, there is only ever one of them, the
+ * hand-over to the next card leaves exactly one open, and **the list's height does not move
+ * through any of it** — the property the whole component exists for. The *close delay* is the
+ * one rule left to `CardStack.test.tsx`, because proving it means catching a frame at a named
+ * millisecond, and only a fake clock can be at a named millisecond.
+ */
+export const FlipThrough: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByRole("list", { name: "Ramp" });
+    const cards = canvas.getAllByRole("listitem");
+    const open = () => list.querySelectorAll(`[${STACK_OPEN_ATTR}]`);
+    const height = list.style.height;
+
+    // At rest the stack is closed and is the arithmetic's own height.
+    expect(open()).toHaveLength(0);
+    expect(height).toBe(`${stackHeight(RAMP.length)}px`);
+
+    await userEvent.hover(cards[1]);
+    await waitFor(() => expect(cards[1]).toHaveAttribute(STACK_OPEN_ATTR));
+    expect(open()).toHaveLength(1);
+    expect(list.style.height).toBe(height);
+
+    // Crossing to the next card is a hand-over rather than a close and an open: moving between
+    // two cards never leaves the list, so nothing schedules a collapse in the first place, and
+    // exactly one card is up once the second commits.
+    await userEvent.hover(cards[2]);
+    await waitFor(() => expect(cards[2]).toHaveAttribute(STACK_OPEN_ATTR));
+    expect(cards[1]).not.toHaveAttribute(STACK_OPEN_ATTR);
+    expect(open()).toHaveLength(1);
+    expect(list.style.height).toBe(height);
+
+    // And leaving collapses it — after the close delay, not on the way out.
+    await userEvent.unhover(cards[2]);
+    await waitFor(() => expect(open()).toHaveLength(0));
+    expect(list.style.height).toBe(height);
+  },
+};
+
+/**
  * The list's height is **a function of the card count and nothing else** — which is the whole
- * of why the group cannot reflow, and it is a property that can be checked without hovering
+ * of why the group cannot reflow, and it is a property that can be checked without touching
  * anything.
  *
- * **This play does not prove the no-reflow claim, and it is named so it does not pretend to.**
- * The earlier version hovered each card and asserted `getBoundingClientRect().height` was
- * unchanged; that assertion is **vacuous in both runners**, because `userEvent.hover`
- * dispatches pointer events and never engages the CSS `:hover` state — so nothing moved in
- * the first place and the assertion could not have failed. Leaving it green would have been a
- * test standing in for a claim it cannot make, on the headline interaction of the redesign.
- *
- * What actually holds the property up is two things, both recorded rather than implied:
- *
- * * **structurally** — the lift is `hover:` / `focus-within:` in CSS and there is no hover
- *   state in JavaScript, so no height can depend on one. `CardStack.test.tsx`'s
- *   `hovering_a_card_does_not_change_the_group_height` drives both gestures and reads the
- *   height back, which is what fails the day someone reaches for `useState`.
- * * **by measurement** — a real Chromium over CDP, three-step pointer approach, reported the
- *   list at 796px before, during and after a hover on a 15-card stack while the first card's
- *   margin went −278px → 8px and the second card's top went 50 → 336. That run is in the lane
- *   report.
- *
- * So what is asserted here is the derived height, at three counts, against the arithmetic.
+ * Kept as its own story beside {@link FlipThrough} because the two check it from opposite
+ * ends: this one against the arithmetic, at three counts, with nothing hovered; that one
+ * through a real gesture, where the height is read back across an open, a hand-over and a
+ * close. The measured third leg is a real Chromium over CDP, three-step pointer approach,
+ * which reported the list at 796px before, during and after opening a card in a 15-card stack
+ * while that card's margin went −278px → 8px and the next card's top went 50 → 336.
  */
 export const FixedHeightFromTheCardCount: Story = {
   play: async ({ canvasElement }) => {
@@ -80,7 +124,7 @@ export const FixedHeightFromTheCardCount: Story = {
     const list = canvas.getByRole("list", { name: "Ramp" });
 
     expect(list.style.height).toBe(`${stackHeight(RAMP.length)}px`);
-    // The canvas's own formula, and the slack that lets a lifted card overflow rather than
+    // The canvas's own formula, and the slack that lets an open card overflow rather than
     // resize its group.
     expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 269);
     expect(stackHeight(RAMP.length) - stackHeight(RAMP.length - 1)).toBe(34);
@@ -215,8 +259,12 @@ export const OneCard: Story = {
 
 /**
  * Fifteen cards, which is where the arithmetic earns itself: the collapsed stack is 510px of
- * title bars plus one full card, and lifting the first of them pushes 286px of cards out of
+ * title bars plus one full card, and opening the first of them pushes 286px of cards out of
  * the bottom without the group growing by a pixel.
+ *
+ * It is also where the dwell earns itself. Fifteen strips are 510px of travel and a sweep down
+ * them crosses one every ~15ms, so under the CSS lift this replaced, a reader aiming for card
+ * four landed on card eight or nine.
  */
 export const LongStack: Story = {
   args: {

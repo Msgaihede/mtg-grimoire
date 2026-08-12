@@ -1,0 +1,27 @@
+# Reference docs
+
+The long-form record behind the rules in the repo's `CLAUDE.md` files: measurements, the traps
+that produced each rule, and the sessions that found them. Every figure keeps the date it was
+taken and the build (debug or release) it was taken on.
+
+These pages are **reference, not instruction** — the binding rules live in the `CLAUDE.md` for
+each area, which links here for the _why_. Read a page when you need the reasoning behind a rule
+or a number to compare a new measurement against.
+
+| Doc | Holds | Governed by |
+| --- | --- | --- |
+| [data-and-sync.md](data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [scryfall.md](scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [image-cache.md](image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [search-faceting.md](search-faceting.md) | The in-memory index, and why faceting fails open | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [in-app-updates.md](in-app-updates.md) | Why the portable swap is hand-written | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [decks-storage.md](decks-storage.md) | Deck tables, the six card commands, the allocator, the audit log | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [decks-live-findings.md](decks-live-findings.md) | What driving the shipped window found — **including three open bugs** | [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md) |
+| [frontend-design.md](frontend-design.md) | The ribbon, card images, foil, layers, tables | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
+| [motion.md](motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
+| [storybook.md](storybook.md) | The workbench and its fake, in full | [`.storybook/CLAUDE.md`](../../.storybook/CLAUDE.md) |
+| [live-ui-verification.md](live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
+| [ci-and-releases.md](ci-and-releases.md) | Both workflows, in full | [`.github/CLAUDE.md`](../../.github/CLAUDE.md) |
+
+`docs/superpowers/` is a different thing and stays where it is: the brainstorm → spec → plan
+flow, plus the research notes those plans were built on.

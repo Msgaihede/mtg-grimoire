@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { FoilOverlay } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
@@ -5,6 +7,7 @@ import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { stackCard } from "@/lib/motion";
 import { usdPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -45,11 +48,25 @@ import type { ValidationIssue } from "./validation/types";
  * proportion, because the quantity chip overlaid on that strip has to fit in it.
  *
  * The list is then given a **fixed height** of `34n + 269`: the collapsed stack (`34n + 261`)
- * plus **8px**, which is one lifted card's bottom margin. Fixed is the point. A lifted card's
+ * plus **8px**, which is one open card's bottom margin. Fixed is the point. An open card's
  * margin goes from −261 to +8 and pushes every card after it down by 269px — out of the
  * list's box, over whatever is below, and *not* into the list's height. So the group's header
  * does not move, the next group in the column does not move, and the reader can run down a
  * fifteen-card stack without the page walking away from the pointer.
+ *
+ * ## The arithmetic that decides the interaction, not just the look
+ *
+ * With card *N* open, card *k*'s top is `k·34` for `k ≤ N`, and `N·34 + 303 + (k−N−1)·34` for
+ * `k > N`. Open card *N+1* instead and **every one of those tops is unchanged except card
+ * N+1's**, which moves from `N·34 + 303` up to `N·34 + 34`. Cards N+2 and beyond do not move
+ * at all.
+ *
+ * So a step down the stack moves exactly one card, 269px — which is why the whole reflow is
+ * one `margin-bottom` tween, and it is also the whole of the defect this component was
+ * rebuilt to fix. After the first step the *next* card's strip is only ~34px below the
+ * pointer, so one continuous downward sweep crosses four or five strips in ~60ms and, under
+ * a bare CSS `:hover`, armed every one of them. The reader landed several cards below the one
+ * they aimed at. See {@link useFlipThrough} for what replaced it.
  */
 export const STACK_CARD_WIDTH = 210;
 /**
@@ -65,16 +82,50 @@ export const STACK_CARD_HEIGHT = STACK_IMAGE_HEIGHT + 2;
 export const STACK_ADVANCE = 34;
 /** The collapsed bottom margin, in px. Negative: each card is pulled up over its neighbour. */
 export const STACK_COLLAPSED_MARGIN = STACK_ADVANCE - STACK_CARD_HEIGHT;
-/** The bottom margin a lifted card takes, and therefore the slack the list is given. */
+/** The bottom margin an open card takes, and therefore the slack the list is given. */
 export const STACK_LIFTED_MARGIN = 8;
+
+/**
+ * How long the pointer must stay on a card before it opens.
+ *
+ * Short enough that a reader who meant to stop never notices it, long enough that a sweep
+ * down the stack commits to nothing on the way past — a pointer crossing four strips in 60ms
+ * arms four cards and settles on none of them, which is exactly what should happen.
+ */
+export const STACK_OPEN_DWELL_MS = 70;
+
+/**
+ * How long an open card stays open after the pointer leaves the stack.
+ *
+ * **Its real job is the gap between two cards**, not the exit: arming any card cancels a
+ * pending close, so the stack never shows an all-closed frame while the reader is moving
+ * from one card to the next. That it also forgives a pointer that slips off the edge is the
+ * smaller half of it.
+ *
+ * It happens to equal the reflow's own duration and that is a coincidence, not a derivation —
+ * this is an *intent* delay and belongs to the gesture, where `lib/motion.ts`'s scale belongs
+ * to what the pixels do.
+ */
+export const STACK_CLOSE_DELAY_MS = 180;
+
+/**
+ * How the open card says so, for anything that has to find it **after the fact**.
+ *
+ * The lift used to be CSS `:hover`, which nothing outside a real browser can observe and
+ * which `userEvent.hover` does not engage — so no test and no story could say which card was
+ * up. It is state now, and this is the one honest question to ask about it: from a test, and
+ * from `scripts/cdp.mjs --probe` in the shipped window, where the alternative is reading a
+ * margin mid-tween. `DECK_CARD_ATTR` and `DECK_GROUP_ATTR` are the same idea one floor down.
+ */
+export const STACK_OPEN_ATTR = "data-stack-open";
 
 /**
  * How tall the list is for `count` cards — **a function of the count and nothing else**.
  *
- * That is the property `hovering_a_card_does_not_change_the_group_height` pins, and it is
- * why the lift is pure CSS: there is no hover state in this component for a height to depend
- * on. An empty stack is 0 rather than 286 — a group with nothing in it draws its header and
- * no box.
+ * That is the property `opening_a_card_does_not_change_the_group_height` pins, and it now
+ * holds by construction rather than by there being no state to depend on: the height is
+ * computed from `cards.length` and reads {@link useFlipThrough}'s answer nowhere. An empty
+ * stack is 0 rather than 269 — a group with nothing in it draws its header and no box.
  */
 export function stackHeight(count: number): number {
   if (count === 0) return 0;
@@ -105,6 +156,120 @@ const CARD_MARKS_STRIP = "absolute inset-x-0 top-0 flex items-center justify-end
  * because a reader looking for the tint should find out where it went, not just that it is
  * missing.
  */
+
+/** A `setTimeout` handle, as this project's DOM-only lib types one. */
+type Timer = ReturnType<typeof setTimeout>;
+
+/** What {@link useFlipThrough} answers with. */
+interface FlipThrough {
+  /** Which card is open, or `null` for a stack at rest. */
+  openIndex: number | null;
+  /** The pointer arrived on card `index`. Opens it once it has stayed {@link STACK_OPEN_DWELL_MS}. */
+  arm: (index: number) => void;
+  /** The caret arrived on card `index`. Opens it now — a caret is a deliberate act. */
+  openNow: (index: number) => void;
+  /** The pointer left the stack, or the caret did. Closes after {@link STACK_CLOSE_DELAY_MS}. */
+  release: () => void;
+}
+
+/**
+ * Which card is open, and the two timers that decide it — the whole of the flip-through.
+ *
+ * **This is hover *intent*, and its absence was the defect.** The trigger is `pointerenter` on
+ * the card, which needs no new hit target: a closed card is overlapped by 261px by its
+ * successor, which is later in the document and therefore paints over it, so the only hittable
+ * part of a closed card already *is* its 34px strip. What was missing was the pair of delays.
+ *
+ * * **Opening waits.** A sweep down the stack crosses a strip every ~15ms and arms each one in
+ *   turn; each arming cancels the one before, so the sweep commits to nothing and only the card
+ *   the pointer settles on opens.
+ * * **Closing waits, and arming another card cancels it.** That second half is the one worth
+ *   stating: without it the frame between leaving card N and committing to card N+1 is a stack
+ *   with nothing open, and a reader running down a column would watch it collapse and re-open
+ *   under their hand.
+ *
+ * Re-entering the card that is already open resolves to `setOpenIndex(sameIndex)`, which React
+ * bails out of — so the arm needs no special case for it and does not have to read the state it
+ * sets. Nothing here is a dependency of anything, which is what keeps the two callbacks stable
+ * across every open and close.
+ *
+ * **{@link release} cancels a pending open as well as scheduling the close**, including when it
+ * comes from the caret leaving. The one case that costs is a pointer dwelling on one card while
+ * focus leaves the stack from another — the dwell is dropped and the next pointer move re-arms
+ * it. That is a cheaper wrong answer than a card that opens 70ms *after* the reader left.
+ */
+function useFlipThrough(): FlipThrough {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  // At most one pending timer of each kind. A ref rather than state: a timer handle is not
+  // something to draw, and writing one must never schedule a render of its own.
+  const pending = useRef<{ open: Timer | null; close: Timer | null }>({ open: null, close: null });
+
+  const cancel = useCallback((kind: "open" | "close") => {
+    const timer = pending.current[kind];
+    if (timer !== null) {
+      clearTimeout(timer);
+      pending.current[kind] = null;
+    }
+  }, []);
+
+  // Read out of the ref here rather than in the cleanup, which is what the hooks lint asks
+  // for and is honest besides: `pending` is created by this hook and never replaced, so the
+  // object the cleanup closes over is the object the handlers wrote into.
+  useEffect(() => {
+    const timers = pending.current;
+    return () => {
+      if (timers.open !== null) clearTimeout(timers.open);
+      if (timers.close !== null) clearTimeout(timers.close);
+    };
+  }, []);
+
+  const arm = useCallback(
+    (index: number) => {
+      cancel("close");
+      cancel("open");
+      pending.current.open = setTimeout(() => {
+        pending.current.open = null;
+        setOpenIndex(index);
+      }, STACK_OPEN_DWELL_MS);
+    },
+    [cancel],
+  );
+
+  const openNow = useCallback(
+    (index: number) => {
+      cancel("close");
+      cancel("open");
+      setOpenIndex(index);
+    },
+    [cancel],
+  );
+
+  const release = useCallback(() => {
+    cancel("open");
+    cancel("close");
+    pending.current.close = setTimeout(() => {
+      pending.current.close = null;
+      setOpenIndex(null);
+    }, STACK_CLOSE_DELAY_MS);
+  }, [cancel]);
+
+  return { openIndex, arm, openNow, release };
+}
+
+/**
+ * Reduced motion's answer for the one thing the app-wide switch does not cover.
+ *
+ * `MotionConfig reducedMotion="user"` makes transforms and `width`/`height`/`top`/`left`
+ * instant — `motion`'s `positionalKeys`, read out of the installed package — and
+ * `margin-bottom` is **not** in that set. So the app's single switch would leave this
+ * component's 269px reflow running at full travel for a reader who asked their OS for less,
+ * which is precisely the hazard WCAG 2.3.3 names. `App.tsx` says `useReducedMotion()` is fine
+ * inside one component that wants to swap a slide for something still; this is that component.
+ *
+ * The layout still changes. Only the travel is removed — which is exactly what the
+ * `motion-reduce` opt-out on the CSS version did.
+ */
+const STILL: Transition = { duration: 0 };
 
 export interface CardStackProps {
   cards: readonly DeckCard[];
@@ -138,17 +303,20 @@ export interface CardStackProps {
 
 /**
  * One group's cards as a stack: overlapping card faces, each showing only its title bar, and
- * the one under the pointer lifted clear of the rest.
+ * the one the reader has settled on standing clear of the rest.
  *
  * This is the signature interaction of the deck builder, and the reason it is a stack rather
  * than a list of rows: a deck is a physical object, and the thing a builder does with one is
  * fan it. Reading a column of eighty rows tells you their names; running a pointer down a
  * stack shows you the cards.
  *
- * **The lift is pure CSS** — `hover:` and `focus-within:` on the card, and nothing in
- * JavaScript. Two things follow from that, and both are the point. The list's height cannot
- * depend on which card is lifted, because nothing in this component knows; and the caret does
- * exactly what the pointer does for free, rather than by a second code path that would drift.
+ * **The lift is state, and it used to be CSS.** `hover:` and `focus-within:` open instantly, on
+ * every strip the pointer crosses, which is what made a sweep land four cards below the one it
+ * was aimed at — the geometry note at the top of this file has the numbers. {@link useFlipThrough}
+ * is the replacement and the one place the rules live. Two things that were consequences of the
+ * CSS version survive it deliberately: the list's height still cannot depend on which card is
+ * open, because {@link stackHeight} reads the count and nothing else; and the caret still does
+ * what the pointer does, by the same two callbacks rather than by a second code path.
  */
 export function CardStack({
   cards,
@@ -158,30 +326,42 @@ export function CardStack({
   actions,
   className,
 }: CardStackProps) {
+  const { openIndex, arm, openNow, release } = useFlipThrough();
+  const reduced = useReducedMotion();
   if (cards.length === 0) return null;
 
   return (
     // `overflow-visible` and the fixed height are the two halves of one idea, and neither
     // works alone: the height is what stops the group resizing, and the overflow is what lets
-    // the lifted card and the cards after it leave the box instead of being clipped.
+    // the open card and the cards after it leave the box instead of being clipped.
     //
     // `relative` plus the lift, so the whole stack comes forward over the groups below it in
     // the column while it is being read — the cards that slide out of the box are painted
     // over by anything later in the document otherwise.
+    //
+    // The close is scheduled here rather than per card, and that is the point of putting it on
+    // the list: a card that overflows the box is still a descendant, so crossing from one card
+    // to the next is never a leave, and only leaving the stack itself schedules anything.
     <ul
       aria-label={label}
+      onPointerLeave={release}
       style={{ height: stackHeight(cards.length) }}
       className={cn(
         "relative block overflow-visible",
-        LAYER.raisedOnHover,
-        LAYER.raisedOnFocus,
+        openIndex !== null && LAYER.raised,
         className,
       )}
     >
-      {cards.map((card) => (
+      {cards.map((card, index) => (
         <StackedCard
           key={card.id}
           card={card}
+          index={index}
+          open={index === openIndex}
+          onArm={arm}
+          onOpenNow={openNow}
+          onRelease={release}
+          transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
           onSelect={onSelect}
           actions={actions}
@@ -217,11 +397,25 @@ export function CardStack({
  */
 function StackedCard({
   card,
+  index,
+  open,
+  onArm,
+  onOpenNow,
+  onRelease,
+  transition,
   ruleBreakText,
   onSelect,
   actions,
 }: {
   card: DeckCard;
+  /** Its place in the stack, which is the whole of its identity to {@link useFlipThrough}. */
+  index: number;
+  open: boolean;
+  onArm: (index: number) => void;
+  onOpenNow: (index: number) => void;
+  onRelease: () => void;
+  /** The reflow's tween, decided once by the stack so every card animates on the same clock. */
+  transition: Transition;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
@@ -241,29 +435,50 @@ function StackedCard({
   const short = card.categoryActive && card.ownedQuantity < card.quantity;
 
   return (
-    <li
+    // Collapsed, pulled up over its neighbour; open, standing 8px clear of it. The margin is
+    // the whole animation — nothing scales, nothing translates — because a margin is what
+    // pushes the cards *after* it down, which is the interaction this is named for. `motion`
+    // writes it as an inline style, which the shipped CSP allows (`style-src-attr`); both
+    // margins change per step and they share one clock, which is what makes a step read as one
+    // card sliding rather than as two cards swapping.
+    //
+    // `initial={false}`, so a stack that has just mounted draws itself collapsed rather than
+    // animating into it — a category scrolling into view is not a gesture.
+    <motion.li
       ref={dragRef}
+      // Arming, not opening. The dwell is the fix; see `useFlipThrough`. The close lives on
+      // the list above, because leaving *this* card for the next one is not leaving the stack.
+      onPointerEnter={() => onArm(index)}
+      // On the item rather than on the button, which is `focus-within`'s reach and is
+      // load-bearing: the controls drawn over the card are siblings of the button, so a caret
+      // stepping from the card into its own stepper would otherwise close the card under it.
+      onFocus={() => onOpenNow(index)}
+      onBlur={onRelease}
+      {...(open ? { [STACK_OPEN_ATTR]: "" } : {})}
+      initial={false}
+      animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : STACK_COLLAPSED_MARGIN }}
+      transition={transition}
       className={cn(
-        // `group`, so the controls below can be revealed by the same two states that lift the
-        // card. Nothing else in a stack carries one, so the unqualified variant is unambiguous.
-        "group relative block overflow-hidden rounded-md border shadow-lg",
-        // Collapsed, pulled up over its neighbour; lifted, standing 8px clear of it. The
-        // margin is the whole animation — nothing scales, nothing translates — because a
-        // margin is what pushes the cards *after* it down, which is the interaction this is
-        // named for.
+        // `group`, so the controls below are revealed by the pointer and the caret. Nothing
+        // else in a stack carries one, so the unqualified variant is unambiguous.
         //
-        // Written out as literals rather than built from the constants above, because
-        // Tailwind scans source text for whole class names and a class assembled at runtime
-        // emits no rule at all. `a stacked card is pulled up by exactly one card's advance`
-        // is what keeps the two spellings of −261 and 8 in step.
+        // **No z-index here, deliberately, and an open card is no exception.** These are
+        // `relative` siblings with a negative bottom margin, so painting order is document
+        // order: every card is drawn over the one before it, and that *is* the stacked look —
+        // the reveal strip a reader runs down is the top 34px of a card its successor has not
+        // covered. Raising the open card inverts that for the whole tail of the stack, and it
+        // does it at the worst moment: `LAYER.raised` lands on the first frame while the cards
+        // after it are still 269px from where they are going, so the card appears to jump in
+        // front of the stack and then have the stack catch up around it.
         //
-        // `focus-within:` beside every `hover:`: a stack only a mouse can read is a stack
-        // half the readers cannot.
-        "mb-[-261px] hover:mb-2 focus-within:mb-2",
-        "transition-[margin-bottom] duration-150 motion-reduce:transition-none",
-        "hover:shadow-2xl focus-within:shadow-2xl",
-        LAYER.raisedOnHover,
-        LAYER.raisedOnFocus,
+        // Doing nothing is the fix. The cards after it move out of the way and uncover it, and
+        // once they have settled nothing is over it anyway — an open card's bottom is
+        // `N·34 + 295` and its successor's top is `N·34 + 303`, 8px clear. The list keeps its
+        // own `LAYER.raised` (see `CardStack`): that one lifts the *group* over the groups
+        // below it in the column, which is a different question and still needs answering,
+        // because the cards it pushes down leave the box on purpose.
+        "group relative block overflow-hidden rounded-md border",
+        open ? "shadow-2xl" : "shadow-lg",
         // A card that breaks a rule is outlined in the destructive colour — the loudest of the
         // three signals it can carry, and the only one that changes the card's own edge.
         ruleBreakText ? "border-destructive" : "border-border",
@@ -384,6 +599,6 @@ function StackedCard({
         actions={actions}
         className={cn("absolute inset-x-0 bottom-6 px-1", REVEALED_ON_CARD)}
       />
-    </li>
+    </motion.li>
   );
 }

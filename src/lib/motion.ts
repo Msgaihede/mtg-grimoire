@@ -1,0 +1,278 @@
+/**
+ * Every duration and easing this app animates with, named for what the thing *does*.
+ *
+ * It exists for the same reason `layers.ts` does. The visual direction's "150ms budget" was
+ * real policy and had no home: it lived as **88 hand-copied `duration-150` literals across 30
+ * files** and one sentence in a comment in `index.css`. A number copied 88 times is not a
+ * budget, it is 88 independent decisions that happen to agree today — nothing tells you which
+ * of them is a drawer crossing the window and which is a chevron turning 90°, and nothing
+ * stops the 89th from being 300.
+ *
+ * So: **a consumer imports a preset and never writes a number.** If a surface needs a timing
+ * that is not here, the answer is a new preset in this file with a sentence saying what it is
+ * for — not a literal at the call site.
+ *
+ * ## The scale
+ *
+ * Three tiers, from the spec's §3 table. The app's stated 150ms budget is kept as the
+ * *interaction* tier and widened only where a surface travels a real distance:
+ *
+ * | tier | value | for |
+ * |---|---|---|
+ * | {@link DURATION.fast} | 120ms | press feedback, chevrons, colour |
+ * | {@link DURATION.base} | 180ms | the deck stack's reflow, popups, status lines |
+ * | {@link DURATION.slow} | 260ms | drawers and dialogs, which cross the window |
+ *
+ * `src/index.css` carries the same three as `--duration-*` and the same three curves as
+ * `--ease-*`, so a CSS-only transition and a JS one cannot drift. `motion.test.ts` compares
+ * the two files and fails if they do.
+ *
+ * ## Why the presets are prop bags and not `Variants`
+ *
+ * Every preset here is spread onto the element:
+ *
+ * ```tsx
+ * <AnimatePresence>
+ *   {open && <motion.div {...scrim} className="fixed inset-0 bg-black/60" />}
+ * </AnimatePresence>
+ * ```
+ *
+ * A variant *label* propagates from a parent to any child that has not defined its own, which
+ * is a feature for an orchestrated list and a trap for these seven — they are leaves that
+ * happen to sit inside other animated things. A spread also type-checks against `motion`'s own
+ * prop types at the call site, where the mistake is made. {@link variants} is here for the case
+ * that genuinely wants propagation; nothing in the app needs it yet.
+ *
+ * Enter and exit carry **different** curves and often different durations, which is why each
+ * target holds its own `transition` rather than the preset exposing one. A surface arriving
+ * decelerates into place ({@link EASE.enter}); a surface leaving accelerates away
+ * ({@link EASE.exit}); something moving between two on-screen positions does both
+ * ({@link EASE.standard}).
+ *
+ * ## Reduced motion
+ *
+ * Nothing here branches on it. The single `MotionConfig` in `src/App.tsx`, set to the reader's
+ * preference, is the one switch — and it is load-bearing rather than decorative, because
+ * `motion` ships `reducedMotion: "never"`. Read that component's comment before assuming what
+ * it does: it is a deliberately *weaker* rule than the app's `motion-reduce:transition-none`,
+ * because opacity and colour keep animating under it.
+ *
+ * (Spelled without its angle bracket, so that `tokens.test.ts`'s sweep — which counts opening
+ * tags across `src/` — reads this paragraph as prose rather than as a second provider.)
+ *
+ * ## Two `motion` APIs this file cannot give you
+ *
+ * `AnimatePresence`'s out-of-flow exit mode, and the view-transition builder exported from
+ * `motion`'s root. Both append a `<style>` **element** at runtime, which the shipped CSP
+ * blocks — and both fail *silently*, in the shipped exe only. `src/lib/tokens.test.ts` bans
+ * them by name and is the only thing that can; see the comment on that sweep. This paragraph
+ * spells neither name for that reason.
+ */
+import type { TargetAndTransition, Transition, Variants } from "motion/react";
+
+/** A cubic-bézier curve, as both `motion` and CSS spell one. */
+export type Bezier = [number, number, number, number];
+
+/**
+ * The three tiers, in **milliseconds** — the unit the CSS tokens and the design conversation
+ * are both in. `motion` wants seconds; {@link seconds} is the one place that conversion
+ * happens.
+ */
+export const DURATION = {
+  /** Press feedback, chevrons, a colour change. Below this a transition reads as a glitch. */
+  fast: 120,
+  /** The interaction tier, and the app's old 150ms budget rounded to the scale. */
+  base: 180,
+  /** Only for a surface that crosses the window: a docked drawer, a modal. */
+  slow: 260,
+} as const;
+
+export type DurationTier = keyof typeof DURATION;
+
+/** Milliseconds to the seconds `motion` measures a `Transition` in. */
+export const seconds = (ms: number): number => ms / 1000;
+
+/** A curve as CSS writes it, so a token and a preset can be compared character for character. */
+export const cssEase = (curve: Bezier): string => `cubic-bezier(${curve.join(", ")})`;
+
+/**
+ * Three curves, named for the direction of travel rather than for their shape.
+ *
+ * Kept identical to `index.css`'s `--ease-standard` / `--ease-enter` / `--ease-exit`, which are
+ * a real Tailwind v4 namespace and therefore also spellable as `ease-standard`, `ease-enter`
+ * and `ease-exit` utilities. Tailwind's own `ease-in`/`ease-out`/`ease-in-out` are untouched.
+ */
+export const EASE = {
+  /** Both ends eased. For something moving between two positions it never leaves. */
+  standard: [0.4, 0, 0.2, 1],
+  /** Decelerating. For something arriving: it enters fast and settles. */
+  enter: [0, 0, 0.2, 1],
+  /** Accelerating. For something leaving: it gives way immediately and is gone. */
+  exit: [0.4, 0, 1, 1],
+} satisfies Record<string, Bezier>;
+
+/** The three tiers as ready `Transition`s, for a consumer that is not animating enter/exit. */
+export const TRANSITION = {
+  fast: { duration: seconds(DURATION.fast), ease: EASE.standard },
+  base: { duration: seconds(DURATION.base), ease: EASE.standard },
+  slow: { duration: seconds(DURATION.slow), ease: EASE.standard },
+} satisfies Record<DurationTier, Transition>;
+
+const arriving = (ms: number): Transition => ({ duration: seconds(ms), ease: EASE.enter });
+const leaving = (ms: number): Transition => ({ duration: seconds(ms), ease: EASE.exit });
+
+/**
+ * A preset in the shape it is used: spread onto a `motion.*` element inside `AnimatePresence`.
+ *
+ * `animate` and `exit` each carry their own `transition`, so the two directions can differ.
+ */
+export interface EnterExit {
+  initial: TargetAndTransition;
+  animate: TargetAndTransition;
+  exit: TargetAndTransition;
+}
+
+/**
+ * The full-window backdrop behind a drawer or a dialog — `bg-black/60`, `fixed inset-0`.
+ *
+ * `base` in **both** directions, which is not the usual asymmetry and is deliberate: the scrim
+ * has a partner. Entering it is quicker than {@link drawerRight} so the ground darkens and
+ * *then* the panel arrives; leaving, the two are the same length so the panel is never seen
+ * sliding out over unscrimmed content.
+ */
+export const scrim: EnterExit = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1, transition: arriving(DURATION.base) },
+  exit: { opacity: 0, transition: leaving(DURATION.base) },
+};
+
+/**
+ * A right-docked panel, sliding in from its own width. `AuditDrawer` and `CategoriesPanel`.
+ *
+ * `x: "100%"` rather than a pixel offset, so the preset needs to know nothing about how wide
+ * the panel is — and a panel whose width is a percentage of the window still starts exactly
+ * off-screen. Pair it with {@link scrim} in the same `AnimatePresence`.
+ *
+ * Under reduced motion this becomes instant, because `x` is a transform. That is the intended
+ * outcome and the whole point of the rule: the panel appears, it does not travel.
+ */
+export const drawerRight: EnterExit = {
+  initial: { x: "100%" },
+  animate: { x: 0, transition: arriving(DURATION.slow) },
+  exit: { x: "100%", transition: leaving(DURATION.base) },
+};
+
+/**
+ * A centred surface drawn over the view: `DeckSettingsDialog`, `TheoryDiffDialog`.
+ *
+ * The scale is 0.97 and not 0.9 on purpose — a dialog that grows visibly reads as a zoom, and
+ * this one is meant to read as arriving. Exits a touch *above* 1 so the gesture reverses rather
+ * than retracing.
+ */
+export const dialog: EnterExit = {
+  initial: { opacity: 0, scale: 0.97 },
+  animate: { opacity: 1, scale: 1, transition: arriving(DURATION.slow) },
+  exit: { opacity: 0, scale: 0.98, transition: leaving(DURATION.base) },
+};
+
+/**
+ * A small popup anchored to the control that opened it: the set picker, `AddToCollection`,
+ * `ValidationPanel`.
+ *
+ * **The transform origin is the consumer's**, and it matters more than anything in here: a
+ * popup that grows from the middle of itself reads as unrelated to its trigger. Set it with
+ * Tailwind's whole-literal utilities — `origin-top-right` for a popup pinned `right-0` under
+ * its trigger, `origin-top-left` for a left-aligned one, `origin-bottom-*` for one that opens
+ * upward. Never build the class by interpolation; see `layers.ts` for why.
+ *
+ * Leaves on `fast` while it arrives on `base`: a dismissal that lingers feels stuck, and the
+ * reader has already looked away.
+ */
+export const popup: EnterExit = {
+  initial: { opacity: 0, scale: 0.96 },
+  animate: { opacity: 1, scale: 1, transition: arriving(DURATION.base) },
+  exit: { opacity: 0, scale: 0.98, transition: leaving(DURATION.fast) },
+};
+
+/**
+ * An inline `role="status"` / `role="alert"` line that **grows into place** instead of shoving
+ * everything below it down by its full height the instant it appears.
+ *
+ * It animates `height` from 0 to `auto`, which `motion` measures for you — and which needs
+ * `overflow-hidden` on the element, or the text is fully drawn at zero height for the first
+ * frame. That class is the consumer's to add, because it is layout and this is timing.
+ *
+ * **The gap above the line is the trap.** A margin on a box whose height is animating to 0
+ * still occupies its margin, so the layout still jumps — by the margin instead of by the whole
+ * 32px, which looks like a bug rather than like a fix. Two ways out, and either is fine: put
+ * the spacing on a child *inside* the animated element, or use {@link statusLineGap} and drop
+ * the margin class.
+ */
+export const statusLine: EnterExit = {
+  initial: { height: 0, opacity: 0 },
+  animate: { height: "auto", opacity: 1, transition: arriving(DURATION.base) },
+  exit: { height: 0, opacity: 0, transition: leaving(DURATION.base) },
+};
+
+/**
+ * {@link statusLine} with its top margin animated too.
+ *
+ * A function and not a constant because the gap belongs to the surface, not to the vocabulary:
+ * pass the pixel value of the margin class you would otherwise have written (`mt-1` is 4,
+ * `mt-2` is 8, `mt-3` is 12) and remove that class from the element.
+ */
+export function statusLineGap(marginTop: number): EnterExit {
+  return {
+    initial: { height: 0, opacity: 0, marginTop: 0 },
+    animate: { height: "auto", opacity: 1, marginTop, transition: arriving(DURATION.base) },
+    exit: { height: 0, opacity: 0, marginTop: 0, transition: leaving(DURATION.base) },
+  };
+}
+
+/** {@link press}'s shape: the two gesture props plus the one transition they share. */
+export interface PressFeedback {
+  whileHover: TargetAndTransition;
+  whileTap: TargetAndTransition;
+  transition: Transition;
+}
+
+/**
+ * Hover and press feedback for a button or a chip.
+ *
+ * Small numbers on purpose. 1.02 and 0.96 are felt rather than seen, which is what a control
+ * that is pressed a hundred times an hour needs; anything larger turns a table of buttons into
+ * a trampoline. Both are transforms, so both go instant under reduced motion and the feedback
+ * survives as a step rather than a slide.
+ *
+ * It does **not** carry a `whileFocus`. A focus ring is not motion, and scaling on focus moves
+ * a control out from under a caret the reader just put there.
+ */
+export const press: PressFeedback = {
+  whileHover: { scale: 1.02 },
+  whileTap: { scale: 0.96 },
+  transition: TRANSITION.fast,
+};
+
+/**
+ * The deck stack's one moving card.
+ *
+ * Only ever one: opening card *N+1* instead of card *N* leaves every card's top unchanged
+ * except that one, which travels 286px (the spec's §1 arithmetic). So this is a single
+ * `margin-bottom` tween and the values belong to `CardStack`, which owns the geometry —
+ * `STACK_CARD_HEIGHT`, `STACK_ADVANCE` and the collapsed margin are not this file's to know.
+ *
+ * `standard` and not `enter`: the card is moving between two positions it occupies either way,
+ * not arriving from nowhere. `base`, because the spec's table puts the stack reflow there.
+ */
+export const stackCard: Transition = TRANSITION.base;
+
+/**
+ * An {@link EnterExit} as `Variants`, for the one case a prop bag cannot do: a parent that
+ * drives its children by label.
+ *
+ * The labels are `hidden` / `visible` / `exit` and not `initial` / `animate` / `exit`, because
+ * a variant named after the prop that selects it reads as a tautology at the call site.
+ */
+export function variants(preset: EnterExit): Variants {
+  return { hidden: preset.initial, visible: preset.animate, exit: preset.exit };
+}
