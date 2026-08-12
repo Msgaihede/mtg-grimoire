@@ -12,6 +12,8 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage --testTimeout=30000",
+    "test:coverage:rust": "node scripts/coverage-rust.mjs",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "verify": "npm run build && npm run lint && npm run test:run && cargo test --manifest-path src-tauri/Cargo.toml"

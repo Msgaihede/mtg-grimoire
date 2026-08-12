@@ -60,5 +60,30 @@ export default defineConfig({
     // CSS; `.storybook/preview.tsx` imports three files of it and reaches the suite through
     // `src/stories.test.tsx`, which is the second thing this now carries.
     css: true,
+    coverage: {
+      provider: "v8",
+      // `json-summary` is the machine-readable one — `coverage/coverage-summary.json` is
+      // what the README figure is read off. `text` prints the per-file table locally.
+      reporter: ["text", "json-summary"],
+      // Vitest 4 dropped `coverage.all`; an explicit `include` is now what makes a file
+      // with no test at all count as 0% instead of vanishing from the denominator. Without
+      // it the report covers only modules some test happened to import, which flatters the
+      // number by exactly the files nobody tested.
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        // Tests, and the two helpers that exist only for them.
+        "src/**/*.test.{ts,tsx}",
+        "src/test-setup.ts",
+        "src/test-drag.ts",
+        // Stories are the Storybook workbench, not app code. They *do* run — through
+        // `src/stories.test.tsx` — so leaving them in would count the workbench's own
+        // coverage of itself as product coverage.
+        "src/**/*.stories.tsx",
+        // No statements to cover: ambient types, and the `createRoot` entry point that
+        // only ever runs in a browser.
+        "src/vite-env.d.ts",
+        "src/main.tsx",
+      ],
+    },
   },
 });

@@ -8,6 +8,9 @@ storybook-static/
 *.tsbuildinfo
 src-tauri/target/
 src-tauri/data/
+# `vitest run --coverage` writes here. The Rust side's equivalent lands under
+# `src-tauri/target/llvm-cov/`, which the line above already covers.
+coverage/
 data/
 *.local
 .DS_Store
