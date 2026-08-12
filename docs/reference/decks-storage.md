@@ -222,6 +222,10 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   The gallery path end to end: `Import deck` → paste `REFERENCE_LIST` → the box counts
   **105 lines · 117 cards** → name it and pick Commander → Preview → **117 cards · 6 categories**
   and **no problem list at all** → pick a commander → Import → the editor opens on the new deck.
+  **That `6 categories` is the tally bug being measured, not the shipped behaviour**: the pile
+  count was computed before the commander was chosen and never recomputed, so the same press
+  today reads **7 categories** with a `Commander` row — see
+  [the frontend's own rules](../../src/features/decks/CLAUDE.md) for the fix and the numbers.
   Read back through `deck_get`: **105 of 105 lines resolved** against the live corpus — 0
   unmatched, 0 hint misses, 0 parse issues — **105 rows carrying 117 copies**, and ten categories:
   the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,
@@ -249,31 +253,49 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   Halfling`, the one non-legendary creature among its 56 creatures, was correctly not offered.
   This is the first time the `power`/`toughness` columns schema v5 added have been shown doing the
   job they were added for, on real data rather than on a fixture.
-- **BUG, found live and not fixed: a printing hint that resolves is trusted over the name, so a
-  wrong hint silently imports a different card.** `BY_SET_AND_NUMBER` consults no name — which is
-  deliberate and documented, and is what lets a non-English list land on the right cards — but
-  nothing afterwards checks that the printing it found *is* the card the line named, and
-  `hint_missed` cannot say so because the hint did not miss. Measured: `Captain Sisay (brc 132)` →
-  **`Arcane Signet [brc 132]`**, `hint_missed: false`; `Sol Ring (ltc 285)` → **`Talisman of
-  Conviction`**; `Forest (unf 235)` → **`Plains`**; `Path to Exile (2x2 21)` → **`Monastery
-  Mentor`**. The preview shows **no problem at all** for any of them. The failing-open design is
-  intact for the case it was written for — `Captain Sisay (brc 99999)` sets `hint_missed: true`
-  and falls through to the name — so the gap is precisely "the hint matched *something else*",
-  which a stale collector number, a renumbered reprint or a hand-edited list all produce.
-- **BUG, in this repo's own fixture: `MOXFIELD_LIST`'s set/collector hints are fabricated.** Five
-  of its six lines name a printing that is a different card in the live corpus (only
-  `Arcane Signet (ELD) 331` is right), so the fixture demonstrates the trap above rather than a
-  Moxfield export. The parser tests stay green because they assert *parsing*, and Storybook stays
-  green because the fake carries its own corpus — nothing that runs in CI resolves this fixture
-  against real data. `REFERENCE_LIST`, which carries no hints at all, is unaffected and resolved
-  105 of 105.
-- **`MATCH_ORDER` has no language term**, so a name-only line lands on whatever paper printing is
-  newest — which for **5 of the reference list's 105 lines** is not an English one:
-  `Akroma's Will → soa 131 [ja]`, `Arcane Signet → hoc 95 [dw]`, `Mox Amber → hoc 96 [dw]`,
-  `Elesh Norn, Mother of Machines → one 418 [ph]`, `The Wandering Rescuer → pwcs 2026-3 [ja]`.
-  100 of 105 came back `en`. Recorded rather than fixed: determinism and "a printing you own
-  first" are the promises the order exists to keep, and a language preference is a fourth key
-  nobody has decided the position of.
+- **A hint narrows which _printing of the named card_ to take. It never overrides which card** —
+  `hint_names_the_card`, and it was a live bug before it was a rule. `BY_SET_AND_NUMBER` consults
+  no name in its SQL, which is deliberate and is what lets a non-English list land on the right
+  cards; nothing then checked that the printing it found _was_ the card the line named, and
+  `hint_missed` could not say so because the hint had not missed. Measured 2026-08-12 in the
+  shipped window (**debug**) over the live corpus: `Captain Sisay (brc 132)` imported
+  **`Arcane Signet`**, `Sol Ring (ltc 285)` **`Talisman of Conviction`**, `Forest (unf 235)`
+  **`Plains`**, `Path to Exile (2x2 21)` **`Monastery Mentor`** — every one `hint_missed: false`
+  with no problem list drawn at all. The row's name is now folded against the line's, and a
+  disagreement is treated as **exactly** a hint that named nothing: `hint_missed`, and fall
+  through to the name arms, so a wrong hint costs the reader the printing and never the card.
+  **The check is the most permissive of the three name tests** (`fold_rank` — the whole folded
+  name or the folded front face), because both binary arms imply their folded form; so the guard
+  can only discard a row no name arm could have reached either. The set-with-name arms need none:
+  the name is in their `WHERE` clause. Same reasoning as `deck_swap_printing`'s different-oracle
+  guard — "swap this printing" must never become "swap this card".
+- **`MOXFIELD_LIST`'s hints are real pairs, verified against the corpus** — and they were
+  fabricated until 2026-08-12, when five of its six lines named a different card and the repo's
+  own Moxfield fixture demonstrated the trap above rather than a Moxfield export. Nothing in CI
+  catches that: the parser tests assert _parsing_, and Storybook carries its own corpus, so no
+  green check ever resolves a fixture against real data. Verified against the live 116 695-row
+  corpus (data of 2026-08-10): `Captain Sisay (INV) 237`, `Sol Ring (LTC) 284`,
+  `Arcane Signet (ELD) 331`, `Forest (UNF) 239`, `Path to Exile (2X2) 23`. `Captain Sisay` has no
+  `brc` printing at all — that set code was invented whole. **A hint that cannot be verified is
+  dropped from its line rather than guessed at.**
+- **`MATCH_ORDER` prefers English, behind the owned printing and ahead of the date.** Without a
+  language term a name-only line lands on whatever paper printing is newest, which for **5 of the
+  reference list's 105 lines** was not an English one: `Akroma's Will → soa 131 [ja]`,
+  `Arcane Signet → hoc 95 [dw]`, `Mox Amber → hoc 96 [dw]`,
+  `Elesh Norn, Mother of Machines → one 418 [ph]`, `The Wandering Rescuer → pwcs 2026-3 [ja]` —
+  100 of 105 `en`. With `(c.lang = 'en') DESC` in the order those five become `soa 1`, `sld 2816`,
+  `brr 98z`, `one 419` and `pdsk 41p`, and the list is **105 of 105 English** (re-measured
+  2026-08-12 through `node:sqlite` against the live corpus, driving the shipped statements' own
+  `WHERE`/`ORDER BY` text; the collection was empty, so `owned_quantity` was 0 on every row and
+  the language term was the only key that could move). **Position is the whole decision**: behind
+  `owned_quantity`, because a Japanese copy you own is still a copy you own and a deck that
+  preferred an English printing you have not got would claim nothing from the binder; ahead of
+  the date, because "newest" is a tie-break for which printing looks current and is exactly the
+  key that produced those five. `cards.lang` is `TEXT NOT NULL` holding Scryfall's codes (`en`,
+  `es`, `ja`, … 19 in the corpus, 0 NULL), so the predicate is a plain equality and never a
+  three-valued one — and the `id` tie-break still ends the order, so an import stays
+  deterministic. The fold arm sorts in Rust and carries the same term in the same position,
+  because that arm may never disagree with the SQL one.
 - **Card images decoded in the shipped window for the first time.** The 2026-08-11 deck-builder
   pass could not render one because `cards.scryfall.io` was in a path-MTU black hole; on
   2026-08-12 that host was reachable and the pass left **401 files / 20.17 MB** under

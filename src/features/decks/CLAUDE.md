@@ -114,21 +114,24 @@ panel, nothing written until Import). The Rust half and every measurement:
   new deck, `deck_import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
   `invoke` on that build, and the commander step offered **56** candidates — the list's 55
   legendary creatures plus a legendary Spacecraft with a P/T box. Every figure, the variant and
-  audit checks, and the three resolver-side bugs it found (the fourth is the next bullet):
+  audit checks, and the three resolver-side faults it found — all since fixed: a printing hint
+  trusted over the card name, `MOXFIELD_LIST`'s fabricated hints, and `MATCH_ORDER` having no
+  language term — are in
   [decks-storage.md](../../../docs/reference/decks-storage.md).
-- **The preview's tally is computed before the commander is chosen and is never recomputed, so
-  the two numbers on that step disagree with what gets written.** `buildImportPlan` fills
-  `categories` from `tallyOf(cards)`, which reads only `autoCategoryFor`'s answer;
-  `toImportItems(plan, commanderIds)` is what actually moves the commander, and it runs at
-  Import. Measured live: the reference list previewed as **`117 cards · 6 categories`** with
-  `Creature 56` and no Commander row, and `deck_get` after the import read **7 categories**,
-  `Creature 55`, `Commander 1`. It is worst on the **`automatic`** arm, where the reader is given
-  nothing to press — the dialog printed *"Krenko, Mob Boss goes in the command zone"* directly
-  above a tally listing him under `Creature` and no Commander pile at all. `fromFile` is the one
-  arm that agrees, because there the card already carries the Commander category name. The
-  `toImportItems` doc calls the split deliberate ("the plan is what the preview draws *while*
-  they are still choosing") and the split is fine; what is missing is a second tally over the
-  items actually being sent.
+- **The preview's tally is counted over the _items_, never over the plan** — `tallyOf(items)`
+  where `items` is `toImportItems(plan, commanderIds)`, so it recomputes on every press. There is
+  deliberately **no `categories` field on `ImportPlan`**: the piles are a fact about what is being
+  sent, and the commander choice is applied in `toImportItems` and nowhere else, so that is the
+  only place a preview of it can be counted. `totalCards` stays on the plan, because the choice
+  changes _which_ pile a card lands in and never _how many_ copies land. This was a live bug:
+  measured 2026-08-12, the reference list previewed as **`117 cards · 6 categories`** with
+  `Creature 56` and no Commander row while `deck_get` after the import read **7 categories**,
+  `Creature 55`, `Commander 1`. Worst on the **`automatic`** arm, where the reader presses
+  nothing — the dialog printed *"Krenko, Mob Boss goes in the command zone"* directly above a
+  tally filing him under `Creature`. `fromFile` was the one arm that agreed, because there the
+  card already carries the Commander category name. The split `toImportItems`' doc calls
+  deliberate is still right ("the plan is what the preview draws _while_ they are still
+  choosing"); what was wrong is that the tally was ever part of the plan.
 - **The layer contract holds and was measured, not assumed.** The dialog's scrim computes to
   `z-index: 45` from both entry points (`LAYER.overlay`, the rung the editor's other full-window
   surfaces share); one Escape closed the dialog and **left the card pane open**, handing focus
@@ -214,17 +217,14 @@ price | type`). An **inactive category stays its own group in all three grouping
 
 ## Known open bugs
 
-Six, all found by driving the shipped window and **none of them fixed.**
-
-Three from the 2026-08-11 builder pass — the title row collapsing the deck name at 1060–1350px, a
-custom deck cover never appearing in the gallery, and Table view starving the card name. Detail:
+Three, all found by driving the shipped window and **none of them fixed** — all from the
+2026-08-11 builder pass: the title row collapsing the deck name at 1060–1350px, a custom deck
+cover never appearing in the gallery, and Table view starving the card name. Detail:
 [docs/reference/decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
 
-Three from the 2026-08-12 import pass. **The preview tally ignoring the commander choice** is
-written up in the `## Import` section above, because it is a TypeScript decision. The other two are
-in [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) with their
-reproductions: a **printing hint that resolves is trusted over the name**, so a wrong hint silently
-imports a different card and `hint_missed` stays `false`; and **`MOXFIELD_LIST`'s own hints are
-fabricated** — five of its six lines name a different card in the live corpus. A fourth finding,
-recorded there rather than filed: `MATCH_ORDER` has no language term, so 5 of the reference list's
-105 lines resolve to a non-English printing.
+The 2026-08-12 import pass found four more and **all four are fixed**, each with a test that fails
+against the code before it: the preview tally ignoring the commander choice (the `## Import`
+section above — it is a TypeScript decision), and three resolver-side ones in
+[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) with their
+reproductions — a printing hint trusted over the card name, `MOXFIELD_LIST`'s fabricated hints,
+and `MATCH_ORDER` having no language term.

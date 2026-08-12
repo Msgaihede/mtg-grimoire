@@ -136,6 +136,16 @@ Full detail, with the measurements and the traps behind each rule, is in
   `"N // N"` rows outranked the real card on 3 of those 105 lines. Case-insensitivity lives in the
   fold arm, in Rust, over `cards_fts`. **Do not restore the collation here** — it reads like a
   regression and is not one.
+- **`deck_import.rs`: a printing hint narrows which _printing of the named card_ to take, never
+  which card** (`hint_names_the_card`). `BY_SET_AND_NUMBER` consults no name in its SQL, so the row
+  it finds is folded against the line's name in Rust and a disagreement is treated as exactly a
+  hint that named nothing — `hint_missed`, and fall through. Before that guard,
+  `1 Captain Sisay (brc) 132` silently imported **Arcane Signet** with `hint_missed: false`. Same
+  reasoning as `deck_swap_printing`'s different-oracle guard.
+- **`deck_import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
+  language key is the decision: a copy you own in any language is still a copy you own, while
+  "newest" is exactly the key that put 5 of the reference list's 105 lines on a `ja`/`dw`/`ph`
+  printing. `fold_match` repeats the same keys in Rust and may never disagree.
 
 ## Scryfall and the network
 
