@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tauri": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@hypothesi/tauri-mcp-server"
+      ],
+      "env": {}
+    },
+    "mtg-grimoire-sb-mcp": {
+      "url": "http://localhost:6006/mcp",
+      "type": "http"
+    }
+  }
+}
