@@ -50,7 +50,7 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  */
 const CHIP = cn(
   "rounded-md border px-2 py-1 text-xs",
-  "transition-[color,background-color,border-color,opacity,transform]",
+  "transition-[color,background-color,border-color,opacity,transform,scale]",
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
   "motion-reduce:transition-none",
 );

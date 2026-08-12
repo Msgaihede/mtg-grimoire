@@ -47,7 +47,7 @@ import { TextView } from "./views/TextView";
  *  `disabled` when the specs have not answered and must not appear to depress. */
 const CONTROL =
   "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
-  "transition-[color,background-color,border-color,opacity,transform] " +
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
   "disabled:active:scale-100 motion-reduce:transition-none";
 

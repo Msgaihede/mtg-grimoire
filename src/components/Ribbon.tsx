@@ -126,7 +126,7 @@ export function Ribbon({
                 // One arbitrary property list rather than a colour utility beside a transform
                 // one: those two compile to the same CSS longhand, so tailwind-merge keeps
                 // whichever it saw last and the press feedback snaps with nothing to show.
-                "transition-[color,background-color,border-color,opacity,transform]",
+                "transition-[color,background-color,border-color,opacity,transform,scale]",
                 "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
                 "motion-reduce:transition-none",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
@@ -193,7 +193,7 @@ export function Ribbon({
             className={cn(
               "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm",
               "hover:bg-bg",
-              "transition-[color,background-color,border-color,opacity,transform]",
+              "transition-[color,background-color,border-color,opacity,transform,scale]",
               "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
               "motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",

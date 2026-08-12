@@ -59,7 +59,7 @@ const GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4";
  */
 const ICON_BUTTON = cn(
   "grid size-6 place-items-center rounded-md text-dim hover:text-text",
-  "transition-[color,background-color,border-color,opacity,transform]",
+  "transition-[color,background-color,border-color,opacity,transform,scale]",
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
   "motion-reduce:transition-none",
   FOCUS,
@@ -71,7 +71,7 @@ const ICON_BUTTON = cn(
  *  reason. */
 const HEADING_BUTTON = cn(
   "h-9 rounded-md border border-border bg-surface px-3 text-sm text-dim hover:text-text",
-  "transition-[color,background-color,border-color,opacity,transform]",
+  "transition-[color,background-color,border-color,opacity,transform,scale]",
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
   "motion-reduce:transition-none",
   FOCUS,

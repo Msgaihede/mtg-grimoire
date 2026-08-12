@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  *  refuses is a control that lies. */
 const BUTTON =
   "inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-1.5 text-sm " +
-  "transition-[color,background-color,border-color,opacity,transform] " +
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
   "motion-reduce:transition-none " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +

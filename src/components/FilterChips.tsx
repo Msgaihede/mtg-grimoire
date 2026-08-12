@@ -44,7 +44,7 @@ export const FILTER_FOCUS =
  */
 export const FILTER_CONTROL =
   "h-9 rounded-md border text-sm " +
-  "transition-[color,background-color,border-color,opacity,transform] " +
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
   "aria-disabled:active:scale-100 motion-reduce:transition-none";
 
@@ -132,7 +132,7 @@ export function ManaChip({
         // is a ring and a ring is a box shadow — but `transform` joins it so the colour chips
         // depress like every other chip in the row, and a row where half the chips answer a
         // press is worse than one where none of them do.
-        "transition-[opacity,box-shadow,transform] duration-[var(--duration-fast)] ease-standard",
+        "transition-[opacity,box-shadow,transform,scale] duration-[var(--duration-fast)] ease-standard",
         "active:scale-[0.97] aria-disabled:active:scale-100 motion-reduce:transition-none",
         // Clear of the pressed ring, so a focused chip that is already on shows both.
         "focus-visible:outline-2 focus-visible:outline-offset-[5px] focus-visible:outline-accent",

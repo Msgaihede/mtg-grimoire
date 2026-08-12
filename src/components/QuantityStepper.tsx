@@ -36,7 +36,7 @@ const FOCUS_INSET =
  */
 const BUTTON =
   "grid place-items-center rounded-md border border-border text-dim hover:text-text " +
-  "transition-[color,background-color,border-color,opacity,transform] " +
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
   "disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100 " +
   "motion-reduce:transition-none";
