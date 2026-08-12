@@ -584,22 +584,14 @@ pub async fn collection_remove(
         .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-/// What one owned card is worth in USD, read from the `prices` blob **by finish**.
+/// What one owned card is worth at the reader's marketplace, **by finish** — the entry's own
+/// `e.finish`, handed to [`crate::sorting::price_expr`].
 ///
 /// Never `cards.price_usd`: that column is a display/sort fallback chain
 /// (`usd → usd_foil → usd_etched`) and would price a plain copy of a card whose only
 /// listed price is its foil at the foil's price. A finish with no price is `NULL` —
-/// which is a different statement from `0.00`, and is counted as such.
-pub const FINISH_PRICE_USD: &str = "CAST(json_extract(c.prices,
-        CASE e.finish WHEN 'foil' THEN '$.usd_foil'
-                      WHEN 'etched' THEN '$.usd_etched'
-                      ELSE '$.usd' END) AS REAL)";
-
-/// The same in EUR, with the hole the data actually has: **`eur_etched` does not exist**.
-/// An etched card is unpriced in euros rather than valued at the nonfoil rate.
-pub const FINISH_PRICE_EUR: &str = "CASE e.finish WHEN 'etched' THEN NULL ELSE
-        CAST(json_extract(c.prices,
-            CASE e.finish WHEN 'foil' THEN '$.eur_foil' ELSE '$.eur' END) AS REAL) END";
+/// which is a different statement from `0.00`, and is counted as such, in every marketplace.
+pub const ENTRY_FINISH: &str = "e.finish";
 
 /// Rows per page. The collection is not 116 k rows, but it can be tens of thousands, and
 /// the table is virtualised for the same reason the search results are.
@@ -622,10 +614,11 @@ pub struct CollectionQuery {
     /// breaking its ties. Empty or absent is name order. Keys outside [`COLLECTION_SORTS`]
     /// are dropped, never interpolated.
     pub sort: Option<Vec<crate::sorting::SortTerm>>,
-    /// Which currency the `value` and `price` sorts order by. Absent — or anything this build
-    /// does not recognise — means `usd`, which is what every caller had before there was a
-    /// marketplace to pick. See [`crate::sorting::Currency`].
-    pub currency: crate::sorting::Currency,
+    /// Where to quote prices from — the source of every figure on the page and the order the
+    /// `value` and `price` sorts read. Absent, or anything this build does not recognise,
+    /// means `tcgplayer`, which is what every caller had before there was a marketplace to
+    /// pick. See [`crate::sorting::Marketplace`].
+    pub marketplace: crate::sorting::Marketplace,
     pub limit: u32,
     pub offset: u32,
 }
@@ -652,9 +645,10 @@ pub struct CollectionRow {
     pub condition: String,
     pub quantity: i64,
     pub tradelist_quantity: i64,
-    /// Per copy, per finish, from the blob. `None` when there is no price for that finish.
-    pub unit_price_usd: Option<f64>,
-    pub unit_price_eur: Option<f64>,
+    /// Per copy, per finish, at the marketplace the query named. `None` when that marketplace
+    /// has no price for that finish — a fact about the marketplace, never filled in from
+    /// another one.
+    pub unit_price: Option<f64>,
     pub purchase_price: Option<f64>,
     pub purchase_currency: Option<String>,
     pub acquired_at: Option<String>,
@@ -695,12 +689,12 @@ pub struct CollectionSummary {
     pub unique_cards: i64,
     pub entries: i64,
     pub tradelist_cards: i64,
-    pub value_usd: f64,
-    pub value_eur: f64,
-    /// Copies with no price for their finish. Shown beside the value, because a total that
-    /// silently omits 400 cards is a number that lies by rounding down.
-    pub unpriced_usd: i64,
-    pub unpriced_eur: i64,
+    /// What the listed rows are worth at the marketplace the query named.
+    pub value: f64,
+    /// Copies that marketplace has no price for. Shown beside the value, because a total that
+    /// silently omits 400 cards is a number that lies by rounding down — and the figure moves
+    /// with the marketplace, which is the point of showing it.
+    pub unpriced: i64,
     pub needs_review: i64,
 }
 
@@ -848,41 +842,31 @@ const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
     },
 ];
 
-/// `value` and `price`, in each currency — the two keys that turn on the reader's
-/// marketplace.
+/// `value` and `price` — the two keys that turn on the reader's marketplace.
 ///
-/// Both order by the **output aliases** of the two per-finish price expressions the page
-/// already selects, `unit_price_usd` and `unit_price_eur`, and never by any column of either
-/// table. So the euro orders carry [`FINISH_PRICE_EUR`]'s hole with them: an etched row is
-/// NULL in euros and sorts last in both directions, where in dollars it has a price and does
-/// not. That is the marketplace being honest rather than the sort being wrong — Cardmarket
-/// does not quote etched.
+/// Both order by the **output alias** of the per-finish price expression the page already
+/// selects, and never by any column of either table, so the order and the cell cannot come
+/// from two marketplaces. That alias is what [`UNIT_PRICE_ALIAS`] names and what
+/// [`crate::sorting::sorts_for`] fills the hole with.
+///
+/// The marketplace's own holes ride along: an etched row is NULL on Cardmarket — there is no
+/// `eur_etched` key — and sorts last in both directions, where on TCGplayer it has a price and
+/// does not. That is the marketplace being honest rather than the sort being wrong.
 const COLLECTION_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
     crate::sorting::PricedSort {
-        usd: crate::sorting::SortColumn {
-            key: "value",
-            asc: "unit_price_usd * e.quantity ASC NULLS LAST",
-            desc: "unit_price_usd * e.quantity DESC NULLS LAST",
-        },
-        eur: crate::sorting::SortColumn {
-            key: "value",
-            asc: "unit_price_eur * e.quantity ASC NULLS LAST",
-            desc: "unit_price_eur * e.quantity DESC NULLS LAST",
-        },
+        key: "value",
+        asc: "{price} * e.quantity ASC NULLS LAST",
+        desc: "{price} * e.quantity DESC NULLS LAST",
     },
     crate::sorting::PricedSort {
-        usd: crate::sorting::SortColumn {
-            key: "price",
-            asc: "unit_price_usd ASC NULLS LAST",
-            desc: "unit_price_usd DESC NULLS LAST",
-        },
-        eur: crate::sorting::SortColumn {
-            key: "price",
-            asc: "unit_price_eur ASC NULLS LAST",
-            desc: "unit_price_eur DESC NULLS LAST",
-        },
+        key: "price",
+        asc: "{price} ASC NULLS LAST",
+        desc: "{price} DESC NULLS LAST",
     },
 ];
+
+/// What the page calls its price column, and therefore what its money sorts order by.
+const UNIT_PRICE_ALIAS: &str = "unit_price";
 
 /// Name order, with the orphans under their card id rather than at the top under an empty
 /// string. The `e.id` tiebreak is appended by [`crate::sorting::order_by`].
@@ -914,14 +898,15 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
         "SELECT e.id, e.card_id, c.name, e.set_code, c.set_name, e.collector_number, e.lang,
                 c.rarity, c.mana_cost, c.type_line, c.layout,
                 e.finish, e.condition, e.quantity, e.tradelist_quantity,
-                {FINISH_PRICE_USD} AS unit_price_usd, {FINISH_PRICE_EUR} AS unit_price_eur,
+                {price} AS {UNIT_PRICE_ALIAS},
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at
          FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+        price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
             q.sort.as_deref(),
-            &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, q.currency),
+            &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, UNIT_PRICE_ALIAS),
             COLLECTION_DEFAULT_ORDER,
             "e.id ASC",
         )
@@ -950,22 +935,21 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     condition: r.get(12)?,
                     quantity: r.get(13)?,
                     tradelist_quantity: r.get(14)?,
-                    unit_price_usd: r.get(15)?,
-                    unit_price_eur: r.get(16)?,
-                    purchase_price: r.get(17)?,
-                    purchase_currency: r.get(18)?,
-                    acquired_at: r.get(19)?,
-                    acquisition_source: r.get(20)?,
-                    serial_number: r.get(21)?,
-                    altered: r.get(22)?,
-                    signed: r.get(23)?,
-                    proxy: r.get(24)?,
-                    misprint: r.get(25)?,
-                    grading: r.get(26)?,
-                    tags: r.get(27)?,
-                    notes: r.get(28)?,
-                    needs_review: r.get(29)?,
-                    updated_at: r.get(30)?,
+                    unit_price: r.get(15)?,
+                    purchase_price: r.get(16)?,
+                    purchase_currency: r.get(17)?,
+                    acquired_at: r.get(18)?,
+                    acquisition_source: r.get(19)?,
+                    serial_number: r.get(20)?,
+                    altered: r.get(21)?,
+                    signed: r.get(22)?,
+                    proxy: r.get(23)?,
+                    misprint: r.get(24)?,
+                    grading: r.get(25)?,
+                    tags: r.get(26)?,
+                    notes: r.get(27)?,
+                    needs_review: r.get(28)?,
+                    updated_at: r.get(29)?,
                 })
             },
         )
@@ -985,14 +969,11 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 count(DISTINCT e.card_id),
                 count(*),
                 coalesce(sum(e.tradelist_quantity), 0),
-                coalesce(sum(e.quantity * coalesce({usd}, 0.0)), 0.0),
-                coalesce(sum(e.quantity * coalesce({eur}, 0.0)), 0.0),
-                coalesce(sum(CASE WHEN {usd} IS NULL THEN e.quantity ELSE 0 END), 0),
-                coalesce(sum(CASE WHEN {eur} IS NULL THEN e.quantity ELSE 0 END), 0),
+                coalesce(sum(e.quantity * coalesce({price}, 0.0)), 0.0),
+                coalesce(sum(CASE WHEN {price} IS NULL THEN e.quantity ELSE 0 END), 0),
                 coalesce(sum(CASE WHEN e.needs_review IS NOT NULL THEN 1 ELSE 0 END), 0)
          FROM {FROM} WHERE {where_sql}",
-        usd = FINISH_PRICE_USD,
-        eur = FINISH_PRICE_EUR
+        price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH)
     );
     conn.query_row(
         &sql,
@@ -1003,11 +984,9 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 unique_cards: r.get(1)?,
                 entries: r.get(2)?,
                 tradelist_cards: r.get(3)?,
-                value_usd: r.get(4)?,
-                value_eur: r.get(5)?,
-                unpriced_usd: r.get(6)?,
-                unpriced_eur: r.get(7)?,
-                needs_review: r.get(8)?,
+                value: r.get(4)?,
+                unpriced: r.get(5)?,
+                needs_review: r.get(6)?,
             })
         },
     )
@@ -1083,6 +1062,29 @@ mod tests {
             finish: finish.to_owned(),
             quantity,
             ..Default::default()
+        }
+    }
+
+    /// The default query, priced somewhere other than the default.
+    fn on(marketplace: crate::sorting::Marketplace) -> CollectionQuery {
+        CollectionQuery {
+            marketplace,
+            ..Default::default()
+        }
+    }
+
+    /// Rows in `marketplace_prices` — schema v10's table, which `migrate` has already made.
+    ///
+    /// Written by hand rather than through `crate::marketplace_feed`, because what these tests
+    /// are about is what a *query* does with a feed's rows and not how they got there.
+    fn seed_feed(conn: &Connection, rows: &[(&str, &str, &str, f64)]) {
+        for (marketplace, card_id, finish, price) in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO marketplace_prices
+                    (marketplace, card_id, finish, price) VALUES (?1,?2,?3,?4)",
+                rusqlite::params![marketplace, card_id, finish, price],
+            )
+            .unwrap();
         }
     }
 
@@ -1874,26 +1876,24 @@ mod tests {
         assert_eq!(s.unique_cards, 2, "two printings, three rows");
         assert_eq!(s.entries, 3);
         assert!(
-            (s.value_usd - (2.0 * 400.50 + 3.0 * 90.00 + 12.00)).abs() < 0.005,
+            (s.value - (2.0 * 400.50 + 3.0 * 90.00 + 12.00)).abs() < 0.005,
             "got {}",
-            s.value_usd
+            s.value
         );
-        // The Japanese printing has no EUR price of any kind, so those four cards are
-        // counted as unpriced rather than valued at their dollar figure.
-        assert!(
-            (s.value_eur - 2.0 * 320.00).abs() < 0.005,
-            "got {}",
-            s.value_eur
-        );
-        assert_eq!(s.unpriced_eur, 4);
-        assert_eq!(s.unpriced_usd, 0);
+        assert_eq!(s.unpriced, 0);
+
+        // The same rows on Cardmarket: the Japanese printing has no EUR price of any kind, so
+        // those four cards are counted as unpriced rather than valued at their dollar figure.
+        let s = summarise(&conn, &on(crate::sorting::Marketplace::Cardmarket)).unwrap();
+        assert!((s.value - 2.0 * 320.00).abs() < 0.005, "got {}", s.value);
+        assert_eq!(s.unpriced, 4);
     }
 
     /// `eur_etched` is documented and **does not exist in the data**. An etched card is
-    /// therefore unpriced in euros — never priced at the nonfoil rate, which is what a
+    /// therefore unpriced on Cardmarket — never priced at the nonfoil rate, which is what a
     /// naive `coalesce` chain would do.
     #[test]
-    fn an_etched_card_has_no_euro_price_at_all() {
+    fn an_etched_card_has_no_cardmarket_price_at_all() {
         let conn = seeded();
         conn.execute(
             "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -1906,10 +1906,11 @@ mod tests {
         add_entry(&conn, &input("bolt-etch", "etched", 2)).unwrap();
 
         let s = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert!((s.value - 50.00).abs() < 0.005, "got {}", s.value);
 
-        assert!((s.value_usd - 50.00).abs() < 0.005, "got {}", s.value_usd);
-        assert_eq!(s.value_eur, 0.0, "there is no eur_etched key in the data");
-        assert_eq!(s.unpriced_eur, 2);
+        let s = summarise(&conn, &on(crate::sorting::Marketplace::Cardmarket)).unwrap();
+        assert_eq!(s.value, 0.0, "there is no eur_etched key in the data");
+        assert_eq!(s.unpriced, 2);
     }
 
     /// Collector numbers are TEXT and ~9% of them are not numeric. A plain string sort puts
@@ -2029,10 +2030,10 @@ mod tests {
             (row.set_code.as_str(), row.collector_number.as_str()),
             ("lea", "161")
         );
-        assert_eq!(row.unit_price_usd, None, "and no price either — not zero");
+        assert_eq!(row.unit_price, None, "and no price either — not zero");
         let s = summarise(&conn, &CollectionQuery::default()).unwrap();
         assert_eq!(s.total_cards, 2, "the cards are still owned");
-        assert_eq!(s.unpriced_usd, 2);
+        assert_eq!(s.unpriced, 2);
     }
 
     /// The zero-quantity ruling, fenced. A stepper taken to zero keeps the row (Task 5), and
@@ -2091,9 +2092,9 @@ mod tests {
         // The value follows the copies, which is the same statement seen from the money
         // side: an emptied row is worth nothing and is not unpriced.
         assert!(
-            (after.value_usd - 3.0 * 90.00).abs() < 0.005,
+            (after.value - 3.0 * 90.00).abs() < 0.005,
             "got {}",
-            after.value_usd
+            after.value
         );
     }
 
@@ -2279,7 +2280,7 @@ mod tests {
     /// Every sort key is a *string interpolated into the statement*, so one that names a
     /// column or an alias the query does not have is a `prepare` error at run time — an
     /// empty list and an error dialog, not a differently-ordered one. `price` and `value`
-    /// earn this on their own: both order by the `unit_price_usd` **output alias**, not by
+    /// earn this on their own: both order by the `unit_price` **output alias**, not by
     /// any column of either table. Paged two at a time as well, so a sort that is not a
     /// total order shows a row twice here rather than in front of a reader — and the
     /// two-key case is in the list, because a second key makes an order *look* more
@@ -2305,10 +2306,10 @@ mod tests {
             ),
             ("nonsense", vec![term("nonsense", "asc")]),
         ];
-        // Both currencies, because the euro orders are *different strings* over a second
-        // alias — a `value` written against a `unit_price_eur` the page did not select would
-        // fail at prepare time and only ever on Cardmarket.
-        for currency in [crate::sorting::Currency::Usd, crate::sorting::Currency::Eur] {
+        // Every marketplace, because each writes a *different expression* into the same
+        // statement — and two of them reach a table `cards` does not join, so a spelling
+        // mistake there is a prepare error that would only ever fire on one shop.
+        for marketplace in MARKETPLACES {
             for (label, sort) in orders.clone() {
                 let mut seen: Vec<i64> = Vec::new();
                 for page in 0..2 {
@@ -2316,13 +2317,15 @@ mod tests {
                         &conn,
                         &CollectionQuery {
                             sort: Some(sort.clone()),
-                            currency,
+                            marketplace,
                             limit: 2,
                             offset: page * 2,
                             ..Default::default()
                         },
                     )
-                    .unwrap_or_else(|e| panic!("sorting by `{label}` in {currency:?} failed: {e}"));
+                    .unwrap_or_else(|e| {
+                        panic!("sorting by `{label}` on {marketplace:?} failed: {e}")
+                    });
                     assert_eq!(p.total, 3, "the count is the same set whatever the order");
                     seen.extend(p.items.iter().map(|r| r.id));
                 }
@@ -2332,16 +2335,41 @@ mod tests {
                 assert_eq!(
                     (unique.len(), seen.len()),
                     (3, 3),
-                    "paging by `{label}` in {currency:?} returned a row twice or lost one: {seen:?}"
+                    "paging by `{label}` on {marketplace:?} \
+                     returned a row twice or lost one: {seen:?}"
                 );
             }
         }
     }
 
-    /// Three entries whose dollar order and euro order disagree on every pair, one of them
+    /// Every marketplace a price can come from, so a loop over them cannot quietly miss the
+    /// one that was added last.
+    const MARKETPLACES: [crate::sorting::Marketplace; 4] = [
+        crate::sorting::Marketplace::Tcgplayer,
+        crate::sorting::Marketplace::Cardmarket,
+        crate::sorting::Marketplace::Cardkingdom,
+        crate::sorting::Marketplace::Manapool,
+    ];
+
+    /// `sorting`'s rule, applied to this table's list: a money clause with no `{price}` hole
+    /// in it is a clause that quotes one marketplace whatever the reader picked.
+    #[test]
+    fn every_collection_money_sort_names_the_price_hole() {
+        for p in COLLECTION_PRICE_SORTS {
+            assert!(p.asc.contains(crate::sorting::PRICE_HOLE), "{}", p.asc);
+            assert!(p.desc.contains(crate::sorting::PRICE_HOLE), "{}", p.desc);
+        }
+    }
+
+    /// Three entries whose order disagrees between every pair of marketplaces, one of them
     /// **etched** — and the etched card's blob carries a perfectly good `$.eur`, which is
     /// exactly the number a naive fallback would charge for it.
-    fn seeded_currencies() -> Connection {
+    ///
+    /// The feeds are seeded to make two further points. **Card Kingdom has never heard of the
+    /// etched printing**, which is what "unpriced at this marketplace" looks like from a
+    /// table; **Mana Pool prices it**, because that feed publishes an etched column where
+    /// Scryfall's euro keys do not. The same card, three different right answers.
+    fn seeded_marketplaces() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
         for (id, prices) in [
@@ -2360,6 +2388,17 @@ mod tests {
             )
             .unwrap();
         }
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "cheap-usd", "nonfoil", 3.00),
+                ("cardkingdom", "dear-usd", "nonfoil", 20.00),
+                // and no `cardkingdom` row for `etched` at all.
+                ("manapool", "cheap-usd", "nonfoil", 8.00),
+                ("manapool", "dear-usd", "nonfoil", 1.00),
+                ("manapool", "etched", "etched", 4.00),
+            ],
+        );
         // Quantities chosen so `value` and `price` disagree as well: the cheapest card is
         // held ten times and the dearest once.
         add_entry(&conn, &input("cheap-usd", "nonfoil", 10)).unwrap();
@@ -2369,16 +2408,16 @@ mod tests {
     }
 
     /// Ordering happens inside SQLite, so the chosen marketplace is the one thing about it
-    /// that has to cross the wire. Both keys, both directions, both currencies.
+    /// that has to cross the wire. Both keys, both directions, all four shops.
     #[test]
-    fn the_value_and_price_sorts_order_by_the_currency_they_are_asked_for() {
-        let conn = seeded_currencies();
-        let ids = |key: &str, dir: &str, currency| -> Vec<String> {
+    fn the_value_and_price_sorts_order_by_the_marketplace_they_are_asked_for() {
+        let conn = seeded_marketplaces();
+        let ids = |key: &str, dir: &str, marketplace| -> Vec<String> {
             list_entries(
                 &conn,
                 &CollectionQuery {
                     sort: Some(vec![term(key, dir)]),
-                    currency,
+                    marketplace,
                     ..Default::default()
                 },
             )
@@ -2388,70 +2427,142 @@ mod tests {
             .map(|r| r.card_id)
             .collect()
         };
-        let (usd, eur) = (crate::sorting::Currency::Usd, crate::sorting::Currency::Eur);
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
 
-        // Per copy: $1 / $50 / $9 against €90 / €2 / —.
+        // Per copy. TCGplayer $1 / $50 / $9; Cardmarket €90 / €2 / —; Card Kingdom
+        // $3 / $20 / — (no feed row); Mana Pool $8 / $1 / $4.
         assert_eq!(
-            ids("price", "asc", usd),
-            ["cheap-usd", "etched", "dear-usd"]
+            ids("price", "asc", Tcgplayer),
+            C("cheap-usd,etched,dear-usd")
         );
         assert_eq!(
-            ids("price", "asc", eur),
-            ["dear-usd", "cheap-usd", "etched"]
+            ids("price", "desc", Tcgplayer),
+            C("dear-usd,etched,cheap-usd")
         );
         assert_eq!(
-            ids("price", "desc", usd),
-            ["dear-usd", "etched", "cheap-usd"]
+            ids("price", "asc", Cardmarket),
+            C("dear-usd,cheap-usd,etched")
         );
         assert_eq!(
-            ids("price", "desc", eur),
-            ["cheap-usd", "dear-usd", "etched"],
+            ids("price", "desc", Cardmarket),
+            C("cheap-usd,dear-usd,etched"),
             "the etched row has no euro price and stays last in both directions"
         );
+        assert_eq!(
+            ids("price", "asc", Cardkingdom),
+            C("cheap-usd,dear-usd,etched"),
+            "a card the feed has never listed is unpriced and sorts last"
+        );
+        assert_eq!(
+            ids("price", "desc", Cardkingdom),
+            C("dear-usd,cheap-usd,etched")
+        );
+        assert_eq!(
+            ids("price", "asc", Manapool),
+            C("dear-usd,etched,cheap-usd")
+        );
+        assert_eq!(
+            ids("price", "desc", Manapool),
+            C("cheap-usd,etched,dear-usd"),
+            "Mana Pool prices the etched copies, so they place rather than trail"
+        );
 
-        // × copies: $10 / $50 / $27 against €900 / €2 / —.
+        // × copies: 10 / 1 / 3. TCGplayer $10 / $50 / $27; Cardmarket €900 / €2 / —;
+        // Card Kingdom $30 / $20 / —; Mana Pool $80 / $1 / $12.
         assert_eq!(
-            ids("value", "asc", usd),
-            ["cheap-usd", "etched", "dear-usd"]
+            ids("value", "asc", Tcgplayer),
+            C("cheap-usd,etched,dear-usd")
         );
         assert_eq!(
-            ids("value", "asc", eur),
-            ["dear-usd", "cheap-usd", "etched"]
+            ids("value", "desc", Tcgplayer),
+            C("dear-usd,etched,cheap-usd")
         );
         assert_eq!(
-            ids("value", "desc", usd),
-            ["dear-usd", "etched", "cheap-usd"]
+            ids("value", "asc", Cardmarket),
+            C("dear-usd,cheap-usd,etched")
         );
         assert_eq!(
-            ids("value", "desc", eur),
-            ["cheap-usd", "dear-usd", "etched"]
+            ids("value", "desc", Cardmarket),
+            C("cheap-usd,dear-usd,etched")
+        );
+        assert_eq!(
+            ids("value", "asc", Cardkingdom),
+            C("dear-usd,cheap-usd,etched"),
+            "`value` and `price` disagree on Card Kingdom, which is the point of the copies"
+        );
+        assert_eq!(
+            ids("value", "desc", Cardkingdom),
+            C("cheap-usd,dear-usd,etched")
+        );
+        assert_eq!(
+            ids("value", "asc", Manapool),
+            C("dear-usd,etched,cheap-usd")
+        );
+        assert_eq!(
+            ids("value", "desc", Manapool),
+            C("cheap-usd,etched,dear-usd")
         );
     }
 
-    /// The rule the euro sorts inherit, stated on the row itself: an etched entry is `NULL`
-    /// in euros **even though its blob has a `$.eur`**, because `eur_etched` does not exist
-    /// and the nonfoil rate is not a stand-in for it.
-    #[test]
-    fn an_etched_row_is_unpriced_in_euros_while_its_blob_names_a_nonfoil_euro_price() {
-        let conn = seeded_currencies();
-        let rows = list_entries(&conn, &CollectionQuery::default()).unwrap();
-        let row = |id: &str| rows.items.iter().find(|r| r.card_id == id).unwrap();
+    /// A comma-separated expectation, so an eight-way table of orders reads as a table.
+    #[allow(non_snake_case)]
+    fn C(ids: &str) -> Vec<String> {
+        ids.split(',').map(str::to_owned).collect()
+    }
 
-        assert_eq!(row("etched").unit_price_usd, Some(9.00));
+    /// The etched contrast, on the row itself. **Every one of these four answers is right
+    /// about its own marketplace**, and no two of them agree:
+    ///
+    /// * TCGplayer prices it through `usd_etched`;
+    /// * Cardmarket cannot, **even though the blob names a `$.eur`** — there is no
+    ///   `eur_etched` key and the nonfoil rate is not a stand-in for one;
+    /// * Card Kingdom's feed has never listed the printing, so there is no row to read;
+    /// * Mana Pool publishes an etched column, so there is.
+    ///
+    /// Nothing is filled in from a neighbour. That is the whole rule.
+    #[test]
+    fn an_etched_row_is_priced_or_not_by_each_marketplace_on_its_own() {
+        let conn = seeded_marketplaces();
+        let price = |id: &str, marketplace| {
+            list_entries(&conn, &on(marketplace))
+                .unwrap()
+                .items
+                .iter()
+                .find(|r| r.card_id == id)
+                .unwrap()
+                .unit_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+
+        assert_eq!(price("etched", Tcgplayer), Some(9.00));
         assert_eq!(
-            row("etched").unit_price_eur,
+            price("etched", Cardmarket),
             None,
             "and not the €7.00 beside it"
         );
-        assert_eq!(row("cheap-usd").unit_price_eur, Some(90.00));
+        assert_eq!(
+            price("etched", Cardkingdom),
+            None,
+            "in `cards`, absent from the feed — unpriced, never another shop's number"
+        );
+        assert_eq!(
+            price("etched", Manapool),
+            Some(4.00),
+            "this feed has an etched column, which is exactly the contrast"
+        );
+
+        // And the neighbouring row, so the NULLs above are about the etched printing rather
+        // than about the marketplace having no rows at all.
+        assert_eq!(price("cheap-usd", Cardmarket), Some(90.00));
+        assert_eq!(price("cheap-usd", Cardkingdom), Some(3.00));
     }
 
-    /// Absent means dollars — the order every caller had before there was a picker — and so
-    /// does a currency this build has never heard of. Deserialized from the wire, because it
+    /// Absent means TCGplayer — the prices every caller had before there was a picker — and
+    /// so does an id this build has never heard of. Deserialized from the wire, because it
     /// is the *payload* that omits the field.
     #[test]
-    fn a_query_with_no_currency_sorts_in_dollars() {
-        let conn = seeded_currencies();
+    fn a_query_with_no_marketplace_quotes_tcgplayer() {
+        let conn = seeded_marketplaces();
         let ids = |json: &str| -> Vec<String> {
             let q: CollectionQuery = serde_json::from_str(json).unwrap();
             list_entries(&conn, &q)
@@ -2463,16 +2574,21 @@ mod tests {
         };
         let sort = r#""sort":[{"key":"price","dir":"asc"}]"#;
 
-        let dollars = ["cheap-usd", "etched", "dear-usd"];
-        assert_eq!(ids(&format!("{{{sort}}}")), dollars, "absent");
+        let tcgplayer = C("cheap-usd,etched,dear-usd");
+        assert_eq!(ids(&format!("{{{sort}}}")), tcgplayer, "absent");
         assert_eq!(
-            ids(&format!(r#"{{{sort},"currency":"gbp"}}"#)),
-            dollars,
-            "and a currency this build has never heard of"
+            ids(&format!(r#"{{{sort},"marketplace":"ebay"}}"#)),
+            tcgplayer,
+            "and an id this build has never heard of"
         );
         assert_eq!(
-            ids(&format!(r#"{{{sort},"currency":"eur"}}"#)),
-            ["dear-usd", "cheap-usd", "etched"]
+            ids(&format!(r#"{{{sort},"marketplace":"cardtrader"}}"#)),
+            tcgplayer,
+            "and one it lists but cannot price"
+        );
+        assert_eq!(
+            ids(&format!(r#"{{{sort},"marketplace":"manapool"}}"#)),
+            C("dear-usd,etched,cheap-usd")
         );
     }
 
@@ -2538,8 +2654,7 @@ mod tests {
             condition: "NM".into(),
             quantity: 4,
             tradelist_quantity: 1,
-            unit_price_usd: Some(400.5),
-            unit_price_eur: Some(320.0),
+            unit_price: Some(400.5),
             purchase_price: Some(12.5),
             purchase_currency: Some("USD".into()),
             acquired_at: Some("2020-05-01".into()),
@@ -2564,7 +2679,7 @@ mod tests {
                 "setName": "Limited Edition Alpha", "collectorNumber": "161", "lang": "en",
                 "rarity": "common", "manaCost": "{R}", "typeLine": "Instant", "layout": "normal",
                 "finish": "nonfoil", "condition": "NM", "quantity": 4, "tradelistQuantity": 1,
-                "unitPriceUsd": 400.5, "unitPriceEur": 320.0, "purchasePrice": 12.5,
+                "unitPrice": 400.5, "purchasePrice": 12.5,
                 "purchaseCurrency": "USD", "acquiredAt": "2020-05-01",
                 "acquisitionSource": "Local shop", "serialNumber": null, "altered": false,
                 "signed": true, "proxy": false, "misprint": false, "grading": null,
@@ -2577,10 +2692,8 @@ mod tests {
             unique_cards: 2,
             entries: 3,
             tradelist_cards: 1,
-            value_usd: 1213.0,
-            value_eur: 640.0,
-            unpriced_usd: 0,
-            unpriced_eur: 4,
+            value: 1213.0,
+            unpriced: 4,
             needs_review: 0,
         })
         .unwrap();
@@ -2588,8 +2701,7 @@ mod tests {
             summary,
             serde_json::json!({
                 "totalCards": 6, "uniqueCards": 2, "entries": 3, "tradelistCards": 1,
-                "valueUsd": 1213.0, "valueEur": 640.0, "unpricedUsd": 0, "unpricedEur": 4,
-                "needsReview": 0
+                "value": 1213.0, "unpriced": 4, "needsReview": 0
             })
         );
     }

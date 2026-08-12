@@ -14,6 +14,7 @@ pub mod ingest;
 pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
+pub mod marketplace_feed;
 pub mod paths;
 pub mod reconcile;
 pub mod schema;
@@ -286,6 +287,8 @@ pub fn run() {
             deck_theory::deck_theory_missing_to_wishlist,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
+            marketplace_feed::marketplace_feed_refresh,
+            marketplace_feed::marketplace_feed_status,
             error_log_list,
             error_log_clear,
             update_status,
@@ -335,6 +338,19 @@ pub fn run() {
                 if let Err(e) = sync::run_sync(sync_state, handle, false).await {
                     eprintln!("initial sync failed: {e}");
                 }
+            });
+
+            // The selected marketplace's price feed, if it is one this app downloads and it is
+            // due. Its own task for the update check's reason — three services, three
+            // schedules, and none of them may be the reason another stops running — and
+            // deliberately *only* the selected one: nobody downloads 63.7 MiB for a
+            // marketplace they never picked, which is the whole shape of
+            // `refresh_selected_if_due`. Silent and best-effort; a failure is already in
+            // `error_log` and the honest fallback is the prices already on disk.
+            let feed_state = state.clone();
+            let feed_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                marketplace_feed::refresh_selected_if_due(&feed_state, &feed_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:

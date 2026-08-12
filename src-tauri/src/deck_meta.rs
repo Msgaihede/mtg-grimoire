@@ -158,21 +158,19 @@ pub struct DeckCategoryRow {
     /// shape that made this worth a schema-to-webview change rather than a note: a control that
     /// lies about its scope lies in the direction of the reader pressing it.
     pub card_count_all_variants: i64,
-    /// Nonfoil `usd` × copies, summed over the same `variant`. `None` when nothing filed here
-    /// has a price, `deck.rs`'s own `unit_price_usd` expression verbatim
-    /// (`CAST(json_extract(prices, '$.usd') AS REAL)`) — never `cards.price_usd`, which is a
-    /// display fallback chain and must not be summed. SQL's `sum()` already skips NULL terms,
-    /// which is what makes an all-unpriced category (or an empty one) read `None` rather than
-    /// `Some(0.0)` with no extra branch: a sum of zero NULL-or-priced rows is NULL either way.
-    pub total_price_usd: Option<f64>,
-    /// The same in EUR, from `$.eur`, over the same rows.
+    /// Nonfoil unit price × copies at the marketplace the read was given, summed over the same
+    /// `variant`. `None` when nothing filed here has a price there — `deck.rs`'s own
+    /// `unit_price` expression verbatim, through [`crate::sorting::price_expr`] over
+    /// [`crate::deck::DECK_FINISH`], and never `cards.price_usd`, which is a display fallback
+    /// chain and must not be summed. SQL's `sum()` already skips NULL terms, which is what
+    /// makes an all-unpriced category (or an empty one) read `None` rather than `Some(0.0)`
+    /// with no extra branch: a sum of zero NULL-or-priced rows is NULL either way.
     ///
-    /// **Legitimately lower than converting the dollar total would suggest**, and not by a
-    /// rounding: a category holding etched printings sums *fewer cards* here, because
-    /// Scryfall publishes no `eur_etched` and those copies are unpriced rather than valued at
-    /// the nonfoil rate. `sum()` skips the NULLs, so the number is honest about a smaller
-    /// population rather than quietly inventing prices for it.
-    pub total_price_eur: Option<f64>,
+    /// **Two marketplaces can differ by more than a conversion**, and not by a rounding: a
+    /// category holding printings one of them has never listed sums *fewer cards* there, and
+    /// `sum()` skipping the NULLs is what keeps that honest about a smaller population rather
+    /// than quietly inventing prices for it.
+    pub total_price: Option<f64>,
 }
 
 /// One tag of one deck.
@@ -345,19 +343,21 @@ pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(
 /// Every column of a [`DeckCategoryRow`] but `deck_id`'s WHERE clause, which each caller below
 /// supplies — [`crate::deck::DECK_SELECT`]'s shape. `?2` (the variant) is bound by every
 /// caller; `?1` is whichever id the appended clause filters by.
-const CATEGORY_SELECT: &str = "SELECT cat.id, cat.deck_id, cat.name, cat.kind, cat.is_active,
+fn category_select(marketplace: crate::sorting::Marketplace) -> String {
+    format!(
+        "SELECT cat.id, cat.deck_id, cat.name, cat.kind, cat.is_active,
             cat.sort_order,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                        WHERE dc.category_id = cat.id AND dc.variant = ?2), 0),
-            (SELECT sum(dc.quantity * CAST(json_extract(c.prices, '$.usd') AS REAL))
-               FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
-              WHERE dc.category_id = cat.id AND dc.variant = ?2),
-            (SELECT sum(dc.quantity * CAST(json_extract(c.prices, '$.eur') AS REAL))
+            (SELECT sum(dc.quantity * ({price}))
                FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
               WHERE dc.category_id = cat.id AND dc.variant = ?2),
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                        WHERE dc.category_id = cat.id), 0)
-       FROM deck_categories cat";
+       FROM deck_categories cat",
+        price = crate::sorting::price_expr(marketplace, crate::deck::DECK_FINISH)
+    )
+}
 
 fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
     Ok(DeckCategoryRow {
@@ -368,12 +368,22 @@ fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
         is_active: r.get(4)?,
         sort_order: r.get(5)?,
         card_count: r.get(6)?,
-        total_price_usd: r.get(7)?,
-        total_price_eur: r.get(8)?,
+        total_price: r.get(7)?,
         // No `?2` in this one's subquery, and that is the whole of the difference: the CASCADE
         // this number exists to describe does not know what variant anybody is looking at.
-        card_count_all_variants: r.get(9)?,
+        card_count_all_variants: r.get(8)?,
     })
+}
+
+/// The marketplace a **write's own readback** quotes: the stored setting.
+///
+/// [`READBACK_VARIANT`]'s counterpart, and the opposite answer to it, because the two facts
+/// are different. A rename carries no variant of its own, so the readback names the one the
+/// editor opens on; it carries no marketplace either, but there *is* a right answer for that
+/// one — the setting the reader is looking at the deck through. A fixed default here would
+/// hand the panel a TCGplayer total the moment a Cardmarket user renamed a column.
+fn readback_marketplace(conn: &Connection) -> crate::sorting::Marketplace {
+    crate::sorting::Marketplace::from_id(&crate::marketplace::stored(conn))
 }
 
 fn read_category(
@@ -382,7 +392,10 @@ fn read_category(
     variant: &str,
 ) -> Result<Option<DeckCategoryRow>, String> {
     conn.query_row(
-        &format!("{CATEGORY_SELECT} WHERE cat.id = ?1"),
+        &format!(
+            "{} WHERE cat.id = ?1",
+            category_select(readback_marketplace(conn))
+        ),
         params![id, variant],
         category_row,
     )
@@ -401,9 +414,13 @@ pub fn list_categories(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
+    marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let variant = valid_variant(variant)?;
-    let sql = format!("{CATEGORY_SELECT} WHERE cat.deck_id = ?1 ORDER BY cat.sort_order, cat.id");
+    let sql = format!(
+        "{} WHERE cat.deck_id = ?1 ORDER BY cat.sort_order, cat.id",
+        category_select(marketplace)
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![deck_id, variant], category_row)
@@ -657,7 +674,7 @@ pub fn reorder_categories(
     // rather than the change.
     record_category(&tx, deck_id, &json!({ "action": "reorder" }))?;
     tx.commit().map_err(|e| e.to_string())?;
-    list_categories(conn, deck_id, READBACK_VARIANT)
+    list_categories(conn, deck_id, READBACK_VARIANT, readback_marketplace(conn))
 }
 
 /// Delete a `kind = 'main'` category — refuses a predefined one, [`predefined_refusal`] again.
@@ -1236,10 +1253,17 @@ pub async fn deck_category_list(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     variant: String,
+    marketplace: Option<String>,
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let state = state.inner().clone();
+    let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
-        list_categories(&crate::sync::lock_db_read(&state), deck_id, &variant)
+        list_categories(
+            &crate::sync::lock_db_read(&state),
+            deck_id,
+            &variant,
+            marketplace,
+        )
     })
     .await
     .map_err(|e| format!("the deck's categories could not be read: {e}"))?
@@ -1479,6 +1503,10 @@ mod tests {
         conn
     }
 
+    /// The marketplace a test that is **not about prices** reads through —
+    /// [`crate::deck`]'s constant, kept per module.
+    const ANY_MARKET: crate::sorting::Marketplace = crate::sorting::Marketplace::Tcgplayer;
+
     /// A `cards` row carrying a nonfoil `usd` price — [`crate::schema::tests::seed_card`] does
     /// not set `prices`, and the total-price tests need a printing that has one.
     fn priced_card(conn: &Connection, id: &str, usd: &str) {
@@ -1637,7 +1665,7 @@ mod tests {
         // `deck()` inserts straight into `decks`, bypassing both `deck::create_deck` and the
         // migration — exactly the shape a bare row has before either has run.
         let deck_id = deck(&conn, "Burn");
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         assert_eq!(
             rows.len(),
             0,
@@ -1645,7 +1673,7 @@ mod tests {
         );
 
         ensure_predefined_categories(&conn, deck_id).unwrap();
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         assert_eq!(
             rows.len(),
             4,
@@ -1684,7 +1712,7 @@ mod tests {
         );
     }
 
-    // -- card_count / total_price_usd -------------------------------------------------------
+    // -- card_count / total_price -----------------------------------------------------------
 
     #[test]
     fn card_count_is_copies_not_rows_and_scoped_to_the_asked_variant() {
@@ -1699,11 +1727,11 @@ mod tests {
         // A `theory` copy that must not leak into the `live` count.
         deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
 
-        let live = list_categories(&conn, deck_id, "live").unwrap();
+        let live = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         let commander_live = live.iter().find(|c| c.id == cat).unwrap();
         assert_eq!(commander_live.card_count, 5, "copies, not rows: 2 + 3");
 
-        let theory = list_categories(&conn, deck_id, "theory").unwrap();
+        let theory = list_categories(&conn, deck_id, "theory", ANY_MARKET).unwrap();
         let commander_theory = theory.iter().find(|c| c.id == cat).unwrap();
         assert_eq!(
             commander_theory.card_count, 7,
@@ -1729,7 +1757,7 @@ mod tests {
         deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
 
         for (variant, scoped) in [("live", 5), ("theory", 7)] {
-            let rows = list_categories(&conn, deck_id, variant).unwrap();
+            let rows = list_categories(&conn, deck_id, variant, ANY_MARKET).unwrap();
             let row = rows.iter().find(|c| c.id == cat).unwrap();
             assert_eq!(row.card_count, scoped, "{variant}: the one list asked for");
             assert_eq!(
@@ -1752,7 +1780,7 @@ mod tests {
         deck_card(&conn, deck_id, "bolt-lea", cat, 5);
         deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
 
-        let quoted = list_categories(&conn, deck_id, "live")
+        let quoted = list_categories(&conn, deck_id, "live", ANY_MARKET)
             .unwrap()
             .iter()
             .find(|c| c.id == cat)
@@ -1772,7 +1800,7 @@ mod tests {
     }
 
     #[test]
-    fn total_price_usd_sums_nonfoil_usd_times_copies_and_skips_unpriced_cards() {
+    fn total_price_sums_nonfoil_price_times_copies_and_skips_unpriced_cards() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "commander", "Commander");
@@ -1781,38 +1809,37 @@ mod tests {
         deck_card(&conn, deck_id, "priced", cat, 3);
         deck_card(&conn, deck_id, "unpriced", cat, 5);
 
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         let row = rows.iter().find(|c| c.id == cat).unwrap();
         assert_eq!(
-            row.total_price_usd,
+            row.total_price,
             Some(6.0),
             "3 copies at $2.00, the unpriced card skipped"
         );
     }
 
     #[test]
-    fn total_price_usd_is_none_when_nothing_in_the_category_has_a_price() {
+    fn total_price_is_none_when_nothing_in_the_category_has_a_price() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "commander", "Commander");
         crate::schema::tests::seed_card(&conn, "unpriced", "lea", "162");
         deck_card(&conn, deck_id, "unpriced", cat, 4);
 
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         let row = rows.iter().find(|c| c.id == cat).unwrap();
-        assert_eq!(row.total_price_usd, None);
+        assert_eq!(row.total_price, None);
 
         // And an empty category beside it: nothing filed, nothing priced, same answer.
         let empty = category(&conn, deck_id, "companion", "Companion");
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
+        let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         let row = rows.iter().find(|c| c.id == empty).unwrap();
         assert_eq!(row.card_count, 0);
-        assert_eq!(row.total_price_usd, None);
-        assert_eq!(row.total_price_eur, None);
+        assert_eq!(row.total_price, None);
     }
 
-    /// A `cards` row carrying both currencies, written out so the euro total has something
-    /// to disagree with the dollar one about.
+    /// A `cards` row carrying more than one currency, written out so two marketplaces have
+    /// something to disagree about.
     fn priced_card_both(conn: &Connection, id: &str, prices: &str) {
         conn.execute(
             "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
@@ -1823,12 +1850,24 @@ mod tests {
         .unwrap();
     }
 
-    /// The euro total is the dollar total's rule over `$.eur`, and it is **legitimately taken
-    /// over fewer cards**: `sum()` skips NULLs, so a printing Cardmarket does not quote drops
-    /// out of the euro figure while staying in the dollar one. Never converted, never filled
-    /// in from the nonfoil rate — the two numbers describe two marketplaces.
+    /// Rows in `marketplace_prices` — [`crate::collection`]'s helper, kept per module.
+    fn seed_feed(conn: &Connection, rows: &[(&str, &str, &str, f64)]) {
+        for (marketplace, card_id, finish, price) in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO marketplace_prices
+                    (marketplace, card_id, finish, price) VALUES (?1,?2,?3,?4)",
+                params![marketplace, card_id, finish, price],
+            )
+            .unwrap();
+        }
+    }
+
+    /// One total, from the marketplace the read was given — and **legitimately taken over
+    /// fewer cards** on some of them: `sum()` skips NULLs, so a printing a shop does not quote
+    /// drops out of its figure while staying in another's. Never converted, never filled in
+    /// from a neighbour; each number describes one marketplace.
     #[test]
-    fn total_price_eur_sums_the_same_rule_over_eur_and_skips_what_cardmarket_does_not_quote() {
+    fn the_category_total_sums_the_marketplace_it_was_asked_for_and_skips_what_it_cannot_quote() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "commander", "Commander");
@@ -1840,38 +1879,101 @@ mod tests {
             "etched",
             r#"{"usd":"5.00","usd_etched":"25.00","eur":null}"#,
         );
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "both", "nonfoil", 1.00),
+                // and no `cardkingdom` row for `etched`.
+                ("manapool", "both", "nonfoil", 3.00),
+                ("manapool", "etched", "nonfoil", 4.00),
+            ],
+        );
         deck_card(&conn, deck_id, "both", cat, 3);
         deck_card(&conn, deck_id, "etched", cat, 2);
 
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
-        let row = rows.iter().find(|c| c.id == cat).unwrap();
+        let total = |marketplace| {
+            list_categories(&conn, deck_id, "live", marketplace)
+                .unwrap()
+                .iter()
+                .find(|c| c.id == cat)
+                .unwrap()
+                .total_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+
         assert_eq!(
-            row.total_price_usd,
+            total(Tcgplayer),
             Some(3.0 * 2.00 + 2.0 * 5.00),
-            "both printings have a nonfoil dollar price"
+            "both printings have a nonfoil TCGplayer price"
         );
         assert_eq!(
-            row.total_price_eur,
+            total(Cardmarket),
             Some(3.0 * 1.50),
-            "and only one of them has a euro one"
+            "and only one of them has a Cardmarket one"
         );
+        assert_eq!(
+            total(Cardkingdom),
+            Some(3.0 * 1.00),
+            "the feed lists one of the two, and the other is skipped rather than borrowed"
+        );
+        assert_eq!(total(Manapool), Some(3.0 * 3.00 + 2.0 * 4.00));
     }
 
-    /// A category whose every card is unpriced in euros reads `None` there while reading a
-    /// real number in dollars — the two totals are independent, and neither stands in for the
-    /// other.
+    /// A category every one of whose cards is unpriced at the chosen marketplace reads `None`
+    /// there while reading a real number at another. The totals are independent, and none of
+    /// them stands in for another.
     #[test]
-    fn a_category_priced_only_in_dollars_has_no_euro_total_at_all() {
+    fn a_category_priced_at_one_marketplace_has_no_total_at_the_others() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "commander", "Commander");
         priced_card(&conn, "usd-only", "2.00");
         deck_card(&conn, deck_id, "usd-only", cat, 4);
 
-        let rows = list_categories(&conn, deck_id, "live").unwrap();
-        let row = rows.iter().find(|c| c.id == cat).unwrap();
-        assert_eq!(row.total_price_usd, Some(8.0));
-        assert_eq!(row.total_price_eur, None, "never 0.00, and never converted");
+        let total = |marketplace| {
+            list_categories(&conn, deck_id, "live", marketplace)
+                .unwrap()
+                .iter()
+                .find(|c| c.id == cat)
+                .unwrap()
+                .total_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+
+        assert_eq!(total(Tcgplayer), Some(8.0));
+        for elsewhere in [Cardmarket, Cardkingdom, Manapool] {
+            assert_eq!(
+                total(elsewhere),
+                None,
+                "{elsewhere:?}: never 0.00, and never converted"
+            );
+        }
+    }
+
+    /// A write's readback has no marketplace of its own, so it quotes the **stored** setting —
+    /// the one the reader is looking at the deck through. A fixed default here would hand the
+    /// panel a TCGplayer total the moment a Cardmarket user renamed a column.
+    #[test]
+    fn a_category_readback_quotes_the_stored_marketplace() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "main", "Ramp");
+        priced_card_both(&conn, "both", r#"{"usd":"2.00","eur":"1.50"}"#);
+        deck_card(&conn, deck_id, "both", cat, 3);
+
+        assert_eq!(
+            rename_category(&conn, cat, "Acceleration")
+                .unwrap()
+                .total_price,
+            Some(6.0),
+            "a database nobody has told quotes TCGplayer"
+        );
+
+        crate::marketplace::store(&conn, "cardmarket").unwrap();
+        assert_eq!(
+            rename_category(&conn, cat, "Ramp").unwrap().total_price,
+            Some(4.5)
+        );
     }
 
     /// The hand-mirrored wire contract for the category row, pinned so a field added here and
@@ -1887,8 +1989,7 @@ mod tests {
             sort_order: 2,
             card_count: 5,
             card_count_all_variants: 12,
-            total_price_usd: Some(41.5),
-            total_price_eur: Some(33.25),
+            total_price: Some(41.5),
         })
         .unwrap();
         assert_eq!(
@@ -1896,7 +1997,7 @@ mod tests {
             serde_json::json!({
                 "id": 3, "deckId": 7, "name": "Ramp", "kind": "custom", "isActive": true,
                 "sortOrder": 2, "cardCount": 5, "cardCountAllVariants": 12,
-                "totalPriceUsd": 41.5, "totalPriceEur": 33.25
+                "totalPrice": 41.5
             })
         );
     }

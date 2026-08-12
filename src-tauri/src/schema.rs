@@ -105,11 +105,11 @@ const CARDS_COLUMNS: &str = "
 /// rather than a rebuild. A step that *changes* a definition — as v10 changes this one —
 /// drops the old one first, or `IF NOT EXISTS` silently keeps what is already there.
 ///
-/// The rule is a *moving* one: a v11 that touches `cards` must take the replay from v10, and
+/// The rule is a *moving* one: a v12 that touches `cards` must take the replay from v10, and
 /// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what fails if it does not.
-/// A step that leaves `cards` alone entirely — v8, the deck tables, and v9, the error log —
-/// neither needs the list nor may replay it, and neither takes the title of newest creator
-/// from v10.
+/// A step that leaves `cards` alone entirely — v8, the deck tables, v9, the error log, and
+/// v11, the marketplace price tables — neither needs the list nor may replay it, and none of
+/// them takes the title of newest creator from v10.
 const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -1191,6 +1191,69 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch(&cards_indexes_sql())?;
         // Literal `10`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 10;")?;
+        tx.commit()?;
+    }
+    if v < 11 {
+        let tx = conn.unchecked_transaction()?;
+        // Card Kingdom's and Mana Pool's price feeds, in tables of their own.
+        //
+        // **They cannot be columns on `cards`, and that is the whole reason this step
+        // exists.** [`swap_staging`] drops and recreates `cards` on every sync, so a price
+        // column would be destroyed by the next refresh — and re-downloading 112 MiB of feed
+        // to restore it is not a recovery plan. Keyed on `scryfall_id` instead, in a table the
+        // swap never touches.
+        //
+        // **No foreign key against `cards.id`, deliberately**, which is the rule the whole
+        // crate follows: enforced foreign keys exist only *between user tables*. A declared
+        // `REFERENCES cards(id)` aborts every sync. It would also be a lie about the data — a
+        // feed and the card corpus are collected on different days and from different people,
+        // so a price for a printing this database has never heard of (and a printing no
+        // marketplace stocks) is the expected case rather than an error. 149 989 Card Kingdom
+        // rows against 116 590 `cards` rows, measured 2026-08-12.
+        //
+        // `WITHOUT ROWID`: the table *is* its primary key plus one number, so the rowid
+        // b-tree an ordinary table carries would be a second copy of it. Every read is a
+        // point lookup on the full key — `LEFT JOIN marketplace_prices USING (marketplace,
+        // card_id, finish)` — which the primary key answers on its own, so no secondary index
+        // is created here and none is owed.
+        //
+        // `finish` is CHECK-constrained to the same three values [`crate::collection::FINISHES`]
+        // holds, as every other finish column in this schema is: etched is a third finish and
+        // not `foil: true`, and a feed that starts spelling it differently must fail loudly
+        // rather than file a foil price under a nonfoil key.
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables) and
+        // v9 (the error log) left it. Nothing here is FTS-indexed and no rowid is renumbered,
+        // so no `cards_fts` rebuild is owed: the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS marketplace_prices (
+                -- One of `crate::marketplace::MARKETPLACE_IDS`, and always a feed-backed one:
+                -- TCGplayer and Cardmarket are read out of `cards.prices` and are never here.
+                marketplace TEXT NOT NULL,
+                -- A Scryfall id. Soft: no FK, for the reason above.
+                card_id TEXT NOT NULL,
+                finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                -- Near Mint, in the marketplace's own currency. One price per finish; a
+                -- finish the feed does not quote has no row at all, never a zero — `$0.00`
+                -- is a price nobody offered, and the app renders absence as an em dash.
+                price REAL NOT NULL,
+                PRIMARY KEY (marketplace, card_id, finish)
+             ) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS marketplace_feed_meta (
+                marketplace TEXT PRIMARY KEY,
+                -- Unix seconds, like every stamp in this schema: when *we* pulled it.
+                fetched_at INTEGER NOT NULL,
+                -- The feed's own stamp, verbatim (Card Kingdom's `meta.created_at`). NULL
+                -- for a feed that publishes none, which Mana Pool does not — the two answer
+                -- different questions and a missing one must not be faked from `fetched_at`.
+                feed_built_at TEXT,
+                row_count INTEGER NOT NULL
+             );",
+        )?;
+        // Literal `11`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 11;")?;
         tx.commit()?;
     }
     Ok(())
@@ -3691,14 +3754,16 @@ pub(crate) mod tests {
 
     // ---- v10: `legal_mask` and the widened collapse index ---------------------------
 
-    /// A database that stopped at version 9 — the shape a machine that has run this app
-    /// before is in, one version below head.
+    /// A database that stopped at version 9 — the last version below the step that replays
+    /// [`CARDS_INDEXES`], which is the property this fixture exists for.
     ///
-    /// **The version it names is not this branch's to choose: it is head minus one, whatever
-    /// main last landed.** It was `v8_database` while our step was v9; main's own v9 (the
-    /// error log) pushed ours to v10 and this fixture to 9. What it *means* — "one version
-    /// below ours, so `migrate` runs our step and nothing else" — has never changed, and the
-    /// name has to keep saying it.
+    /// **The version it names is not this branch's to choose.** It was `v8_database` while the
+    /// `legal_mask` step was v9; main's own v9 (the error log) pushed that step to v10 and this
+    /// fixture to 9. It is no longer head minus one — v11 (the marketplace price tables) sits
+    /// above v10 — and it is deliberately *not* renumbered with the ladder, because what it is
+    /// for is the one thing only a pre-v10 database can prove: that a machine entering the
+    /// ladder *below* the `CARDS_INDEXES` replay ends up with every index a fresh install has.
+    /// [`v10_database`] is what carries the "one step below head" claim now.
     ///
     /// [`v1_database`]'s trick cannot reach v9: only version 1's DDL is frozen, and every
     /// version after it is an `ALTER` (or, at v8, a whole table rebuild) inside a step there
@@ -3735,23 +3800,23 @@ pub(crate) mod tests {
     /// [`v9_database`] must really be **at** version 9, and the renumber is what makes this
     /// worth asserting rather than assuming.
     ///
-    /// The fixture is a head database with our step undone, so every way it can be wrong
+    /// The fixture is a head database with the v10 step undone, so every way it can be wrong
     /// leaves it looking like head — and a head-shaped "v9" would sail through
     /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] **vacuously**, because
     /// `migrate` would have nothing to do and the comparison would be a fresh install against
-    /// itself. The next merge renumbers this fixture again (it has been `v8_database` once
-    /// already); this is the line that fails if the rewind and the ladder drift apart.
+    /// itself. The literal `9` is the point: this fixture is pinned to the version below the
+    /// [`CARDS_INDEXES`] replay, not to head minus one, and the two came apart when v11 landed.
     ///
     /// Its three claims are the three things the v10 step goes on to change: the version, the
     /// column, and the *narrow* index definition.
     #[test]
-    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+    fn the_pre_index_replay_fixture_really_sits_at_version_nine() {
         let conn = v9_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(version, 9, "below the step that replays `CARDS_INDEXES`");
 
         assert!(
             !card_columns(&conn).contains(&"legal_mask".to_owned()),
@@ -3887,18 +3952,173 @@ pub(crate) mod tests {
         assert!(sql.contains("color_identity"), "widened: {sql}");
     }
 
+    // ---- v11: the marketplace price tables ------------------------------------------
+
+    /// A database one step below head: everything v10 left behind, and none of v11.
+    ///
+    /// [`v9_database`]'s trick again — walk to head, undo exactly the newest step, renumber —
+    /// and for its reason: only version 1's DDL is frozen, so there is no way to *build* a v10
+    /// database forwards. Two `DROP TABLE`s are the whole of what v11 did, which is what makes
+    /// the rewind honest here where a rewind through v8's table rebuild would not be.
+    fn v10_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE marketplace_prices;
+             DROP TABLE marketplace_feed_meta;
+             PRAGMA user_version = 10;",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// [`v10_database`] must really sit one step below head, or the test below it is a fresh
+    /// install compared against itself. The next step added to the ladder renumbers this
+    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    #[test]
+    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+        let conn = v10_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+
+        let tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'
+                   AND name IN ('marketplace_prices','marketplace_feed_meta')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "the v11 tables must not be there yet");
+
+        // v10's own column is standing, because this *is* a v10 database.
+        assert!(card_columns(&conn).contains(&"legal_mask".to_owned()));
+    }
+
+    /// The step itself, from the version below it: both tables arrive, keyed the way every
+    /// price lookup joins them, and a rerun is a no-op.
+    #[test]
+    fn the_v11_step_creates_the_marketplace_price_tables() {
+        let conn = v10_database();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        conn.execute(
+            "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
+             VALUES ('cardkingdom','bolt','nonfoil',0.35)",
+            [],
+        )
+        .unwrap();
+        // The primary key is the join key, so a second row under it is a conflict rather
+        // than a duplicate price nothing would ever notice.
+        let dup = conn.execute(
+            "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
+             VALUES ('cardkingdom','bolt','nonfoil',9.99)",
+            [],
+        );
+        assert!(dup.is_err(), "(marketplace, card_id, finish) is unique");
+
+        // A finish spelled any other way is refused, as it is on every other finish column
+        // in this schema: etched is a third finish, never `foil: true`.
+        let bad = conn.execute(
+            "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
+             VALUES ('cardkingdom','bolt','Foil',1.0)",
+            [],
+        );
+        assert!(bad.is_err(), "the finish CHECK must hold");
+
+        // `feed_built_at` is the nullable one — Mana Pool publishes no stamp at all — and
+        // the other three are not.
+        conn.execute(
+            "INSERT INTO marketplace_feed_meta (marketplace, fetched_at, feed_built_at, row_count)
+             VALUES ('manapool', 1800000000, NULL, 102321)",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// **The reason these tables exist at all.** `cards` is dropped and recreated on every
+    /// sync, so a price column on it would be destroyed by the next refresh — and there is no
+    /// cheap way back, the feeds being 112 MiB between them. This walks a real swap over a
+    /// seeded price and asserts it is still there afterwards.
+    #[test]
+    fn marketplace_prices_survive_the_staging_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
+                VALUES ('cardkingdom','bolt','nonfoil',0.35);
+             INSERT INTO marketplace_feed_meta (marketplace, fetched_at, feed_built_at, row_count)
+                VALUES ('cardkingdom', 1800000000, '2026-08-11 21:07:02', 1);",
+        )
+        .unwrap();
+
+        create_staging(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('bolt','Lightning Bolt','lea','161','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        swap_staging(&conn).unwrap();
+
+        let (price, rows): (f64, i64) = conn
+            .query_row(
+                "SELECT (SELECT price FROM marketplace_prices
+                          WHERE marketplace='cardkingdom' AND card_id='bolt' AND finish='nonfoil'),
+                        (SELECT row_count FROM marketplace_feed_meta WHERE marketplace='cardkingdom')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((price, rows), (0.35, 1), "a sync must not cost the prices");
+    }
+
+    /// **No foreign key against `cards.id`, and that is a promise about the data.** A feed and
+    /// the corpus are collected on different days, so a price for a printing this database has
+    /// never seen has to store — and a declared `REFERENCES cards(id)` would also abort every
+    /// sync, since `swap_staging` drops the table the reference names.
+    #[test]
+    fn a_price_for_a_card_the_corpus_does_not_have_is_storable() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        conn.execute(
+            "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
+             VALUES ('manapool','a-card-scryfall-has-not-shipped-us','foil',2.18)",
+            [],
+        )
+        .expect("a price for an unknown card is expected, not an error");
+
+        // `PRAGMA foreign_key_check` yields one row per violation, so an empty answer is a
+        // clean database — counted rather than matched on `QueryReturnedNoRows`, which is the
+        // same result spelled as an error and reads backwards.
+        let violations = conn
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |_| Ok(()))
+            .unwrap()
+            .count();
+        assert_eq!(violations, 0, "and no foreign key is violated by it");
+    }
+
     /// The ladder ends where the constant says it does. Written as a literal so that
     /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
     /// step and forgetting the constant — fails here rather than in the field.
     #[test]
-    fn the_schema_version_is_ten() {
+    fn the_schema_version_is_eleven() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 10);
+        assert_eq!(SCHEMA_VERSION, 11);
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole

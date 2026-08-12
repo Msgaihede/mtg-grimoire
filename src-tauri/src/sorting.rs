@@ -1,11 +1,22 @@
-//! One `ORDER BY` builder, shared by the search, the collection and the wishlist.
+//! What the selected marketplace does to a query: the price expression, and the `ORDER BY`.
 //!
-//! A sort arrives from the UI as an ordered list of `{key, dir}`. Nothing in it is ever
-//! interpolated: a key is looked up in the calling table's whitelist of `&'static str`
-//! literals and dropped when it misses, and a direction picks one of two literals. So the
-//! only thing a request can influence is *which* of a fixed set of clauses is used and in
-//! what order — which is the property [`crate::search`] has always had for its four
-//! hard-coded orders, kept while the number of reachable orders goes from four to dozens.
+//! Two jobs, one module, because they are the same decision read twice. The marketplace
+//! decides *where a price comes from*, and a money sort has to order by the very figure the
+//! row shows — so the expression and the order that reads it cannot be chosen in two places.
+//!
+//! **Rust returns one price per row.** An earlier build carried a USD twin and a EUR twin on
+//! every row and let TypeScript pick, which was right while a price was one of two keys of
+//! one JSON blob. Card Kingdom and Mana Pool prices live in a *table*, so that shape would
+//! mean four figures per row today and five the day Card trader lands, each one ignored by
+//! four out of five renders. The marketplace is a query parameter now, and switching it
+//! refetches — against local SQLite, like every other filter in this app.
+//!
+//! The `ORDER BY` builder itself is unchanged in the property that matters: a sort arrives
+//! from the UI as an ordered list of `{key, dir}`, nothing in it is ever interpolated, a key
+//! is looked up in the calling table's whitelist and dropped when it misses, and a direction
+//! picks one of two literals. The only thing a *request* can influence is which of a fixed
+//! set of clauses is used and in what order. The price expression folded into a money clause
+//! is built by [`price_expr`] from an enum, never from a string off the wire.
 
 use serde::Deserialize;
 
@@ -34,65 +45,220 @@ pub struct SortColumn {
     pub desc: &'static str,
 }
 
-/// Which currency a price order reads.
+/// A **money** column: a [`SortColumn`] with [`PRICE_HOLE`] standing in for the selected
+/// marketplace's price.
 ///
-/// **The one thing about the selected marketplace that has to cross the wire.** Every other
-/// price decision in this app is made in TypeScript, over both figures Rust already returns
-/// side by side — but ordering happens inside SQLite, so a price sort has to be told.
-///
-/// Not a `Deserialize` derive, and for [`SortTerm::dir`]'s reason turned up one level: an
-/// unrecognised currency must be a *default*, not a deserialization failure. A future build
-/// that learns a third currency would otherwise make every list this one draws fail to load
-/// rather than fall back to the dollars it has always shown. So **anything at all that is
-/// not the string `eur` is `usd`** — absent, null, a typo, a number, a future id.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Currency {
-    #[default]
-    Usd,
-    Eur,
+/// One spelling per key, not one per marketplace. The previous shape wrote each money sort
+/// out twice, in dollars and in euros, and the failure mode of that copy was silent — a sort
+/// added to one half and forgotten in the other is a header that quietly stops working the
+/// day the reader picks the other marketplace, and no test that only ever asks in dollars
+/// would notice. With four marketplaces and a fifth coming that copy is four spellings, so
+/// the whole class of mistake is spelled away instead: there is one clause, and
+/// [`sorts_for`] fills the hole.
+#[derive(Debug, Clone, Copy)]
+pub struct PricedSort {
+    pub key: &'static str,
+    pub asc: &'static str,
+    pub desc: &'static str,
 }
 
-impl<'de> Deserialize<'de> for Currency {
+/// What [`sorts_for`] replaces in a [`PricedSort`]'s clauses.
+///
+/// A money clause that does not contain it is a clause that ignores the marketplace, which is
+/// exactly the bug the templates exist to make impossible — so every table's list is checked
+/// for it (`a_priced_sort_names_the_price_hole`, run per table in that table's own module).
+pub const PRICE_HOLE: &str = "{price}";
+
+/// A resolved sort column: a [`SortColumn`] verbatim, or a [`PricedSort`] with the
+/// marketplace's price folded in.
+///
+/// Owned strings rather than `&'static str`, and that is the one property this type gives up
+/// against [`SortColumn`]. What it does **not** give up is where the text comes from: every
+/// `Sort` in the crate is built by [`sorts_for`] out of a `&'static str` template plus the
+/// output of [`price_expr`]/[`printing_price_expr`], which are `match`es over an enum. No
+/// byte of a request reaches either.
+#[derive(Debug, Clone)]
+pub struct Sort {
+    pub key: &'static str,
+    pub asc: String,
+    pub desc: String,
+}
+
+/// Where the app quotes prices from.
+///
+/// **The one thing about the marketplace setting that has to cross into SQL**, and now it
+/// crosses for every price and not just for an order: a price site returns the figure this
+/// names and nothing else.
+///
+/// Not a `Deserialize` derive, and for [`SortTerm::dir`]'s reason turned up one level: an
+/// unrecognised id must be a *default*, not a deserialization failure. A build that learns a
+/// fifth marketplace would otherwise make every list an older build draws fail to load rather
+/// than fall back to the TCGplayer prices it has always shown. So **anything that is not one
+/// of the three named ids is `Tcgplayer`** — absent, null, a typo, a number, a future id.
+///
+/// `cardtrader` lands here too. It is a marketplace the *setting* knows and the picker lists
+/// (`crate::marketplace::MARKETPLACE_IDS`), and it has no feed: its API needs a per-user JWT
+/// and offers no bulk download. Quoting TCGplayer for it is what this app did before any of
+/// this existed, and it is a listing decision rather than a pricing one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Marketplace {
+    #[default]
+    Tcgplayer,
+    Cardmarket,
+    Cardkingdom,
+    Manapool,
+}
+
+/// `marketplace_prices.marketplace` for the two table-backed feeds. Written out rather than
+/// derived from the enum's name so that a rename in Rust cannot silently stop matching rows
+/// `crate::marketplace_feed` wrote.
+const CARDKINGDOM: &str = "cardkingdom";
+const MANAPOOL: &str = "manapool";
+
+impl Marketplace {
+    /// The id as `crate::marketplace` stores it, or the default for anything else.
+    pub fn from_id(id: &str) -> Marketplace {
+        match id {
+            "cardmarket" => Marketplace::Cardmarket,
+            CARDKINGDOM => Marketplace::Cardkingdom,
+            MANAPOOL => Marketplace::Manapool,
+            _ => Marketplace::Tcgplayer,
+        }
+    }
+
+    /// The same, for a command argument that may simply not be there.
+    pub fn from_opt(id: Option<&str>) -> Marketplace {
+        id.map_or(Marketplace::Tcgplayer, Marketplace::from_id)
+    }
+}
+
+impl<'de> Deserialize<'de> for Marketplace {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // Through `Value` rather than `String` so that a payload sending the wrong *type*
         // lands on the default too, instead of failing the whole request.
         let raw = serde_json::Value::deserialize(d)?;
-        Ok(match raw.as_str() {
-            Some("eur") => Currency::Eur,
-            _ => Currency::Usd,
-        })
+        Ok(raw
+            .as_str()
+            .map_or(Marketplace::Tcgplayer, Marketplace::from_id))
     }
 }
 
-/// One sort key whose SQL depends on the currency — the same key, written twice.
+/// What one copy of a card costs at `market`, per **finish**.
 ///
-/// Both halves carry the key so each is a complete [`SortColumn`]; that they agree is what
-/// `a_priced_sort_offers_the_same_key_in_both_currencies` checks, because a pair that
-/// disagreed would give the reader a header that works in dollars and does nothing in euros.
-#[derive(Debug, Clone, Copy)]
-pub struct PricedSort {
-    pub usd: SortColumn,
-    pub eur: SortColumn,
+/// The one SQL fragment every price site in this crate uses. `finish` is the caller's SQL for
+/// the finish being priced — `e.finish` on the collection, `coalesce(w.preferred_finish,
+/// 'nonfoil')` on the wishlist, the literal `'nonfoil'` on a deck row, which names a printing
+/// and never a finish. **The printing itself is always the alias `c`**: every list in this
+/// crate joins `cards` as `c`, and hard-coding it here is what keeps the join key and the
+/// price from being spelled apart.
+///
+/// Four marketplaces, two shapes:
+///
+/// * **TCGplayer and Cardmarket** read `cards.prices` by finish. Never `cards.price_usd`,
+///   which is a display/sort fallback chain (`usd → usd_foil → usd_etched`) and would price a
+///   plain copy of a card whose only listed price is its foil at the foil's price.
+/// * **Card Kingdom and Mana Pool** read `marketplace_prices`, which survives the sync's
+///   `cards` swap because it is keyed by `scryfall_id` and is not part of the corpus.
+///
+/// The euro expression carries **the hole the data actually has: there is no `eur_etched` key
+/// in Scryfall's data**, so an etched card is unpriced in euros rather than valued at the
+/// nonfoil rate. Mana Pool publishes `price_cents_nm_etched` and so *does* quote etched — the
+/// two answers differ for the same card, and both are right about their own marketplace.
+///
+/// **A card in `cards` but absent from a feed reads NULL, and nothing fills it in.** That is a
+/// fact about the marketplace, not a gap: there is no cross-marketplace fallback anywhere in
+/// this file, and a price surface renders the NULL as an em dash.
+///
+/// The feed arm is a correlated scalar subquery rather than a `LEFT JOIN` in the caller's
+/// `FROM`, and the difference is only in where it is written: `marketplace_prices`' primary
+/// key is `(marketplace, card_id, finish)`, so the subquery matches at most one row and means
+/// exactly what that join would. Written this way it composes — six call sites keep their
+/// `FROM` clauses, the collection's summary can name it inside a `sum()`, and a query that
+/// prices *by finish* cannot accidentally multiply its own rows by the two or three finishes a
+/// printing is listed in.
+pub fn price_expr(market: Marketplace, finish: &str) -> String {
+    match market {
+        Marketplace::Tcgplayer => format!(
+            "CAST(json_extract(c.prices,
+        CASE {finish} WHEN 'foil' THEN '$.usd_foil'
+                      WHEN 'etched' THEN '$.usd_etched'
+                      ELSE '$.usd' END) AS REAL)"
+        ),
+        Marketplace::Cardmarket => format!(
+            "CASE {finish} WHEN 'etched' THEN NULL ELSE
+        CAST(json_extract(c.prices,
+            CASE {finish} WHEN 'foil' THEN '$.eur_foil' ELSE '$.eur' END) AS REAL) END"
+        ),
+        Marketplace::Cardkingdom => feed_price(CARDKINGDOM, finish),
+        Marketplace::Manapool => feed_price(MANAPOOL, finish),
+    }
 }
 
-/// A table's sort whitelist, with its money columns written for the currency asked for.
+fn feed_price(feed: &str, finish: &str) -> String {
+    format!(
+        "(SELECT mp.price FROM marketplace_prices mp
+           WHERE mp.marketplace = '{feed}' AND mp.card_id = c.id AND mp.finish = {finish})"
+    )
+}
+
+/// What a **printing** costs at `market`, with no finish to price it at.
 ///
-/// Assembled rather than each table being spelled out twice, because the failure mode of the
-/// copy is silent: a new sort key added to the dollar list and forgotten in the euro one is a
-/// header that quietly stops working the day the reader picks Cardmarket, and no test that
-/// only ever asks in dollars would notice.
+/// The search's figure, and the only place a fallback chain is the right answer: a result row
+/// is a printing rather than a copy of one, so it quotes the cheapest thing it can be — the
+/// nonfoil price, or the foil's if the printing is foil-only, or the etched one. `price_usd`
+/// and `price_eur` are those chains precomputed by [`crate::card_row`] into columns of
+/// `cards`, and the feed arm walks the same order over `marketplace_prices`.
 ///
-/// The result is still a whitelist of `&'static str` literals — nothing here is built from a
-/// request, so [`order_by`]'s safety property is untouched.
-pub fn sorts_for(
-    shared: &[SortColumn],
-    priced: &[PricedSort],
-    currency: Currency,
-) -> Vec<SortColumn> {
-    let mut out = shared.to_vec();
-    out.extend(priced.iter().map(|p| match currency {
-        Currency::Usd => p.usd,
-        Currency::Eur => p.eur,
+/// **`c.price_usd` is a column of `idx_cards_collapse`**, which is what makes the collapsed
+/// browse's group step a covering scan (`crate::schema::CARDS_INDEXES`). No other marketplace
+/// is in that index, so a collapsed browse costs row lookups on the other three. That was
+/// already true of Cardmarket before the feeds landed; it is not measured for either feed.
+pub fn printing_price_expr(market: Marketplace) -> String {
+    match market {
+        Marketplace::Tcgplayer => "c.price_usd".to_owned(),
+        Marketplace::Cardmarket => "c.price_eur".to_owned(),
+        Marketplace::Cardkingdom => feed_printing_price(CARDKINGDOM),
+        Marketplace::Manapool => feed_printing_price(MANAPOOL),
+    }
+}
+
+/// A feed's version of `cards.price_usd`: the same `nonfoil → foil → etched` order, resolved
+/// by `ORDER BY … LIMIT 1` because the finishes are rows here rather than keys.
+fn feed_printing_price(feed: &str) -> String {
+    format!(
+        "(SELECT mp.price FROM marketplace_prices mp
+           WHERE mp.marketplace = '{feed}' AND mp.card_id = c.id
+           ORDER BY CASE mp.finish WHEN 'nonfoil' THEN 0 WHEN 'foil' THEN 1 ELSE 2 END
+           LIMIT 1)"
+    )
+}
+
+/// A table's sort whitelist, with its money columns written for the price it shows.
+///
+/// `price` is the SQL a money clause's [`PRICE_HOLE`] is replaced with. Two kinds of caller,
+/// and both are deliberate:
+///
+/// * a list that **selects** its price under an alias passes the alias, so the order and the
+///   cell cannot disagree — the collection's `unit_price`, the wishlist's;
+/// * a list whose order has to reach the expression itself passes [`price_expr`]'s or
+///   [`printing_price_expr`]'s output — the search, whose `ORDER BY c.price_usd` is what the
+///   `cards` index can answer.
+///
+/// The result is still a whitelist keyed by `&'static str` and built from `&'static str`
+/// clauses, so [`order_by`]'s safety property is untouched.
+pub fn sorts_for(shared: &[SortColumn], priced: &[PricedSort], price: &str) -> Vec<Sort> {
+    let mut out: Vec<Sort> = shared
+        .iter()
+        .map(|c| Sort {
+            key: c.key,
+            asc: c.asc.to_owned(),
+            desc: c.desc.to_owned(),
+        })
+        .collect();
+    out.extend(priced.iter().map(|p| Sort {
+        key: p.key,
+        asc: p.asc.replace(PRICE_HOLE, price),
+        desc: p.desc.replace(PRICE_HOLE, price),
     }));
     out
 }
@@ -106,11 +272,11 @@ pub fn sorts_for(
 /// one of them twice and the other never.
 pub fn order_by(
     terms: Option<&[SortTerm]>,
-    allowed: &[SortColumn],
+    allowed: &[Sort],
     fallback: &str,
     tiebreak: &str,
 ) -> String {
-    let mut parts: Vec<&'static str> = Vec::new();
+    let mut parts: Vec<&str> = Vec::new();
     let mut used: Vec<&'static str> = Vec::new();
 
     for term in terms.unwrap_or(&[]) {
@@ -125,9 +291,9 @@ pub fn order_by(
         used.push(column.key);
         // Anything that is not "desc" is ascending, for the reason `SortTerm::dir` gives.
         parts.push(if term.dir == "desc" {
-            column.desc
+            &column.desc
         } else {
-            column.asc
+            &column.asc
         });
     }
 
@@ -141,18 +307,21 @@ pub fn order_by(
 mod tests {
     use super::*;
 
-    const COLUMNS: &[SortColumn] = &[
-        SortColumn {
-            key: "name",
-            asc: "c.name ASC",
-            desc: "c.name DESC",
-        },
-        SortColumn {
-            key: "price",
-            asc: "c.price_usd ASC NULLS LAST",
-            desc: "c.price_usd DESC NULLS LAST",
-        },
-    ];
+    const SHARED: &[SortColumn] = &[SortColumn {
+        key: "name",
+        asc: "c.name ASC",
+        desc: "c.name DESC",
+    }];
+
+    const PRICED: &[PricedSort] = &[PricedSort {
+        key: "price",
+        asc: "{price} ASC NULLS LAST",
+        desc: "{price} DESC NULLS LAST",
+    }];
+
+    fn columns() -> Vec<Sort> {
+        sorts_for(SHARED, PRICED, "c.price_usd")
+    }
 
     const FALLBACK: &str = "c.name ASC";
     const TIEBREAK: &str = "c.id ASC";
@@ -166,12 +335,13 @@ mod tests {
 
     #[test]
     fn no_terms_is_the_view_default() {
+        let columns = columns();
         assert_eq!(
-            order_by(None, COLUMNS, FALLBACK, TIEBREAK),
+            order_by(None, &columns, FALLBACK, TIEBREAK),
             "c.name ASC, c.id ASC"
         );
         assert_eq!(
-            order_by(Some(&[]), COLUMNS, FALLBACK, TIEBREAK),
+            order_by(Some(&[]), &columns, FALLBACK, TIEBREAK),
             "c.name ASC, c.id ASC"
         );
     }
@@ -180,7 +350,7 @@ mod tests {
     fn terms_are_joined_in_the_order_they_arrive() {
         let terms = [term("price", "desc"), term("name", "asc")];
         assert_eq!(
-            order_by(Some(&terms), COLUMNS, FALLBACK, TIEBREAK),
+            order_by(Some(&terms), &columns(), FALLBACK, TIEBREAK),
             "c.price_usd DESC NULLS LAST, c.name ASC, c.id ASC"
         );
     }
@@ -193,7 +363,7 @@ mod tests {
             term("c.name; DROP TABLE cards", "asc"),
             term("released_at", "desc"),
         ];
-        let sql = order_by(Some(&terms), COLUMNS, FALLBACK, TIEBREAK);
+        let sql = order_by(Some(&terms), &columns(), FALLBACK, TIEBREAK);
         assert_eq!(sql, "c.name ASC, c.id ASC");
         assert!(!sql.contains("DROP"));
     }
@@ -203,7 +373,7 @@ mod tests {
     fn an_unknown_direction_is_ascending() {
         let terms = [term("name", "descending; --")];
         assert_eq!(
-            order_by(Some(&terms), COLUMNS, FALLBACK, TIEBREAK),
+            order_by(Some(&terms), &columns(), FALLBACK, TIEBREAK),
             "c.name ASC, c.id ASC"
         );
     }
@@ -218,7 +388,7 @@ mod tests {
             term("name", "desc"),
         ];
         assert_eq!(
-            order_by(Some(&terms), COLUMNS, FALLBACK, TIEBREAK),
+            order_by(Some(&terms), &columns(), FALLBACK, TIEBREAK),
             "c.name ASC, c.price_usd DESC NULLS LAST, c.id ASC"
         );
     }
@@ -227,61 +397,79 @@ mod tests {
     /// and another never. The tiebreak is not the caller's to forget.
     #[test]
     fn the_tiebreak_is_always_last() {
+        let columns = columns();
         let terms = [term("name", "asc")];
-        assert!(order_by(Some(&terms), COLUMNS, FALLBACK, TIEBREAK).ends_with("c.id ASC"));
-        assert!(order_by(None, COLUMNS, FALLBACK, TIEBREAK).ends_with("c.id ASC"));
+        assert!(order_by(Some(&terms), &columns, FALLBACK, TIEBREAK).ends_with("c.id ASC"));
+        assert!(order_by(None, &columns, FALLBACK, TIEBREAK).ends_with("c.id ASC"));
     }
 
-    const SHARED: &[SortColumn] = &[SortColumn {
-        key: "name",
-        asc: "c.name ASC",
-        desc: "c.name DESC",
-    }];
-
-    const PRICED: &[PricedSort] = &[PricedSort {
-        usd: SortColumn {
-            key: "price",
-            asc: "c.price_usd ASC NULLS LAST",
-            desc: "c.price_usd DESC NULLS LAST",
-        },
-        eur: SortColumn {
-            key: "price",
-            asc: "c.price_eur ASC NULLS LAST",
-            desc: "c.price_eur DESC NULLS LAST",
-        },
-    }];
-
-    /// The whole of the currency contract in one place: absent, null, a typo and a wrong type
-    /// all mean dollars, because a marketplace this build has not heard of must not make a
-    /// list fail to load. Only the exact string `eur` moves it.
+    /// The whole of the marketplace contract in one place: absent, null, a typo and a wrong
+    /// type all mean TCGplayer, because an id this build has not heard of must not make a list
+    /// fail to load. Only the three exact ids move it.
     #[test]
-    fn anything_that_is_not_eur_is_usd() {
+    fn anything_that_is_not_a_known_id_is_tcgplayer() {
         #[derive(Debug, Default, Deserialize)]
         #[serde(default)]
         struct Req {
-            currency: Currency,
+            marketplace: Marketplace,
         }
-        let parse = |json: &str| serde_json::from_str::<Req>(json).unwrap().currency;
+        let parse = |json: &str| serde_json::from_str::<Req>(json).unwrap().marketplace;
 
-        assert_eq!(parse("{}"), Currency::Usd, "absent");
-        assert_eq!(parse(r#"{"currency":null}"#), Currency::Usd, "null");
-        assert_eq!(parse(r#"{"currency":"usd"}"#), Currency::Usd);
-        assert_eq!(parse(r#"{"currency":"gbp"}"#), Currency::Usd, "a future id");
+        assert_eq!(parse("{}"), Marketplace::Tcgplayer, "absent");
         assert_eq!(
-            parse(r#"{"currency":"EUR"}"#),
-            Currency::Usd,
+            parse(r#"{"marketplace":null}"#),
+            Marketplace::Tcgplayer,
+            "null"
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"tcgplayer"}"#),
+            Marketplace::Tcgplayer
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"ebay"}"#),
+            Marketplace::Tcgplayer,
+            "a future id"
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"cardtrader"}"#),
+            Marketplace::Tcgplayer,
+            "listed in the picker, and it has no feed"
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"Cardmarket"}"#),
+            Marketplace::Tcgplayer,
             "case matters"
         );
-        assert_eq!(parse(r#"{"currency":7}"#), Currency::Usd, "a wrong type");
-        assert_eq!(parse(r#"{"currency":"eur"}"#), Currency::Eur);
-        assert_eq!(Currency::default(), Currency::Usd);
+        assert_eq!(
+            parse(r#"{"marketplace":7}"#),
+            Marketplace::Tcgplayer,
+            "type"
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"cardmarket"}"#),
+            Marketplace::Cardmarket
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"cardkingdom"}"#),
+            Marketplace::Cardkingdom
+        );
+        assert_eq!(
+            parse(r#"{"marketplace":"manapool"}"#),
+            Marketplace::Manapool
+        );
+        assert_eq!(Marketplace::default(), Marketplace::Tcgplayer);
+        assert_eq!(Marketplace::from_opt(None), Marketplace::Tcgplayer);
+        assert_eq!(
+            Marketplace::from_opt(Some("manapool")),
+            Marketplace::Manapool
+        );
     }
 
-    /// The money column follows the currency and the rest of the table does not move.
+    /// The money column follows the price it is given and the rest of the table does not move.
     #[test]
-    fn sorts_for_swaps_only_the_priced_columns() {
-        let usd = sorts_for(SHARED, PRICED, Currency::Usd);
-        let eur = sorts_for(SHARED, PRICED, Currency::Eur);
+    fn sorts_for_fills_only_the_priced_columns() {
+        let usd = sorts_for(SHARED, PRICED, "c.price_usd");
+        let eur = sorts_for(SHARED, PRICED, "c.price_eur");
         assert_eq!(usd.len(), 2);
         assert_eq!(eur.len(), 2);
 
@@ -294,7 +482,8 @@ mod tests {
             order_by(Some(&terms), &eur, FALLBACK, TIEBREAK),
             "c.price_eur DESC NULLS LAST, c.name ASC, c.id ASC"
         );
-        // The unpriced keys are the same SQL either way — a currency reorders money, not names.
+        // The unpriced keys are the same SQL either way — a marketplace reorders money, not
+        // names.
         let name = [term("name", "desc")];
         assert_eq!(
             order_by(Some(&name), &usd, FALLBACK, TIEBREAK),
@@ -302,13 +491,62 @@ mod tests {
         );
     }
 
-    /// A pair whose two halves answered to different keys would give the reader a header that
-    /// sorts in dollars and does nothing in euros. Every table's pairs are checked in its own
-    /// module; this is the rule itself.
+    /// Each marketplace's per-finish expression, checked for the things that are easy to get
+    /// wrong rather than for its exact text.
     #[test]
-    fn a_priced_sort_offers_the_same_key_in_both_currencies() {
+    fn price_expr_reads_each_marketplace_from_its_own_source() {
+        let tcg = price_expr(Marketplace::Tcgplayer, "e.finish");
+        assert!(tcg.contains("$.usd_foil") && tcg.contains("$.usd_etched"));
+        assert!(!tcg.contains("marketplace_prices"));
+
+        // The hole the data has: `eur_etched` does not exist, so etched is NULL — never the
+        // nonfoil rate, which the blob does carry and which a fallback would quietly charge.
+        let cm = price_expr(Marketplace::Cardmarket, "e.finish");
+        assert!(cm.contains("WHEN 'etched' THEN NULL"));
+        assert!(!cm.contains("eur_etched"));
+
+        for (market, feed) in [
+            (Marketplace::Cardkingdom, "cardkingdom"),
+            (Marketplace::Manapool, "manapool"),
+        ] {
+            let sql = price_expr(market, "e.finish");
+            assert!(sql.contains("marketplace_prices"), "{sql}");
+            assert!(sql.contains(&format!("mp.marketplace = '{feed}'")), "{sql}");
+            assert!(sql.contains("mp.finish = e.finish"), "{sql}");
+            // No cross-marketplace fallback: a feed that has never heard of a card reads
+            // NULL, and there is nowhere else for the expression to look.
+            assert!(!sql.contains("json_extract"), "{sql}");
+            assert!(!sql.contains("coalesce"), "{sql}");
+        }
+    }
+
+    /// The printing-level chain, which is the search's figure. Same `nonfoil → foil → etched`
+    /// order on all four, expressed as a column pair on the blob-backed two and as an ordered
+    /// lookup on the feeds.
+    #[test]
+    fn printing_price_expr_is_a_fallback_chain_on_every_marketplace() {
+        assert_eq!(
+            printing_price_expr(Marketplace::Tcgplayer),
+            "c.price_usd",
+            "the column `idx_cards_collapse` covers"
+        );
+        assert_eq!(printing_price_expr(Marketplace::Cardmarket), "c.price_eur");
+        for market in [Marketplace::Cardkingdom, Marketplace::Manapool] {
+            let sql = printing_price_expr(market);
+            assert!(sql.contains("WHEN 'nonfoil' THEN 0"), "{sql}");
+            assert!(sql.contains("WHEN 'foil' THEN 1"), "{sql}");
+            assert!(sql.contains("LIMIT 1"), "{sql}");
+        }
+    }
+
+    /// A money clause with no [`PRICE_HOLE`] in it is a clause that ignores the marketplace —
+    /// the whole failure the templates replace. Every table checks its own list; this is the
+    /// rule itself.
+    #[test]
+    fn a_priced_sort_names_the_price_hole() {
         for p in PRICED {
-            assert_eq!(p.usd.key, p.eur.key);
+            assert!(p.asc.contains(PRICE_HOLE), "{}", p.asc);
+            assert!(p.desc.contains(PRICE_HOLE), "{}", p.desc);
         }
     }
 }
