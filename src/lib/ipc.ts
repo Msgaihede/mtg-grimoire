@@ -143,11 +143,14 @@ export interface CardSummary {
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
    *
-   * One of **three** fields in this file with this name, and no two answer the same question.
-   * {@link WishRow.ownedQuantity} is counted against one wish and *is* finish-aware, so a
-   * foil wish is not satisfied by the nonfoil in the binder; {@link DeckCard.ownedQuantity}
-   * is neither — it is the copies one deck's allocator *secured*, oracle-grained and clamped
-   * to what the entries still hold. Read each against its own row.
+   * One of **four** fields in this file with this name, and only one of the other three asks
+   * the same question. {@link WishRow.ownedQuantity} is counted against one wish and *is*
+   * finish-aware, so a foil wish is not satisfied by the nonfoil in the binder;
+   * {@link DeckCard.ownedQuantity} is neither — it is the copies one deck's allocator
+   * *secured*, oracle-grained and clamped to what the entries still hold. The fourth,
+   * {@link ImportMatch.ownedQuantity}, **is** this number: every copy of one printing,
+   * finish-blind, asked per decklist line instead of per search row. Read each against its own
+   * row.
    *
    * `0` rather than `null`: "you own none of these" is a fact, not an absence, and a badge
    * that has to tell `null` from `0` is a badge with a bug waiting in it.
@@ -1217,10 +1220,11 @@ export interface DeckCard {
    * Copies of this oracle card the allocator **secured for this deck**, attributed to this
    * row in the read's own order and clamped to what each collection entry still holds.
    *
-   * The third of this file's three `ownedQuantity` fields and the only one that is not a
-   * count of what the user has: {@link CardSummary.ownedQuantity} is every copy of one
-   * printing, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this one
-   * is a *claim* — oracle-grained (a Bolt is a Bolt), finish-blind, condition-blind.
+   * The only one of this file's four `ownedQuantity` fields that is not a count of what the
+   * user has: {@link CardSummary.ownedQuantity} is every copy of one printing,
+   * {@link ImportMatch.ownedQuantity} is that same count taken per decklist line,
+   * {@link WishRow.ownedQuantity} is the copies that fill one wish, and this one is a *claim* —
+   * oracle-grained (a Bolt is a Bolt), finish-blind, condition-blind.
    *
    * Three things it will not do, all by design:
    *
@@ -1283,6 +1287,204 @@ export interface SwapResult {
   folded: boolean;
   /** What the row the copies now live in holds — the **sum**, when `folded`. */
   quantity: number;
+}
+
+/**
+ * One line of a parsed decklist, on its way to be turned into a printing.
+ *
+ * **The quantity is deliberately not here.** {@link ipc.deckImportResolve} answers *which
+ * printing a name means* — the one question this side cannot answer, because it is a question
+ * about 116 k rows of card data — and how many copies the line asked for is this side's
+ * arithmetic all the way to {@link ImportItem}. Both hints are optional because most decklist
+ * formats carry neither.
+ *
+ * A blank hint costs nothing: the backend trims and reads `""` or `"   "` as *absent*, which is
+ * what a trailing tab in a pasted export leaves behind and would otherwise turn every line of
+ * that paste into a missed hint.
+ */
+export interface ImportResolveLine {
+  /** As the line wrote it. Case and diacritics are both survivable — the backend folds a name
+   *  that no exact rule matched — and so is a double-faced card written as its front face only,
+   *  which is the commonest way a decklist writes one. */
+  name: string;
+  /** The set code in any case: the backend lower-cases it, because 0 of the corpus's 116 695
+   *  rows carry a set code in any other case while a parser that upper-cases `(MH2)` is the
+   *  ordinary source of one. */
+  setCode: string | null;
+  /** Only ever *narrows* a set — a collector number is not unique across sets — so one arriving
+   *  with no `setCode` beside it is reported as a missed hint without being tried at all. */
+  collectorNumber: string | null;
+}
+
+/**
+ * The printing a decklist line resolved to, and every fact the preview and the validation engine
+ * need about it.
+ *
+ * **The card fields are {@link DeckCard}'s, deliberately**, so an imported card and a card
+ * already in a deck are described by the same facts: a preview that judged legality on a
+ * narrower set of columns than the editor would show a legal deck the editor then refuses.
+ * Three differences, named here so a reader diffing the two does not have to guess which are
+ * drift — `finishes` is absent (a deck names a printing and never a finish, so a preview draws
+ * no foil marking), {@link ImportMatch.gameChanger} is a plain boolean where `DeckCard`'s is
+ * nullable, and `ownedQuantity`/`printingCount` are the import's own.
+ */
+export interface ImportMatch {
+  cardId: string;
+  /** **The whole printed name**, so a double-faced card resolved from its front face comes back
+   *  as `"A // B"` — what `deck_cards.name` denormalizes and what the reader is shown. A
+   *  preview that echoed the line's own name would hide the one case worth checking. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  lang: string;
+  oracleId: string | null;
+  manaCost: string | null;
+  cmc: number | null;
+  typeLine: string | null;
+  oracleText: string | null;
+  /** Concatenated letters — `"WU"`, not `["W","U"]`, and not JSON. {@link DeckCard.colors}. */
+  colors: string | null;
+  /** The same letter form, precomputed by Scryfall — DFC backs, adventures, colour indicators
+   *  and basic land types already folded in. {@link DeckCard.colorIdentity}. */
+  colorIdentity: string | null;
+  /** JSON: **this printing's** blob, not the oracle card's, which is what makes `oldschool`
+   *  come out right with no special case. {@link DeckCard.legalities}. */
+  legalities: string | null;
+  /** Printed power **as text** — `"*"`, `"1+*"` and a printed `"0"` all ship in real data. Both
+   *  `null` means *unknown*, never "no P/T box", and CR 903.3 turns on that difference. */
+  power: string | null;
+  toughness: string | null;
+  layout: string | null;
+  rarity: string | null;
+  /** JSON: the `card_faces` array verbatim. {@link DeckCard.faces}. */
+  faces: string | null;
+  /**
+   * On Wizards' Game Changer list.
+   *
+   * **A plain boolean where {@link DeckCard.gameChanger} is `boolean | null`**, and the
+   * difference is real rather than a mirror slip: `cards.game_changer` is nullable and a NULL
+   * means *not on the list*, so the backend flattens it here rather than handing this side a
+   * third state to fence. A resolved line always names a card that exists, which is the state
+   * `DeckCard`'s `null` is reserved for.
+   */
+  gameChanger: boolean;
+  /** Printed at uncommon on **any** printing of this oracle card — what makes a Pauper Commander
+   *  commander eligible. Computed; the `paupercommander` legality key answers the 99. */
+  everUncommon: boolean;
+  /** The nonfoil `usd` key of **this printing's** prices blob, per copy. Never `cards.price_usd`,
+   *  which is a display fallback chain and must not be summed. */
+  unitPriceUsd: number | null;
+  /**
+   * Every copy of **this printing** the collection holds, finish-blind — and the reason this
+   * printing won: a printing you own beats a newer one you do not, then the newest wins, then
+   * the id (which is what makes the same list pasted twice build the same deck).
+   *
+   * The same question {@link CardSummary.ownedQuantity} answers, asked per decklist line rather
+   * than per search row. Not {@link DeckCard.ownedQuantity}, which is a deck's *claim* — nothing
+   * has been allocated at resolve time, and nothing will be until
+   * {@link ipc.deckImportCommit} runs.
+   */
+  ownedQuantity: number;
+  /**
+   * **How many rows the rule that matched this line found** — not how many printings the card
+   * has, which is a different number and one nothing computes.
+   *
+   * It is per *matching arm*, and the backend has **six**, so this field means six things:
+   * through a set-and-collector-number hint it is how many printings that pair named (1, in a
+   * corpus with no duplicates); through a set-scoped name, that name's printings **within that
+   * set**, and through a set-scoped front face, that set's printings whose front face is the
+   * name; through a bare name, that name's paper printings corpus-wide, and through a bare
+   * front face, the paper printings whose front face is the name; through the fold arm, how many
+   * candidates survived the fold comparison.
+   *
+   * So "how many printings is the reader choosing between" is only what it means on a line that
+   * carried **no hint** — which is most of a pasted list, and the only case an affordance built
+   * on this number may claim to be about the card. Even there it counts *paper* printings of
+   * that exact name, so it is not what Scryfall would list. On a hinted line it describes the
+   * hint. Stated this narrowly on purpose: a true per-name count would cost a second query per
+   * line, and the arms are one indexed lookup each precisely because they do not do that.
+   */
+  printingCount: number;
+}
+
+/**
+ * One resolved line. `matched` is `null` for a name no printing bears — **not an error**: the
+ * preview quotes it and the import proceeds without it.
+ *
+ * `hintMissed` says the line carried a `(SET) 123` this app has no printing for, and that the
+ * name rule answered instead. Both can be true at once: a missed hint whose name also matched
+ * nothing comes back `matched: null, hintMissed: true`.
+ */
+export interface ImportResolveRow {
+  /** **The caller's index**, not a row number — the list that was sent is the only thing that
+   *  knows what line 34 said. The two are the same today, and a filter between them would make
+   *  them differ silently, which is why it rides along rather than being inferred. */
+  index: number;
+  matched: ImportMatch | null;
+  /** *Some part of what the reader wrote about the printing was not used.* So a collector number
+   *  that named nothing sets it even when the set and name then answer, and a collector number
+   *  with no set beside it sets it without being tried. Never a reason to lose the card. */
+  hintMissed: boolean;
+}
+
+/**
+ * What an import does to the variant it lands in.
+ *
+ * `merge` folds onto the deck-card grain — the same printing in the same category becomes one
+ * row with the sum, so a list naming a card on two lines lands as one row. `replace` clears
+ * that variant's **cards** first and leaves its **categories**: a category is the reader's
+ * filing, not the list's, and a replace that swept them would delete piles somebody named,
+ * reordered and switched off to import a file that mentions none of that.
+ *
+ * It clears **one variant**. Replacing the plan never touches what is sleeved up, and the other
+ * way round — the reason `variant` is part of the grain at all.
+ *
+ * Spelled out here rather than derived from anything: the backend validates against its own
+ * list and quotes it back in the refusal, so a third mode is a Rust change first.
+ */
+export type ImportMode = "merge" | "replace";
+
+/**
+ * One line of a decklist after this side has decided everything a *deck* decision is.
+ *
+ * The three fields are the three answers the backend cannot compute for itself: which printing
+ * (resolved by {@link ipc.deckImportResolve}, and perhaps overridden in the preview), how many,
+ * and which pile.
+ */
+export interface ImportItem {
+  cardId: string;
+  /** Copies, and it must be **positive**. Zero is refused rather than read as a removal — and it
+   *  is refused for the whole import, because one line that cannot land rolls the transaction
+   *  back. */
+  quantity: number;
+  /**
+   * **A name, not an id**, which is the one place this command's shape differs from
+   * {@link ipc.deckAddCard}'s id arm and the difference is deliberate: an imported list names
+   * sections the deck may not have yet, and the word itself is `autoCategoryFor`'s to compute,
+   * because which pile a Sol Ring belongs in is domain logic.
+   *
+   * Found-or-created, matched **by name alone**, so a `Sideboard` section lands on the deck's
+   * seeded `side` category rather than making a second pile with the same word on it. Trimmed
+   * before it is keyed, so `Ramp` and `  Ramp  ` are one pile and count as one creation.
+   */
+  categoryName: string;
+}
+
+/**
+ * What an import did, in the three numbers the "Imported 117 cards" report is written from.
+ *
+ * `added` and `removed` are **copies, not rows** — a reader counts cards — and `added` is what
+ * the list asked for rather than what the deck landed on, so a merge that folded 3 onto an
+ * existing 2 reports 3 and the row now holds 5.
+ */
+export interface ImportOutcome {
+  added: number;
+  /** Copies cleared before the list went in. Always `0` on a `merge`; `0` on a `replace` over an
+   *  empty variant too, which is also when no `remove` row is written to the history. */
+  removed: number;
+  /** The piles the import had to make — the part of the outcome a reader could not have
+   *  predicted from the file. A section name their deck already had costs nothing. */
+  categoriesCreated: number;
 }
 
 /**
@@ -1893,6 +2095,52 @@ export const ipc = {
    * would be worse than no button.
    */
   deckMissingToWishlist: (deckId: number) => invoke<number>("deck_missing_to_wishlist", { deckId }),
+  /**
+   * Every name in a decklist, resolved to a printing this app has. **Read-only**, and one call
+   * for the whole list rather than one per line — ~100 names is six prepared statements and a
+   * few hundred index lookups (11.6 ms for a 105-line commander list, measured over the live
+   * corpus), where a call per line would be a hundred IPC hops for the same work.
+   *
+   * **A name no printing bears is a row, never a rejection**: 99 good lines must not be lost to
+   * one bad one, so `matched: null` is the ordinary answer for a typo and the preview quotes it.
+   * The rows come back in the order the lines went out and carry
+   * {@link ImportResolveRow.index} besides.
+   */
+  deckImportResolve: (lines: ImportResolveLine[]) =>
+    invoke<ImportResolveRow[]>("deck_import_resolve", { lines }),
+  /**
+   * A whole decklist into one deck: one transaction, one allocation, one or two history rows.
+   *
+   * **This command exists for the allocator.** Looping {@link ipc.deckAddCard} would be correct
+   * in every other respect and would rebuild the deck's claims once per line — a hundred
+   * delete-and-rebuild passes for one import. Here it runs once, at the end, over the finished
+   * deck.
+   *
+   * All-or-nothing: a line naming a printing the card database has not got refuses the import
+   * and leaves the deck — including the one a `replace` was about to clear — exactly as it was,
+   * with no history row and no half-made category behind it. An empty `items` is refused in
+   * words, and a `replace` most of all: it would clear the deck and put nothing back.
+   *
+   * The history it writes is **one row per effect, never one per card** — an import of 117 cards
+   * would otherwise bury every other event of that day in the drawer.
+   */
+  deckImportCommit: (deckId: number, variant: DeckVariant, mode: ImportMode, items: ImportItem[]) =>
+    invoke<ImportOutcome>("deck_import_commit", { deckId, variant, mode, items }),
+  /**
+   * A decklist file the reader picked, as text.
+   *
+   * **Takes a path — Rust opens the file.** That is the contract that makes `dialog:allow-open`
+   * sufficient and is why **no `fs:` permission is granted anywhere**: pass the path
+   * `@tauri-apps/plugin-dialog`'s `open()` answered and let the backend read it. A page that
+   * read the bytes itself would need a filesystem capability this app deliberately does not
+   * have.
+   *
+   * Capped at 1 MB, and read **lossily** on purpose: a Windows-1252 apostrophe in one card name
+   * costs that one line — it comes back carrying `U+FFFD`, resolves to nothing and is quoted in
+   * the preview — rather than failing the other hundred. What comes back is a string and nothing
+   * more; parsing it is this side's, exactly as it is for a paste.
+   */
+  deckImportReadFile: (path: string) => invoke<string>("deck_import_read_file", { path }),
   /** The format rules as data, in picker order. Seeded by the migration, so this changes at
    *  most once per app version — cached for the session by `useFormatSpecs`. */
   formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),
