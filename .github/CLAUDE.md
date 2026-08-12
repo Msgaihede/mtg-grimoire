@@ -11,10 +11,21 @@ Two workflows, and every rule below was measured live. Full detail, including th
   `main` still can.
 - **A change only builds the half it touched.** The `changes` job diffs against the base and
   routes each path: `src-tauri/**` → `rust`; frontend sources, lockfiles, configs and
-  **`scripts/` because `eslint .` lints it** → `frontend`; `ci.yml` itself → both; prose and
-  editor bookkeeping → neither; and **anything unrecognised → both**. That last arm is the
+  **`scripts/` because `eslint .` lints it** → `frontend`; `*.ps1`/`*.psm1`/`*.psd1` →
+  `powershell`; `ci.yml` itself → all three; prose and
+  editor bookkeeping → neither; and **anything unrecognised → both build jobs**. That last arm
+  is the
   fail-safe that makes the lists safe to be wrong in the cheap direction. **Only the "neither"
   arm can wrongly skip work, so it stays small.**
+- **The `powershell` job runs `lock.test.ps1` on `windows-latest`**, and its `case` arm must
+  stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and `scripts/` is on the
+  frontend list only because `eslint .` lints it, which a `.ps1` is not. It matches `.psm1`
+  and `.psd1` too, because **the `*)` fail-safe does not set `powershell`**: a module would
+  otherwise fall through it and skip the only job that tests the change. Windows is not a
+  preference — `lock.ps1` identifies a holder by pid + name + `StartTime`.
+- **A new job gated on a `changes` output belongs in two places, not one:** `ci-ok`'s `needs`
+  **and** its success-or-skipped loop. In `needs` alone, its failure is a result the gate never
+  reads.
 - **Three traps in that routing, all measured against a fixture repo:**
   1. A workflow-level `paths:` filter is the obvious implementation and is **wrong** — it skips
      the whole workflow, `ci-ok` included, and a required check that never reports leaves every

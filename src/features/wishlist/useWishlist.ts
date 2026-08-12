@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { nextOffset } from "@/features/collection/useCollection";
-import { cycleTriState, DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { cycleTriState, DEBOUNCE_MS, sortCurrency } from "@/features/search/useCardSearch";
 import { ipc, type WishlistQuery, type WishlistSortKey } from "@/lib/ipc";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
+import { useMarketplace } from "@/lib/useMarketplace";
+
+/**
+ * The two orders SQLite has to be told a currency for: what finishing a wish still costs, and
+ * what one copy costs. Both read a `unit_price_*` column inside the `ORDER BY` — see
+ * {@link sortCurrency}.
+ */
+const WISHLIST_MONEY_SORTS: readonly WishlistSortKey[] = ["cost", "price"];
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this. A wishlist is tens of
@@ -80,6 +88,9 @@ export function activeFilterCount(f: WishlistFilterState): number {
  * up to is arithmetic over the rows on screen rather than a second round trip.
  */
 export function useWishlist() {
+  // Which marketplace this list quotes. The Cost cells and the header's total read the twin
+  // field off the rows already in hand; only the two money **orders** cross the wire.
+  const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
   const [fulfilled, setFulfilled] = useState<boolean | undefined>(undefined);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
@@ -112,6 +123,10 @@ export function useWishlist() {
   // collection write in the app already fires refreshes this list too — a wish's
   // `ownedQuantity` is computed from `collection_entries`, so a stepper press two views away
   // has just changed what this list says.
+  // `undefined` unless Cost or the unit-price order is deciding the list — see
+  // {@link sortCurrency}.
+  const currencyParam = sortCurrency(sort, WISHLIST_MONEY_SORTS, marketplace.currency);
+
   const listKey = [
     "wishlist",
     "list",
@@ -119,6 +134,10 @@ export function useWishlist() {
     fulfilled === undefined ? "" : fulfilled ? "fulfilled" : "missing",
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     sort.map((t) => `${t.key}:${t.dir}`).join(","),
+    // Empty on every order that is not money, which is what keeps a marketplace switch off
+    // the wire: the key is unchanged, the cached page stands, and the Cost cells read the
+    // other twin field.
+    currencyParam ?? "",
   ];
 
   const query = useInfiniteQuery({
@@ -129,6 +148,8 @@ export function useWishlist() {
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
+        // Absent unless a money column is deciding the order; the backend defaults to `usd`.
+        currency: currencyParam,
         limit: WISHLIST_PAGE_SIZE,
         offset: pageParam,
       }),
@@ -188,6 +209,11 @@ export function useWishlist() {
       setFulfilled(undefined);
       setNeedsReview(undefined);
     },
+    /**
+     * The marketplace every price on this view is quoted from — its label for the as-of
+     * sentence, its currency for the formatter and for which twin field a cell reads.
+     */
+    marketplace,
     query,
     rows,
     /** Wishes matching the filters, counted in full. `0` until the first page answers. */

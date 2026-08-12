@@ -2,7 +2,8 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckCard } from "@/lib/ipc";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { card, islands } from "./validation/fixtures";
 import { DeckStats, deckStats, typeCounts, type MissingWrite } from "./DeckStats";
 
@@ -94,11 +95,20 @@ describe("typeCounts", () => {
   });
 });
 
+/**
+ * `deckStats` in dollars.
+ *
+ * Only two of the fields it answers have an opinion about money — `price` and `unpriced` —
+ * so every claim about a curve, a pie or a size is made through this rather than restating a
+ * currency it is not about. The two that *are* about it name theirs.
+ */
+const usdStats = (cards: readonly DeckCard[]) => deckStats(cards, "usd");
+
 describe("deckStats", () => {
   /** The curve is the deck's casting costs: nine buckets, and the last one is open-ended —
    *  a 12-drop is still a card you have to reach. */
   it("buckets the curve over nonlands, with the last bucket open-ended", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Ritual", 1, { quantity: 4 }),
       spell("Gift", 3, { quantity: 2 }),
       spell("Emrakul", 15),
@@ -115,7 +125,7 @@ describe("deckStats", () => {
   /** A cost with no column behind it is still a cost — `cmc` is nullable, and the printed
    *  string is what the engine falls back to for the same reason. */
   it("reads a mana value off the printed cost when the column has none", () => {
-    const stats = deckStats([spell("Counterspell", 0, { cmc: null, manaCost: "{U}{U}" })]);
+    const stats = usdStats([spell("Counterspell", 0, { cmc: null, manaCost: "{U}{U}" })]);
 
     expect(stats.curve[2]).toBe(1);
     expect(stats.unknownManaValue).toBe(0);
@@ -123,7 +133,7 @@ describe("deckStats", () => {
 
   /** An orphaned row has no cost at all, and 0 is a number this app would be making up. */
   it("leaves a card with no mana value out of the curve and the average", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1),
       card({ name: "Ghost", cmc: null, manaCost: null, typeLine: null }),
     ]);
@@ -136,7 +146,7 @@ describe("deckStats", () => {
   /** Pips, not cards: a WU card is white *and* blue, which is what makes this the "what can
    *  this deck cast" measure rather than a second colour pie. */
   it("counts pips per colour, so a two-colour card feeds both", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       card({ name: "Fractured Identity", colors: "WU", quantity: 2 }),
       card({ name: "Bolt", colors: "R", quantity: 4 }),
     ]);
@@ -147,40 +157,72 @@ describe("deckStats", () => {
   /** `colors`, never `colorIdentity`: the curve strip describes what a card costs, and a
    *  Kenrith in the command zone does not make the deck's spells five-coloured. */
   it("takes the pips from a card's colours and not from its identity", () => {
-    const stats = deckStats([card({ name: "Ancestral", colors: "U", colorIdentity: "WUBRG" })]);
+    const stats = usdStats([card({ name: "Ancestral", colors: "U", colorIdentity: "WUBRG" })]);
 
     expect(stats.pips).toEqual({ W: 0, U: 1, B: 0, R: 0, G: 0 });
   });
 
   it("averages mana value over nonlands only", () => {
-    const stats = deckStats([spell("A", 1), spell("B", 3), islands(10)]);
+    const stats = usdStats([spell("A", 1), spell("B", 3), islands(10)]);
 
     expect(stats.averageManaValue).toBe(2);
   });
 
   it("has no average to give for a deck of nothing but lands", () => {
-    expect(deckStats([islands(10)]).averageManaValue).toBeNull();
+    expect(usdStats([islands(10)]).averageManaValue).toBeNull();
   });
 
   /** `unitPriceUsd` is the row's own finish-correct `usd`. `cards.price_usd` is a display
    *  fallback chain and must never be summed. */
   it("sums the row price by copies and counts what it could not price", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1, { quantity: 4, unitPriceUsd: 2.5 }),
       spell("Bear", 2, { quantity: 2, unitPriceUsd: null }),
     ]);
 
-    expect(stats.priceUsd).toBe(10);
+    expect(stats.price).toBe(10);
     expect(stats.unpriced).toBe(2);
   });
 
   it("has no price at all when nothing in the deck is priced", () => {
-    expect(deckStats([spell("Bolt", 1, { unitPriceUsd: null })]).priceUsd).toBeNull();
+    expect(usdStats([spell("Bolt", 1, { unitPriceUsd: null })]).price).toBeNull();
+  });
+
+  /**
+   * **The two money fields follow the currency, and the `unpriced` count with them.** That
+   * second half is the one worth pinning: the two currencies do not have the same holes, so a
+   * deck of etched printings is fully priced in dollars and entirely unpriced in euros — and a
+   * shared count would be wrong about whichever figure it was not describing.
+   *
+   * Nothing falls back. The euro total here is the euro rows only; the dollar figure for the
+   * etched copies is not borrowed to fill the gap, because a price nobody quoted is worse than
+   * an em dash beside "2 unpriced".
+   */
+  it("prices in the currency it is given, and counts that currency's own gaps", () => {
+    const cards = [
+      spell("Bolt", 1, { quantity: 4, unitPriceUsd: 2.5, unitPriceEur: 2 }),
+      spell("Etched Bomb", 2, { quantity: 2, unitPriceUsd: 50, unitPriceEur: null }),
+    ];
+
+    const usd = deckStats(cards, "usd");
+    expect(usd.price).toBe(110);
+    expect(usd.unpriced).toBe(0);
+
+    const eur = deckStats(cards, "eur");
+    expect(eur.price).toBe(8);
+    expect(eur.unpriced).toBe(2);
+  });
+
+  it("has no euro price at all for a deck of nothing but etched printings", () => {
+    const etched = [spell("Etched Bomb", 2, { quantity: 2, unitPriceUsd: 50, unitPriceEur: null })];
+
+    expect(deckStats(etched, "usd").price).toBe(100);
+    expect(deckStats(etched, "eur").price).toBeNull();
   });
 
   /** The same arithmetic every row's own badge does, added up once. */
   it("agrees with the rows about owned and missing", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1, { quantity: 4, ownedQuantity: 1 }),
       spell("Bear", 2, { quantity: 2, ownedQuantity: 2 }),
     ]);
@@ -192,7 +234,7 @@ describe("deckStats", () => {
 
   /** Every nonland lands in exactly one bucket, so the buckets can be a pie. */
   it("buckets nonlands into mono, multicolour and colourless", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       card({ name: "Bolt", colors: "R", quantity: 4 }),
       card({ name: "Duo", colors: "WU", quantity: 2 }),
       card({ name: "Sol Ring", colors: null, typeLine: "Artifact" }),
@@ -206,7 +248,7 @@ describe("deckStats", () => {
 
   /** And every land, by the basic types printed on its front face. */
   it("buckets lands by their basic land types", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       islands(4),
       card({ name: "Sacred Foundry", typeLine: "Land — Mountain Plains", quantity: 2 }),
       card({ name: "Command Tower", typeLine: "Land", quantity: 1 }),
@@ -229,7 +271,7 @@ describe("deckStats", () => {
    * curve would file it under 0 — the very flood the curve excludes lands to avoid.
    */
   it("keeps a land that is not filed under Land a land to every chart but the type bars", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       card({ name: "Urza's Saga", typeLine: "Legendary Enchantment Land", cmc: 0, manaCost: null }),
       card({ name: "Tree of Tales", typeLine: "Artifact Land", cmc: 0, manaCost: null }),
       card({ name: "Dryad Arbor", typeLine: "Land Creature — Dryad", cmc: 0, manaCost: null }),
@@ -255,7 +297,7 @@ describe("deckStats", () => {
    *  and the format check count the same cards; everything else is counted over every active
    *  pile. */
   it("sizes the deck by the kinds the format's size rule counts", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1, { quantity: 4 }),
       card({ name: "Kenrith", categoryKind: "commander" }),
       spell("Pyroblast", 1, { categoryKind: "side", quantity: 3 }),
@@ -284,7 +326,7 @@ describe("deckStats", () => {
   /** The type bars come from the deck list's own grouping, so a heading in a column and a
    *  bar in the strip can never disagree. */
   it("counts types in the deck list's own buckets", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
       card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
       islands(1),
@@ -301,14 +343,14 @@ describe("deckStats", () => {
    *  nothing — the same rule the engine applies before it judges anything, and the allocator
    *  never claims a copy for it either. */
   it("leaves the seeded Maybeboard out of every number", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1, { quantity: 4, unitPriceUsd: 1 }),
       spell("Ghost", 5, { categoryKind: "maybe", quantity: 9, unitPriceUsd: 100 }),
     ]);
 
     expect(stats.copies).toBe(4);
     expect(stats.curve[5]).toBe(0);
-    expect(stats.priceUsd).toBe(4);
+    expect(stats.price).toBe(4);
   });
 
   /**
@@ -320,7 +362,7 @@ describe("deckStats", () => {
    * category is the Maybeboard sizes this deck at 13 and puts nine copies in the curve.
    */
   it("leaves a category the reader switched off out of the size and the curve", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1, { quantity: 4, unitPriceUsd: 1 }),
       spell("Ghost", 5, {
         categoryId: 7,
@@ -335,7 +377,7 @@ describe("deckStats", () => {
     expect(stats.sized).toBe(4);
     expect(stats.copies).toBe(4);
     expect(stats.curve[5]).toBe(0);
-    expect(stats.priceUsd).toBe(4);
+    expect(stats.price).toBe(4);
     // Listed, though, like the Maybeboard above it: "counts toward nothing" is not "hidden".
     expect(stats.byCategory).toContainEqual({ id: 7, name: "Cuts", quantity: 9 });
     // And not in the headline's note, which accounts for the copies the figure left out.
@@ -360,9 +402,9 @@ describe("deckStats", () => {
     });
     const played = { ...parked, categoryActive: true };
 
-    expect(deckStats([spell("Bolt", 1, { quantity: 4 }), parked]).sized).toBe(4);
+    expect(usdStats([spell("Bolt", 1, { quantity: 4 }), parked]).sized).toBe(4);
 
-    const on = deckStats([spell("Bolt", 1, { quantity: 4 }), played]);
+    const on = usdStats([spell("Bolt", 1, { quantity: 4 }), played]);
     expect(on.sized).toBe(13);
     expect(on.curve[5]).toBe(9);
     // In the size, so *not* in the note that accounts for what the size left out.
@@ -372,7 +414,7 @@ describe("deckStats", () => {
   /** The sideboard is part of what a deck costs and what it is short of: it is cards you
    *  own, sleeve and pay for. */
   it("counts every active category", () => {
-    const stats = deckStats([
+    const stats = usdStats([
       spell("Bolt", 1, { quantity: 4 }),
       spell("Pyroblast", 1, { categoryKind: "side", quantity: 2 }),
     ]);
@@ -383,7 +425,7 @@ describe("deckStats", () => {
 
 describe("DeckStats", () => {
   const strip = (cards: DeckCard[], send = sender()) =>
-    render(<DeckStats cards={cards} send={send} />);
+    render(<DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={send} />);
 
   /** A deck short of three copies of one card. */
   const short = (): DeckCard[] => [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })];
@@ -394,9 +436,11 @@ describe("DeckStats", () => {
    * *press* was made against, not off a mutation flag that stays true forever.
    */
   async function press(cards: DeckCard[], settled: MissingWrite) {
-    const view = render(<DeckStats cards={cards} send={sender()} />);
+    const view = render(
+      <DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={sender()} />,
+    );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
-    view.rerender(<DeckStats cards={cards} send={settled} />);
+    view.rerender(<DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={settled} />);
     return view;
   }
 
@@ -526,12 +570,57 @@ describe("DeckStats", () => {
     for (const svg of svgs) expect(svg).toHaveAttribute("aria-hidden", "true");
   });
 
-  /** Spec §5: a price never appears without saying how old it is. */
-  it("says how old the deck's price is", () => {
+  /** Spec §5: a price never appears without saying how old it is — and, now that a reader can
+   *  pick, whose it is. */
+  it("says how old the deck's price is, and whose", () => {
     strip([card({ name: "Bolt", unitPriceUsd: 4.5, quantity: 2 })]);
 
-    expect(screen.getByText("Price (USD)").closest("div")).toHaveAttribute("title", PRICES_AS_OF);
+    expect(screen.getByText("Price (USD)").closest("div")).toHaveAttribute(
+      "title",
+      pricesAsOf(MARKETPLACES.tcgplayer),
+    );
     expect(screen.getByText("$9.00")).toBeInTheDocument();
+  });
+
+  /**
+   * The strip on a euro marketplace: the figure, the label and the as-of sentence all move
+   * together. A label still naming USD over a euro figure would be the one failure mode a
+   * reader cannot detect from the number alone.
+   */
+  it("draws the selected marketplace's currency in the figure, the label and the sentence", () => {
+    render(
+      <DeckStats
+        cards={[card({ name: "Bolt", unitPriceUsd: 4.5, unitPriceEur: 3, quantity: 2 })]}
+        marketplace={MARKETPLACES.cardmarket}
+        send={sender()}
+      />,
+    );
+
+    expect(screen.getByText("€6.00")).toBeInTheDocument();
+    expect(screen.queryByText("$9.00")).not.toBeInTheDocument();
+    expect(screen.getByText("Price (EUR)").closest("div")).toHaveAttribute(
+      "title",
+      pricesAsOf(MARKETPLACES.cardmarket),
+    );
+  });
+
+  /**
+   * An etched printing has no euro price at all, so on Cardmarket the figure is an em dash
+   * with the copies counted beside it — never the dollar figure re-badged.
+   */
+  it("shows an em dash and an unpriced count for a deck with no euro prices", () => {
+    render(
+      <DeckStats
+        cards={[card({ name: "Etched Bomb", unitPriceUsd: 50, unitPriceEur: null, quantity: 2 })]}
+        marketplace={MARKETPLACES.cardmarket}
+        send={sender()}
+      />,
+    );
+
+    const figure = screen.getByText("Price (EUR)").closest("div");
+    expect(within(figure as HTMLElement).getByText("—")).toBeInTheDocument();
+    expect(screen.getByText("2 unpriced")).toBeInTheDocument();
+    expect(screen.queryByText("$100.00")).not.toBeInTheDocument();
   });
 
   /**
@@ -631,6 +720,7 @@ describe("DeckStats", () => {
     rerender(
       <DeckStats
         cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })]}
+        marketplace={MARKETPLACES.tcgplayer}
         send={sender({ isSuccess: true, data: 1 })}
       />,
     );
@@ -657,10 +747,14 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     // Away…
     rerender(
-      <DeckStats cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]} send={settled} />,
+      <DeckStats
+        cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]}
+        marketplace={MARKETPLACES.tcgplayer}
+        send={settled}
+      />,
     );
     // …and back to exactly the number that was sent.
-    rerender(<DeckStats cards={deck} send={settled} />);
+    rerender(<DeckStats cards={deck} marketplace={MARKETPLACES.tcgplayer} send={settled} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("");
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
@@ -701,7 +795,9 @@ describe("DeckStats", () => {
    */
   it("takes the caret back after the write it disabled itself for", async () => {
     const deck = short();
-    const { rerender } = render(<DeckStats cards={deck} send={sender()} />);
+    const { rerender } = render(
+      <DeckStats cards={deck} marketplace={MARKETPLACES.tcgplayer} send={sender()} />,
+    );
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
     await userEvent.click(button);
     button.focus();
@@ -712,10 +808,22 @@ describe("DeckStats", () => {
     // (a disabled control is not focusable, so `blur()` returns early) — the state under test
     // is the same one either way.
     button.blur();
-    rerender(<DeckStats cards={deck} send={sender({ isPending: true })} />);
+    rerender(
+      <DeckStats
+        cards={deck}
+        marketplace={MARKETPLACES.tcgplayer}
+        send={sender({ isPending: true })}
+      />,
+    );
     expect(document.body).toHaveFocus();
 
-    rerender(<DeckStats cards={deck} send={sender({ isSuccess: true, data: 3 })} />);
+    rerender(
+      <DeckStats
+        cards={deck}
+        marketplace={MARKETPLACES.tcgplayer}
+        send={sender({ isSuccess: true, data: 3 })}
+      />,
+    );
 
     expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toHaveFocus();
   });

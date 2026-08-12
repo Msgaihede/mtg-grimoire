@@ -18,6 +18,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     sortOrder: 1,
     cardCount: 0,
     totalPriceUsd: null,
+    totalPriceEur: null,
     cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
@@ -46,6 +47,7 @@ describe("buildGroups by category", () => {
       [COMMANDER, MAIN, SIDE],
       "category",
       "alphabetical",
+      "usd",
     );
 
     // An empty Sideboard is where the next sideboard card goes; a column that vanished when
@@ -60,6 +62,7 @@ describe("buildGroups by category", () => {
       [COMMANDER, MAIN, MAYBE],
       "category",
       "alphabetical",
+      "usd",
     );
 
     expect(commander).toMatchObject({
@@ -89,6 +92,7 @@ describe("buildGroups by category", () => {
       [MAIN],
       "category",
       "alphabetical",
+      "usd",
     );
 
     expect(group.cards).toHaveLength(2);
@@ -105,15 +109,68 @@ describe("buildGroups by category", () => {
       [MAIN],
       "category",
       "alphabetical",
+      "usd",
     );
 
-    expect(group.totalPriceUsd).toBeCloseTo(3.99, 5);
+    expect(group.totalPrice).toBeCloseTo(3.99, 5);
   });
 
   /**
-   * A partial total is more useful than none — the surface that shows it says
-   * `PRICES_AS_OF` — but a group where *nothing* is priced quotes no number at all, because
-   * `$0.00` is a price nobody offered.
+   * **The heading totals the currency it was given**, which is the whole reason `buildGroups`
+   * takes one: a column whose price is summed in dollars while its cards print euros is a
+   * heading disagreeing with the rows under it.
+   */
+  it("sums the currency it is given", () => {
+    const cards = [
+      card({ name: "Sol Ring", quantity: 2, unitPriceUsd: 1.5, unitPriceEur: 1 }),
+      card({ name: "Arcane Signet", quantity: 1, unitPriceUsd: 0.99, unitPriceEur: 0.5 }),
+    ];
+
+    expect(buildGroups(cards, [MAIN], "category", "alphabetical", "usd")[0].totalPrice).toBeCloseTo(
+      3.99,
+      5,
+    );
+    expect(buildGroups(cards, [MAIN], "category", "alphabetical", "eur")[0].totalPrice).toBeCloseTo(
+      2.5,
+      5,
+    );
+  });
+
+  /**
+   * **The etched hole, at the one place a total could paper over it.** `eur_etched` does not
+   * exist in Scryfall's data, so an etched printing carries a dollar price and no euro one —
+   * and a pile of them is `null` in euros rather than quoted at its dollar figure or at the
+   * nonfoil rate. A euro total legitimately *lower* than its dollar twin over the same cards
+   * is what that looks like, and it is the answer rather than a bug.
+   */
+  it("leaves a card unpriced in this currency out of the total, and never borrows the other", () => {
+    const cards = [
+      card({ name: "Sol Ring", quantity: 1, unitPriceUsd: 1.99, unitPriceEur: 1.5 }),
+      card({ name: "Etched Bomb", quantity: 2, unitPriceUsd: 50, unitPriceEur: null }),
+    ];
+
+    expect(buildGroups(cards, [MAIN], "category", "alphabetical", "usd")[0].totalPrice).toBeCloseTo(
+      101.99,
+      5,
+    );
+    expect(buildGroups(cards, [MAIN], "category", "alphabetical", "eur")[0].totalPrice).toBeCloseTo(
+      1.5,
+      5,
+    );
+
+    // Nothing priced in euros at all: an em dash, not the dollar sum wearing a euro sign.
+    const etchedOnly = [
+      card({ name: "Etched Bomb", quantity: 2, unitPriceUsd: 50, unitPriceEur: null }),
+    ];
+    expect(
+      buildGroups(etchedOnly, [MAIN], "category", "alphabetical", "eur")[0].totalPrice,
+    ).toBeNull();
+  });
+
+  /**
+   * A partial total is more useful than none — the surface that shows it says whose prices
+   * they are and when they were true — but a group where *nothing* is priced quotes no number
+   * at all, because `$0.00` is a price nobody offered.
    */
   it("skips unpriced cards, and is null when nothing in the group has a price", () => {
     const [partial] = buildGroups(
@@ -124,16 +181,18 @@ describe("buildGroups by category", () => {
       [MAIN],
       "category",
       "alphabetical",
+      "usd",
     );
-    expect(partial.totalPriceUsd).toBeCloseTo(1.99, 5);
+    expect(partial.totalPrice).toBeCloseTo(1.99, 5);
 
     const [none] = buildGroups(
       [card({ name: "Orphan", quantity: 3, unitPriceUsd: null })],
       [MAIN],
       "category",
       "alphabetical",
+      "usd",
     );
-    expect(none.totalPriceUsd).toBeNull();
+    expect(none.totalPrice).toBeNull();
   });
 
   it("sorts the cards inside each group by the order it was given", () => {
@@ -142,6 +201,7 @@ describe("buildGroups by category", () => {
       [MAIN],
       "category",
       "manaCost",
+      "usd",
     );
 
     expect(names(group.cards)).toEqual(["Sol Ring", "Arcane Signet"]);
@@ -167,6 +227,7 @@ describe("buildGroups by category", () => {
       [MAIN],
       "category",
       "alphabetical",
+      "usd",
     );
 
     expect(names(groups)).toEqual(["Main deck", "Gone"]);
@@ -205,7 +266,7 @@ describe("buildGroups by a derived key", () => {
     ];
 
     for (const groupBy of ["manaValue", "type"] as const) {
-      const groups = buildGroups(cards, [MAIN, MAYBE, CUTS], groupBy, "alphabetical");
+      const groups = buildGroups(cards, [MAIN, MAYBE, CUTS], groupBy, "alphabetical", "usd");
       const inactive = groups.filter((g) => !g.isActive);
 
       // The two switched-off piles are there, as themselves, in sort_order — the Maybeboard
@@ -229,6 +290,7 @@ describe("buildGroups by a derived key", () => {
       [MAIN],
       "type",
       "alphabetical",
+      "usd",
     );
 
     expect(names(groups)).toEqual(["Artifact"]);
@@ -253,6 +315,7 @@ describe("buildGroups by a derived key", () => {
       [MAIN],
       "type",
       "alphabetical",
+      "usd",
     );
 
     expect(names(groups)).toEqual(["Creature", "Artifact", "Instant", "Land", "Uncategorised"]);
@@ -270,6 +333,7 @@ describe("buildGroups by a derived key", () => {
       [MAIN],
       "manaValue",
       "alphabetical",
+      "usd",
     );
 
     expect(names(groups)).toEqual([
@@ -282,7 +346,7 @@ describe("buildGroups by a derived key", () => {
   });
 
   it("names a derived group nothing can be dropped into", () => {
-    const [group] = buildGroups([card({ cmc: 1 })], [MAIN], "manaValue", "alphabetical");
+    const [group] = buildGroups([card({ cmc: 1 })], [MAIN], "manaValue", "alphabetical", "usd");
 
     expect(group.categoryId).toBeNull();
     expect(group.kind).toBeNull();
@@ -299,12 +363,13 @@ describe("buildGroups by a derived key", () => {
       [MAIN],
       "manaValue",
       "alphabetical",
+      "usd",
     );
 
     // The 0-drop is its own group; this one is the mana value 1 bucket.
     expect(group.name).toBe("Mana value 0");
     expect(group.count).toBe(1);
-    expect(group.totalPriceUsd).toBeNull();
+    expect(group.totalPrice).toBeNull();
   });
 
   /** The toolbar's "Group by" select is built from this list. */

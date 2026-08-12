@@ -11,6 +11,9 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
 
+**Take the `app` lock first.** Only one app runs across every worktree and a second exits
+with code 0, no window and no stderr — the `running-the-app` skill owns that protocol.
+
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
 `drag <source css> <target css>` · `hover <css> [--rest ms] [--probe expr]` ·

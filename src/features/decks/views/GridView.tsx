@@ -11,7 +11,8 @@ import { RarityGem } from "@/components/RarityGem";
 import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
-import { usdPrice } from "@/lib/prices";
+import type { Currency, Marketplace } from "@/lib/marketplace";
+import { formatPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "../CardMarks";
@@ -35,12 +36,16 @@ import { GroupHeader } from "./GroupHeader";
 
 export function GridView({
   groups,
+  marketplace,
   violations,
   onSelect,
   actions,
   className,
 }: {
   groups: readonly CardGroup[];
+  /** Which marketplace every price in this view is quoted from — the heading's total and each
+   *  tile's own unit price. */
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
@@ -55,6 +60,7 @@ export function GridView({
         <GridGroup
           key={group.key}
           group={group}
+          marketplace={marketplace}
           violations={violations}
           onSelect={onSelect}
           actions={actions}
@@ -68,11 +74,13 @@ export function GridView({
  *  `StackView`'s `StackGroup`, for its reason. */
 function GridGroup({
   group,
+  marketplace,
   violations,
   onSelect,
   actions,
 }: {
   group: CardGroup;
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
@@ -93,6 +101,7 @@ function GridGroup({
           edge would be a price 1 200px away from the heading it belongs to. */}
       <GroupHeader
         group={group}
+        marketplace={marketplace}
         layout="tight"
         id={`grid-group-${group.key}`}
         className="px-0.5 pb-1.5"
@@ -105,6 +114,7 @@ function GridGroup({
             <GridCard
               key={card.id}
               card={card}
+              currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
@@ -131,11 +141,14 @@ function GridGroup({
  */
 function GridCard({
   card,
+  currency,
   ruleBreakText,
   onSelect,
   actions,
 }: {
   card: DeckCard;
+  /** Which of the row's two unit prices the tile's foot prints. */
+  currency: Currency;
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
@@ -211,7 +224,7 @@ function GridCard({
         <span className="flex h-5 items-center gap-1 px-1.5 font-mono text-[0.5625rem] text-dim">
           <RarityGem rarity={card.rarity} />
           <span className="ml-auto shrink-0 tabular-nums text-text">
-            {usdPrice(card.unitPriceUsd)}
+            {formatPrice(currency === "eur" ? card.unitPriceEur : card.unitPriceUsd, currency)}
           </span>
         </span>
       </button>

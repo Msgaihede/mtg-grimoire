@@ -23,7 +23,15 @@ const meta = {
   title: "Decks/CardStack",
   component: CardStack,
   tags: ["autodocs"],
-  args: { cards: RAMP, label: "Ramp", onSelect: fn() },
+  args: {
+    cards: RAMP,
+    label: "Ramp",
+    // The default marketplace, and what every dollar figure in this file is a claim about. A
+    // stack takes the currency rather than reading it, so it cannot disagree with the heading
+    // the view draws above it.
+    currency: "usd",
+    onSelect: fn(),
+  },
   // The editor's own column width, straight off the design canvas: 224px, which is what a
   // 1280px window fits seven of with the stats panel docked. The stack sizes its own height,
   // so nothing here constrains it — that is the whole point of the fixed height inside.

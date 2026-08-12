@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { CardDetail, TheoryDiffRow } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckTheoryMissingToWishlist = vi.hoisted(() => vi.fn());
@@ -32,6 +33,7 @@ function row(over: Partial<TheoryDiffRow> = {}): TheoryDiffRow {
     categoryName: "Removal",
     quantity: 2,
     unitPriceUsd: 400,
+    unitPriceEur: 320,
     setCode: "lea",
     collectorNumber: "161",
     ownedSpare: 0,
@@ -106,8 +108,7 @@ beforeEach(() => {
 });
 
 /** The one row every press below is aimed at. */
-const rowFor = async (name: string) =>
-  (await screen.findByText(name)).closest("li") as HTMLElement;
+const rowFor = async (name: string) => (await screen.findByText(name)).closest("li") as HTMLElement;
 
 describe("the theory difference dialog", () => {
   /**
@@ -169,7 +170,7 @@ describe("the theory difference dialog", () => {
     expect(copies).toHaveTextContent("6");
     expect(copies).toHaveTextContent("3 cards");
 
-    const cost = screen.getByText("Cost to build").closest("div")!;
+    const cost = screen.getByText("Cost to build (USD)").closest("div")!;
     expect(cost).toHaveTextContent("$804.50");
     expect(cost).toHaveTextContent("1 unpriced");
 
@@ -182,11 +183,36 @@ describe("the theory difference dialog", () => {
     // Three wanted, three loose in the box. The plan still needs three: `quantity` has already
     // had the live list taken out of it and `ownedSpare` has not, so netting them counts the
     // live list twice.
-    const totals = diffTotals([row({ quantity: 3, ownedSpare: 3, unitPriceUsd: 2 })]);
+    const totals = diffTotals([row({ quantity: 3, ownedSpare: 3, unitPriceUsd: 2 })], "usd");
 
     expect(totals.copies).toBe(3);
-    expect(totals.costUsd).toBe(6);
+    expect(totals.cost).toBe(6);
     expect(totals.spare).toBe(3);
+  });
+
+  /**
+   * The shopping list's total is quoted in the marketplace the reader picked, and it is a
+   * *different sum* rather than the same sum with a different symbol — nothing in this app
+   * converts.
+   *
+   * The second half is the etched hole where it costs a reader money: a card with a dollar
+   * price and no euro one is left out of the euro sum and counted in `unpriced`, never charged
+   * at its dollar rate. A "cost to build" that quietly borrowed the other currency's figure
+   * would be the most expensive lie this dialog could tell.
+   */
+  it("sums the currency it is given, and counts that currency's own gaps", () => {
+    const rows = [
+      row({ cardId: "a", quantity: 2, unitPriceUsd: 10, unitPriceEur: 8 }),
+      row({ cardId: "b", quantity: 1, unitPriceUsd: 50, unitPriceEur: null }),
+    ];
+
+    const usd = diffTotals(rows, "usd");
+    expect(usd.cost).toBe(70);
+    expect(usd.unpriced).toBe(0);
+
+    const eur = diffTotals(rows, "eur");
+    expect(eur.cost).toBe(16);
+    expect(eur.unpriced).toBe(1);
   });
 
   /**
@@ -200,7 +226,7 @@ describe("the theory difference dialog", () => {
     await screen.findByText(/Cards in Live but not in Theory are cuts you have already made/);
     // Spec §5: this surface is nothing but prices, so the as-of sentence is drawn rather than
     // hung on a hover.
-    expect(screen.getByText(PRICES_AS_OF)).toBeInTheDocument();
+    expect(screen.getByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();
   });
 
   /** The two lists agreeing is an answer, and an answer is a sentence. */

@@ -22,12 +22,29 @@ import type { ValidationIssue } from "./validation/types";
 /** Sol Ring is the only card here the collection cannot cover, so the shortage is legible in
  *  one place and its absence is legible everywhere else. */
 const CARDS: DeckCard[] = [
-  card({ name: "Sol Ring", quantity: 2, ownedQuantity: 1, unitPriceUsd: 1.99, rarity: "uncommon" }),
-  card({ name: "Arcane Signet", ownedQuantity: 1, unitPriceUsd: 0.99, colorIdentity: null }),
+  card({
+    name: "Sol Ring",
+    quantity: 2,
+    ownedQuantity: 1,
+    unitPriceUsd: 1.99,
+    // Deliberately not a conversion of the dollar figure: nothing in this app converts, and a
+    // euro price that happened to be `usd × rate` would make a currency mix-up read as
+    // arithmetic rather than as the wrong field.
+    unitPriceEur: 1.5,
+    rarity: "uncommon",
+  }),
+  card({
+    name: "Arcane Signet",
+    ownedQuantity: 1,
+    unitPriceUsd: 0.99,
+    unitPriceEur: 0.75,
+    colorIdentity: null,
+  }),
   card({
     name: "The Great Henge",
     ownedQuantity: 1,
     unitPriceUsd: 38.5,
+    unitPriceEur: 30,
     colorIdentity: "G",
     gameChanger: true,
   }),
@@ -62,8 +79,7 @@ const arriveOn = (li: Element) => fireEvent.pointerOver(li);
  *  list, which is exactly the case the close delay is not for. */
 const crossTo = (from: Element, to: Element) => fireEvent.pointerOut(from, { relatedTarget: to });
 /** The pointer leaves the whole stack, which is what schedules the collapse. */
-const leaveStack = (from: Element) =>
-  fireEvent.pointerOut(from, { relatedTarget: document.body });
+const leaveStack = (from: Element) => fireEvent.pointerOut(from, { relatedTarget: document.body });
 
 describe("CardStack geometry", () => {
   /**
@@ -110,7 +126,7 @@ describe("CardStack geometry", () => {
 
   it("draws no box for a group with nothing in it", () => {
     expect(stackHeight(0)).toBe(0);
-    const { container } = render(<CardStack cards={[]} label="Ramp" />);
+    const { container } = render(<CardStack cards={[]} label="Ramp" currency="usd" />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -137,7 +153,7 @@ describe("CardStack geometry", () => {
    */
   it("writes the margin as an inline style, from −278px collapsed to 8px open", async () => {
     const user = userEvent.setup();
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     for (const item of items()) {
       expect(item.style.marginBottom).toBe(`${STACK_COLLAPSED_MARGIN}px`);
@@ -175,7 +191,8 @@ describe("CardStack flip-through", () => {
     vi.useRealTimers();
   });
 
-  const mount = () => render(<CardStack cards={CARDS} label="Ramp" onSelect={vi.fn()} />);
+  const mount = () =>
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" onSelect={vi.fn()} />);
 
   /** Advance the fake clock and let React commit whatever that woke. */
   const tick = async (ms: number) => {
@@ -295,7 +312,7 @@ describe("CardStack flip-through", () => {
   /** A dwell that outlives its stack would call `setState` on a component that is gone — and
    *  a group unmounts whenever the deck regroups, which is every card write. */
   it("takes its timers with it when the group unmounts", () => {
-    const { unmount } = render(<CardStack cards={CARDS} label="Ramp" />);
+    const { unmount } = render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     arriveOn(items()[0]);
     expect(vi.getTimerCount()).toBe(1);
@@ -335,7 +352,7 @@ describe("CardStack does not reflow", () => {
    * measure are pinned by the geometry suite above.
    */
   it("opening_a_card_does_not_change_the_group_height", async () => {
-    render(<CardStack cards={CARDS} label="Ramp" onSelect={vi.fn()} />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" onSelect={vi.fn()} />);
 
     const before = list().style.height;
     expect(before).toBe(`${stackHeight(CARDS.length)}px`);
@@ -376,11 +393,11 @@ describe("CardStack does not reflow", () => {
    */
   it("keeps its height when its cards carry controls", () => {
     const actions = { setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop: vi.fn() };
-    const { unmount } = render(<CardStack cards={CARDS} label="Ramp" />);
+    const { unmount } = render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
     const plain = list().style.height;
     unmount();
 
-    render(<CardStack cards={CARDS} label="Ramp" actions={actions} />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" actions={actions} />);
 
     expect(list().style.height).toBe(plain);
     expect(list().style.height).toBe(`${stackHeight(CARDS.length)}px`);
@@ -394,7 +411,7 @@ describe("CardStack does not reflow", () => {
    * pushes down — leave the box instead of being clipped inside it.
    */
   it("lets an open card leave the box rather than clipping it", () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
     expect(list().className).toContain("overflow-visible");
   });
 
@@ -417,7 +434,7 @@ describe("CardStack does not reflow", () => {
    * so a variant could not have said this even to be wrong.
    */
   it("raises the stack but never a card in it", async () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     for (const element of [list(), ...items()]) {
       expect(element.className).not.toContain(LAYER.raised);
@@ -440,7 +457,7 @@ describe("CardStack cards", () => {
   it("reaches every card with the keyboard, in the order they are stacked", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
-    render(<CardStack cards={CARDS} label="Ramp" onSelect={onSelect} />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" onSelect={onSelect} />);
 
     await user.tab();
     expect(screen.getByRole("button", { name: SOL_RING })).toHaveFocus();
@@ -457,7 +474,7 @@ describe("CardStack cards", () => {
   it("opens a card once when it is clicked", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
-    render(<CardStack cards={CARDS} label="Ramp" onSelect={onSelect} />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" onSelect={onSelect} />);
 
     await user.click(screen.getByRole("button", { name: HENGE }));
 
@@ -473,7 +490,7 @@ describe("CardStack cards", () => {
    * testing with a mouse. `VirtualTable`'s rows already document the same trap.
    */
   it("keeps the focus outline inside the box that clips it", () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     for (const button of screen.getAllByRole("button")) {
       expect(button.className).toContain("focus-visible:-outline-offset-2");
@@ -482,7 +499,7 @@ describe("CardStack cards", () => {
   });
 
   it("draws the copies, the rarity, the printing and its own price over the card", () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     // The copies badge — 2 of the Sol Ring, and nothing else on screen is a bare "2".
     expect(screen.getByText("2")).toBeInTheDocument();
@@ -490,6 +507,35 @@ describe("CardStack cards", () => {
     expect(screen.getAllByText("LEA · 161")).toHaveLength(3);
     // `RarityGem` names the rarity even where it only draws a dot ("Rarity: uncommon").
     expect(screen.getAllByText(/uncommon/)).not.toHaveLength(0);
+  });
+
+  /**
+   * The data line's price follows the marketplace, and the dollar figure goes away with it —
+   * this line is the only place a deck card states a number of its own, so a stale currency
+   * here would be a card claiming a price the strip above it does not agree with.
+   */
+  it("prices a card in the currency it is given", () => {
+    render(<CardStack cards={CARDS} label="Ramp" currency="eur" />);
+
+    expect(screen.getByText("€1.50")).toBeInTheDocument();
+    expect(screen.queryByText("$1.99")).not.toBeInTheDocument();
+  });
+
+  /**
+   * An etched printing has no euro price at all — `eur_etched` is not a key Scryfall's data
+   * has — so it draws an em dash rather than borrowing the dollar figure it does carry.
+   */
+  it("draws an em dash for a card unpriced in this currency", () => {
+    render(
+      <CardStack
+        cards={[card({ name: "Etched Bomb", unitPriceUsd: 38.5, unitPriceEur: null })]}
+        label="Ramp"
+        currency="eur"
+      />,
+    );
+
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("$38.50")).not.toBeInTheDocument();
   });
 
   /**
@@ -502,7 +548,7 @@ describe("CardStack cards", () => {
    * `deckCardName` carries it on the button and this is the test that says so.
    */
   it("leaves the name and cost to the printed card, but not the accessible name", () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     expect(screen.queryByText("Sol Ring")).not.toBeInTheDocument();
     expect(document.querySelectorAll("i.ms-cost")).toHaveLength(0);
@@ -526,6 +572,7 @@ describe("CardStack cards", () => {
       <CardStack
         cards={[card({ name: "Gone Card", needsReview: "This printing has left the database." })]}
         label="Ramp"
+        currency="usd"
       />,
     );
 
@@ -541,7 +588,7 @@ describe("CardStack cards", () => {
    * one number on this card that is about them.
    */
   it("says how many copies are missing, in the figure and in the name", () => {
-    render(<CardStack cards={CARDS} label="Ramp" />);
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
     expect(screen.getByText("1/2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: SOL_RING })).toBeInTheDocument();
@@ -558,6 +605,7 @@ describe("CardStack cards", () => {
       <CardStack
         cards={[card({ name: "Avacyn", quantity: 3, ownedQuantity: 0, categoryActive: false })]}
         label="Maybeboard"
+        currency="usd"
       />,
     );
 
@@ -577,6 +625,7 @@ describe("CardStack cards", () => {
           }),
         ]}
         label="Ramp"
+        currency="usd"
       />,
     );
 
@@ -606,6 +655,7 @@ describe("CardStack cards", () => {
           }),
         ]}
         label="Ramp"
+        currency="usd"
         violations={
           new Map([
             [
@@ -653,6 +703,7 @@ describe("CardStack marks", () => {
           card({ name: "Sol Ring", gameChanger: true }),
         ]}
         label="Ramp"
+        currency="usd"
         violations={new Map([["c-Mana Crypt", [banned]]])}
       />,
     );
@@ -699,6 +750,7 @@ describe("CardStack marks", () => {
       <CardStack
         cards={[card({ name: "Sword of the Meek" })]}
         label="Ramp"
+        currency="usd"
         violations={
           new Map([
             [

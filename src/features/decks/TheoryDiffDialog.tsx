@@ -7,10 +7,12 @@ import { Figure } from "@/components/Figure";
 import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import type { Currency, Marketplace } from "@/lib/marketplace";
 import { dialog, scrim } from "@/lib/motion";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 
@@ -134,8 +136,10 @@ function useTheoryDiff(deckId: number) {
 interface Totals {
   /** Copies, not rows: a card wanted three more times counts three. */
   copies: number;
-  /** The shown printings' nonfoil `usd`, times the copies wanted. */
-  costUsd: number;
+  /** The shown printings' nonfoil unit price **in the currency {@link diffTotals} was given**,
+   *  times the copies wanted. Unsuffixed, for {@link CardGroup.totalPrice}'s reason: the
+   *  currency belongs to the call rather than to the field. */
+  cost: number;
   /** Copies the sum above could not price, so the total never lies by rounding down. */
   unpriced: number;
   /** The plain sum of {@link TheoryDiffRow.ownedSpare} — see {@link FigureStrip}. */
@@ -145,9 +149,11 @@ interface Totals {
 /**
  * The strip's arithmetic, and the one line of it worth reading twice.
  *
- * `costUsd` sums **the row's own printing's** price, which is what `unitPriceUsd` is: the nonfoil
- * `usd` key of that printing's `prices` blob, never `cards.price_usd`, which is a display fallback
- * chain and must not be summed.
+ * `cost` sums **the row's own printing's** price, which is what `unitPrice*` is: the nonfoil
+ * `usd`/`eur` key of that printing's `prices` blob, never `cards.price_usd`, which is a display
+ * fallback chain and must not be summed. Whichever of the two the currency names, and never the
+ * other one as a stand-in — an unpriced row is counted rather than charged at the other
+ * currency's rate.
  *
  * `spare` is a **plain sum** of a display field. It is deliberately not `min(spare, quantity)`, not
  * subtracted from `copies`, and not netted against anything: the moment it enters an arithmetic
@@ -155,18 +161,19 @@ interface Totals {
  * `ipc.ts` exists to prevent. A reader may well own five spare Sol Rings while needing one; the
  * figure says so, and says nothing else.
  */
-export function diffTotals(rows: readonly TheoryDiffRow[]): Totals {
+export function diffTotals(rows: readonly TheoryDiffRow[], currency: Currency): Totals {
   let copies = 0;
-  let costUsd = 0;
+  let cost = 0;
   let unpriced = 0;
   let spare = 0;
   for (const row of rows) {
     copies += row.quantity;
-    if (row.unitPriceUsd === null) unpriced += row.quantity;
-    else costUsd += row.unitPriceUsd * row.quantity;
+    const unit = currency === "eur" ? row.unitPriceEur : row.unitPriceUsd;
+    if (unit === null) unpriced += row.quantity;
+    else cost += unit * row.quantity;
     spare += row.ownedSpare;
   }
-  return { copies, costUsd, unpriced, spare };
+  return { copies, cost, unpriced, spare };
 }
 
 export interface TheoryDiffDialogProps {
@@ -244,8 +251,12 @@ export function TheoryDiffDialog({
 /** The dialog itself, mounted only while it is open — see {@link TheoryDiffDialog}. */
 function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open">) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Read here rather than threaded from the editor: this dialog is mounted only while it is
+  // open, already holds a query client of its own, and a shopping list is exactly the surface
+  // a reader would open *because* they have just changed which shop they are pricing against.
+  const { marketplace } = useMarketplace();
   const { query, rows, wishAll, wishRow } = useTheoryDiff(deckId);
-  const totals = useMemo(() => diffTotals(rows), [rows]);
+  const totals = useMemo(() => diffTotals(rows, marketplace.currency), [rows, marketplace]);
 
   /**
    * The rows a press has already put on the wishlist, so the button can say so.
@@ -350,7 +361,12 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
           </button>
         </header>
 
-        <FigureStrip totals={totals} cards={rows.length} pending={query.isPending} />
+        <FigureStrip
+          totals={totals}
+          cards={rows.length}
+          marketplace={marketplace}
+          pending={query.isPending}
+        />
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
           {query.isPending ? (
@@ -370,6 +386,7 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
                 <Row
                   key={row.cardId}
                   row={row}
+                  currency={marketplace.currency}
                   sent={sent.has(row.cardId)}
                   pending={wishRow.isPending && wishRow.variables?.cardId === row.cardId}
                   onWishlist={() =>
@@ -388,8 +405,10 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
             <p className="text-[0.7rem] leading-snug text-dim">{ONE_DIRECTION}</p>
             {/* Spec §5: a price is never shown without it, and this surface is nothing but
                 prices. Drawn rather than hung on a `title`, which is the choice `DeckEditor` and
-                the card pane both made for the same reason — a hover is not a reader. */}
-            <p className="text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+                the card pane both made for the same reason — a hover is not a reader. It names
+                the marketplace too, because with five in the picker a bare "as of the last
+                sync" leaves the reader guessing whose shopping list this is. */}
+            <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
           </div>
 
           {/* One live region for every answer this dialog gives, so a reader who cannot see the
@@ -440,10 +459,13 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
 function FigureStrip({
   totals,
   cards,
+  marketplace,
   pending,
 }: {
   totals: Totals;
   cards: number;
+  /** Which marketplace "Cost to build" is quoted in. */
+  marketplace: Marketplace;
   pending: boolean;
 }) {
   const dash = (value: string) => (pending ? "—" : value);
@@ -458,12 +480,13 @@ function FigureStrip({
         note={pending ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`}
       />
       <Figure
-        label="Cost to build"
-        value={dash(usdPrice(totals.costUsd))}
+        label={`Cost to build (${marketplace.currency.toUpperCase()})`}
+        value={dash(formatPrice(totals.cost, marketplace.currency))}
         // The same shape the wishlist's "Still to buy" uses: a total that silently omits the
-        // copies it could not price is a number that lies by rounding down.
+        // copies it could not price is a number that lies by rounding down — and the count is
+        // per currency, because the two do not have the same holes.
         note={!pending && totals.unpriced > 0 ? `${totals.unpriced} unpriced` : undefined}
-        title={PRICES_AS_OF}
+        title={pricesAsOf(marketplace)}
       />
       <Figure
         label="Already owned"
@@ -484,11 +507,15 @@ function FigureStrip({
 /** One line of the shopping list: the card, what it costs, and the one thing to do about it. */
 function Row({
   row,
+  currency,
   sent,
   pending,
   onWishlist,
 }: {
   row: TheoryDiffRow;
+  /** Which of the row's two unit prices the line prints — the strip's total is the sum of
+   *  exactly these, so they take the same argument. */
+  currency: Currency;
   sent: boolean;
   pending: boolean;
   onWishlist: () => void;
@@ -501,10 +528,7 @@ function Row({
           printing that has none. Through `CardImage`, never a bare `<img>`: this is a *slot*, and
           a browser paints an `<img>`'s last decoded frame until the new src decodes, so the
           picture would lag the name by the length of the fetch. */}
-      <span
-        aria-hidden="true"
-        className="h-8 w-11 shrink-0 overflow-hidden rounded bg-surface"
-      >
+      <span aria-hidden="true" className="h-8 w-11 shrink-0 overflow-hidden rounded bg-surface">
         <CardImage
           src={cardImageUrl(row.cardId, 0, "art")}
           alt=""
@@ -532,15 +556,15 @@ function Row({
       </span>
 
       {/* The printing the price belongs to. The direction's row leaves it out; it is here because
-          the price beside it is *this* printing's `usd` and the strip's total is the sum of them —
-          a figure a reader cannot attribute to a card they can name is a figure they cannot
+          the price beside it is *this* printing's nonfoil rate and the strip's total is the sum of
+          them — a figure a reader cannot attribute to a card they can name is a figure they cannot
           check. Same spelling as every other card row in the app. */}
       <span className="hidden shrink-0 font-mono text-[0.7rem] tabular-nums text-dim md:block">
         {row.setCode.toUpperCase()} · {row.collectorNumber}
       </span>
 
       <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">
-        {usdPrice(row.unitPriceUsd)}
+        {formatPrice(currency === "eur" ? row.unitPriceEur : row.unitPriceUsd, currency)}
       </span>
 
       <button
@@ -565,5 +589,3 @@ function Row({
     </li>
   );
 }
-
-

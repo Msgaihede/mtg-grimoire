@@ -1757,6 +1757,13 @@ pub struct DeckCardRow {
     /// Nonfoil `usd` from the prices blob — `WishRow::unit_price_usd`'s rule. Never
     /// `cards.price_usd`, which is a display fallback chain and must not be summed.
     pub unit_price_usd: Option<f64>,
+    /// The same in EUR, from `$.eur`. Both travel on every row so that switching marketplace
+    /// is a re-render rather than a refetch of every deck.
+    ///
+    /// A deck names a *printing* and never a finish, so this is the nonfoil rate in both
+    /// currencies and the etched hole cannot arise here — an etched-only printing simply has
+    /// no `$.eur`, and reads `None`, which is the same answer it already gives in dollars.
+    pub unit_price_eur: Option<f64>,
     /// Copies of this oracle card the allocator secured for this deck, attributed to this
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
@@ -1776,7 +1783,8 @@ pub struct DeckDetail {
     /// narrowed to the categories that happen to hold cards would make an empty deck
     /// uneditable.
     ///
-    /// Their `card_count`/`total_price_usd` are scoped to the same variant the cards are.
+    /// Their `card_count` and both `total_price_*` are scoped to the same variant the cards
+    /// are.
     pub categories: Vec<DeckCategoryRow>,
     /// Every tag of the deck, alphabetically — the palette a row's label is picked from,
     /// which exists whether or not any row is wearing it.
@@ -1831,6 +1839,7 @@ const DECK_CARD_SELECT: &str = "SELECT dc.id, dc.card_id,
             c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
             c.faces, c.game_changer, c.finishes,
             CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
+            CAST(json_extract(c.prices, '$.eur') AS REAL) AS unit_price_eur,
             EXISTS(SELECT 1 FROM cards u
                     WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
        FROM deck_cards dc
@@ -1924,7 +1933,8 @@ fn read_deck_cards(
                 game_changer: r.get(29)?,
                 finishes: r.get(30)?,
                 unit_price_usd: r.get(31)?,
-                ever_uncommon: r.get(32)?,
+                unit_price_eur: r.get(32)?,
+                ever_uncommon: r.get(33)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -4594,6 +4604,54 @@ mod tests {
         );
     }
 
+    /// Every deck row carries both currencies, so switching marketplace is a re-render rather
+    /// than a refetch of the whole deck. The euro figure is `$.eur` under the same rule the
+    /// dollar one follows — nonfoil, out of this printing's blob, never `cards.price_eur`.
+    ///
+    /// A deck names a *printing* and never a finish, so the etched hole cannot open here the
+    /// way it does on the collection: an etched-only printing simply has no `$.eur`, and reads
+    /// `None` exactly as it already reads `None` in dollars when it has no `$.usd`.
+    #[test]
+    fn a_deck_row_carries_a_euro_price_beside_its_dollar_one() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    prices,price_usd,price_eur,raw)
+               VALUES
+                 ('both','o3','Both','tst','1','en','normal',
+                  '{"usd":"10.00","eur":"7.50"}',10.0,7.5,'{}'),
+                 ('etched-only','o4','Etched Only','tst','2','en','normal',
+                  '{"usd":null,"usd_foil":null,"usd_etched":"0.71","eur":null,"eur_foil":null}',
+                  0.71,NULL,'{}');"#,
+        )
+        .unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "both", main, 1);
+        add(&conn, deck.id, "etched-only", main, 1);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+
+        let detail = get_deck(&conn, deck.id, LIVE).unwrap().unwrap();
+        let priced = card_row(&detail, "both", main);
+        assert_eq!(
+            (priced.unit_price_usd, priced.unit_price_eur),
+            (Some(10.0), Some(7.5))
+        );
+
+        let etched = card_row(&detail, "etched-only", main);
+        assert_eq!(
+            (etched.unit_price_usd, etched.unit_price_eur),
+            (None, None),
+            "nonfoil out of the blob, and `price_usd`'s 0.71 fallback chain is not it"
+        );
+
+        assert_eq!(
+            card_row(&detail, "bolt-lea", main).unit_price_eur,
+            None,
+            "a blob with no `eur` at all is unpriced, never the dollar figure"
+        );
+    }
+
     /// **Rules 4 and 6.** One read answers with one variant's cards and **every** category and
     /// tag the deck owns — an empty category still draws its column, an inactive one always
     /// draws, and a tag nobody is wearing is still in the palette. The cards come back in
@@ -5189,6 +5247,7 @@ mod tests {
             finishes: Some(r#"["nonfoil","foil"]"#.to_owned()),
             ever_uncommon: false,
             unit_price_usd: Some(400.0),
+            unit_price_eur: Some(320.0),
             owned_quantity: 3,
         })
         .unwrap();
@@ -5205,7 +5264,7 @@ mod tests {
                 "legalities": "{\"modern\":\"legal\"}", "power": null, "toughness": null,
                 "layout": "normal", "rarity": "common", "faces": null,
                 "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
-                "everUncommon": false, "unitPriceUsd": 400.0,
+                "everUncommon": false, "unitPriceUsd": 400.0, "unitPriceEur": 320.0,
                 "ownedQuantity": 3
             })
         );

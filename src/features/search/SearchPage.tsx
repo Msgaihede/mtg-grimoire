@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
@@ -9,8 +9,9 @@ import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/Ad
 import type { DragPayload } from "@/features/decks/dnd";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
+import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { pricesAsOf } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -33,117 +34,134 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * The keys are the backend's, verbatim: `SEARCH_SORTS` in `src-tauri/src/search.rs`. A key
  * that does not match one there is dropped silently at the far end, which is a header that
  * does nothing.
+ *
+ * A function of the marketplace rather than a module constant, because the Price column is:
+ * the sentence in its header names the marketplace and the figures in its cells are read out
+ * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
+ * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
  */
-const COLUMNS: TableColumn<CardSummary>[] = [
-  {
-    key: "name",
-    width: "minmax(0,2fr)",
-    header: "Name",
-    sortable: true,
-    cellClassName: "flex items-baseline gap-2",
-    cell: (card) => (
-      <>
-        <span className="truncate">{card.name}</span>
-        {/* The printed symbols, from the bundled font — the same rule as the detail pane:
+function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
+  const asOf = pricesAsOf(marketplace);
+  const eur = marketplace.currency === "eur";
+  return [
+    {
+      key: "name",
+      width: "minmax(0,2fr)",
+      header: "Name",
+      sortable: true,
+      cellClassName: "flex items-baseline gap-2",
+      cell: (card) => (
+        <>
+          <span className="truncate">{card.name}</span>
+          {/* The printed symbols, from the bundled font — the same rule as the detail pane:
             a cost is read as symbols, and `{1}{W}{U}` is a wire format. */}
-        <ManaText source={card.manaCost} className="shrink-0 text-xs" />
-        {/* The two facts the tile carries over its art, in the cell that identifies the row —
+          <ManaText source={card.manaCost} className="shrink-0 text-xs" />
+          {/* The two facts the tile carries over its art, in the cell that identifies the row —
             because they are facts about the *card*, and the table's other five columns are
             about the printing. One truth, stated the same way in both layouts. */}
-        <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
-        {/* The table shows no art, so the glyph carries the whole of what the wall's sheen
+          <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
+          {/* The table shows no art, so the glyph carries the whole of what the wall's sheen
             says: this printing exists in one finish and it is not the assumed one. */}
-        {tileFinish(card) && <FinishMark finish={tileFinish(card)!} />}
-        {/* What a collapsed row stands for. Drawn only past one, because "×1 printings" on
+          {tileFinish(card) && <FinishMark finish={tileFinish(card)!} />}
+          {/* What a collapsed row stands for. Drawn only past one, because "×1 printings" on
             the 17 588 cards that have a single printing — and on *every* row once All
             printings is on — would be a column of noise saying nothing. */}
-        {card.printings > 1 && (
-          <span className="shrink-0 text-xs text-dim">×{card.printings} printings</span>
-        )}
-      </>
-    ),
-  },
-  {
-    key: "set",
-    width: "8rem",
-    header: "Set",
-    sortable: true,
-    cellClassName: "truncate font-mono text-dim",
-    // `setName` is nullable and the code is not, so the code is what is shown; the full name
-    // rides along as the tooltip when there is one. Mono because a collector number is data
-    // — the same rule as the grid caption and the pane.
-    cell: (card) => (
-      <span title={card.setName ?? undefined}>
-        {card.setCode.toUpperCase()} · {card.collectorNumber}
-      </span>
-    ),
-  },
-  {
-    key: "type",
-    width: "minmax(0,1fr)",
-    header: "Type",
-    sortable: true,
-    cellClassName: "truncate text-dim",
-    cell: (card) => card.typeLine ?? "—",
-  },
-  {
-    key: "rarity",
-    width: "6rem",
-    header: "Rarity",
-    sortable: true,
-    // Gem dot plus tinted word, exactly as the grid tiles caption a rarity — the two views
-    // show the same fact and there is no reason for it to look like two facts.
-    cell: (card) => <RarityGem rarity={card.rarity} withLabel className="max-w-full" />,
-  },
-  {
-    key: "price",
-    width: "6rem",
-    header: "Price",
-    sortable: true,
-    firstDir: "desc",
-    // Spec §5: a price is never shown without saying how old it is. The detail pane has room
-    // to say it in the open; a 36px header row does not, so the same sentence rides as the
-    // column's tooltip and inside its accessible name. The label *begins* with the visible
-    // word, which is what keeps an overriding `aria-label` legitimate here (WCAG 2.5.3,
-    // label in name) — "Price" still selects this column for anyone driving it by voice.
-    headerTitle: PRICES_AS_OF,
-    headerLabel: `Price. ${PRICES_AS_OF}`,
-    headerClassName: "text-right",
-    cellClassName: "text-right font-mono tabular-nums",
-    // The spread across the printings the row stands for. Uncollapsed both ends are the
-    // row's own price, so this renders exactly what `usdPrice(card.priceUsd)` used to.
-    cell: (card) => priceRange(card.priceLow, card.priceHigh),
-  },
-  {
-    key: "actions",
-    width: "2.5rem",
-    // Nothing to show, and a header a screen reader still needs: an unnamed column is
-    // announced as "column 6" for every row.
-    header: "Actions",
-    srOnlyHeader: true,
-    // The row opens the card on any click and on Enter or Space, and every one of those
-    // lands here too: without stopping them, recording a copy would also open the card, and
-    // typing `12` into the quantity box would scroll the list a screenful.
-    interactive: true,
-    cell: (card) => (
-      <AddToCollectionButton
-        className={REVEAL_ON_HOVER}
-        target={{
-          cardId: card.id,
-          name: card.name,
-          setCode: card.setCode,
-          collectorNumber: card.collectorNumber,
-          // Both ride on `CardSummary`, which is what lets a row be honest: the popup
-          // offers the finishes this printing exists in — the backend checks the enum and
-          // not the card, so a foil-only printing would otherwise take a nonfoil entry —
-          // and a wish made here can be for the card rather than for this printing.
-          oracleId: card.oracleId,
-          finishes: parseFinishes(card.finishes),
-        }}
-      />
-    ),
-  },
-];
+          {card.printings > 1 && (
+            <span className="shrink-0 text-xs text-dim">×{card.printings} printings</span>
+          )}
+        </>
+      ),
+    },
+    {
+      key: "set",
+      width: "8rem",
+      header: "Set",
+      sortable: true,
+      cellClassName: "truncate font-mono text-dim",
+      // `setName` is nullable and the code is not, so the code is what is shown; the full name
+      // rides along as the tooltip when there is one. Mono because a collector number is data
+      // — the same rule as the grid caption and the pane.
+      cell: (card) => (
+        <span title={card.setName ?? undefined}>
+          {card.setCode.toUpperCase()} · {card.collectorNumber}
+        </span>
+      ),
+    },
+    {
+      key: "type",
+      width: "minmax(0,1fr)",
+      header: "Type",
+      sortable: true,
+      cellClassName: "truncate text-dim",
+      cell: (card) => card.typeLine ?? "—",
+    },
+    {
+      key: "rarity",
+      width: "6rem",
+      header: "Rarity",
+      sortable: true,
+      // Gem dot plus tinted word, exactly as the grid tiles caption a rarity — the two views
+      // show the same fact and there is no reason for it to look like two facts.
+      cell: (card) => <RarityGem rarity={card.rarity} withLabel className="max-w-full" />,
+    },
+    {
+      key: "price",
+      width: "6rem",
+      header: "Price",
+      sortable: true,
+      firstDir: "desc",
+      // Spec §5: a price is never shown without saying how old it is. The detail pane has room
+      // to say it in the open; a 36px header row does not, so the same sentence rides as the
+      // column's tooltip and inside its accessible name. The label *begins* with the visible
+      // word, which is what keeps an overriding `aria-label` legitimate here (WCAG 2.5.3,
+      // label in name) — "Price" still selects this column for anyone driving it by voice.
+      headerTitle: asOf,
+      headerLabel: `Price. ${asOf}`,
+      headerClassName: "text-right",
+      cellClassName: "text-right font-mono tabular-nums",
+      // The spread across the printings the row stands for, in the selected marketplace's own
+      // currency. Uncollapsed both ends are the row's own price, so this renders exactly what
+      // `formatPrice(card.price…)` would.
+      //
+      // Each pair spans the printings that have a price **in that currency**, so a collapsed
+      // row's euro span can be narrower than its dollar one — or absent while the dollar one
+      // exists, which is an etched-only group and is an em dash rather than a borrowed number.
+      cell: (card) =>
+        eur
+          ? priceRange(card.priceLowEur, card.priceHighEur, "eur")
+          : priceRange(card.priceLowUsd, card.priceHighUsd, "usd"),
+    },
+    {
+      key: "actions",
+      width: "2.5rem",
+      // Nothing to show, and a header a screen reader still needs: an unnamed column is
+      // announced as "column 6" for every row.
+      header: "Actions",
+      srOnlyHeader: true,
+      // The row opens the card on any click and on Enter or Space, and every one of those
+      // lands here too: without stopping them, recording a copy would also open the card, and
+      // typing `12` into the quantity box would scroll the list a screenful.
+      interactive: true,
+      cell: (card) => (
+        <AddToCollectionButton
+          className={REVEAL_ON_HOVER}
+          target={{
+            cardId: card.id,
+            name: card.name,
+            setCode: card.setCode,
+            collectorNumber: card.collectorNumber,
+            // Both ride on `CardSummary`, which is what lets a row be honest: the popup
+            // offers the finishes this printing exists in — the backend checks the enum and
+            // not the card, so a foil-only printing would otherwise take a nonfoil entry —
+            // and a wish made here can be for the card rather than for this printing.
+            oracleId: card.oracleId,
+            finishes: parseFinishes(card.finishes),
+          }}
+        />
+      ),
+    },
+  ];
+}
 
 /**
  * What a tile carries when it is dragged: the printing it draws, and nothing about this view.
@@ -280,7 +298,10 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
 }
 
 function Results({ search }: { search: CardSearch }) {
-  const { query, rows, total, totalIsCapped, searchKey } = search;
+  const { query, rows, total, totalIsCapped, searchKey, marketplace } = search;
+  // Only the Price column depends on it, and a `TableColumn[]` rebuilt every render would
+  // re-key every header — so it is rebuilt when the marketplace changes and not otherwise.
+  const columns = useMemo(() => columnsFor(marketplace), [marketplace]);
   // Read here rather than taken as a prop: the layout is the result area's own business,
   // and the page above it only needs to know which pager is live.
   const view = useAppStore((s) => s.searchView);
@@ -395,7 +416,7 @@ function Results({ search }: { search: CardSearch }) {
         ) : (
           <VirtualTable
             rows={rows}
-            columns={COLUMNS}
+            columns={columns}
             label="Search results"
             // `null` is ARIA's "the total is unknown", which is exactly what a capped count
             // is: 5 000 would be a smaller lie than 20, but still a lie.

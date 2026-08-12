@@ -7,6 +7,7 @@
  */
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import type { DeckCard } from "@/lib/ipc";
+import type { Marketplace } from "@/lib/marketplace";
 import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
@@ -43,6 +44,7 @@ export function groupHeight(group: CardGroup): number {
 
 export function TextView({
   groups,
+  marketplace,
   violations,
   onSelect,
   actions,
@@ -50,6 +52,9 @@ export function TextView({
   className,
 }: {
   groups: readonly CardGroup[];
+  /** Which marketplace the group headings' totals are quoted from. The lines themselves show
+   *  no price — a decklist line is a quantity, a name and its marks. */
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
@@ -71,6 +76,7 @@ export function TextView({
             <TextGroup
               key={group.key}
               group={group}
+              marketplace={marketplace}
               violations={violations}
               onSelect={onSelect}
               actions={actions}
@@ -86,11 +92,13 @@ export function TextView({
  *  `StackView`'s `StackGroup`, for its reason. */
 function TextGroup({
   group,
+  marketplace,
   violations,
   onSelect,
   actions,
 }: {
   group: CardGroup;
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
@@ -108,6 +116,7 @@ function TextGroup({
       {over && <DropIndicator />}
       <GroupHeader
         group={group}
+        marketplace={marketplace}
         id={`text-group-${group.key}`}
         className="border-b border-border px-1 pb-1"
       />

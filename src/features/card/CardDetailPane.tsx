@@ -13,10 +13,12 @@ import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL, finishPrice, parseFinishes, soleFinish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
+import type { Marketplace } from "@/lib/marketplace";
 import { dialog } from "@/lib/motion";
-import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { faceCount, groupByIllustration, legalityChips } from "./printings";
 import {
@@ -208,6 +210,10 @@ function Body({
    *  in and the hand-back after a refused swap are all writes to it. */
   paneRef: RefObject<HTMLElement | null>;
 }) {
+  // Which marketplace this pane quotes. Read here, at the one component that owns a card, and
+  // handed to both surfaces that print a price — the finish table and every printings row —
+  // so the pane cannot say TCGplayer at the top and euros halfway down.
+  const { marketplace } = useMarketplace();
   const [face, setFace] = useState(0);
   const [shown, setShown] = useState(cardId);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -479,7 +485,7 @@ function Body({
       {card.data && (
         <>
           <Art card={card.data} face={face} onFlip={() => setFace((f) => (f === 0 ? 1 : 0))} />
-          <Facts card={card.data} face={face} />
+          <Facts card={card.data} face={face} marketplace={marketplace} />
           <Legalities card={card.data} />
           <Printings
             card={card.data}
@@ -488,6 +494,7 @@ function Body({
             loading={printings.isPending && oracleId !== null}
             error={printings.isError ? ipcError(printings.error) : null}
             swap={offer}
+            marketplace={marketplace}
           />
           {/* Not decoration and not optional: Scryfall requires the artist and the source
               to be identifiable in the same interface that shows the art. The artist is
@@ -530,41 +537,41 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
           shared frame would be a bad bargain. What it *must* share with the wall is the
           marking, which is why `FoilOverlay` is its own component. */}
       <span className="relative block overflow-hidden rounded-xl">
-      {broken === src ? (
-        // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
-        // rather than guessing: the card is still identified, and the way back is stated.
-        <div
-          style={{ aspectRatio: CARD_ASPECT }}
-          className="flex w-full flex-col items-center justify-center gap-1 rounded-xl bg-bg px-6 text-center"
-        >
-          <span className="text-sm">{shown?.name || card.name}</span>
-          <span className="text-xs text-dim">
-            No image yet — it may still be downloading. Reopen the card to try again.
-          </span>
-        </div>
-      ) : (
-        <CardImage
-          // The name, not "card image": this is what a screen reader announces and what
-          // shows if the fetch fails, and both readers want the card.
-          alt={shown?.name || card.name}
-          // Keyed on the `src` inside {@link CardImage}, which is both the flip and the card:
-          // a new face is a new image, so the fade *is* the flip (150ms, the whole motion
-          // budget, gone entirely under `prefers-reduced-motion`; a 3D card turn would be the
-          // biggest animation in an app whose only other one is the sync sweep) — and a new
-          // *card* is a new image too, which a `key={face}` was not. That mattered on the one
-          // path the pane does not blank itself first: a card already in the query cache is
-          // handed over in the same render, with no pending state to unmount the picture, so
-          // browsing back to a card you just looked at kept the other card's art on screen.
-          src={src}
-          onError={() => setBroken(src)}
-          decoding="async"
-          style={{ aspectRatio: CARD_ASPECT }}
-          // No filters and no crop: distorting, recolouring or cropping a card image is
-          // forbidden by Scryfall's usage rules. `object-cover` on a 5:7 frame holding a
-          // 5:7 image is a no-op that stays safe if the frame ever changes.
-          className="w-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
-        />
-      )}
+        {broken === src ? (
+          // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
+          // rather than guessing: the card is still identified, and the way back is stated.
+          <div
+            style={{ aspectRatio: CARD_ASPECT }}
+            className="flex w-full flex-col items-center justify-center gap-1 rounded-xl bg-bg px-6 text-center"
+          >
+            <span className="text-sm">{shown?.name || card.name}</span>
+            <span className="text-xs text-dim">
+              No image yet — it may still be downloading. Reopen the card to try again.
+            </span>
+          </div>
+        ) : (
+          <CardImage
+            // The name, not "card image": this is what a screen reader announces and what
+            // shows if the fetch fails, and both readers want the card.
+            alt={shown?.name || card.name}
+            // Keyed on the `src` inside {@link CardImage}, which is both the flip and the card:
+            // a new face is a new image, so the fade *is* the flip (150ms, the whole motion
+            // budget, gone entirely under `prefers-reduced-motion`; a 3D card turn would be the
+            // biggest animation in an app whose only other one is the sync sweep) — and a new
+            // *card* is a new image too, which a `key={face}` was not. That mattered on the one
+            // path the pane does not blank itself first: a card already in the query cache is
+            // handed over in the same render, with no pending state to unmount the picture, so
+            // browsing back to a card you just looked at kept the other card's art on screen.
+            src={src}
+            onError={() => setBroken(src)}
+            decoding="async"
+            style={{ aspectRatio: CARD_ASPECT }}
+            // No filters and no crop: distorting, recolouring or cropping a card image is
+            // forbidden by Scryfall's usage rules. `object-cover` on a 5:7 frame holding a
+            // 5:7 image is a no-op that stays safe if the frame ever changes.
+            className="w-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
+          />
+        )}
         <FoilOverlay finish={soleFinish(card.finishes)} />
       </span>
       {sides === 2 && (
@@ -593,7 +600,15 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
  * shows the side on screen and swaps with the flip control, while a `split` shows both
  * halves at once because both are printed on the one side the image is of.
  */
-function Facts({ card, face }: { card: CardDetail; face: number }) {
+function Facts({
+  card,
+  face,
+  marketplace,
+}: {
+  card: CardDetail;
+  face: number;
+  marketplace: Marketplace;
+}) {
   const finishes = parseFinishes(card.finishes);
   const sides = faceCount(card.layout, card.faces.length);
   const faces: CardFace[] =
@@ -649,16 +664,26 @@ function Facts({ card, face }: { card: CardDetail; face: number }) {
       {finishes.length > 0 && (
         <>
           <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            {/* Per finish, in the selected marketplace's currency, and **never across
+                currencies**: `eur_etched` is not a key Scryfall has, so an Etched row on
+                Cardmarket reads "—". That em dash is the honest answer — the nonfoil euro
+                rate is a different card's price, and quoting it here would invent one. */}
             {finishes.map((f) => (
               <div key={f} className="flex items-baseline gap-1.5">
                 <dt className="text-dim">{FINISH_LABEL[f]}</dt>
-                <dd className="font-mono tabular-nums">{usdPrice(finishPrice(card.prices, f))}</dd>
+                <dd className="font-mono tabular-nums">
+                  {formatPrice(
+                    finishPrice(card.prices, f, marketplace.currency),
+                    marketplace.currency,
+                  )}
+                </dd>
               </div>
             ))}
           </dl>
-          {/* Spec §5: a price is never shown without saying how old it is. The ribbon
-              carries the date of the data these came in with. */}
-          <p className="text-[0.7rem] text-dim">{PRICES_AS_OF}</p>
+          {/* Spec §5: a price is never shown without saying how old it is — and, now that
+              there is more than one answer, whose it is. The ribbon carries the date of the
+              data these came in with. */}
+          <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
         </>
       )}
     </div>
@@ -724,6 +749,7 @@ function Printings({
   loading,
   error,
   swap,
+  marketplace,
 }: {
   card: CardDetail;
   items: Printing[];
@@ -731,6 +757,8 @@ function Printings({
   loading: boolean;
   error: string | null;
   swap: SwapOffer | null;
+  /** Which marketplace each row's per-finish prices are quoted from. */
+  marketplace: Marketplace;
 }) {
   const headingId = useId();
   // One dwell timer for the whole list — see {@link usePrintingDwell} for why it cannot be one
@@ -795,6 +823,7 @@ function Printings({
                 card={card}
                 current={p.id === card.id}
                 swap={swap}
+                marketplace={marketplace}
                 dwell={dwell.rowProps(p.id)}
               />
             ))}
@@ -814,12 +843,15 @@ function PrintingRow({
   card,
   current,
   swap,
+  marketplace,
   dwell,
 }: {
   printing: Printing;
   card: CardDetail;
   current: boolean;
   swap: SwapOffer | null;
+  /** Which marketplace this row's per-finish prices are quoted from. */
+  marketplace: Marketplace;
   /** The row's half of the list's one hover preview — see {@link usePrintingDwell}. */
   dwell: DwellRowProps;
 }) {
@@ -906,7 +938,10 @@ function PrintingRow({
                 still unmarked — it is the finish a price is assumed to be — and the full
                 word rides in the accessible name, as the `<abbr>`'s title did. */}
             <FinishMark finish={f} />
-            {usdPrice(finishPrice(printing.prices, f))}
+            {formatPrice(
+              finishPrice(printing.prices, f, marketplace.currency),
+              marketplace.currency,
+            )}
           </span>
         ))}
         {/* This row's printing, not the pane's card: the set and the collector number are the

@@ -2110,12 +2110,18 @@ describe("the busy fault", () => {
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
     };
-    // 40 commands in the table, the five above excluded: 35 that really take the lock.
-    // `deck_import_commit` is the newest of them — it takes `AppState.db` through `lock_for`
-    // like every other write, which is what makes it refusable where `deck_import_resolve`
-    // (on `db_read`) is not.
+    // The five above excluded, this is every command that really takes the write lock —
+    // re-counted 2026-08-12 **after merging two branches that each added one**, which is the
+    // case this number keeps losing to: deck-import added `deck_import_commit` and the
+    // marketplace branch added `set_marketplace`, each re-counted correctly against its own
+    // base, and the merge made both counts wrong at once.
+    //
+    // Both follow the same split as `error_log_clear` before them: the write half takes
+    // `AppState.db` through `lock_for` and is therefore refusable, while its read half
+    // (`deck_import_resolve`, `get_marketplace`) goes through `db_read` and answers through
+    // every second of a sync.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(35);
+    expect(names).toHaveLength(36);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -2154,6 +2160,29 @@ describe("the whole command table", () => {
     // `deck_missing_to_wishlist` takes `deckId` where its four neighbours take `id` — the
     // odd one out, and Tauri matches by name.
     await expect(invoke<number>("deck_missing_to_wishlist", { id: 1 })).rejects.toThrow();
+  });
+
+  /**
+   * The one setting stored as an `app_meta` row, and the two states that row has that a
+   * narrowed field could not reach: never written, and written by a build that knew an id this
+   * one does not. Both read as the default, and only a *write* refuses — which is the whole of
+   * why the table cannot collect junk while a downgrade still renders prices.
+   */
+  it("falls back to the default marketplace on a missing or unknown row, and refuses a bad write", () => {
+    expect(readHandlers(makeDb()).get_marketplace()).toBe("tcgplayer");
+    expect(readHandlers(makeDb({ marketplace: "moxfield" })).get_marketplace()).toBe("tcgplayer");
+    expect(readHandlers(makeDb({ marketplace: "cardmarket" })).get_marketplace()).toBe("cardmarket");
+
+    const db = makeDb();
+    writeHandlers(db).set_marketplace({ id: "cardmarket" });
+    expect(db.marketplace).toBe("cardmarket");
+    expect(readHandlers(db).get_marketplace()).toBe("cardmarket");
+
+    expect(() => writeHandlers(db).set_marketplace({ id: "moxfield" })).toThrow(
+      /is not a marketplace/,
+    );
+    // Refused, and the row it would have overwritten is still the one that was chosen.
+    expect(db.marketplace).toBe("cardmarket");
   });
 
   it("answers a sync run without touching the store", () => {

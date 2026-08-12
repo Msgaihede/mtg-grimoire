@@ -44,6 +44,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     sortOrder: 0,
     cardCount: 0,
     totalPriceUsd: null,
+    totalPriceEur: null,
     // Both lists, defaulting to the one-list count — the shape the backend can produce. Only
     // the delete confirmation reads it.
     cardCountAllVariants: over.cardCount ?? 0,
@@ -96,6 +97,7 @@ function card(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     finishes: null,
     everUncommon: false,
     unitPriceUsd: null,
+    unitPriceEur: null,
     ownedQuantity: 0,
     ...over,
   };

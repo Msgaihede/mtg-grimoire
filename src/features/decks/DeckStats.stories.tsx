@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
+import { MARKETPLACES } from "@/lib/marketplace";
 import { DeckStats } from "./DeckStats";
 
 /**
@@ -32,6 +33,10 @@ const meta = {
   component: DeckStats,
   tags: ["autodocs"],
   args: {
+    // The default, and what every dollar figure in this file is a claim about. The strip takes
+    // the marketplace rather than reading it, so the Price figure, its label and its as-of
+    // sentence are decided in one place and cannot disagree with the deck list beside them.
+    marketplace: MARKETPLACES.tcgplayer,
     // The narrowed `useDeck().missingToWishlist`, idle. Narrowed rather than passed whole so the
     // strip can be rendered without a query client, and so the one write it makes is visible in
     // its own signature.

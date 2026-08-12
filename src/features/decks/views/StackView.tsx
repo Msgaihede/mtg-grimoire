@@ -4,13 +4,10 @@
  */
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import type { DeckCard } from "@/lib/ipc";
+import type { Marketplace } from "@/lib/marketplace";
 import { cn } from "@/lib/utils";
 import { CardStack, stackHeight } from "../CardStack";
-import {
-  deckGroupProps,
-  useCategoryDrop,
-  type DeckCardActions,
-} from "../cardControl";
+import { deckGroupProps, useCategoryDrop, type DeckCardActions } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
@@ -54,6 +51,7 @@ export const DEFAULT_COLUMN_HEIGHT = 640;
 
 export function StackView({
   groups,
+  marketplace,
   violations,
   onSelect,
   actions,
@@ -61,6 +59,9 @@ export function StackView({
   className,
 }: {
   groups: readonly CardGroup[];
+  /** Which marketplace every price in this view is quoted from — the heading's total and each
+   *  card's own unit price. One value for the whole view, so the two cannot disagree. */
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here, and where a dropped one lands. See
@@ -91,6 +92,7 @@ export function StackView({
             <StackGroup
               key={group.key}
               group={group}
+              marketplace={marketplace}
               violations={violations}
               onSelect={onSelect}
               actions={actions}
@@ -111,11 +113,13 @@ export function StackView({
  */
 function StackGroup({
   group,
+  marketplace,
   violations,
   onSelect,
   actions,
 }: {
   group: CardGroup;
+  marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
@@ -149,6 +153,7 @@ function StackGroup({
       {over && <DropIndicator />}
       <GroupHeader
         group={group}
+        marketplace={marketplace}
         layout="stacked"
         id={`group-${group.key}`}
         className="px-1 pb-1.5"
@@ -161,6 +166,7 @@ function StackGroup({
         <CardStack
           cards={group.cards}
           label={group.name}
+          currency={marketplace.currency}
           violations={violations}
           onSelect={onSelect}
           actions={actions}

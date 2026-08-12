@@ -6,15 +6,19 @@ import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/ad
 import type { ReactElement } from "react";
 import { readDragData } from "@/features/decks/dnd";
 import type { WishlistQuery, WishRow } from "@/lib/ipc";
-import { PRICES_AS_OF } from "@/lib/prices";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
 
 const wishlistList = vi.hoisted(() => vi.fn());
 const wishlistSetQuantity = vi.hoisted(() => vi.fn());
 const wishlistRemove = vi.hoisted(() => vi.fn());
+/** Which marketplace the Cost column and the header figure quote. An unmocked command is a
+ *  rejected query that silently resolves to the default, so it is answered explicitly. */
+const getMarketplace = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { wishlistList, wishlistSetQuantity, wishlistRemove },
+  ipc: { wishlistList, wishlistSetQuantity, wishlistRemove, getMarketplace },
 }));
 
 import { WishlistPage } from "./WishlistPage";
@@ -84,15 +88,14 @@ const lastQuery = () =>
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
 /**
- * The header's money figures, scoped — a two-row wishlist prints the same dollar amount in
- * the total and in the row it came from, and an unscoped query cannot tell the sum from a
- * term. Two of them since the header started mirroring the collection's, which prices in both
- * currencies; each one carries its own unpriced count, so each has to be read on its own.
+ * The header's money figure, scoped — a two-row wishlist prints the same amount in the total
+ * and in the row it came from, and an unscoped query cannot tell the sum from a term.
+ *
+ * **One figure now, not the pair this header used to draw.** The label names the currency
+ * because the figure changes denomination in Settings, so the scoping selector takes it.
  */
-const total = async () =>
-  (await screen.findByText("Still to buy (USD)")).closest("div") as HTMLElement;
-const totalEur = async () =>
-  (await screen.findByText("Still to buy (EUR)")).closest("div") as HTMLElement;
+const total = async (currency: "USD" | "EUR" = "USD") =>
+  (await screen.findByText(`Still to buy (${currency})`)).closest("div") as HTMLElement;
 
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -117,6 +120,8 @@ beforeEach(() => {
   wishlistList.mockReset().mockResolvedValue(page([BOLT]));
   wishlistSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 5, removed: false });
   wishlistRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
+  // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
+  getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   useAppStore.setState({ selectedCardId: null });
 });
 
@@ -244,7 +249,7 @@ describe("WishlistPage", () => {
    * What the list is *for*: the money still to spend. Counted over what is missing rather
    * than over what is wanted — three of the four Bolts at $400.50, plus the Recall — because
    * a total that charged the reader for cards already in the binder is a number nobody can
-   * act on. Spec §5: it says how old the prices are.
+   * act on. Spec §5: it says how old the prices are, and whose.
    */
   it("adds up what is still to buy, and says how old the prices are", async () => {
     wishlistList.mockResolvedValue(page([BOLT, ANY]));
@@ -252,7 +257,10 @@ describe("WishlistPage", () => {
 
     // Three of the four Bolts at $400.50, plus the Recall.
     expect(await within(await total()).findByText("$1,213.50")).toBeInTheDocument();
-    expect(await total()).toHaveAttribute("title", PRICES_AS_OF);
+    expect(await total()).toHaveAttribute("title", pricesAsOf(MARKETPLACES.tcgplayer));
+    // One figure, not the pair this header drew before the marketplace setting existed: two
+    // totals over one shopping list is two answers to the question it is open to ask.
+    expect(screen.queryByText("Still to buy (EUR)")).not.toBeInTheDocument();
   });
 
   /** A fulfilled wish costs nothing to finish, so it adds nothing to the total. */
@@ -276,14 +284,19 @@ describe("WishlistPage", () => {
   });
 
   /**
-   * Spec §7: this header mirrors the collection's, and that one prices in both currencies.
+   * Spec §7: this header mirrors the collection's, and that one now quotes the marketplace the
+   * reader picked. On Cardmarket the figure, the label and the as-of sentence all move
+   * together, and the dollars are not on screen at all.
    *
-   * The euro column has a hole the dollar one does not — `eur_etched` is documented and
-   * absent from Scryfall's data — so an etched wish is priced in dollars and unpriced in
-   * euros at the same time. Two figures, therefore two unpriced counters: one shared note
-   * would have to describe whichever of them it was wrong about.
+   * **And the unpriced count moves with them, which is the half that matters.** The euro
+   * column has a hole the dollar one does not — `eur_etched` is documented and absent from
+   * Scryfall's data — so an etched wish is priced in dollars and unpriced in euros at the same
+   * time. A count borrowed from the other currency would be wrong about exactly the rows this
+   * note exists for, and nothing falls back: the etched wish contributes nothing to the sum
+   * rather than its dollar price.
    */
-  it("prices what is still to buy in euros too, and counts the etched hole on its own", async () => {
+  it("prices what is still to buy in euros, and counts the etched hole on its own", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
     const ETCHED: WishRow = {
       ...ANY,
       id: 9,
@@ -296,15 +309,42 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
 
     // Three of the four Bolts at €320, and nothing at all for the etched wish.
-    const eur = await totalEur();
+    const eur = await total("EUR");
     expect(await within(eur).findByText("€960.00")).toBeInTheDocument();
     expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
-    expect(eur).toHaveAttribute("title", PRICES_AS_OF);
+    expect(eur).toHaveAttribute("title", pricesAsOf(MARKETPLACES.cardmarket));
+    // The dollar sum over the same rows — $1,231.50 — is nowhere on screen, and neither is
+    // the etched wish's own $30 propping the euro total up.
+    expect(screen.queryByText("$1,231.50")).not.toBeInTheDocument();
+    expect(screen.queryByText("Still to buy (USD)")).not.toBeInTheDocument();
+  });
 
-    // The same rows in dollars, where every one of them has a price.
-    const usd = await total();
-    expect(within(usd).getByText("$1,231.50")).toBeInTheDocument();
-    expect(within(usd).queryByText(/unpriced/)).not.toBeInTheDocument();
+  /**
+   * The Cost column, per row, in the selected currency — including the `ea` line, which is
+   * only drawn where more than one copy is missing and therefore survives every single-copy
+   * fixture above it.
+   *
+   * `ORDER BY` is the other half: it runs inside SQLite, so a Cost header ranking by dollars
+   * while the cells print euros is the bug `WishlistQuery.currency` exists to prevent — and it
+   * is sent only for the money orders, which is what keeps a marketplace switch off the wire
+   * on a name-ordered list.
+   */
+  it("prices the Cost column in the selected currency and sorts by the same one", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    const user = userEvent.setup();
+    wishlistList.mockResolvedValue(page([BOLT]));
+    wrap(<WishlistPage />);
+
+    const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]') as HTMLElement;
+    // Three of four still missing, at €320 each. Scoped to the row: with one wish on the list
+    // the header's total is the same number, and an unscoped query cannot tell a sum from a
+    // term — the same reason `total()` above is scoped.
+    await waitFor(() => expect(within(row).getByText("€960.00")).toBeInTheDocument());
+    expect(within(row).getByText("€320.00 ea")).toBeInTheDocument();
+
+    await waitFor(() => expect(lastQuery().currency).toBeUndefined());
+    await user.click(screen.getByRole("button", { name: /^Cost/ }));
+    await waitFor(() => expect(lastQuery().currency).toBe("eur"));
   });
 
   /**

@@ -24,6 +24,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
+import type { Currency, MarketplaceId } from "./marketplace";
 import type { ImageVariant } from "./images";
 import type { SortSpec } from "./sort";
 
@@ -96,6 +97,13 @@ export interface SearchRequest {
    */
   sort?: SortSpec<SearchSortKey>;
   /**
+   * Which currency a `price` sort orders by. Absent means `usd`.
+   *
+   * The one place the selected marketplace has to cross the wire: ordering happens inside
+   * SQLite, so unlike every other price decision in this app it cannot be made on this side.
+   */
+  currency?: Currency;
+  /**
    * Fold every printing of one card into a single row, represented by the newest printing.
    *
    * Absent means false, which is what this command has always answered. A **view mode**
@@ -118,7 +126,17 @@ export interface CardSummary {
   rarity: string | null;
   typeLine: string | null;
   manaCost: string | null;
+  /**
+   * The row's own price in each currency — a display/sort fallback chain
+   * (`usd → usd_foil → usd_etched`), never a per-finish figure. Read the one the selected
+   * marketplace's `currency` names; see `@/lib/marketplace`.
+   *
+   * Both arrive on every row so that switching marketplace is a re-render rather than a
+   * refetch. `priceEur` is `null` far more often than `priceUsd` — there is no `eur_etched`
+   * key in Scryfall's data at all, so an etched-only printing is unpriced in euros.
+   */
   priceUsd: number | null;
+  priceEur: number | null;
   layout: string;
   /**
    * The oracle card this printing is of. `null` mirrors `cards.oracle_id`'s nullability and
@@ -170,9 +188,16 @@ export interface CardSummary {
    * Cheapest and dearest {@link CardSummary.priceUsd} among the printings this row stands
    * for; both equal it when the search is not collapsed. Render a range only when the two
    * differ — most cards have one printing, and `$2.15–$2.15` is noise.
+   *
+   * Suffixed by currency since there are two: a bare `priceLow` was unambiguous only while
+   * every price in the app was dollars. Each pair spans the printings **that have a price in
+   * that currency**, so a group's euro span can be narrower than its dollar one — or absent
+   * while the dollar one exists.
    */
-  priceLow: number | null;
-  priceHigh: number | null;
+  priceLowUsd: number | null;
+  priceHighUsd: number | null;
+  priceLowEur: number | null;
+  priceHighEur: number | null;
 }
 
 /** A page of results plus the size of the whole match set, for the pager. */
@@ -472,6 +497,9 @@ export interface CollectionQuery extends CardFilters {
   needsReview?: boolean;
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<CollectionSortKey>;
+  /** Which currency the `value` and `price` sorts order by. Absent means `usd`; see
+   *  {@link SearchRequest.currency}. */
+  currency?: Currency;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;
@@ -585,6 +613,9 @@ export interface WishlistQuery extends CardFilters {
   needsReview?: boolean;
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<WishlistSortKey>;
+  /** Which currency the `cost` and `price` sorts order by. Absent means `usd`; see
+   *  {@link SearchRequest.currency}. */
+  currency?: Currency;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;
@@ -716,6 +747,10 @@ export interface DeckCategory {
   cardCount: number;
   /** Nonfoil `usd` × copies over the same variant, `null` when nothing here has a price. */
   totalPriceUsd: number | null;
+  /** The same in EUR. Lower than a naive conversion would suggest and legitimately so: a
+   *  category holding etched printings sums fewer cards here, because `eur_etched` does not
+   *  exist and those copies are unpriced rather than valued at the nonfoil rate. */
+  totalPriceEur: number | null;
   /**
    * Copies filed here **across both variants**, live and theory together — the number a
    * destructive confirmation has to quote, and the same answer whichever variant was asked by.
@@ -826,6 +861,8 @@ export interface TheoryDiffRow {
   /** Nonfoil `usd` from this printing's prices blob, per copy — {@link DeckCard.unitPriceUsd}'s
    *  rule. Never `cards.price_usd`, which is a display fallback chain and must not be summed. */
   unitPriceUsd: number | null;
+  /** The same in EUR, from `$.eur`. */
+  unitPriceEur: number | null;
   setCode: string;
   collectorNumber: string;
   /**
@@ -1216,6 +1253,8 @@ export interface DeckCard {
   /** Nonfoil `usd` from the prices blob, per copy — {@link WishRow.unitPriceUsd}'s rule.
    *  Never `cards.price_usd`, which is a display fallback chain and must not be summed. */
   unitPriceUsd: number | null;
+  /** The same in EUR, from `$.eur`. */
+  unitPriceEur: number | null;
   /**
    * Copies of this oracle card the allocator **secured for this deck**, attributed to this
    * row in the read's own order and clamped to what each collection entry still holds.
@@ -2179,6 +2218,16 @@ export const ipc = {
   /** A reconcile pass that moved user rows. See {@link ReconciledEvent}. */
   onCollectionReconciled: (cb: (e: ReconciledEvent) => void): Promise<UnlistenFn> =>
     listen<ReconciledEvent>("collection:reconciled", (evt) => cb(evt.payload)),
+  /**
+   * The marketplace whose prices the app quotes, as a stored id.
+   *
+   * A raw string rather than a `MarketplaceId`: the value came out of the database and may
+   * have been written by a different build, so narrowing it is `resolveMarketplace`'s job on
+   * this side of the wire. The backend answers the default for a missing row.
+   */
+  getMarketplace: () => invoke<string>("get_marketplace"),
+  /** Choose one. Rejects an id the backend does not know, so `app_meta` cannot collect junk. */
+  setMarketplace: (id: MarketplaceId) => invoke<void>("set_marketplace", { id }),
 };
 
 /**

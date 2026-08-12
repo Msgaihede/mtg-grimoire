@@ -22,6 +22,7 @@ or a number to compare a new measurement against.
 | [storybook.md](storybook.md) | The workbench and its fake, in full | [`.storybook/CLAUDE.md`](../../.storybook/CLAUDE.md) |
 | [live-ui-verification.md](live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [ci-and-releases.md](ci-and-releases.md) | Both workflows, in full | [`.github/CLAUDE.md`](../../.github/CLAUDE.md) |
+| [test-coverage.md](test-coverage.md) | What both suites reach, and why the Rust figure needs a correction | [`CLAUDE.md`](../../CLAUDE.md) |
 
 `docs/superpowers/` is a different thing and stays where it is: the brainstorm → spec → plan
 flow, plus the research notes those plans were built on.

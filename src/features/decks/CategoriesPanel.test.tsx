@@ -59,6 +59,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     sortOrder: over.id,
     cardCount: 0,
     totalPriceUsd: null,
+    totalPriceEur: null,
     ...over,
   };
   // Both lists, defaulting to the one-list count: these fixtures are single-list decks unless
@@ -716,7 +717,9 @@ describe("tags", () => {
     // trigger stays uniquely addressable, and `getByRole` throwing on two matches is the proof.
     expect(within(li).getByRole("button", { name: "Delete" })).toBeDisabled();
     // `deck_cards.tag_id` is `ON DELETE SET NULL`: the cards are untagged, never deleted.
-    expect(within(dialog).getByText(/cards stay in the deck and lose the label/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/cards stay in the deck and lose the label/),
+    ).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "Delete tag" }));
     expect(deckTagDelete).toHaveBeenCalledWith(10);
@@ -804,9 +807,7 @@ describe("tags", () => {
     expect(within(dialog).getByRole("button", { name: "Delete tag" })).toHaveFocus();
 
     await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
-    await waitFor(() =>
-      expect(within(li).getByRole("button", { name: "Delete" })).toHaveFocus(),
-    );
+    await waitFor(() => expect(within(li).getByRole("button", { name: "Delete" })).toHaveFocus());
   });
 
   it("makes a tag of this deck from a suggestion, and offers no name it already has", async () => {

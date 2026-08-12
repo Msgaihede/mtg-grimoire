@@ -68,7 +68,7 @@ const meta = {
           "*app*, so they live in one place that never changes.\n\n" +
           "**One line does two jobs.** Idle, it reports the card database; while something " +
           "long is running it reports that instead, and hands the row back the moment the " +
-          "work stops. It is a single permanently mounted `role=\"status\"` — a live region " +
+          'work stops. It is a single permanently mounted `role="status"` — a live region ' +
           "that first appears with its sentence already inside announces nothing — and the " +
           "number beside the phase is `aria-hidden`, because the label changes about four " +
           "times in a sync while an ingest's count changes fifty-eight.\n\n" +

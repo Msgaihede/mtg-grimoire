@@ -147,6 +147,7 @@ import type {
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
+import { DEFAULT_MARKETPLACE, MARKETPLACE_IDS, isMarketplaceId } from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
 
 /* ------------------------------------------------------------------ the rows ---------- */
@@ -459,6 +460,16 @@ export interface FakeDb {
    * interaction no story could exercise.
    */
   errorLog: ErrorEntry[];
+  /**
+   * `app_meta.marketplace` — the one row this whole setting is.
+   *
+   * A **stored string** rather than a `MarketplaceId`, and `null` for the row not being there
+   * at all, because those are the two states the backend actually has to answer for: a fresh
+   * install has never written it, and a value written by a different build may name a
+   * marketplace this one has never heard of. Store it narrowed and neither case could be
+   * reached from a story.
+   */
+  marketplace: string | null;
   fault: Fault | null;
 }
 
@@ -532,6 +543,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // failed" is a state of the world, not a shape of collection, so every seed can be in
     // either state. `installWorld` is where a fault is applied, so that is where it is filled.
     errorLog: [],
+    // The row a fresh install has never written. `get_marketplace` answers the default for it,
+    // which is what every story that says nothing about prices is standing in.
+    marketplace: null,
     fault: null,
     ...init,
   };
@@ -586,6 +600,25 @@ function finishPriceUsd(card: FakeCard | null, finish: string): number | null {
 function finishPriceEur(card: FakeCard | null, finish: string): number | null {
   if (finish === "etched") return null;
   return priceKey(card, finish === "foil" ? "eur_foil" : "eur");
+}
+
+/**
+ * The `cards.price_eur` **column** — `card_row.rs:275`'s expression, `eur → eur_foil`.
+ *
+ * **Derived here where its dollar twin is stored**, and the asymmetry is a fact about the
+ * fixture rather than about the schema: `cards.ts` is generated wholesale from a local sync
+ * that predates this column, so `FakeCard` carries `priceUsd` and no `priceEur`. The column's
+ * *definition* is this expression, so deriving it from the same `prices` blob the generator
+ * copied is the same number the ingest would have written — and it keeps the fixture
+ * regenerable without a hand-edited value in it.
+ *
+ * **The chain is two links, not three.** `price_usd` falls through `usd → usd_foil →
+ * usd_etched`; there is no `eur_etched` key to fall through to, so an etched-only printing has
+ * a dollar price here and `null` in euros. That is the hole, at the column level, and it must
+ * not be closed by reaching for `usd`.
+ */
+function priceEurColumn(card: FakeCard | null): number | null {
+  return priceKey(card, "eur") ?? priceKey(card, "eur_foil");
 }
 
 /** A filter the user actually set — `filters::nonblank`. A picker's "Any set" sends `""`,
@@ -954,8 +987,11 @@ function toCardSummary(db: FakeDb, c: FakeCard): CardSummary {
     rarity: c.rarity,
     typeLine: c.typeLine,
     manaCost: c.manaCost,
-    // The `price_usd` **column**: a display and sort fallback chain, never summed.
+    // The `price_usd` **column**: a display and sort fallback chain, never summed. Its euro
+    // twin arrives on every row whether or not the reader is on Cardmarket, which is what
+    // makes switching marketplace a re-render instead of a refetch.
     priceUsd: c.priceUsd,
+    priceEur: priceEurColumn(c),
     layout: c.layout,
     oracleId: c.oracleId,
     finishes: c.finishes,
@@ -964,8 +1000,10 @@ function toCardSummary(db: FakeDb, c: FakeCard): CardSummary {
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
     // price. One shape for both modes, exactly as `search.rs` returns it.
     printings: 1,
-    priceLow: c.priceUsd,
-    priceHigh: c.priceUsd,
+    priceLowUsd: c.priceUsd,
+    priceHighUsd: c.priceUsd,
+    priceLowEur: priceEurColumn(c),
+    priceHighEur: priceEurColumn(c),
   };
 }
 
@@ -989,8 +1027,8 @@ function collapseKey(c: FakeCard): string {
  * * The **name** is `min(name)` across the group and not the representative's, because 71 of
  *   the corpus's paper groups span two names (reversible cards — `Command Tower` beside
  *   `Command Tower // Command Tower`) and the browse sorts by the same `min`.
- * * `printings`, `priceLow` and `priceHigh` describe **what matched**, not the database:
- *   filters narrow printings first and the survivors are grouped.
+ * * `printings` and both price spans describe **what matched**, not the database: filters
+ *   narrow printings first and the survivors are grouped.
  * * `ownedQuantity` sums copies of **every** printing of the card, because "do I have this
  *   card" is the question a collapsed row asks. Uncollapsed it stays per printing.
  */
@@ -1006,13 +1044,20 @@ function collapseToCards(db: FakeDb, matched: FakeCard[]): CardSummary[] {
   return [...groups.values()].map((group) => {
     // `released_at DESC, id DESC` — the real pick, ties to the greatest id.
     const rep = [...group].sort((a, b) => cmp(b.releasedAt, a.releasedAt) || cmp(b.id, a.id))[0];
-    const priced = group.map((c) => c.priceUsd).filter((p): p is number => p !== null);
+    // **A span per currency, each over the printings priced *in that currency*.** Not one span
+    // and a conversion, and not the dollar-priced printings' euro figures either: a group whose
+    // only priced printing is etched has a dollar span and no euro one at all, which is the
+    // etched hole showing up as an absent range rather than as a narrower one.
+    const pricedUsd = group.map((c) => c.priceUsd).filter((p): p is number => p !== null);
+    const pricedEur = group.map(priceEurColumn).filter((p): p is number => p !== null);
     return {
       ...toCardSummary(db, rep),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
       printings: group.length,
-      priceLow: priced.length > 0 ? Math.min(...priced) : null,
-      priceHigh: priced.length > 0 ? Math.max(...priced) : null,
+      priceLowUsd: pricedUsd.length > 0 ? Math.min(...pricedUsd) : null,
+      priceHighUsd: pricedUsd.length > 0 ? Math.max(...pricedUsd) : null,
+      priceLowEur: pricedEur.length > 0 ? Math.min(...pricedEur) : null,
+      priceHighEur: pricedEur.length > 0 ? Math.max(...pricedEur) : null,
       ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id), 0),
       wishlisted: group.some((c) => wishlisted(db, c)),
     };
@@ -1399,12 +1444,18 @@ function toDeckAudit(a: FakeDeckAudit): DeckAuditEntry {
 function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): DeckCategory {
   const filed = db.deckCards.filter((dc) => dc.categoryId === c.id);
   const rows = filed.filter((dc) => dc.variant === variant);
-  const priced = rows
-    .map((dc) => {
-      const unit = priceKey(cardById(db, dc.cardId), "usd");
-      return unit === null ? null : unit * dc.quantity;
-    })
-    .filter((n): n is number => n !== null);
+  // `deck_meta.rs:352-356`: one rule, run twice over two keys. **Each sum skips what its own
+  // currency does not quote**, so a category can total in dollars and be `null` in euros — and
+  // neither figure is ever the other converted.
+  const totalOf = (key: string): number | null => {
+    const priced = rows
+      .map((dc) => {
+        const unit = priceKey(cardById(db, dc.cardId), key);
+        return unit === null ? null : unit * dc.quantity;
+      })
+      .filter((n): n is number => n !== null);
+    return priced.length === 0 ? null : priced.reduce((n, p) => n + p, 0);
+  };
   return {
     id: c.id,
     deckId: c.deckId,
@@ -1413,7 +1464,8 @@ function toDeckCategory(db: FakeDb, c: FakeDeckCategory, variant: DeckVariant): 
     isActive: c.isActive,
     sortOrder: c.sortOrder,
     cardCount: rows.reduce((n, dc) => n + dc.quantity, 0),
-    totalPriceUsd: priced.length === 0 ? null : priced.reduce((n, p) => n + p, 0),
+    totalPriceUsd: totalOf("usd"),
+    totalPriceEur: totalOf("eur"),
     cardCountAllVariants: filed.reduce((n, dc) => n + dc.quantity, 0),
   };
 }
@@ -1688,9 +1740,12 @@ function toDeckCard(
     // recomputation answers `false` and a legal commander renders ineligible. `false` for an
     // orphan, because nothing is known about a card that is not there.
     everUncommon: card?.everUncommon ?? false,
-    // The nonfoil `usd` key: a deck names a printing, not a finish, and nonfoil is the
-    // cheapest way to satisfy it. Never the `price_usd` column.
+    // The nonfoil key in each currency: a deck names a printing, not a finish, and nonfoil is
+    // the cheapest way to satisfy it. Never the `price_usd` column, and never `eur_foil` —
+    // `deck.rs:1836-1837` reads `$.usd` and `$.eur` flat, so there is no finish branch here and
+    // therefore no etched case to hole.
     unitPriceUsd: priceKey(card, "usd"),
+    unitPriceEur: priceKey(card, "eur"),
     ownedQuantity,
   };
 }
@@ -2788,6 +2843,24 @@ export function readHandlers(db: FakeDb) {
     update_status: (): UpdateStatus => toUpdateStatus(db),
 
     /**
+     * `marketplace::get_marketplace` — the stored id, or the default.
+     *
+     * **Two ways to get the default and both are here**, because they are the two the command
+     * exists to absorb: the row has never been written, or it holds a value this build does not
+     * recognise. A newer build's id landing in an older one is a downgrade rather than a
+     * corruption, and failing every price surface over it would be the worse answer — so the
+     * fallback is a `String` this side narrows, not an error.
+     *
+     * `isMarketplaceId` is imported rather than re-listed: the ids are a *list*, and the Rust
+     * validates against the same one. The rule around it — fall back on a read, refuse on a
+     * write — is re-implemented here, which is the half a mirror is for.
+     */
+    get_marketplace: (): string =>
+      db.marketplace !== null && isMarketplaceId(db.marketplace)
+        ? db.marketplace
+        : DEFAULT_MARKETPLACE,
+
+    /**
      * `error_log_list` — newest first, clamped exactly as the Rust does.
      *
      * The clamp's low end is the part worth mirroring: SQLite reads a negative `LIMIT` as no
@@ -3482,7 +3555,9 @@ function theoryDiff(db: FakeDb, deckId: number): GroupedDiff[] {
           categoryName: categoryById(db, dc.categoryId)?.name ?? "",
           // Filled below, once both sides are summed.
           quantity: 0,
+          // `deck_theory.rs:114-115` — the same flat pair the deck read uses.
           unitPriceUsd: priceKey(card, "usd"),
+          unitPriceEur: priceKey(card, "eur"),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
           ownedSpare: 0,
@@ -4874,6 +4949,30 @@ export function writeHandlers(db: FakeDb) {
       const gone = db.errorLog.length;
       db.errorLog = [];
       return gone;
+    },
+
+    /**
+     * `marketplace::set_marketplace` — choose one, and refuse anything else.
+     *
+     * The refusal is what keeps `app_meta` from collecting junk: the read side falls back on an
+     * id it does not know, so an unchecked write would leave a row that silently means
+     * "TCGplayer" forever. `marketplace::store`'s sentence, verbatim.
+     *
+     * It honours `busy` like every other ordinary write here — `marketplace.rs:110` takes the
+     * write connection through `db::lock_for` rather than the update commands' blocking
+     * `sync::lock_db`. **The lock comes first and the id is checked inside it**, which is the
+     * Rust's own order: a bad id sent while a sync holds the connection answers BUSY, because
+     * nothing has looked at the id yet.
+     */
+    set_marketplace: (args: { id: string }): void => {
+      refuseIfBusy(db);
+      if (!isMarketplaceId(args.id)) {
+        throw refuse(
+          `"${args.id}" is not a marketplace this app knows. ` +
+            `Expected one of: ${MARKETPLACE_IDS.join(", ")}.`,
+        );
+      }
+      db.marketplace = args.id;
     },
 
     /**

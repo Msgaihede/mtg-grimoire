@@ -6,9 +6,14 @@ Scryfall as the only external dependency.
 
 ## Commands
 
-- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild)
+- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
+  one app runs across every worktree. See the `running-the-app` skill.
 - `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
+- `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
+  `cargo llvm-cov`'s**: that counts the inline `#[cfg(test)]` modules, where every line is
+  covered by definition, and reads ~14 points high. See
+  [test-coverage.md](docs/reference/test-coverage.md) before quoting either figure.
 - `npm run storybook` / `build-storybook` — the component workbench
 
 ## Architecture
@@ -34,6 +39,23 @@ on — do not work from this page alone.
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
 
+## Project skills (`.claude/skills/`)
+
+Three skills carry the worktree workflow and are the authority on it — this file does not
+repeat them:
+
+- **`worktree-setup`** — first thing in a fresh worktree. `npm install` inside it (without
+  which three suites fail on Vite's `fs.allow` and it reads as your regression), the
+  base-branch check, and what is not shared with the main checkout.
+- **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
+  and both collisions are silent. Two locks in `locks/` under the git **common** dir
+  (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a
+  directory), claimed and released through
+  `.claude/skills/running-the-app/lock.ps1`. Ports stay 1420/6006/9222; they are hardcoded
+  in tracked files and must not be remapped.
+- **`shipping-a-branch`** — `npm run verify` → PR → merge `main` in (never rebase) →
+  wait for `ci-ok`. The agent does not press Merge.
+
 ## Reference docs
 
 The long-form record — every measurement, with the date and the build it was taken on. Linked
@@ -54,6 +76,7 @@ number to compare against.
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
+| [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying
 
@@ -94,3 +117,15 @@ number to compare against.
 
 - Ultracode/dynamic workflows for large parallelizable work; subagents use Opus 5.
 - Superpowers flow: brainstorm → spec → plan → subagent-driven implementation.
+- **Fan a feature out to parallel subagents rather than working it one step at a time.** Split it
+  at the seams this repo already has — Rust command, TS domain logic, UI, stories, docs — and
+  dispatch the independent pieces in a single message so they run at once. Serialize only what
+  genuinely needs an earlier task's result. See `superpowers:dispatching-parallel-agents` and
+  `superpowers:subagent-driven-development`.
+- **Two subagents editing the same files in the same tree clobber each other.** Give each one
+  files no sibling touches, or its own worktree (`superpowers:using-git-worktrees`) — and note
+  that a worktree needs its own `npm install` before its suites pass.
+- **Tests run once, at the end, after fan-in — not inside each subagent.** A subagent's slice
+  compiles against a tree its siblings are still changing, so a suite run mid-fan-out fails for
+  reasons that are not its own, and `npm run verify` is too slow to pay for N times. Have each
+  one report what it changed, then run `npm run verify` yourself before the commit.
