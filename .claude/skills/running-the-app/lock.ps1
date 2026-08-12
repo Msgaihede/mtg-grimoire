@@ -31,7 +31,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # A lock between `acquire` and `adopt` has no pid yet. Treat it as live for this long
-# so a crash in that window cannot block another agent forever.
+# so a crash in that window cannot block another agent forever. It has to cover the
+# longest honest acquire->adopt gap, which is a cold `npm run tauri dev` cargo build -
+# shorten it and an agent steals a lock out from under a build that is still going.
+# SKILL.md's poll ceiling matches it; change one and change the other.
 $UnadoptedGraceMinutes = 10
 
 function Get-LockDir {
@@ -61,17 +64,60 @@ function Write-Lock([string]$path, $lock) {
     Set-Content -Path $path -Value ($lock | ConvertTo-Json -Compress) -Encoding utf8NoBOM
 }
 
-# Live means: an adopted pid that is running AND still carries the recorded process
-# name — Windows reuses pids, so the pid alone is not an answer. An un-adopted lock is
-# live only inside the grace window.
+# Process identity is pid + process name + start time, and the third field is not
+# ceremony: Windows reuses pids, and the name check buys nothing for the `storybook`
+# lock because Storybook, Vite, vitest and the MCP server are ALL named `node` — a
+# reused pid belonging to an unrelated node would pass both of the first two, and
+# `release` would stop it. The start time is what makes a pid a particular process.
+# A lock written before this field existed records none; then it is simply not checked.
+function Get-StartTime($p) {
+    # Not every process yields its start time (access denied on some), so both the
+    # writing and the reading side have to tolerate not having one.
+    try { return [DateTimeOffset]$p.StartTime } catch { return $null }
+}
+
+function Get-StartTimeStamp($p) {
+    $t = Get-StartTime $p
+    if ($null -eq $t) { return $null }
+    return $t.ToString('o')
+}
+
+function Get-ProcessById($id) {
+    # A garbage pid in a hand-edited lock must not throw out of a parameter bind.
+    try { return Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue } catch { return $null }
+}
+
+function Test-SameProcess($lock, $p) {
+    if (-not $p) { return $false }
+    if ($p.ProcessName -ne $lock.process) { return $false }
+    if (-not $lock.started) { return $true }   # written before this field existed
+    # Compared as instants: ConvertFrom-Json hands `started` back as a DateTime, and
+    # `-eq` against a formatted string would compare two different renderings and
+    # always disagree.
+    $recorded = $null
+    try { $recorded = [DateTimeOffset]$lock.started } catch { return $false }
+    $actual = Get-StartTime $p
+    if ($null -eq $actual) { return $true }    # unreadable now; pid + name is all there is
+    return $recorded -eq $actual
+}
+
+# Live means: an adopted pid still running as the same process it was adopted as. An
+# un-adopted lock is live only inside the grace window.
+#
+# A lock this function cannot understand — unreadable JSON, no `since`, a `since` that
+# is not a date — is **stale**, never an exception. Throwing here made `acquire` exit 1,
+# which SKILL.md tells an agent to read as HELD, so one corrupt file made every later
+# agent wait forever on a lock nobody was holding. A lock the script cannot read is not
+# a lock anyone is holding.
 function Test-LockLive($lock) {
     if (-not $lock) { return $false }
     if (-not $lock.pid) {
-        $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($lock.since)).TotalMinutes
+        if (-not $lock.since) { return $false }
+        try { $since = [DateTimeOffset]::Parse($lock.since) } catch { return $false }
+        $age = ([DateTimeOffset]::UtcNow - $since).TotalMinutes
         return $age -lt $UnadoptedGraceMinutes
     }
-    $p = Get-Process -Id $lock.pid -ErrorAction SilentlyContinue
-    return ($null -ne $p) -and ($p.ProcessName -eq $lock.process)
+    return (Test-SameProcess $lock (Get-ProcessById $lock.pid))
 }
 
 function Require-Name {
@@ -105,6 +151,7 @@ function Invoke-Acquire {
     }
 
     # CreateNew is O_EXCL: it throws if another agent won the race since the check above.
+    $since = [DateTimeOffset]::UtcNow.ToString('o')
     try { $stream = [System.IO.File]::Open($path, 'CreateNew', 'Write') }
     catch { Write-Host "HELD  $Name was claimed by another agent moments ago"; exit 1 }
     try {
@@ -112,12 +159,31 @@ function Invoke-Acquire {
             worktree = Get-Worktree
             pid      = $null
             process  = $null
+            started  = $null
             what     = $What
-            since    = [DateTimeOffset]::UtcNow.ToString('o')
+            since    = $since
         } | ConvertTo-Json -Compress
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
         $stream.Write($bytes, 0, $bytes.Length)
     } finally { $stream.Dispose() }
+
+    # CreateNew only guards free -> claimed. A stale takeover is Remove-Item THEN
+    # CreateNew, which is two operations: two agents reading the same stale lock can
+    # both delete and both create, and B's Remove-Item takes A's fresh file with it.
+    # So read back what is actually on disk and only claim the lock if the `since`
+    # there is the one we just wrote. Whoever wrote last holds it; everyone else is
+    # told HELD and exits 1, which is what they would have been told anyway.
+    # (Compared as instants, because ConvertFrom-Json hands `since` back as a DateTime
+    # rather than as the string that was written.)
+    $landed = Read-Lock $path
+    $landedSince = $null
+    if ($landed -and $landed.since) {
+        try { $landedSince = [DateTimeOffset]$landed.since } catch { $landedSince = $null }
+    }
+    if ($null -eq $landedSince -or $landedSince -ne [DateTimeOffset]$since) {
+        Write-Host "HELD  $Name was claimed by another agent moments ago"
+        exit 1
+    }
 
     Write-Host "OK    $Name acquired by $(Get-Worktree)"
     Write-Host "      Now launch, then: lock.ps1 adopt $Name -ProcessId <pid>"
@@ -133,8 +199,9 @@ function Invoke-Adopt {
     }
     $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if (-not $p) { Write-Host "ERR   no running process with id $ProcessId"; exit 1 }
-    $lock.pid = $ProcessId
-    $lock.process = $p.ProcessName
+    $lock | Add-Member -NotePropertyName pid     -NotePropertyValue $ProcessId       -Force
+    $lock | Add-Member -NotePropertyName process -NotePropertyValue $p.ProcessName   -Force
+    $lock | Add-Member -NotePropertyName started -NotePropertyValue (Get-StartTimeStamp $p) -Force
     Write-Lock $path $lock
     Write-Host "OK    $Name now holds pid $ProcessId ($($p.ProcessName))"
 }
@@ -149,8 +216,10 @@ function Invoke-Release {
         exit 1
     }
     if (-not $KeepProcess -and $lock -and $lock.pid) {
-        $p = Get-Process -Id $lock.pid -ErrorAction SilentlyContinue
-        if ($p -and $p.ProcessName -eq $lock.process) {
+        $p = Get-ProcessById $lock.pid
+        # All three identity fields, or nothing is stopped. Stopping a reused pid that
+        # merely happens to be a `node` would take out somebody's vitest run.
+        if (Test-SameProcess $lock $p) {
             Stop-Process -Id $lock.pid -Force
             $p.WaitForExit(10000) | Out-Null
             Write-Host "OK    stopped $($lock.process) (pid $($lock.pid))"

@@ -52,7 +52,12 @@ fails TS2307 on the new import, which also reads as a real failure and is not.
 | --- | --- |
 | `node_modules` | the git object store |
 | `src-tauri/target` (gigabytes) | **the stash stack** |
-| `src-tauri/target/debug/data/mtg.db` | the lock dir, `.git/locks/` |
+| `src-tauri/target/debug/data/mtg.db` | the lock dir, `<git common dir>/locks` |
+
+A worktree's `.git` is a **file**, not a directory, so `ls .git/locks` fails here. The
+common dir is what every worktree shares:
+`git rev-parse --path-format=absolute --git-common-dir` answers it from anywhere, and on
+this machine that is `D:/Code/mtg-grimoire/.git`.
 
 **Never use bare `git stash` or `git stash pop`.** The stack is shared and another
 agent's work may be on it. Prefer a temporary WIP commit. If you must stash, use

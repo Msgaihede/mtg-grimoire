@@ -39,11 +39,21 @@ pwsh -NoProfile -File $L release app
 ```
 
 `acquire` exits 1 and prints `HELD` when another worktree has it. **Wait — poll every
-15 seconds for up to 5 minutes, then tell the user who holds it.** Never kill another
-agent's app: a live CDP pass is measurements in flight.
+15 seconds for up to 10 minutes, then tell the user who holds it.** Ten, not five,
+because a lock that has been acquired but not yet adopted is held live for exactly ten
+minutes (`lock.ps1`'s `$UnadoptedGraceMinutes`) — long enough to cover a cold
+`tauri dev` cargo build, which is the honest reason that gap is long. Polling for less
+than the grace window means an *abandoned* un-adopted lock can never be waited out.
+Never kill another agent's app: a live CDP pass is measurements in flight.
 
-A lock whose pid is dead, or alive under a different process name, is **stale**;
-`acquire` takes it over and says so.
+A lock whose pid is dead, or alive as a different process (name **and** start time are
+both checked, because Windows reuses pids and half this repo's processes are called
+`node`), is **stale**; `acquire` takes it over and says so. So is a lock file the script
+cannot parse.
+
+**The escape hatch, and it is the last resort:** `release <name> -Force` deletes a lock
+belonging to another worktree. Use it only when `status` calls the lock `STALE` and you
+have confirmed with `Get-Process` that nothing is running — never to jump a `HELD` queue.
 
 ## Launching
 
@@ -64,7 +74,35 @@ Three traps, all measured:
 - **The exe cannot be relinked while it runs** — `Access is denied. (os error 5)`. Stop
   it first.
 - `npm run tauri dev` has neither problem, because Vite serves the frontend. Prefer it
-  unless you are specifically measuring a release path. It still takes the `app` lock.
+  unless you are specifically measuring a release path. It still takes the `app` lock —
+  and it adopts differently, below.
+
+### Dev mode adopts the app, not the launcher
+
+```powershell
+Get-Process mtg-grimoire -ErrorAction SilentlyContinue   # must be empty, or you adopt someone else's
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+Start-Process npm.cmd -ArgumentList "run","tauri","dev"
+do { Start-Sleep 5; $app = Get-Process mtg-grimoire -ErrorAction SilentlyContinue } until ($app)
+pwsh -NoProfile -File $L adopt app -ProcessId $app.Id
+```
+
+`tauri dev` runs the exe as a **grandchild** (`npm.cmd` → cargo → `mtg-grimoire.exe`), so
+`Start-Process -PassThru` hands you `npm.cmd`'s pid. Adopt that and `release` stops the
+wrapper only: cargo and the app keep running while the lock file is deleted, the next
+agent acquires cleanly, launches, and gets **exit code 0 with no window** — the exact
+failure this lock exists to prevent. **Adopt the `mtg-grimoire` process instead**, which
+is the loop above and the same shape as Storybook's. It can legitimately run for minutes
+on a cold cargo build, which is why the grace window is ten.
+
+`Get-Process` with `-ErrorAction SilentlyContinue` returns `$null` when nothing matches
+(so `until ($app)` is the whole loop) and a single `Process` when one does — single-
+instance guarantees there is never a second, **which is exactly why the emptiness check
+above the loop is not optional**: a `mtg-grimoire` already running from another checkout
+is the one thing that makes `$app.Id` the wrong pid.
+
+After `release`, check `Get-Process mtg-grimoire` is empty and close the `tauri dev`
+window if it survived its child.
 
 ## Driving it
 
@@ -76,7 +114,11 @@ and the trap list; this skill does not repeat it.
 single quotes inside — a nested `\"` in a CSS selector reaches the page unescaped — and
 avoid `$`, which PowerShell interpolates before node sees it.
 
-`CDP_PORT` overrides 9222 if you ever need it to.
+`CDP_PORT` overrides 9222 if you ever need it to (`scripts/cdp.mjs:31`) — it points
+`cdp.mjs` at a different debugger on an app that is already running. **It does not make a
+second app possible**: the single-instance guard keys on the `com.mtggrimoire.app`
+identifier, not on a port, so the second one still exits 0 with no window. One app, one
+lock, whatever port you drive it on.
 
 ## Storybook
 
