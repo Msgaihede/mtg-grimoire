@@ -1541,11 +1541,11 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Modify: `CLAUDE.md`
 - Modify: `docs/superpowers/plans/2026-08-12-deck-import.md` (tick the boxes)
 
-- [ ] **Step 1: Extend the Escape-stack test**
+- [x] **Step 1: Extend the Escape-stack test**
 
 `App.test.tsx` pins "Escape closes one layer per press". Add the import dialog: open the card pane, open the import dialog over it, press Escape once → the dialog closes and the pane is still open; press again → the pane closes.
 
-- [ ] **Step 2: Re-count the Storybook numbers**
+- [x] **Step 2: Re-count the Storybook numbers**
 
 Those counts moved out of the root page when main split the docs: they now live in **`docs/reference/storybook.md`**, and `.storybook/CLAUDE.md` governs the fake. The rule is unchanged and is now stated as a global one in the root `CLAUDE.md` — "a prose-only edit routes to neither CI job, so nothing goes red when a document rots; re-count in the same commit that changes one". Do it the only way that is honest:
 
@@ -1559,7 +1559,7 @@ Update the four numbers in `CLAUDE.md` from that output. Also re-count the `play
 grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l
 ```
 
-- [ ] **Step 3: Write the feature into the docs**
+- [x] **Step 3: Write the feature into the docs**
 
 Main split one page into five plus a reference set, so this lands in **two** places and neither is the root `CLAUDE.md`:
 
@@ -1580,14 +1580,14 @@ What to write, in both places scaled to their voice — the decisions and the tr
 
 Leave Task 14's numbers as a placeholder to fill in **after** that task, not before.
 
-- [ ] **Step 4: Full verify**
+- [x] **Step 4: Full verify**
 
 ```bash
 npm run verify
 ```
 Expected: PASS — build, lint, Vitest, cargo test, and `build-storybook`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A

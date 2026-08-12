@@ -66,6 +66,50 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 - **A deck card's unit price is the nonfoil `usd` key of that printing's `prices` blob** — a deck
   names a printing, not a finish. `cards.price_usd` is a fallback chain and is never summed.
 
+## Import
+
+`import/` is `parse.ts` (text → lines), `plan.ts` (lines + the printings Rust resolved → piles, a
+commander, tallies), `useDeckImport.ts` (the writes) and `ImportDeckDialog.tsx` (two steps, one
+panel, nothing written until Import). The Rust half and every measurement:
+[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+
+- **One parser for every export, and every rule in it is a _per-line_ rule.** A format detector
+  would have to choose a reader before it had read anything, and would be wrong about exactly the
+  lists somebody has edited by hand. So an unfamiliar mixture is read line by line rather than
+  refused whole.
+- **`//` is a comment only at the _start_ of a line.** `1 Branchloft Pathway // Boulderloft
+  Pathway` is one card and there are seven such names in the reference list alone, so a `//` found
+  anywhere else is part of the name and must never be cut.
+- **The line splitter takes CRLF, a lone LF _and a lone CR_.** `/\r?\n/` — the obvious spelling —
+  treats a carriage return on its own as nothing and `.` does not cross one, so a CR-only paste
+  arrived as **one** row that matched nothing and the whole list came back as a single issue.
+- **Nothing is ever silently dropped.** A line the parser cannot read becomes a `ParseIssue`
+  carrying its number and its raw text, and one bad line never aborts the parse. The only lines
+  that leave no trace are the ones making no claim — blanks and comments.
+- **`plan.ts` makes every deck decision and the dialog makes none.** The pile is `autoCategoryFor`
+  (the app's one rule, never copied — a plain add, a drag with no column under it and an imported
+  line have to agree) and the commander is `commanderIneligibility`, the same rule the validation
+  panel judges a built deck by. A looser "looks like a commander" test here would offer a card the
+  panel then refuses.
+- **`row.index` is the address, never the array position.** `deck_import_resolve` carries the
+  caller's own index back precisely so the two can differ; reading `rows[i]` against
+  `parsed.lines[i]` works today and mis-files the whole list the day anything filters between them.
+- **`CardIdentity` is the card-level half of `CardFacts`, and `CardFacts` was deliberately _not_
+  narrowed to it.** It exists so the importer can ask "could this be a commander?" about a card
+  that is in no deck yet and therefore has no `id`, no `categoryKind` and no honest `quantity` to
+  invent — but the engine really does read `categoryKind`, `categoryActive` and `quantity`, so a
+  card in a deck is more than a card. Every existing caller passes a whole `DeckCard`, which
+  satisfies a `Pick` of itself, so the widening changed no call site.
+- **An import is not an add path and must never become one.** Routing a list through
+  `useDeck.addCard` would be one transaction and one **allocator run per line**;
+  `deck_import_commit` is one of each. `useDeckImport`'s fourth mutation, `importIntoNewDeck`, is
+  `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
+  transactions, and a refused import must not leave half a deck in the gallery. The commit's
+  refusal is what the caller hears, never the clean-up delete's.
+- **The file picker's own half is unverified**, for the reason `deck_set_cover_image`'s is:
+  `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is tested;
+  click → path is not.
+
 ## Views and interaction
 
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three

@@ -128,6 +128,14 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **Two fences every deck write opens with, neither enforced by the DDL**: the variant must be
   one the schema knows, and the category must belong to _this_ deck — `deck_cards.category_id`'s
   FK only asks that the category exist, not whose it is.
+- **`deck_import.rs`: every resolution arm is one indexed lookup, and a `COLLATE NOCASE` or an
+  `OR` is what stops it being one.** `cards.name`/`set_code`/`collector_number` are plain `TEXT`,
+  so their indexes are BINARY and a comparison naming another collation plans as `SCAN c` — a full
+  table scan **per line**. Splitting the arms took a 105-line list from **46 123 ms to 11.5 ms**
+  (release, live corpus) and separately fixed a **correctness** bug: as one `OR`, art-series
+  `"N // N"` rows outranked the real card on 3 of those 105 lines. Case-insensitivity lives in the
+  fold arm, in Rust, over `cards_fts`. **Do not restore the collation here** — it reads like a
+  regression and is not one.
 
 ## Scryfall and the network
 
@@ -188,4 +196,4 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the cover route |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the seven card commands, the allocator, the audit log |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the seven card commands, the allocator, the audit log, the decklist import |

@@ -156,6 +156,71 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   standing** — a category is the reader's filing, not the list's. An empty item list is refused
   in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
   clearing the deck to put nothing back are the same call.
+- **`deck_import_resolve` is the import's read half, and it answers the one question TypeScript
+  cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
+  reused down the list, tried narrowest first — a set **and** a collector number; the set with the
+  name; the set with the name as a **front face**; the name, exactly; the name as a front face of
+  an `"A // B"` printing; and last the **folded** name (lowercase, diacritics stripped) through
+  `cards_fts`. The order every arm shares is one constant, `MATCH_ORDER`: **a printing you own
+  first, then the newest paper printing, then the `id`.** Owning it first is the whole point — a
+  reader importing a list they already have copies of wants their copies in the deck. **The `id`
+  tie-break is a requirement, not decoration**: two printings sharing a release date are ordinary
+  in this corpus, and without a total order the same list pasted twice builds two different decks.
+  The fold arm re-implements that order in Rust rather than being allowed to disagree with it.
+  **A hint that names nothing falls through and says so** — `hint_missed` is set and the name arms
+  run anyway, because a reader wanting a printing this app has not got is never a reason to lose
+  the card. Failing open is the rule throughout: a name nothing bears _and_ a line whose SQL failed
+  are both `matched: None`, and only a `prepare` failure — a broken schema, not a broken decklist —
+  is an `Err`.
+- **Every arm is one indexed lookup, and `COLLATE NOCASE` is what stopped it being one.**
+  `cards.name`, `set_code` and `collector_number` are plain `TEXT`, so `idx_cards_name` and
+  `idx_cards_set_cn` are BINARY and a comparison naming another collation cannot use them — nor
+  can an _expression_ over a column, which is what `substr(name, 1, instr(name, ' // ') - 1)` is.
+  Both plan as `SCAN c`, which is a full table scan **per line**. Timed through `resolve_lines`
+  itself on a **release** build over a copy of the live 116 695-row corpus, a 105-line commander
+  list, medians of nine: **11.5 ms** as it ships against **46 123 ms** for the first version's one
+  `OR`/`NOCASE` arm — the same column list, the same process, the same file, swapping only the
+  `WHERE` clause. A **4 000×** difference, and the difference between a feature and a hang. The
+  same list lower-cased is 31.6 ms and with an upper-cased `(SET) N` on every line 51.9 ms.
+  Case-insensitivity was not lost, it **moved to the fold arm**, which lowercases both sides in
+  Rust over `cards_fts` candidates — so a dropped `COLLATE NOCASE` here reads like a regression
+  and is not one.
+- **Splitting the exact-name and front-face arms was a _correctness_ fix that happened to be
+  free.** As one `OR`, `MATCH_ORDER` was left to choose between a real card and a `"N // N"` row —
+  and Scryfall's art series print exactly that, the trap
+  [search's relevance ranking](data-and-sync.md) already records. Measured 2026-08-12 over the live
+  corpus: **51 names** have a `"N // X"` printing that outranks every real printing of `N`, and **3
+  of the reference list's 105 lines** resolved to an art-series row instead of the card
+  (`Dakkon, Shadow Slayer` is the mechanism — `mh2` and `amh2` share a release date and the art
+  series wins the `id` tie-break). Asked in sequence the exact name always answers first. A
+  `MULTI-INDEX OR` **is** indexed, measured — and still wrong.
+- **`deck_import_read_file` takes a path, not bytes**, which is the same contract
+  `deck_set_cover_image` uses and the whole reason `dialog:allow-open` is sufficient and **no
+  `fs:` permission is granted anywhere**: a webview that can only _name_ a file needs none. The
+  1 MB cap (`MAX_IMPORT_BYTES`, shared with the paste path so the two cannot disagree) is read off
+  the **metadata**, so a 200 MB file pointed at by mistake is refused without ever being pulled
+  into memory. Decoding is `from_utf8_lossy` **deliberately**: a Windows-1252 apostrophe in one
+  card name should cost that one name, not the other hundred lines — the `U+FFFD` it leaves bears
+  no card's name, so the damaged line comes back quoted in the preview while everything else
+  resolves. A `from_utf8` would answer `Err` for the whole file and name no line.
+- **The TypeScript half decides everything a _deck_ decision is** (`src/features/decks/import/`,
+  and its own [CLAUDE.md](../../src/features/decks/CLAUDE.md) carries the binding rules): one
+  parser with per-line rules only, the pile from `autoCategoryFor`, the commander from
+  `commanderIneligibility`. The one type that crosses for it is **`CardIdentity`, the card-level
+  half of `CardFacts`** — everything true of a printing and nothing true only of a row in a deck —
+  so eligibility can be asked about a card that is in no deck yet. **`CardFacts` was deliberately
+  not narrowed to it**: the engine really does read `categoryKind`, `categoryActive` and
+  `quantity`, so a card in a deck is more than a card, and every existing caller passes a whole
+  `DeckCard`, which satisfies a `Pick` of itself.
+- **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
+  native window CDP cannot reach, so `deck_import_read_file` was exercised by invoking the command
+  with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;
+  the **click → path half is not**.
+- **_Placeholder — the live CDP pass over the shipped window has not run for the import yet._**
+  Everything above is `cargo`, `node:sqlite` or the frontend suite; nothing here has been driven
+  through the real WebView2. Fill this in from that pass and **do not quote a figure here until it
+  has run** — see [decks-live-findings.md](decks-live-findings.md) for what the last such pass
+  found that no suite could.
 - **An add that names no category is filed by the card's type line; an add that names one is
   untouched.** So every _drag_ overrides the rule by construction — pointing at a column is
   naming a category — and nothing in the write path has to tell a gesture from a press. The rule

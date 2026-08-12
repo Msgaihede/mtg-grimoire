@@ -2,13 +2,14 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **340 stories across 45 story files, 44 docs
-pages** — normally counted off `storybook-static/index.json`, which is the only place the three
-agree (`Object.values(index.entries)`, grouped by `type`; the 46th `importPath` is the `.mdx`).
-**The three figures on this line are derived rather than measured** (2026-08-12, the
-`CreateDeckDialog` commit): +3 stories, +1 file, +1 docs page over the last measured triple,
-counted from source because that pass did not run `build-storybook`. Re-measure them off
-`index.json` at the next build.
+`npm run storybook` · `npm run build-storybook`. **346 stories across 46 story files, 45 docs
+pages** — counted off `storybook-static/index.json`, which is the only place the three agree
+(`Object.values(index.entries)`, grouped by `type`; the 47th `importPath` is the `.mdx`).
+**Measured 2026-08-12** on the deck-import branch, off a fresh `build-storybook`: 391 entries,
+346 `story`, 45 `docs`, 47 distinct `importPath`s. The triple before it — 340/45/44 — was
+_derived_ rather than measured (the `CreateDeckDialog` commit counted from source without
+building), and this pass is what settled it: the derivation was one story file and three
+stories short of what the index answered, so a derived count is a placeholder and not a figure.
 **Re-count them in the same commit that adds a story.** This line read 326 for three stories'
 worth of drift and then took three more without noticing, because a prose-only edit routes to
 neither CI job — the same rot that left the fault list below saying four. **It had rotted
@@ -16,7 +17,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**43 of the 45 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**44 of the 46 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -70,7 +71,8 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   store's `set`. So the four story files that write it during render (`AppShell`,
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
-  **frame** and with it its own module graph. `DeckSettingsDialog` and `CreateDeckDialog` carry
+  **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
+  `import/ImportDeckDialog` carry
   the same parameter for an unrelated reason — their scrim is `fixed inset-0`, so inline it
   would cover the docs page rather than its own block — and the rest render inline. A new story file
   that writes the store needs the same parameter or its docs page shows one story's view under
@@ -96,8 +98,9 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**250** plays today, in a file of **253** tests — the other three are its own; `grep -rE
-"^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
+  (**256** plays today, in a file of **259** tests — the other three are its own; `grep -rE
+"^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own summary
+for the second, both measured 2026-08-12), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
