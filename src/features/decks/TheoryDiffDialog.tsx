@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CardImage } from "@/components/CardImage";
 import { Figure } from "@/components/Figure";
 import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { dialog, scrim } from "@/lib/motion";
 import { PRICES_AS_OF, usdPrice } from "@/lib/prices";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -213,15 +215,30 @@ export interface TheoryDiffDialogProps {
  * that renders `null` late, keeps every one of those alive behind a flag and has to remember to
  * clear each: the first version of this file did, and its reset was an effect that called
  * `setState` — a cascading render, and the thing React's own lint rule exists to stop.
+ *
+ * **The Escape rung is registered up here, on the flag, and the panel below no longer owns it.**
+ * With an exit animation the panel outlives `open` by the length of its fade, so a rung that
+ * came up with the *element* would still be consuming Escape while the next overlay is opening
+ * — and two `"inner"` peers are not ordered by this protocol at all. `enabled: open` makes the
+ * rung die on the render that starts the exit, which is what the editor's `Layer` union has
+ * always assumed and used to get for free from a synchronous unmount.
  */
 export function TheoryDiffDialog({
   deckId,
   open,
   onDismiss,
   onClose,
-}: TheoryDiffDialogProps): React.JSX.Element | null {
-  if (!open) return null;
-  return <Panel deckId={deckId} onDismiss={onDismiss} onClose={onClose} />;
+}: TheoryDiffDialogProps): React.JSX.Element {
+  // `useCallback`, because `onDismiss` is a dependency of the hook's effect and an unstable one
+  // re-registers the window listener on every render of the editor.
+  const dismiss = useCallback(() => onDismiss(), [onDismiss]);
+  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
+
+  return (
+    <AnimatePresence>
+      {open && <Panel key="theory-diff" deckId={deckId} onDismiss={onDismiss} onClose={onClose} />}
+    </AnimatePresence>
+  );
 }
 
 /** The dialog itself, mounted only while it is open — see {@link TheoryDiffDialog}. */
@@ -238,12 +255,8 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
    * variables and a reader presses several.
    */
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
-
-  // The `"inner"` rung. `useCallback`, because `onDismiss` is a dependency of the hook's effect
-  // and an unstable one re-registers the window listener on every render of the dialog. No
-  // `enabled`: this component exists only while the dialog is open.
-  const dismiss = useCallback(() => onDismiss(), [onDismiss]);
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss });
+  /** False from the render that starts the fade out. */
+  const present = useIsPresent();
 
   // The caret moves into the layer on the way in, as it does for every other one in the app: the
   // dialog's own controls are then the next thing Tab reaches, and Escape has something to hand
@@ -271,8 +284,20 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
     // scanner reads a comment as eagerly as it reads code, so naming the class in a sentence
     // emits a rule for it — and `layers.test.ts`'s sweep counts that as a second place the scale
     // is written. It caught this very line.
-    <div
-      className={cn("fixed inset-0 flex items-center justify-center bg-bg/70 p-4", LAYER.overlay)}
+    //
+    // Scrim and panel in one presence: the ground fades first and the panel scales up over it,
+    // and the dialog is unmounted only once the later of the two tweens has finished.
+    <motion.div
+      {...scrim}
+      className={cn(
+        "fixed inset-0 flex items-center justify-center bg-bg/70 p-4",
+        !present && "pointer-events-none",
+        LAYER.overlay,
+      )}
+      // On the way out it is a picture: nothing to press, and nothing in the accessibility tree
+      // — a second `role="dialog"` beside whichever overlay the reader opened next would be a
+      // shopping list they have already dismissed. Focus left with the flag.
+      aria-hidden={present ? undefined : true}
       // A press on the scrim and nowhere else. `onMouseDown` rather than `onClick`, because a
       // click fires on the nearest common ancestor of press and release — so a drag that starts
       // on a row's name and ends past the panel's edge is a "click" on the scrim, and the dialog
@@ -281,7 +306,8 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div
+      <motion.div
+        {...dialog}
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
@@ -400,8 +426,8 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
             {wishAll.isPending ? "Sending…" : bulkLabel}
           </button>
         </footer>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

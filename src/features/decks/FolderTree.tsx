@@ -5,10 +5,12 @@ import {
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DeckFolder } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { NOT_A_DRAG } from "./dnd";
@@ -398,11 +400,21 @@ export function FolderTree({
           write the app refused, which is a thing that just happened rather than a condition
           that is. Mounted only when there is something to say — a tree that has loaded has no
           slot for a sentence. */}
-      {failure && (
-        <p role="status" className="px-1 pb-2 text-xs text-destructive">
-          Could not read your folders — {failure}
-        </p>
-      )}
+      {/* Grown into place: the whole tree below it is what moves otherwise. The gap under the
+          sentence is `pb-2` on the child rather than a margin on the animated element, which is
+          the split `motion.ts` asks for — a margin on a box whose height is animating to 0
+          still occupies its margin, so the layout would jump by 8px instead of by 32 and read
+          as a bug rather than as a fix. `overflow-hidden` on the wrapper, since the sentence is
+          laid out at full size whatever the box around it is doing. */}
+      <AnimatePresence initial={false}>
+        {failure && (
+          <motion.div {...statusLine} className="overflow-hidden">
+            <p role="status" className="px-1 pb-2 text-xs text-destructive">
+              Could not read your folders — {failure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <ul className="flex flex-col gap-0.5">
         <FolderRow

@@ -24,9 +24,29 @@ import { cn } from "@/lib/utils";
 export const FILTER_FOCUS =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
-/** Every control in the row is 36px tall, so the chips and the text controls share a line. */
+/**
+ * Every control in the row is 36px tall, so the chips and the text controls share a line.
+ *
+ * **One arbitrary property list, and never a colour utility beside a transform one.** Those two
+ * compile to the same CSS longhand, so tailwind-merge keeps whichever it saw last and drops the
+ * other — and the one it drops is invisible until someone presses a chip and the scale snaps.
+ * The list is spelled out for that reason and is the same string every pressable control in the
+ * app carries.
+ *
+ * (Spelled as a description rather than by naming the two utilities, because `tokens.test.ts`
+ * reads a class name in prose exactly as it reads one in code and would ask this paragraph for
+ * a reduced-motion opt-out of its own.)
+ *
+ * `active:scale-[0.97]` is undone for a control that is out of reach: the filter row greys as
+ * the reader types, and a chip that dips under the finger and then does nothing tells the same
+ * lie {@link filterChipState}'s dropped hover response already refuses to tell. `aria-disabled`
+ * rather than `:disabled`, because these chips never leave the tab order.
+ */
 export const FILTER_CONTROL =
-  "h-9 rounded-md border text-sm transition-colors duration-150 motion-reduce:transition-none";
+  "h-9 rounded-md border text-sm " +
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "aria-disabled:active:scale-100 motion-reduce:transition-none";
 
 /**
  * A control this search cannot reach.
@@ -108,7 +128,12 @@ export function ManaChip({
       style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
       className={cn(
         "grid size-9 place-items-center rounded-full text-lg leading-none text-black",
-        "transition-[opacity,box-shadow] duration-150 motion-reduce:transition-none",
+        // Its own property list rather than `FILTER_CONTROL`'s, because this chip's on state
+        // is a ring and a ring is a box shadow — but `transform` joins it so the colour chips
+        // depress like every other chip in the row, and a row where half the chips answer a
+        // press is worse than one where none of them do.
+        "transition-[opacity,box-shadow,transform,scale] duration-[var(--duration-fast)] ease-standard",
+        "active:scale-[0.97] aria-disabled:active:scale-100 motion-reduce:transition-none",
         // Clear of the pressed ring, so a focused chip that is already on shows both.
         "focus-visible:outline-2 focus-visible:outline-offset-[5px] focus-visible:outline-accent",
         // 60%, not 40: below about half, the fills stop being cream/sky/bone/salmon/sage

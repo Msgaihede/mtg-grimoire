@@ -80,11 +80,40 @@ price | type`). An **inactive category stays its own group in all three grouping
   name a screen reader gets. **The marks go right, never left**: a printed name is left-aligned
   and a collapsed stack is read down its reveal strip.
 - **`CardStack` is arithmetic, not taste.** The card's height is _derived_ — a Magic card's aspect
-  applied to the fixed column width — and the collapsed negative margin leaves a **34px** reveal,
-  a legibility floor for the overlaid chip rather than a fraction. The list gets a fixed
-  `stackHeight(n)`, and the lifted card's `hover:mb-2` pushes every later card out of a box whose
-  height does not change. **The lift is pure CSS** (`hover:` + `focus-within:`), so nothing in
-  JavaScript knows which card is up and the caret gets the interaction for free.
+  applied to the fixed column width, **295px** — and the collapsed **−261px** margin leaves a
+  **34px** reveal, a legibility floor for the overlaid chip rather than a fraction. The list gets
+  a fixed `stackHeight(n) = 34(n−1) + 295 + 8`, and the open card's margin turns −261 into +8:
+  a **269px** push-down of every later card, out of a box whose height does not change.
+- **Exactly one card moves per step, and that is the whole reason the interaction works.**
+  Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
+  card sliding out of the stack, not a list resettling — and the pointer that armed it stays
+  inside it for every frame.
+- **The lift is state, not CSS, because pure CSS could not be given hover intent** (changed
+  2026-08-12). The same arithmetic that makes one card move is what broke selection: after the
+  first step the next card's strip sits ~34px below the pointer, so one continuous sweep armed
+  four or five cards in ~60ms. `CardStack` holds `openIndex`, armed by `pointerenter` after a
+  **70ms** dwell (`STACK_OPEN_DWELL_MS`) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`),
+  where arming another card cancels the pending close. **No new hit target was needed** — a
+  closed card is overlapped by its successor, so its only hittable part already _is_ its 34px
+  reveal strip. `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**; the open card takes
+  `LAYER.raised` from state. The margin is no longer a Tailwind literal either — `motion` writes
+  it inline, so the constants are the only place these numbers live.
+- **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
+  lift was observable from neither.
+- **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
+  and is load-bearing: `DeckCardControls` is a _sibling_ of the button, so a caret stepping into
+  the stepper would otherwise collapse the card out from under itself. The keyboard opens with
+  **no dwell** — a caret is a deliberate act.
+- **React never listens for `pointerenter`.** It synthesises enter/leave from
+  `pointerover`/`pointerout`, so `fireEvent.pointerEnter` fires an event the component cannot
+  hear and the test passes having called nothing — drive these with `fireEvent.pointerOver`/
+  `pointerOut`. And **`userEvent` cannot be driven under Vitest fake timers at all**: RTL's
+  `asyncWrapper` waits on a real `setTimeout` it only knows how to advance through _Jest_, so
+  such a test hangs to its timeout rather than failing.
+- **The stack's lift is `motion`-driven, so it has no CSS transition to probe** and its
+  reduced-motion opt-out is `useReducedMotion()` — see [the Motion rules](../../CLAUDE.md) in
+  `src/CLAUDE.md`. That hook reads its value once at mount, so emulating
+  `prefers-reduced-motion` _after_ mount proves nothing about it.
 - **Four card surfaces outside the editor are drag sources, all through the one `cardDraggable`**,
   carrying `{ kind: "card"; cardId; name; typeLine }`. The `typeLine` is **normalised rather than
   validated** — `readDragData` refuses a bad `cardId` or `name`, but turns an unusable type line

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RANK, type Activity } from "@/lib/activity";
@@ -78,13 +78,17 @@ describe("Ribbon", () => {
     expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
   });
 
-  it("says a Refresh found nothing, and only when there is nothing louder to say", () => {
+  it("says a Refresh found nothing, and only when there is nothing louder to say", async () => {
     const { rerender } = render(<Ribbon {...props({ upToDate: true })} />);
     expect(screen.getByText(/already up to date/i)).toBeInTheDocument();
 
     // An error banner is showing below; repeating a cheerful line beside it is noise.
     rerender(<Ribbon {...props({ upToDate: true, hasError: true })} />);
-    expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+    // `waitFor` and not a bare assertion, because the line **fades out** rather than
+    // vanishing: `AnimatePresence` holds the element until its exit finishes, so it is still
+    // in the document for the frame after the rerender. The claim is unchanged — a line that
+    // never left would still time out here — only the moment it is read.
+    await waitFor(() => expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument());
   });
 
   it("hands the job to the mana line, whether or not the row has room to say so", () => {

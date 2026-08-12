@@ -199,21 +199,48 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
 - **`CardStack` is the signature interaction, and it is arithmetic, not taste — and the card's
   height is now _derived_ rather than chosen.** It is a Magic card's aspect (the `grid` image's own
   488×680) applied to the 210px that `StackView`'s **fixed** `14rem` column leaves after its
-  padding and the card's border: **295px**. Collapsed it carries `mb-[-261px]`, so each card
-  advances by **34px** — a legibility floor for the overlaid chip rather than a fraction, and
-  unchanged from when 34 was the app's own title bar. The list is given a **fixed**
-  `stackHeight(n) = 34(n−1) + 295 + 8`, and the lifted card's `hover:mb-2` turns −261 into +8:
+  padding and the card's border: **295px**. Collapsed it carries a **−261px** bottom margin, so
+  each card advances by **34px** — a legibility floor for the overlaid chip rather than a
+  fraction, and unchanged from when 34 was the app's own title bar. The list is given a **fixed**
+  `stackHeight(n) = 34(n−1) + 295 + 8`, and the open card's margin turns −261 into +8:
   **a 269px push-down of every card after it, out of the box and over what is below, without the
   box changing size.** The column is never measured, which is what keeps `stackHeight` a function
-  of the count alone. **The lift is pure CSS**
-  (`hover:` + `focus-within:`, `LAYER.raisedOnHover`/`raisedOnFocus`), so nothing in JavaScript
-  knows which card is up and the caret gets the interaction for free.
-  **The 2026-08-11 live measurements of this are superseded as numbers** (312px cards, −278px,
-  a 286px push-down, a 490px list) — the mechanism they proved is unchanged, and nobody has
-  re-driven the shipped window since. The 2026-08-06 removal of the _old_ stacked mode is still
-  not contradicted, and now for a narrower reason: that one drew full card faces **at column
-  width with no overlaid chrome and no 34px reveal**, so a ten-card stack was ten full cards to
-  scroll past rather than a column of title bars.
+  of the count alone.
+- **Exactly one card moves per step, and that is the whole reason the interaction works.** With
+  card _N_ open, card _k_'s top is `k·34` for `k ≤ N` and `N·34 + 303 + (k−N−1)·34` for `k > N`;
+  open card _N+1_ instead and every top is unchanged **except card N+1's**, which travels 269px
+  up from `N·34 + 303` to `N·34 + 34`. So the reflow is one card sliding out of the stack, not a
+  list resettling — and the pointer that armed it stays inside it for every frame, because the
+  card is 295px tall and slides up _underneath_ a stationary pointer.
+- **The lift used to be pure CSS and is now state, because pure CSS could not be given hover
+  intent** (changed 2026-08-12). The same arithmetic that makes one card move is what broke
+  selection: after the first step the _next_ card's strip sits only ~34px below the pointer, so
+  one continuous downward sweep crossed four or five strips in ~60ms, armed every one, and left
+  the reader several cards below the one they aimed at. `CardStack` now holds `openIndex`, armed
+  by `pointerenter` on the `<li>` after a **70ms dwell** (`STACK_OPEN_DWELL_MS`) and closed after
+  **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card cancels the pending close so
+  switching never shows a closed frame. **No new hit target was needed**: a closed card is
+  overlapped 261px by its successor, which is later in DOM order and therefore paints over it,
+  so the only hittable part of a closed card already _is_ its 34px reveal strip.
+  `LAYER.raisedOnHover`/`raisedOnFocus` are **gone** — the open card takes `LAYER.raised` from
+  state — and `data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards,
+  which the CSS lift was observable from neither. **The margin is no longer a Tailwind literal
+  either**: `motion` writes it as an inline style, so the constants are the only place these
+  numbers live, and the note about spelling them out for the source scanner no longer applies.
+- **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
+  and is load-bearing: `DeckCardControls` is a _sibling_ of the button, so a caret stepping into
+  the stepper would otherwise collapse the card out from under itself. The keyboard opens with
+  **no dwell** — a caret is a deliberate act and a dwell would just be lag.
+- **React never listens for `pointerenter`.** It synthesises enter/leave from `pointerover`/
+  `pointerout`, so `fireEvent.pointerEnter` fires an event the component cannot hear and the test
+  passes having called nothing. Drive these with `fireEvent.pointerOver`/`pointerOut`. And
+  `userEvent` cannot be driven under Vitest fake timers at all — RTL's `asyncWrapper` waits on a
+  real `setTimeout` it only knows how to advance through _Jest_, so such a test hangs to its
+  5s timeout rather than failing.
+- The 2026-08-06 removal of the _old_ stacked mode is still not contradicted, and now for a
+  narrower reason: that one drew full card faces **at column width with no overlaid chrome and no
+  34px reveal**, so a ten-card stack was ten full cards to scroll past rather than a column of
+  reveal strips.
 - **A printings row in the card pane is clickable to view that printing** —
   `store.viewPrinting` sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap
   offers survive browsing; `setSelectedCardId` there instead silently kills the affordance at its

@@ -1,6 +1,8 @@
+import { AnimatePresence, motion } from "motion/react";
 import { megabytes } from "@/lib/activity";
 import type { SyncProgressEvent } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { scrim } from "@/lib/motion";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 import { cn } from "@/lib/utils";
 
@@ -90,12 +92,22 @@ export interface SyncProgressProps {
  *
  * Every other sync is reported by the ribbon's mana line, which is why there is no
  * second, slimmer bar here any more.
+ *
+ * **The `AnimatePresence` is in here rather than at the mount site**, which is `AppShell`. A
+ * component that returns `null` for "not now" cannot be given an exit by its parent — the
+ * parent sees a child that is always there — so the presence has to be expressed where the
+ * condition is, and that is this function. It is also the only reason this is two components:
+ * the branch is the presence, and {@link FirstRun} is what is present.
  */
 export function SyncProgress({ progress, cardCount, error, busy, onRetry }: SyncProgressProps) {
-  if (cardCount === 0 && progress?.phase !== "done") {
-    return <FirstRun progress={progress} error={error} busy={busy} onRetry={onRetry} />;
-  }
-  return null;
+  const takingOver = cardCount === 0 && progress?.phase !== "done";
+  return (
+    <AnimatePresence>
+      {takingOver && (
+        <FirstRun key="first-run" progress={progress} error={error} busy={busy} onRetry={onRetry} />
+      )}
+    </AnimatePresence>
+  );
 }
 
 /**
@@ -114,6 +126,13 @@ export function SyncProgress({ progress, cardCount, error, busy, onRetry }: Sync
  * from assistive technology while it is still perfectly reachable by keyboard. The
  * message is plain text for the same reason — `AppShell`'s banner is the one `role=alert`
  * and it announces the same string.
+ *
+ * **A plain fade, and {@link scrim} is the vocabulary's plain fade.** The preset is named for
+ * the backdrop it was written for and is nothing but an opacity tween at the interaction tier
+ * in both directions, which is exactly what this wants: no travel, because this surface does
+ * not arrive from anywhere — it *is* the ground until there is an app behind it. Nothing else
+ * here animates, and there is deliberately no scrim of its own to pair with, no focus trap and
+ * no Escape rung: an opaque `bg-bg` takeover has nothing to be dismissed *to*.
  */
 function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "cardCount">) {
   // An `error` event outranks `busy`: the status poll is up to a second behind it, and a
@@ -123,7 +142,8 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
   const message = failed ? (progress?.message ?? error) : error;
 
   return (
-    <div
+    <motion.div
+      {...scrim}
       role="dialog"
       aria-labelledby="first-run-title"
       className={cn(
@@ -176,6 +196,6 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
       >
         Retry download
       </button>
-    </div>
+    </motion.div>
   );
 }

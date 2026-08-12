@@ -50,6 +50,7 @@ number to compare against.
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the six card commands, the allocator, the audit log |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including three open bugs** |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |
+| [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |

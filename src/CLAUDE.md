@@ -83,6 +83,41 @@ Every one of these has its measurement and its story in
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
 
+## Motion (`motion@13.1.0`)
+
+Full detail and every measurement: [docs/reference/motion.md](../docs/reference/motion.md).
+
+- **Timings live in `src/lib/motion.ts` and nowhere else.** Import a **preset** (`scrim`,
+  `drawerRight`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a number.
+  `src/index.css` carries the same scale so CSS-only sites agree. There is no `duration-base`
+  utility — `--duration-*` is not a Tailwind v4 namespace, so it is read as
+  `duration-[var(--duration-fast)]`; `--ease-*` **is** one, so `ease-standard` is real.
+- **Two public APIs are forbidden: `AnimatePresence mode="popLayout"` and `animateView()`.**
+  Both append a `<style>` element to `document.head`, which `style-src 'self'` blocks — and
+  **the failure is silent**: `style.sheet` comes back null, popLayout simply does nothing and
+  siblings jump. `MotionConfig nonce` is not an escape. `mode="sync"` and `"wait"` are fine.
+  **`devCsp` has `style-src 'self' 'unsafe-inline'` and the shipped `csp` does not**, so dev,
+  Storybook and jsdom are all green on this and only the packaged exe breaks. A source sweep in
+  `src/lib/tokens.test.ts` is the only thing that catches it.
+- **`<MotionConfig reducedMotion="user">` is mounted once, in `App.tsx`** — not `main.tsx`,
+  which nothing in the suite or Storybook loads. Motion ships `reducedMotion: "never"`, so that
+  line is load-bearing rather than decorative.
+- **It only reduces positional keys, which is a trap with a live example.** `marginBottom` is
+  **not** among them, so the deck stack's 269px reflow would have travelled at full speed.
+  **Any `motion` animation of a non-positional property needs its own `useReducedMotion()`
+  opt-out.** That hook is a per-component branch: it reads its value once and **never updates
+  on a live media-query change**, so it is the wrong thing to reach for as an app-wide switch.
+- **Tailwind v4's `scale-*` writes the `scale` longhand, not `transform`**, so a
+  `transition-[…,transform]` list does not tween it and the press snaps. The shared press recipe
+  names `scale` explicitly; verify it in the built CSS, not in source.
+- **Under jsdom the animations are real and timing-dependent**, which is why
+  `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. Even so, **a
+  `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false for
+  everything inside an animated surface until the next frame** — assertions about content inside
+  a newly opened overlay need `waitFor`.
+- **The old `\btransition-(?!none)` sweep is blind to JS motion** — a file animated entirely
+  through `motion` matches nothing and passes trivially.
+
 ## Layout
 
 | Path | What lives there |

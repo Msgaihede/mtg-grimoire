@@ -18,6 +18,7 @@ or a number to compare a new measurement against.
 | [decks-storage.md](decks-storage.md) | Deck tables, the six card commands, the allocator, the audit log | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [decks-live-findings.md](decks-live-findings.md) | What driving the shipped window found — **including three open bugs** | [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md) |
 | [frontend-design.md](frontend-design.md) | The ribbon, card images, foil, layers, tables | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
+| [motion.md](motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [storybook.md](storybook.md) | The workbench and its fake, in full | [`.storybook/CLAUDE.md`](../../.storybook/CLAUDE.md) |
 | [live-ui-verification.md](live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [ci-and-releases.md](ci-and-releases.md) | Both workflows, in full | [`.github/CLAUDE.md`](../../.github/CLAUDE.md) |

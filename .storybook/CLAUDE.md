@@ -45,8 +45,11 @@ deliberately**: no screenshots are stored.
 
 - **`tags: ["autodocs"]` is declared per file in the meta** — a new story file gets no docs page
   unless it says so.
-- **Re-count the story totals in the same commit that adds a story.** `storybook-static/index.json`
-  is the only place the three numbers agree.
+- **Re-count the story totals in the same commit that adds a story**, and **count the files too,
+  not just the stories.** `storybook-static/index.json` is the only place the numbers agree.
+  This has rotted twice: it read 326 stories for three stories' worth of drift, and by
+  2026-08-12 it named 43 story files when 44 were on disk — a whole file can go missing from the
+  prose while the story total still looks plausible.
 - **Every drag is held in `try { … } finally { await held.cancel(); }`, and every assertion about
   a drag's result goes through `waitFor`.** A throw mid-drag leaks pdnd's one global drag flag into
   the _next_ story, which is why one broken assertion reported two failures.

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -18,6 +18,9 @@ const deckTagDelete = vi.hoisted(() => vi.fn());
 const deckTagSuggestions = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
+/** The history drawer's one read — this file mounts that drawer too, for the exit-window test
+ *  at the bottom, which needs a *second* overlay to open under the first one's fade. */
+const deckAuditList = vi.hoisted(() => vi.fn());
 
 // The fake sits under `ipc.ts` everywhere else in this repository; here it replaces the object,
 // because these commands are what the panel *is* — every assertion below is about the argument
@@ -39,9 +42,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagSuggestions,
     deckGet,
     deckMoveCard,
+    deckAuditList,
   },
 }));
 
+import { AuditDrawer } from "./AuditDrawer";
 import { CategoriesPanel, movedTo } from "./CategoriesPanel";
 
 /* --------------------------------------------------------------------- fixtures ------- */
@@ -164,6 +169,7 @@ beforeEach(() => {
   deckTagCreate.mockResolvedValue(TAGS[0]);
   deckTagUpdate.mockResolvedValue(TAGS[0]);
   deckTagDelete.mockResolvedValue(undefined);
+  deckAuditList.mockResolvedValue([]);
 });
 
 /* ------------------------------------------------------------------- the reorder ------- */
@@ -254,6 +260,72 @@ describe("CategoriesPanel", () => {
     await user.click(scrim);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------- the exit window ------- */
+
+/**
+ * The hazard an exit animation introduced, and the reason all four of the editor's overlays
+ * register their Escape rung on the **flag** rather than on the panel's mount.
+ *
+ * The editor renders its four overlays unconditionally and holds "which one is up" in a single
+ * `Layer` union, which is what guarantees that two `"inner"` rungs are never live at once —
+ * and `useDismissOnEscape` orders exactly two rungs, one capture-phase and one bubble-phase, so
+ * two `"inner"` peers are not ordered by it at all. That guarantee used to come free from
+ * synchronous unmounting: the flag went false and the listener came down in the same commit.
+ * With an exit animation the *element* outlives the flag, so a rung registered on the mount
+ * would still be consuming Escape while the next overlay was opening — and the press would
+ * close a drawer the reader had already dismissed, or both.
+ *
+ * The test drives exactly that: one commit that closes A and opens B, then a press while A is
+ * still painted. It asserts the exit window is real first, because without that this test is
+ * green over a drawer that had already vanished and proves nothing.
+ */
+describe("Escape during an overlay's exit", () => {
+  it("leaves exactly one layer listening while the previous one fades out", async () => {
+    const categoriesDismiss = vi.fn();
+    const historyDismiss = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    /** The editor's own arrangement: both overlays mounted always, one union deciding which. */
+    const overlays = (layer: "categories" | "history") => (
+      <QueryClientProvider client={client}>
+        <CategoriesPanel
+          deckId={1}
+          variant="live"
+          open={layer === "categories"}
+          onDismiss={categoriesDismiss}
+          onClose={vi.fn()}
+        />
+        <AuditDrawer
+          deckId={1}
+          open={layer === "history"}
+          onDismiss={historyDismiss}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    );
+
+    const { rerender } = render(overlays("categories"));
+    await screen.findByText("Ramp");
+
+    // The switch, in one commit, as pressing History with Categories open makes it.
+    act(() => rerender(overlays("history")));
+
+    // The window this test exists for. `getByText` and not `getByRole`, deliberately: the
+    // exiting layer is `aria-hidden`, so a role query cannot see it — which is itself the other
+    // half of the contract, asserted two lines down.
+    expect(screen.getByText("Categories & tags")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Deck history" })).toBeInTheDocument();
+
+    const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
+    window.dispatchEvent(press);
+
+    expect(historyDismiss).toHaveBeenCalledTimes(1);
+    expect(categoriesDismiss).not.toHaveBeenCalled();
+    expect(press.defaultPrevented).toBe(true);
   });
 });
 

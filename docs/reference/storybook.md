@@ -2,13 +2,17 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **332 stories across 43 story files, 42 docs
+`npm run storybook` · `npm run build-storybook`. **337 stories across 44 story files, 43 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 44th `importPath` is the `.mdx`).
+(`Object.values(index.entries)`, grouped by `type`; the 45th `importPath` is the `.mdx`).
 **Re-count them in the same commit that adds a story.** This line read 326 for three stories'
 worth of drift and then took three more without noticing, because a prose-only edit routes to
-neither CI job — the same rot that left the fault list below saying four.
-**41 of the 43 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+neither CI job — the same rot that left the fault list below saying four. **It had rotted
+again by 2026-08-12**: it read 43 story files when 44 were on disk, and the motion branch that
+found it added _no_ story file, so the drift predates that branch entirely. Count the files
+too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
+can go missing from the prose while the story total still looks plausible.
+**42 of the 44 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -88,7 +92,7 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**242** plays today, in a file of **245** tests — the other three are its own; `grep -rE
+  (**247** plays today, in a file of **250** tests — the other three are its own; `grep -rE
 "^\s+play:" src --include=*.stories.tsx | wc -l`), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
@@ -127,6 +131,5 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   check, which is why the step lives there rather than in a job of its own.
 - **A green Storybook proves nothing about the shipped window.** It runs in a normal browser:
   no WRY OLE drop target, no `mtgimg://` protocol handler. **Drag-and-drop and image loading
-  remain the live CDP pass's to prove** — see
-  [live-ui-verification.md](live-ui-verification.md), and note that the same is true
+  remain the live CDP pass's to prove** — see [live-ui-verification.md](live-ui-verification.md), and note that the same is true
   of the story runner, whose drags are synthetic events in jsdom.
