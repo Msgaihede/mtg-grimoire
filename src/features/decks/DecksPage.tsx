@@ -38,8 +38,14 @@ import {
   type FolderNaming,
   type FolderNode,
 } from "./FolderTree";
+import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
+
+/** The gallery imports into a deck of its own and never into an existing one — there is no
+ *  deck open here to import into. A module constant so the prop keeps one identity across
+ *  every render of a view that redraws on every drag. */
+const NEW_DECK: ImportTarget = { kind: "new" };
 
 /**
  * The wall.
@@ -115,6 +121,7 @@ export function deckBadge(deck: DeckRow): DeckBadge {
  */
 type Panel =
   | { kind: "createDeck" }
+  | { kind: "importDeck" }
   | { kind: "deleteDeck"; deckId: number }
   | { kind: "moveDeck"; deckId: number }
   | { kind: "newFolder"; parentId: number | null }
@@ -299,15 +306,16 @@ export function DecksPage() {
   /** The click-away way out: the layer goes, the caret stays where the reader put it. */
   const close = useCallback(() => setPanel(null), []);
 
-  // Every panel on this screen but one. `CreateDeckDialog` registers its own rung, because it
-  // outlives `panel` by the length of its fade and a rung that came up with the *element*
-  // would still be consuming Escape while the next layer opened. Two `"inner"` peers are not
-  // ordered by this protocol at all, so the one that owns the press has to be the only one
-  // that asked for it — hence the exclusion rather than a second registration.
+  // Every panel on this screen but the two modals. `CreateDeckDialog` and `ImportDeckDialog`
+  // register their own rungs, because each outlives `panel` by the length of its fade and a
+  // rung that came up with the *element* would still be consuming Escape while the next layer
+  // opened. Two `"inner"` peers are not ordered by this protocol at all, so the one that owns
+  // the press has to be the only one that asked for it — hence the exclusion rather than a
+  // second registration.
   useDismissOnEscape({
     layer: "inner",
     onDismiss: dismiss,
-    enabled: panel !== null && panel.kind !== "createDeck",
+    enabled: panel !== null && panel.kind !== "createDeck" && panel.kind !== "importDeck",
   });
 
   const openCreate = useCallback(() => {
@@ -352,6 +360,16 @@ export function DecksPage() {
     (deck: DeckRow) => {
       // Nobody makes a deck in order to look at a tile of it.
       setOpenDeckId(deck.id);
+      dismiss();
+    },
+    [dismiss, setOpenDeckId],
+  );
+
+  /** The same thing one door along: a list imported as a deck opens as one. The outcome's
+   *  numbers belong to the dialog that was showing them and are not repeated out here. */
+  const onImported = useCallback(
+    (deckId: number) => {
+      setOpenDeckId(deckId);
       dismiss();
     },
     [dismiss, setOpenDeckId],
@@ -621,6 +639,36 @@ export function DecksPage() {
               >
                 New folder
               </button>
+
+              {/* A quiet control beside the primary one: making a deck and importing one are
+                  the same act with different starting material, and the gallery has exactly one
+                  primary action. Pressed again, it closes what it opened — the row's own
+                  convention for every trigger here. */}
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={panel?.kind === "importDeck"}
+                  aria-haspopup="dialog"
+                  onClick={(e) =>
+                    panel?.kind === "importDeck"
+                      ? dismiss()
+                      : open({ kind: "importDeck" }, e.currentTarget)
+                  }
+                  className={HEADING_BUTTON}
+                >
+                  Import deck
+                </button>
+                {/* Rendered always and told whether it is open, so the panel can fade *out*:
+                    an `{open && …}` here would unmount the surface on the render that closes
+                    it, and take its exit tween with it. */}
+                <ImportDeckDialog
+                  target={NEW_DECK}
+                  open={panel?.kind === "importDeck"}
+                  onDismiss={dismiss}
+                  onClose={close}
+                  onImported={onImported}
+                />
+              </div>
 
               <NewDeck
                 buttonRef={newDeckRef}

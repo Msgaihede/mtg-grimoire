@@ -131,9 +131,9 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's four full-window surfaces (Categories & tags, History, Theory diff, Deck settings)
-  are held in **one** piece of state, because `useDismissOnEscape` orders exactly two rungs and
-  two `"inner"` peers open at once are not ordered at all.
+- The editor's five full-window surfaces (Import, Categories & tags, History, Theory diff, Deck
+  settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
+  rungs and two `"inner"` peers open at once are not ordered at all.
 
 ## Known open bugs
 

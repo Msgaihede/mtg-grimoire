@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
+import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
 import { cardImageUrl, imageOrigin } from "@/lib/images";
 import { spec } from "./validation/fixtures";
 
@@ -19,6 +19,14 @@ const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+// The import dialog's three commands and the sync it reads to tell "your list is wrong" from
+// "the card database is not filled in yet". Mounted only while the dialog is open, but the
+// whole `ipc` object is replaced here, so a command left out is a `TypeError` rather than a
+// missing answer.
+const deckImportResolve = vi.hoisted(() => vi.fn());
+const deckImportCommit = vi.hoisted(() => vi.fn());
+const deckImportReadFile = vi.hoisted(() => vi.fn());
+const syncStatus = vi.hoisted(() => vi.fn());
 // The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
 // resolve; what it is called with is asserted in its own test below.
 const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -38,6 +46,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderMove,
     deckFolderDelete,
     formatSpecs,
+    deckImportResolve,
+    deckImportCommit,
+    deckImportReadFile,
+    syncStatus,
   },
 }));
 
@@ -126,6 +138,47 @@ const PICKER: FormatSpec[] = [
   spec("casual"),
 ];
 
+/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+ *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: null,
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  unitPriceUsd: null,
+  printingCount: 1,
+  ownedQuantity: 0,
+};
+
+/** A card database that is filled in and idle: the import dialog reads this to tell a list
+ *  that is wrong from one the app has not synced the cards for yet. */
+const SYNCED: SyncStatus = {
+  cardCount: 116_695,
+  lastCheckAt: null,
+  bulkUpdatedAt: null,
+  lastError: null,
+  lastIngestSkipped: null,
+  dataDir: "C:/data",
+  syncing: false,
+  imageStoreFailures: 0,
+};
+
 function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -151,6 +204,12 @@ beforeEach(() => {
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
+  // One printing, so a one-line paste has something to resolve to and the Import button is
+  // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
+  deckImportResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
+  deckImportReadFile.mockReset().mockResolvedValue("");
+  syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });
 });
@@ -426,6 +485,62 @@ describe("DecksPage", () => {
 
     await waitFor(() =>
       expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "modern" }),
+    );
+    await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
+  });
+
+  /**
+   * The gallery's second door into a deck: a list somebody else wrote.
+   *
+   * A quiet control beside the primary one, because making a deck and importing one are the
+   * same act with different starting material — and the gallery has exactly one primary action.
+   */
+  it("opens the import dialog from the gallery heading", async () => {
+    wrap(<DecksPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
+
+    expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    // The gallery has no deck open, so there is nothing to merge into and no choice to offer.
+    expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * One piece of state for every panel on this screen, which is what makes "never two" a shape
+   * rather than a thing to remember: two `"inner"` Escape rungs open at once are not ordered by
+   * that protocol at all, and both would consume one press.
+   */
+  it("never has the create dialog and the import dialog open at once", async () => {
+    wrap(<DecksPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
+    expect(await screen.findByRole("dialog", { name: "New deck" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
+
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+    expect(screen.getByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "New deck" }));
+
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+    expect(screen.getByRole("dialog", { name: "New deck" })).toBeInTheDocument();
+  });
+
+  /** Nobody imports a deck in order to look at a tile of it — the same rule creating one
+   *  follows, through the same handler. */
+  it("opens the new deck in the editor after an import", async () => {
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
+
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    await userEvent.click(screen.getByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "casual" }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
   });
