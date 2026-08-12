@@ -2179,13 +2179,17 @@ function importOrder(db: FakeDb): Compare<FakeCard> {
 }
 
 /**
- * `deck_import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT` plus the two
- * facts only an import asks for.
+ * `deck_import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
+ * money**, plus the two facts only an import asks for.
  *
  * `everUncommon` is read off its column for {@link toDeckCard}'s reason, where the SQL
  * computes it with an `EXISTS` over `cards`: it is a fact the generator took from the full
  * 116 k-row corpus, and re-deriving it over 43 rows would answer a question about the fixture.
- * `unitPriceUsd` is the nonfoil `usd` key of **this printing's** blob, never `priceUsd`.
+ *
+ * **No price, and the absence is deliberate** — see `ImportMatch` in `src/lib/ipc.ts`. Unlike
+ * {@link toDeckCard}, which pairs `unitPriceUsd` with `unitPriceEur` because the deck's views
+ * price a row, an import preview draws no money at all; a lone `usd` key here was the field the
+ * marketplace merge caught drifting, and it is gone rather than paired.
  */
 function toImportMatch(db: FakeDb, c: FakeCard, printingCount: number): ImportMatch {
   return {
@@ -2212,7 +2216,6 @@ function toImportMatch(db: FakeDb, c: FakeCard, printingCount: number): ImportMa
     // card that exists, which is the state that `null` is reserved for.
     gameChanger: c.gameChanger,
     everUncommon: c.everUncommon,
-    unitPriceUsd: priceKey(c, "usd"),
     ownedQuantity: ownedOfPrinting(db, c.id),
     printingCount,
   };

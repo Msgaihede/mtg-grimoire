@@ -67,7 +67,6 @@ function match(over: Partial<ImportMatch> & { name: string }): ImportMatch {
     faces: null,
     gameChanger: false,
     everUncommon: false,
-    unitPriceUsd: null,
     ownedQuantity: 0,
     printingCount: 1,
     ...over,

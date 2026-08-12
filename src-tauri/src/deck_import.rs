@@ -160,12 +160,29 @@ pub struct ResolveLine {
 /// The printing a line resolved to, and every fact the preview and the validation engine
 /// need about it.
 ///
-/// The card columns are `DECK_CARD_SELECT`'s card half verbatim, so an imported card and a
-/// card already in a deck are described by the same facts — a preview that judged legality on
-/// a narrower set of columns than the editor would report a legal deck that the editor then
-/// refuses. Two fields are the import's own: [`Self::owned_quantity`], because "you already
-/// own this" is the reason a printing was chosen, and [`Self::printing_count`], so the preview
-/// can say how many printings the reader is choosing between.
+/// The card columns are `DECK_CARD_SELECT`'s card half **less its money**, so an imported card
+/// and a card already in a deck are described by the same *judgeable* facts — a preview that
+/// judged legality on a narrower set of columns than the editor would report a legal deck that
+/// the editor then refuses. Two fields are the import's own: [`Self::owned_quantity`], because
+/// "you already own this" is the reason a printing was chosen, and [`Self::printing_count`], so
+/// the preview can say how many printings the reader is choosing between.
+///
+/// **No price rides here, and the omission is the fix rather than an oversight.** This struct
+/// carried `unit_price_usd` while `DECK_CARD_SELECT` carried only that one currency; the
+/// marketplace work then added `unit_price_eur` beside it there and not here, which is exactly
+/// the drift the "copied verbatim" claim above existed to prevent, and the doc went on claiming
+/// it for a merge. Three reasons the answer is *remove* rather than *add the euro twin*:
+///
+/// * **Nothing reads it.** Swept 2026-08-12 across the whole frontend: every `unitPriceUsd` on
+///   an `ImportMatch` is a fixture filling the field in as `null` — four of them
+///   (`plan.test.ts`, `ImportDeckDialog.test.tsx`, `DeckEditor.test.tsx`, `DecksPage.test.tsx`)
+///   plus the Storybook fake's `toImportMatch`. The import preview draws no money at all.
+/// * **One currency on a DTO is now wrong by rule.** `src/CLAUDE.md`: money is drawn with
+///   `formatPrice(value, currency)` off `useMarketplace()`, never a hardcoded `priceUsd`, and
+///   Rust ships **both** currencies on every priced row so switching is a re-render. A lone
+///   dollar figure on a DTO nobody prices from is a field that can only be used incorrectly.
+/// * **A field that does not exist cannot drift.** The preview that one day draws a price will
+///   add the pair, against the rule as it stands then.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportMatch {
@@ -196,9 +213,6 @@ pub struct ImportMatch {
     /// here rather than being handed to TypeScript as a third state it would have to fence.
     pub game_changer: bool,
     pub ever_uncommon: bool,
-    /// The nonfoil `usd` key of this printing's `prices` blob. Never `cards.price_usd`, which
-    /// is a display fallback chain and must not be summed (CLAUDE.md).
-    pub unit_price_usd: Option<f64>,
     /// Every copy of *this printing* the collection holds, finish-blind. Not the deck's
     /// allocation — nothing has been allocated yet — and it is here because it is the reason
     /// this printing won.
@@ -238,14 +252,24 @@ pub struct ImportResolveRow {
     pub hint_missed: bool,
 }
 
-/// The card half of `DECK_CARD_SELECT`, plus the two facts only an import asks for.
+/// The card half of `DECK_CARD_SELECT`, less its money, plus the two facts only an import
+/// asks for.
 ///
 /// **Copied from `deck.rs`'s `DECK_CARD_SELECT` rather than retyped**, so an import and the
 /// editor cannot come to describe a card differently. Three deliberate differences, named here
-/// so a reader diffing the two does not have to guess which are drift: `c.finishes` is absent
-/// (a deck names a printing and never a finish — the column exists for the editor's foil
-/// marking, which no preview draws), `owned_quantity` and `printing_count` are added, and
-/// `ever_uncommon`/`unit_price_usd` swap places to match [`ImportMatch`]'s field order.
+/// so a reader diffing the two does not have to guess which are drift:
+///
+/// * **`c.finishes` is absent** — a deck names a printing and never a finish, so that column
+///   exists for the editor's foil marking, which no preview draws.
+/// * **Both price columns are absent**, and that is the one difference worth reading
+///   [`ImportMatch`]'s doc for: `DECK_CARD_SELECT` selects `unit_price_usd` *and*
+///   `unit_price_eur`, this list selects neither, and copying only the dollar one is what the
+///   marketplace merge caught this constant doing. Nothing in the preview prices anything.
+/// * **`owned_quantity` and `printing_count` are added**, because the import asks two questions
+///   the editor does not.
+///
+/// Every other column is `DECK_CARD_SELECT`'s, in `DECK_CARD_SELECT`'s own order, so a diff of
+/// the two lists is a diff of those three bullets and nothing else.
 ///
 /// `count(*) OVER ()` is computed before `LIMIT` — measured 2026-08-12 through `node:sqlite`
 /// over a four-row fixture: `SELECT id, count(*) OVER () FROM cards WHERE name='Sol Ring'
@@ -262,7 +286,6 @@ const MATCH_COLUMNS: &str = "SELECT c.id, c.name, c.set_code, c.collector_number
         c.faces, c.game_changer,
         EXISTS(SELECT 1 FROM cards u
                 WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon,
-        CAST(json_extract(c.prices, '$.usd') AS REAL) AS unit_price_usd,
         coalesce((SELECT sum(e.quantity) FROM collection_entries e
                    WHERE e.card_id = c.id), 0) AS owned_quantity";
 
@@ -427,9 +450,8 @@ fn read_match(r: &Row<'_>) -> rusqlite::Result<ImportMatch> {
         faces: r.get(17)?,
         game_changer: r.get::<_, Option<bool>>(18)?.unwrap_or(false),
         ever_uncommon: r.get(19)?,
-        unit_price_usd: r.get(20)?,
-        owned_quantity: r.get(21)?,
-        printing_count: r.get(22)?,
+        owned_quantity: r.get(20)?,
+        printing_count: r.get(21)?,
     })
 }
 
@@ -528,7 +550,11 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
     // `"one " two"` answers `unterminated string`, and the doubled form answers rows.
     let phrase = format!("\"{}\"", name.replace('"', "\"\""));
     let mut kept: Vec<(u8, ImportMatch, String)> = stmt
-        .query_map(params![phrase], |r| Ok((read_match(r)?, r.get(23)?)))
+        // Column 22 is `released`, the one column `FOLD_COLUMNS` adds past what `read_match`
+        // consumes — so this index is `MATCH_COLUMNS`' width plus `printing_count`, and it moved
+        // when the price column left. Nothing but a test catches a slip here: `r.get` is
+        // positional and every neighbour is a `TEXT` SQLite would happily hand over instead.
+        .query_map(params![phrase], |r| Ok((read_match(r)?, r.get(22)?)))
         .ok()?
         .filter_map(Result::ok)
         .filter_map(|(m, rel)| Some((fold_rank(&m.name, &wanted)?, m, rel)))

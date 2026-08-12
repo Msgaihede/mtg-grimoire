@@ -161,7 +161,6 @@ const SOL_RING: ImportMatch = {
   faces: null,
   gameChanger: false,
   everUncommon: false,
-  unitPriceUsd: null,
   printingCount: 1,
   ownedQuantity: 0,
 };

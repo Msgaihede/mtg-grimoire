@@ -1359,13 +1359,23 @@ export interface ImportResolveLine {
  * The printing a decklist line resolved to, and every fact the preview and the validation engine
  * need about it.
  *
- * **The card fields are {@link DeckCard}'s, deliberately**, so an imported card and a card
- * already in a deck are described by the same facts: a preview that judged legality on a
- * narrower set of columns than the editor would show a legal deck the editor then refuses.
- * Three differences, named here so a reader diffing the two does not have to guess which are
- * drift — `finishes` is absent (a deck names a printing and never a finish, so a preview draws
- * no foil marking), {@link ImportMatch.gameChanger} is a plain boolean where `DeckCard`'s is
- * nullable, and `ownedQuantity`/`printingCount` are the import's own.
+ * **The card fields are {@link DeckCard}'s less its money, deliberately**, so an imported card
+ * and a card already in a deck are described by the same *judgeable* facts: a preview that
+ * judged legality on a narrower set of columns than the editor would show a legal deck the
+ * editor then refuses. Four differences, named here so a reader diffing the two does not have to
+ * guess which are drift — `finishes` is absent (a deck names a printing and never a finish, so a
+ * preview draws no foil marking), **`unitPriceUsd`/`unitPriceEur` are both absent**,
+ * {@link ImportMatch.gameChanger} is a plain boolean where `DeckCard`'s is nullable, and
+ * `ownedQuantity`/`printingCount` are the import's own.
+ *
+ * **No price rides here on purpose.** This interface carried `unitPriceUsd` alone while
+ * `DeckCard` still did too; the marketplace work gave `DeckCard` its euro twin and left this one
+ * a currency behind, which is the drift "the card fields are `DeckCard`'s" was written to
+ * prevent. It is removed rather than paired up because nothing reads it — swept 2026-08-12,
+ * every `unitPriceUsd` on an `ImportMatch` was a fixture writing `null` — and because a lone
+ * dollar figure is now wrong by rule: money is drawn with `formatPrice(value, currency)` off
+ * `useMarketplace()`, so a DTO carrying one currency can only be used incorrectly. A field that
+ * does not exist cannot drift; a preview that one day prices a line adds the pair.
  */
 export interface ImportMatch {
   cardId: string;
@@ -1410,9 +1420,6 @@ export interface ImportMatch {
   /** Printed at uncommon on **any** printing of this oracle card — what makes a Pauper Commander
    *  commander eligible. Computed; the `paupercommander` legality key answers the 99. */
   everUncommon: boolean;
-  /** The nonfoil `usd` key of **this printing's** prices blob, per copy. Never `cards.price_usd`,
-   *  which is a display fallback chain and must not be summed. */
-  unitPriceUsd: number | null;
   /**
    * Every copy of **this printing** the collection holds, finish-blind — and the reason this
    * printing won: a printing you own beats a newer one you do not, then the newest wins, then

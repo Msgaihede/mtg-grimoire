@@ -239,6 +239,10 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   carries the answer back across the IPC boundary, which is **152.9 KB for 105 rows** (1.49 KB
   each, because every `ImportMatch` ships oracle text and the whole `legalities` object). Quote
   either only with its build named, or the pair reads as a regression that never happened.
+  **That payload was measured while `ImportMatch` still carried `unitPriceUsd`**, which the
+  marketplace merge has since removed (see the struct's own doc for why it is removed rather than
+  paired with a euro twin) — about 20 bytes a row of 1 490, so ~1.3 % smaller now. Stated as the
+  arithmetic it is; nobody has re-driven the window to re-measure it.
 - **Variant scoping holds, measured rather than reasoned.** With a deck at 117 copies in both
   lists, a `merge` of a 7-card list into `theory` left `live` at **117** and took `theory` to
   **124**; a `replace` of an 11-card list into `live` took `live` to **11** and left `theory` at
