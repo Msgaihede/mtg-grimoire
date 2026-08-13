@@ -2,21 +2,30 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **364 stories across 47 story files, 46 docs
+`npm run storybook` · `npm run build-storybook`. **369 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
+(`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
 **Measured 2026-08-14** off a fresh `build-storybook` on the printings-rework branch **after**
-merging `main`: 410 entries, 364 `story`, 46 `docs`, 48 distinct `importPath`s.
+merging `main`: 416 entries, 369 `story`, 47 `docs`, 49 distinct `importPath`s.
 
-The six over the 358 measured 2026-08-12 come from two branches that never saw each other's
+The eleven over the 358 measured 2026-08-12 come from four branches that never saw each other's
 stories: five are `Card/DetailPane`'s, fifteen to twenty, when the printings list gained a
 group-by selector (a story per mode that renders differently, plus one that drives the select)
-and the card art gained a foil view; the sixth is `Search/Page`'s `Unplayable`. **Neither
-branch's own figure — 363 and 359 — is right for the merged tree**, and this paragraph is the
-conflict where that was caught: 364 was measured against the merge, not arithmetic done on two
-branch counts. Those 358 were themselves five over `main`'s 353 — `Settings/MarketplacePanel`
-went from three stories to eight when Card Kingdom and Mana Pool became selectable and a feed
-gained a state to draw.
+and the card art gained a foil view; one is `Search/Page`'s `Unplayable`; and five are
+`Components/CardZoomIndicator`'s, **the one new story _file_ in the set** — which is why the
+file and docs-page counts moved here when they had held for four measurements.
+
+**This figure was re-measured three times inside one branch, and each time the previous number
+had already stopped being true.** The branch measured 363 alone; `main` gained
+`hide-non-usable-cards` and this paragraph came back a conflict where neither 363 nor that
+branch's 359 was right for the merged tree; a re-measure gave 364; `main` then gained the zoom
+and cheapest-latest branches and 364 was stale before CI finished. None of the intermediate
+numbers was arrived at by arithmetic on two branch counts — each was a fresh
+`build-storybook`, which is the only thing this line has ever been able to trust.
+
+The 358 were themselves five over `main`'s 353 — `Settings/MarketplacePanel` went from three
+stories to eight when Card Kingdom and Mana Pool became selectable and a feed gained a state to
+draw.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and
@@ -33,7 +42,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**45 of the 47 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**46 of the 48 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
