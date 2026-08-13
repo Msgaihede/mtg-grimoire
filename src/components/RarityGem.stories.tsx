@@ -18,7 +18,12 @@ const meta = {
           "mythic-orange pill would out-shout the art it annotates. Only the four rarities " +
           "with tokens of their own are tinted; `special`, `bonus` and a null rarity fall " +
           "back to the hairline colour, which is fine under 6px of dot and about 1.9:1 as a " +
-          "word — so those keep dim text.",
+          "word — so those keep dim text.\n\n" +
+          "**A gem drawn with no word beside it says the rarity on hover** (`GemOnly` below). " +
+          "A tooltip is what those call sites had reached for on their own before this " +
+          "component existed — the affordance was right and the several wordings were not, " +
+          "which is the whole argument for one component. It is deliberately absent wherever " +
+          "the word is drawn: a tooltip repeating a label an inch away is noise.",
       },
     },
   },
@@ -57,5 +62,9 @@ export const GemOnly: Story = {
     await expect(word).toHaveClass("sr-only");
     // "Rarity: mythic", not a bare "mythic" dropped into the middle of a row of card facts.
     await expect(canvasElement).toHaveTextContent("Rarity: mythic");
+    // And the same sentence on hover, which is this shape's *only* affordance for a reader
+    // who can see the dot: the stories above draw the word and deliberately carry no tooltip.
+    const hoverable = canvasElement.querySelector("[title]");
+    await expect(hoverable).toHaveAttribute("title", "Rarity: mythic");
   },
 };

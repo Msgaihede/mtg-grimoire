@@ -203,6 +203,7 @@ function found(name: string): CardSummary {
     printings: 1,
     priceLow: 1.5,
     priceHigh: 1.5,
+    gameChanger: false,
   };
 }
 

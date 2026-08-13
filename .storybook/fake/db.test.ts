@@ -291,6 +291,44 @@ describe("the paper filter", () => {
 });
 
 /**
+ * `search.rs`'s `c.game_changer` — the crown the wall and the table draw beside the finish
+ * marks.
+ *
+ * The three names are written out rather than counted off `CARDS`, for the reason every
+ * other block here writes its numbers out: a list derived from the fixture would agree with
+ * a `toCardSummary` that re-derived the flag from a hand-typed list of names, which is the
+ * one way this field can go wrong. They are also deliberately unalike — a **land** with no
+ * mana cost, a **common**, and a **foil-only** printing at rarity `special` — so no story
+ * built on the corpus can leave the impression that a crown is a property of rarity, of a
+ * cost, or of a finish.
+ */
+describe("the game changers", () => {
+  it("reads the column onto a search row, and the corpus has exactly three", () => {
+    const page = readHandlers(makeDb()).search_cards({ req: { limit: 200, offset: 0 } });
+    expect(
+      page.items
+        .filter((i) => i.gameChanger)
+        .map((i) => i.name)
+        .sort(),
+    ).toEqual(["Ancient Tomb", "Consecrated Sphinx", "Rhystic Study"]);
+  });
+
+  it("survives collapsing, where a row is a card and not the printing it came from", () => {
+    const study = CARDS.find((c) => c.name === "Rhystic Study")!;
+    // A second printing of the same oracle card, and the **newer** one — so it is the
+    // representative the collapsed row is built from, and a group that lost the crown on the
+    // way through `collapseToCards` would say so here.
+    const db = makeDb({
+      cards: [study, { ...study, id: "rhystic-second", setCode: "cmr", releasedAt: "2020-11-20" }],
+    });
+    const page = readHandlers(db).search_cards({ req: { collapse: true, limit: 10, offset: 0 } });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].printings).toBe(2);
+    expect(page.items[0].gameChanger).toBe(true);
+  });
+});
+
+/**
  * `index::facets::compute`, mirrored.
  *
  * **Every dimension is counted over a base carrying every filter EXCEPT its own** — Solr's

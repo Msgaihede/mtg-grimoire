@@ -1,6 +1,7 @@
 import { CardImage } from "@/components/CardImage";
 import { FinishMark } from "@/components/FinishMark";
-import type { Finish } from "@/lib/finish";
+import { GAME_CHANGER_LABEL, GameChangerMark } from "@/components/GameChangerMark";
+import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,7 @@ export function CardArt({
   selected = false,
   hoverZoom = false,
   finish = null,
+  gameChanger = false,
   className,
 }: {
   /**
@@ -100,6 +102,16 @@ export function CardArt({
    * own stored finish, which is the one place the answer is known outright.
    */
   finish?: Finish | null;
+  /**
+   * Whether this card is one the Commander bracket counts, drawn as a crown in the same corner
+   * chip as {@link finish}.
+   *
+   * A card fact rather than a printing one — every printing of Rhystic Study is a game changer
+   * — so unlike `finish` there is nothing to derive: the caller passes the row's own
+   * `gameChanger` straight through. `false` by default, because the surfaces that have no such
+   * column (a deck row is one, an orphan is another) must draw nothing rather than guess.
+   */
+  gameChanger?: boolean;
   className?: string;
 }) {
   // The self-healing half of the rate limit, and the reset that goes with it: this component
@@ -156,32 +168,63 @@ export function CardArt({
         </span>
       )}
 
-      <FoilOverlay finish={finish} />
+      <FoilOverlay finish={finish} gameChanger={gameChanger} />
     </span>
   );
 }
 
 /**
- * The sheen and the chip that say a card is foil, over whatever frame encloses them.
+ * The marks laid over a card's art — the sheen and the chip that say what this cardboard *is*.
  *
  * Its own component because the card detail pane's main art is **not** a `CardArt`: it keeps
  * a flip fade, a bespoke "no image yet" panel and no retry hook, and routing it through the
  * shared frame would trade three deliberate behaviours for one shared one. What the two must
  * agree on is the marking, so that is what is shared.
  *
+ * Two facts share one chip, and the crown is drawn first because it is the broader one.
+ * **A game changer is a fact about the card; a finish is a fact about the printing** — every
+ * printing of Rhystic Study is a game changer, while a card's printings are foil-only one at a
+ * time — so a card can carry either, both or neither. Both means one chip with two glyphs
+ * rather than two chips, because a tile's fourth corner is the only one left and a second box
+ * beside it would start a row of stickers.
+ *
+ * The crown is the same fact the deck views draw as `GameChangerBadge`'s gold `GC`; see
+ * `GameChangerMark` for why one fact is drawn twice.
+ *
  * The enclosing element needs `relative` and `overflow-hidden`; `CardArt` has both.
  */
-export function FoilOverlay({ finish }: { finish: Finish | null }) {
-  if (!finish) return null;
+export function FoilOverlay({
+  finish,
+  gameChanger = false,
+}: {
+  finish: Finish | null;
+  /**
+   * Optional, and it has to stay optional: three callers outside `CardArt` draw this overlay
+   * (the pane's main art, the deck stack's card, the deck grid's tile) and none of them says
+   * anything about the bracket.
+   */
+  gameChanger?: boolean;
+}) {
+  if (!finish && !gameChanger) return null;
+  // What the chip's own padding says on hover, since a `<title>` inside a glyph only covers
+  // the 12px the glyph occupies. Joined with the separator the app uses between card facts
+  // everywhere else, so "Game changer · Foil" reads as one line rather than a sentence.
+  const chipTitle = [gameChanger ? GAME_CHANGER_LABEL : null, finish ? FINISH_LABEL[finish] : null]
+    .filter((word) => word !== null)
+    .join(" · ");
   return (
     // **`aria-hidden` over the whole overlay, chip included, and that is load-bearing.** This
     // frame usually sits *inside* a button, and a button's accessible name is computed from
     // its contents — so the chip's "Foil" joined it and a wall of foil tiles became buttons
     // called "Consecrated Sphinx Foil". Measured over CDP 2026-08-11, where a tile button's
-    // name came back as bare "Foil". It is the same trap the owned badge avoids by being a
-    // *sibling* of the button rather than a child of it.
+    // name came back as bare "Foil". The crown would have made that worse rather than
+    // different: "Rhystic Study Game changer", on every game changer in the wall. It is the
+    // same trap the owned badge avoids by being a *sibling* of the button rather than a child
+    // of it. A `title` attribute is excluded on the same terms — name computation skips an
+    // `aria-hidden` subtree entirely — while the browser still shows it on hover, which is the
+    // whole reason the tooltips below can exist at all.
     //
-    // Nothing is lost: the finish is stated in text on every surface that has room for it —
+    // Nothing is lost: both facts are stated in text on every surface that has room for them —
     // the search table's Name cell, the deck row beside the card's name, the pane's per-finish
     // prices — and the wall's tile adds an `sr-only` word to its caption. This is the
     // decoration; those are the statement.
@@ -189,22 +232,46 @@ export function FoilOverlay({ finish }: { finish: Finish | null }) {
     // `pointer-events-none` for the second half of the same idea: a full-bleed overlay inside
     // a button would swallow every click on it.
     <span aria-hidden="true" className="pointer-events-none">
-      <span
-        data-foil-sheen
-        // No opacity class: in `screen` the gradient's own alphas are the strength, and a
-        // second multiplier would be one more number to keep in step with them.
-        className="absolute inset-0 mix-blend-screen"
-        style={{ backgroundImage: FOIL_SHEEN }}
-      />
+      {finish && (
+        <span
+          data-foil-sheen
+          // No opacity class: in `screen` the gradient's own alphas are the strength, and a
+          // second multiplier would be one more number to keep in step with them.
+          //
+          // Only for a finish, never for a crown: the sheen is a *photograph* of what the
+          // cardboard does to light, and a game changer's cardboard does nothing special.
+          className="absolute inset-0 mix-blend-screen"
+          style={{ backgroundImage: FOIL_SHEEN }}
+        />
+      )}
       {/* The chip is what *says* foil at a glance; the sheen is what *looks* foil. Neither is
           asked to do the other's job — a sheen alone is ambiguous on busy art, and a chip
-          alone says nothing about the object being a different physical thing.
+          alone says nothing about the object being a different physical thing. A game changer
+          has only the chip half, because there is nothing about it to photograph.
 
           Top-right, because a tile's other two corners are spoken for: bottom-left the owned
           badge, top-left the printing count. The backing is the app's own table felt at 85 %,
-          matching those two exactly. */}
-      <span className="absolute top-1 right-1 flex items-center rounded bg-bg/85 px-1 py-0.5">
-        <FinishMark finish={finish} />
+          matching those two exactly.
+
+          **`pointer-events-auto`, against the wrapper's `none`, and that is a fix rather than
+          a decoration.** `pointer-events` inherits, so the chip inherited the wrapper's `none`
+          and was not a hit target — which meant the `<title>` on every glyph in it had been
+          unreachable since the day it was written: a tooltip is shown by the element the
+          pointer *hits*, and nothing here was ever hit. Re-enabling it on the chip alone
+          leaves the full-bleed sheen untouchable, which is what the wrapper's `none` was for.
+          Nothing is swallowed by giving one chip's worth of hit target back: it sits **inside**
+          the enclosing button on every surface that has one — `CardGrid` renders `<CardArt>` as
+          that button's only child, `CardStack` and `GridView` put this overlay inside theirs —
+          so a click on the chip bubbles and opens the card exactly as a click on the art does.
+          `data-card-marks` is the handle a test finds it by; a hit target is otherwise
+          invisible to the DOM. */}
+      <span
+        data-card-marks
+        title={chipTitle}
+        className="pointer-events-auto absolute top-1 right-1 flex items-center gap-0.5 rounded bg-bg/85 px-1 py-0.5"
+      >
+        {gameChanger && <GameChangerMark />}
+        {finish && <FinishMark finish={finish} />}
       </span>
     </span>
   );

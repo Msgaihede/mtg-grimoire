@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { GAME_CHANGER_HINT, GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { useAppStore, type SearchView } from "@/lib/store";
 import { SearchPage } from "./SearchPage";
 
@@ -76,12 +77,16 @@ const meta = {
           "`db.ts`'s `search_cards` answers it. Nothing here is a hand-written row, so a story " +
           "that disagrees with the app is the app or the fake changing — not a fixture going " +
           "stale.\n\n" +
-          "**The corpus is 43 printings and a default search finds 41 of them.** " +
-          "`SearchRequest.paperOnly` is omitted-means-true and the fixture holds two digital " +
-          "printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — `.storybook/fake/seeds.ts:620` " +
-          "names the same two), so every count on this page under the `starter` seed is 41 and " +
-          'not 43. Measured 2026-08-10 by calling `readHandlers(seed("starter")).search_cards` ' +
-          "with the page's own request.\n\n" +
+          "**The corpus is 43 printings, a default search matches 41 of them, and the caption " +
+          "says 36.** `SearchRequest.paperOnly` is omitted-means-true and the fixture holds two " +
+          "digital printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — " +
+          "`.storybook/fake/seeds.ts:620` names the same two), which is 43 down to 41; the page " +
+          "then opens **collapsed**, one row per card, and five of those 41 are further printings " +
+          "of a card already in the list (four Lightning Bolts, two Sol Rings, two Ancestral " +
+          "Recalls). So `36 cards` is what every play below waits for, and " +
+          "pressing All printings is what asks for the 41 — {@link CollapsedPrintings} is that " +
+          'toggle in one row. Measured 2026-08-10 by calling `readHandlers(seed("starter"))' +
+          ".search_cards` with the page's own request.\n\n" +
           "**Two states this page can show have no story here, for two different reasons.** A " +
           "sync in flight is unreachable through the fake at all — its `sync_status` answers " +
           "`syncing: false` and its `sync_run` resolves at once — and nothing on this page reads " +
@@ -430,5 +435,91 @@ export const OwnedCountsEntries: Story = {
     await expect(
       within(heldRow as HTMLElement).getByText("4 in your collection"),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * A card the Commander bracket counts, in the cell that identifies its row.
+ *
+ * The crown sits with the owned badge and the finish mark, because all three are facts about the
+ * **card** and the table's other five columns are about the printing. `cards.game_changer` is an
+ * oracle-level column, so a collapsed row takes it from its representative printing and no
+ * aggregate is needed to make a group agree with itself.
+ *
+ * Three fixture printings carry it (`.storybook/fake/cards.ts`) and they were chosen to break the
+ * obvious guesses: **Ancient Tomb**, a land with no mana cost at all; **Rhystic Study**, printed
+ * at `common`; and **Consecrated Sphinx**, a foil-only `special`. It is a property of the card
+ * and never of its rarity or its cardboard.
+ *
+ * Two claims here that a screenshot cannot make. The mark is **named** — a screen reader saying
+ * "crown" beside a card would be describing the icon rather than the card — and it carries a
+ * `<title>` so a pointer gets the same sentence in words. The table needs no `aria-hidden`
+ * workaround for either: that trap belongs to the wall, where the chip sits inside the tile's
+ * button ({@link GameChangerOnTheWall}).
+ *
+ * The wait is generous because the box is debounced by `DEBOUNCE_MS` (300 ms) before a keystroke
+ * becomes a query, which is real time rather than a fake timer.
+ */
+export const GameChangerRow: Story = {
+  args: { view: "table" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("36 cards");
+
+    await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Rhystic");
+
+    // The whole check inside one `waitFor`, because the results are replaced wholesale when the
+    // query lands and a row captured before that is stale.
+    await waitFor(
+      async () => {
+        const rows = canvas.getAllByRole("row").filter((r) => r.textContent?.includes("Rhystic"));
+        await expect(rows).toHaveLength(1);
+        await expect(
+          within(rows[0]).getByRole("img", { name: GAME_CHANGER_LABEL }),
+        ).toBeInTheDocument();
+        // The pointer's half of the same fact: a `<title>` inside the glyph, which is what a
+        // hover surfaces. `getByTitle` matches an SVG `<title>` element, not the attribute —
+        // and the sentence it holds is longer than the name, because a tooltip has room to say
+        // what a game changer *is*.
+        await expect(within(rows[0]).getByTitle(GAME_CHANGER_HINT)).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+  },
+};
+
+/**
+ * The same fact over the art — and the reason the wall states it twice.
+ *
+ * The crown shares the **top-right chip** with the finish mark rather than taking a corner of its
+ * own: a tile's other two are spoken for (bottom-left the owned badge, top-left the printing
+ * count), and the deck views' boxed "GC" badge reads as a sticker on a wall of art.
+ *
+ * That chip is inside the tile's button, and the whole overlay around it is `aria-hidden` — any
+ * text of its own would join the button's accessible name and make a wall of game changers forty
+ * buttons called "… Game changer". So the picture is decoration and the caption is the statement:
+ * the tile appends an `sr-only` `, Game changer` beside the set and number, which is where the
+ * finish word already goes. Both halves are asserted here, and so is the button's name.
+ */
+export const GameChangerOnTheWall: Story = {
+  args: { view: "grid" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("36 cards");
+
+    await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Rhystic");
+
+    await waitFor(
+      async () => {
+        const tile = canvas.getByRole("button", { name: "Rhystic Study" });
+        // `hidden: true` — the mark is under an `aria-hidden` overlay, which is the point.
+        await expect(
+          within(tile).getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
+        ).toBeInTheDocument();
+        await expect(tile).toHaveAccessibleName("Rhystic Study");
+        await expect(canvas.getByText(`, ${GAME_CHANGER_LABEL}`)).toHaveClass("sr-only");
+      },
+      { timeout: 5000 },
+    );
   },
 };

@@ -128,6 +128,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `FoilOverlay` is `aria-hidden` now and the finish is stated in text where each surface has
   room (the wall's caption `sr-only`, the search table's Name cell, the pane's per-finish
   prices). This is the same rule the owned badge follows by being a _sibling_ of the button.
+- **A game changer is a crown on a search card and `GC` in a deck view, and that is one fact
+  drawn twice.** `components/GameChangerMark` is the crown — lucide's `Crown` in
+  `text-pie-gold`, the same gold `features/decks/CardMarks.tsx` tints its badge with, because
+  the spec is explicit that a game changer (a fact about a powerful card) and a rule break (a
+  problem) must never be confusable, and the destructive colour belongs to the second. The
+  deck views keep their letters: a 224px stacked card has a title bar to put an abbreviation
+  on, and a search tile has about two glyphs of chip left in its fourth corner. It shares the
+  finish chip rather than taking a corner of its own — **a card fact and a printing fact in
+  one box**, since a card can be either, both or neither, and a second box beside it starts a
+  row of stickers. Nothing derives it: the backend flattens `cards.game_changer`'s NULL into
+  `false` (the column is nullable; only `card_row.rs`'s parser struct is a `bool`).
+- **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
+  tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
+  overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once
+  been shown over card art: a tooltip is drawn by the element the pointer _hits_, and nothing
+  in that subtree was hittable. The chip now takes `pointer-events-auto` on its own while the
+  full-bleed sheen keeps `none`; it sits _inside_ the enclosing button on all three surfaces
+  that have one, so a click on it bubbles and opens the card exactly as a click on the art
+  does. `data-card-marks` is the handle a test finds it by — a hit target is otherwise
+  invisible to the DOM, which is why this went unnoticed through a green suite.
+- **`CardGrid`'s two corner marks take their own clicks now, and that is the price of their
+  tooltips.** The owned badge (bottom-left) and the printing count (top-left) are _siblings_
+  of the tile's button, so `pointer-events-none` was what let a press fall through to the art
+  and kept the tile one click target. But they are abbreviations — `×3`, a filled heart —
+  whose plain-words tooltip is the whole point of hovering them, so each takes its own events
+  and calls `onSelect` itself: same behaviour, now hoverable. The drag is unaffected,
+  `cardDraggable` being registered on the tile's outer wrapper. No keyboard handler is owed —
+  a corner duplicates what the caption already states and opens what the button opens, and a
+  second tab stop per tile would be forty extra presses across a wall to reach nothing new.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's

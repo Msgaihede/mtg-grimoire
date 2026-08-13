@@ -172,6 +172,25 @@ export interface CardSummary {
    */
   finishes: string | null;
   /**
+   * One of the cards the Commander bracket system counts as a **game changer** — a crown on
+   * the tile and in the table's Name cell, beside the foil and etched marks.
+   *
+   * Mirrors `CardSummary::game_changer` in `src-tauri/src/search.rs`, which is `bool` and not
+   * `Option<bool>`: `cards.game_changer` is nullable, a NULL there means *not on the list*, and
+   * the backend reads it as an `Option` and flattens it rather than handing this side a third
+   * state every crown would have to fence.
+   *
+   * So this is a plain `boolean`, exactly like {@link ImportMatch.gameChanger} and **unlike**
+   * {@link DeckCard.gameChanger}, which is `boolean | null`. That difference is real rather than
+   * mirror drift: a deck row survives its printing leaving `cards`, and an orphan knows nothing
+   * about itself. A search row can never be one — a row that came back from `cards` is a card
+   * that is there.
+   *
+   * An **oracle-level** fact, not a property of the cardboard: every printing of a card agrees,
+   * so a collapsed row takes it from the representative printing and needs no aggregate.
+   */
+  gameChanger: boolean;
+  /**
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
    *
@@ -1455,6 +1474,10 @@ export interface ImportMatch {
    * means *not on the list*, so the backend flattens it here rather than handing this side a
    * third state to fence. A resolved line always names a card that exists, which is the state
    * `DeckCard`'s `null` is reserved for.
+   *
+   * One of **three** fields in this file with this name, and the split is two-to-one:
+   * {@link CardSummary.gameChanger} is flattened for the same reason this one is — a search row
+   * is a card that is there — and `DeckCard`'s is the only nullable one.
    */
   gameChanger: boolean;
   /** Printed at uncommon on **any** printing of this oracle card — what makes a Pauper Commander

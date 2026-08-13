@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
@@ -98,6 +99,7 @@ export function CardGrid<T extends GridCard>({
   badge,
   topLeft,
   finish,
+  gameChanger,
   action,
   tileRef,
   dragPayload,
@@ -128,8 +130,9 @@ export function CardGrid<T extends GridCard>({
    *
    * Its own slot rather than a second `badge`, because each corner of a tile has exactly one
    * owner and drift is what happens when they do not: bottom-left the owned/wishlist badge,
-   * top-right the finish chip, top-left this. It shares the badge's rules — the same backing,
-   * `pointer-events-none`, and `empty:hidden` so a mark with nothing to say draws nothing.
+   * top-right the finish chip and the game-changer crown, top-left this. It shares the badge's
+   * rules — the same backing, the same click of its own that opens the card (see the corners in
+   * {@link Tile}), and `empty:hidden` so a mark with nothing to say draws nothing.
    */
   topLeft?: (card: T) => ReactNode;
   /**
@@ -143,6 +146,22 @@ export function CardGrid<T extends GridCard>({
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
    */
   finish?: (card: T) => Finish | null;
+  /**
+   * Whether a tile's card is one of the cards the Commander bracket counts — a small gold
+   * crown, drawn by `CardArt` in the **same top-right chip** as the finish mark beside it.
+   *
+   * A callback for {@link finish}'s reason and not a field on {@link GridCard}: the search's
+   * rows carry the fact and a mapped collection row does not, so a wall that guessed would
+   * crown nothing or everything. Absent means no tile is crowned.
+   *
+   * Unlike `finish` this answers a plain `boolean` rather than a nullable word — the backend
+   * flattens `cards.game_changer`'s NULL into `false` (`CardSummary.gameChanger` in
+   * `src/lib/ipc.ts`), so there is no "unknown" arm for a caller to express.
+   *
+   * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}. A fresh arrow
+   * per render tears every tile's drag registration down and rebuilds it on every scrolled row.
+   */
+  gameChanger?: (card: T) => boolean;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
   /**
@@ -296,6 +315,7 @@ export function CardGrid<T extends GridCard>({
                 badge={badge}
                 topLeft={topLeft}
                 finish={finish}
+                gameChanger={gameChanger}
                 action={action}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
@@ -323,6 +343,7 @@ function Tile<T extends GridCard>({
   badge,
   topLeft,
   finish,
+  gameChanger,
   action,
   tileRef,
   dragPayload,
@@ -334,6 +355,7 @@ function Tile<T extends GridCard>({
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
   finish?: (card: T) => Finish | null;
+  gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
@@ -342,6 +364,7 @@ function Tile<T extends GridCard>({
   const corner = topLeft?.(card);
   const tileFinish = finish?.(card) ?? null;
   const finishWord = tileFinish ? FINISH_LABEL[tileFinish] : null;
+  const crowned = gameChanger?.(card) ?? false;
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -394,6 +417,7 @@ function Tile<T extends GridCard>({
             name={card.name}
             selected={selected}
             finish={tileFinish}
+            gameChanger={crowned}
             hoverZoom
           />
         </button>
@@ -404,22 +428,46 @@ function Tile<T extends GridCard>({
           // can sit on a card without becoming a sticker. Deciding it here is what keeps two
           // views from drifting into two corners and two shades.
           //
-          // `pointer-events-none`: the whole tile opens the card, and a mark that swallowed
-          // the click over its own two square centimetres would be a dead spot in the wall.
+          // **`pointer-events-auto` and a click of its own, where this used to be
+          // `pointer-events-none`.** The corner is a *sibling* of the button, so a
+          // pointer-transparent mark let the press fall through to the art and the whole tile
+          // stayed one click target — but a `title` inside an element that takes no pointer
+          // events can never surface, and these marks are abbreviations (`×3`, a heart) whose
+          // plain-words tooltip is the point of hovering them. So the corner takes its own
+          // events and calls `onSelect` itself: the two square centimetres open the card
+          // exactly as before, and are now hoverable.
+          //
+          // The drag is unaffected. `cardDraggable` is registered on the tile's **outer
+          // wrapper** (the `attach` ref above), and these corners are inside it — a press here
+          // bubbles to the same element it bubbled to when it landed on the art. The corner is
+          // not marked `data-no-drag`, so it is a grab handle like the rest of the tile.
+          //
+          // No keyboard handler, and none is owed: the corner duplicates a fact the caption
+          // already states in words and opens the card the tile's own button opens. A second
+          // tab stop per tile would be forty extra presses across a wall to reach nothing new.
+          // (The eslint config carries no `jsx-a11y` plugin, so nothing flags the handler
+          // either — this note is the reasoning, not a suppression.)
           //
           // `empty:hidden` is what makes "a mark with nothing to say draws nothing" true. A
           // badge that guards *itself* still hands this slot a truthy element — React has no
           // way to ask an element what it will render — so a wall of unowned tiles was a wall
           // of empty 12×4px chips. The guard belongs here, where the corner is decided, and
           // then it holds for every caller instead of for the ones that remembered.
-          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden">
+          <span
+            onClick={() => onSelect(card.id)}
+            className="pointer-events-auto absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden"
+          >
             {mark}
           </span>
         )}
         {corner && (
           // The opposite corner, under the same rules as the badge above — see `topLeft`
-          // for why each corner has exactly one owner.
-          <span className="pointer-events-none absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 font-mono text-[0.7rem] text-dim empty:hidden">
+          // for why each corner has exactly one owner, and the badge's comment for why both
+          // take their own clicks now.
+          <span
+            onClick={() => onSelect(card.id)}
+            className="pointer-events-auto absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 font-mono text-[0.7rem] text-dim empty:hidden"
+          >
             {corner}
           </span>
         )}
@@ -441,6 +489,10 @@ function Tile<T extends GridCard>({
               name and make a wall of foils forty buttons called "… Foil". Stated here
               instead, in the caption, which is a sibling of that button. */}
           {finishWord && <span className="sr-only">, {finishWord}</span>}
+          {/* And the crown, for the same reason and in the same place: it shares the chip
+              that the whole `aria-hidden` overlay covers, so the picture is decoration and
+              this line is the statement. */}
+          {crowned && <span className="sr-only">, {GAME_CHANGER_LABEL}</span>}
         </span>
         {/* Whatever the caller hangs here — the search's quick-add, anchored to this
             caption. The tile does not build it, because what a control needs to be honest

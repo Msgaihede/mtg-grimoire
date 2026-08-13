@@ -2,14 +2,15 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **358 stories across 47 story files, 46 docs
+`npm run storybook` · `npm run build-storybook`. **363 stories across 47 story files, 46 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
-**Measured 2026-08-12** off a fresh `build-storybook` on the price-feed branch merged with
-`main`: 404 entries, 358 `story`, 46 `docs`, 48 distinct `importPath`s. The five stories over
-`main`'s 353 are `Settings/MarketplacePanel`'s, which went from three to eight when Card Kingdom
-and Mana Pool became selectable and a feed gained a state to draw; no story *file* was added,
-which is why that count did not move.
+**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch: 409 entries,
+363 `story`, 46 `docs`, 48 distinct `importPath`s. The five over the 358 measured 2026-08-12 are
+the crown's — two on `CardArt`, one on `CardGrid`, two on `SearchPage` — and again no story
+*file* was added, which is why that count did not move. (The 2026-08-12 figure was itself five
+over `main`'s 353, from `Settings/MarketplacePanel` going from three stories to eight when Card
+Kingdom and Mana Pool became selectable and a feed gained a state to draw.)
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and

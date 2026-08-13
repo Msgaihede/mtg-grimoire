@@ -19,6 +19,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { parseFinishes } from "@/lib/finish";
@@ -60,12 +61,19 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
   layout: "normal",
   oracleId: "o-bolt",
   finishes,
+  // Off by default, which is what all but a few hundred of the corpus's cards are. The rows
+  // that wear the crown say so by spreading this — see `SearchPage`'s `tileGameChanger` for
+  // the one-line callback the wall is really handed.
+  gameChanger: false,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
   priceLow: 400.5,
   priceHigh: 400.5,
 });
+
+/** The wall's own slot, exactly as `SearchPage` passes it: a field read, held still. */
+const rowIsGameChanger = (c: CardSummary) => c.gameChanger;
 
 /**
  * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height
@@ -355,14 +363,115 @@ describe("CardGrid", () => {
 
     // The corner is the wall's, not the badge's: every caller hands over a plain inline mark
     // and this is the one place that decides where a mark goes, so two views cannot drift
-    // into two corners. `pointer-events-none` because the whole tile opens the card, and a
-    // mark that swallowed the click over its own two square centimetres would be a dead spot.
-    expect(badge.parentElement).toHaveClass(
-      "pointer-events-none",
-      "absolute",
-      "bottom-1",
-      "left-1",
+    // into two corners.
+    expect(badge.parentElement).toHaveClass("absolute", "bottom-1", "left-1");
+  });
+
+  /**
+   * The corner takes its own pointer events — which is what lets a `title` on the mark inside
+   * it surface at all — and pays for that by opening the card itself.
+   *
+   * It used to be `pointer-events-none`, so the press fell through to the art and the whole
+   * tile was one target. A tooltip cannot come out of an element that receives no pointer
+   * events, and these marks are abbreviations (`×3`, a heart) whose plain words are exactly
+   * what a reader hovers for. So both corners answer a click with the same `onSelect` the
+   * button underneath would have: hoverable, and not a dead spot.
+   */
+  it("opens the card from a mark's corner, which is hoverable rather than click-through", async () => {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={onSelect}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        badge={(c) => <span title="3 in your collection">×{c.printings}</span>}
+        topLeft={() => <span title="3 printings matched these filters">×3</span>}
+      />,
     );
+
+    const bottomLeft = screen.getByTitle("3 in your collection").parentElement!;
+    const topLeft = screen.getByTitle("3 printings matched these filters").parentElement!;
+    expect(bottomLeft).toHaveClass("pointer-events-auto");
+    expect(topLeft).toHaveClass("pointer-events-auto");
+
+    await userEvent.click(bottomLeft);
+    await userEvent.click(topLeft);
+
+    expect(onSelect.mock.calls).toEqual([["aaa"], ["aaa"]]);
+  });
+
+  /**
+   * The Commander bracket's crown, in the chip the finish mark already owns.
+   *
+   * Drawn from the wall's own slot rather than from a field on `GridCard`, for the reason the
+   * `finish` slot beside it exists: the search's rows carry the fact and a mapped collection
+   * row does not, so a wall that guessed would crown nothing or everything.
+   *
+   * `hidden: true`, because the whole overlay the chip sits in is `aria-hidden` — it is inside
+   * the tile's button, where any text of its own would join the button's accessible name and
+   * make a wall of game changers forty buttons called "… Game changer". Which is the other
+   * half of this test.
+   */
+  it("crowns a game changer's tile, and leaves an ordinary card's alone", () => {
+    render(
+      <CardGrid
+        rows={[
+          { ...card("aaa", "Rhystic Study"), gameChanger: true },
+          card("bbb", "Lightning Bolt"),
+        ]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        gameChanger={rowIsGameChanger}
+      />,
+    );
+
+    const crowns = screen.getAllByRole("img", { name: GAME_CHANGER_LABEL, hidden: true });
+    expect(crowns).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Rhystic Study" })).toContainElement(crowns[0]);
+    expect(screen.getByRole("button", { name: "Rhystic Study" })).toHaveAccessibleName(
+      "Rhystic Study",
+    );
+  });
+
+  /**
+   * And the fact stated in words, because the chip that draws it is decoration: the caption is
+   * a *sibling* of the button, so a sentence here reaches a screen reader without renaming
+   * forty tiles. The same treatment the finish word gets, one line above it.
+   */
+  it("states the crown in the caption, where the art's chip cannot", () => {
+    render(
+      <CardGrid
+        rows={[{ ...card("aaa", "Rhystic Study"), gameChanger: true }]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        gameChanger={rowIsGameChanger}
+      />,
+    );
+
+    const stated = screen.getByText(`, ${GAME_CHANGER_LABEL}`);
+    expect(stated).toHaveClass("sr-only");
+    // In the caption beside the set and number, not inside the button that names the card.
+    expect(screen.getByRole("button", { name: "Rhystic Study" })).not.toContainElement(stated);
+  });
+
+  /** A wall told nothing crowns nothing — the collection's, which has no such fact to give. */
+  it("crowns no tile at all when the caller passes no answer", () => {
+    render(
+      <CardGrid
+        rows={[{ ...card("aaa", "Rhystic Study"), gameChanger: true }]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+
+    expect(
+      screen.queryByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(`, ${GAME_CHANGER_LABEL}`)).not.toBeInTheDocument();
   });
 
   /**
