@@ -135,6 +135,35 @@ Ties on `released_at` are broken by the **greatest** `id`, where the uncollapsed
 `ORDER_NAME` breaks them by the least. Ids are UUIDs, so both are arbitrary; the pick is stated here
 and pinned by a test rather than left to chance.
 
+> **Superseded 2026-08-14 — the representative is now the *cheapest* printing of the latest release
+> date.** The mechanism above is unchanged: still one fixed-width sortable string under `max()`, still
+> `substr()` slicing the winning `id` back out, so the join back into `cards` is still the primary-key
+> lookup this section exists to justify. What changed is the order encoded in that string. It is now
+> three keys — `released_at` DESC (NULL → `'0000-00-00'`), **price ASC at the reader's marketplace**
+> (an unpriced printing loses to every priced one), then `c.id` DESC — and the price segment is
+> written *inverted*, because `max()` takes the greatest string and the cheapest price has to encode
+> as the largest segment. `COLLAPSE_REP` therefore stops being a constant and becomes a function of
+> `sorting::printing_price_expr`: **the pick is marketplace-dependent**, which is consistent because
+> the request already carries a `marketplace` and the query key already includes it.
+>
+> "Latest set" is resolved by **price** rather than by set code, and that is deliberate. Every
+> candidate shares the card's latest release date, so every candidate is in a set released that day —
+> and 2,503 of 37,556 paper groups have a latest date spanning more than one set. A `set_code DESC`
+> tie-break was written, measured and rejected: promo sets are `p`-prefixed (`piko`, `pneo`, `pkhm`)
+> and sort *above* their parent set, so a same-day tie went to the promo printing, usually the dearer
+> one — Icebreaker Kraken `khm 63` **$0.36** → `pkhm 63p` **$0.88**, a rule called "cheapest" making
+> the row more expensive.
+>
+> Measured 2026-08-14 on the live database (Windows, 116,703 cards, 37,556 paper oracle groups,
+> TCGplayer prices): **4,011 groups (10.7 %) change representative and 0 of them get a dearer one** —
+> a property of the key, since every printing the old rule could have picked is still a candidate.
+> 163 go from an unpriced representative to a priced one; 1,155 cross a set boundary inside the same
+> release date (`pfrf 143s` $2.59 → `frf 143` $0.35). The third evaluation of the price expression
+> costs the unfiltered browse 108 → 127 ms at TCGplayer and 891 → 1,044 ms at a feed marketplace,
+> and a narrowed browse nothing at all (24 → 24 ms); the covering scan survives. Those figures,
+> their provenance and current behaviour live in
+> [data-and-sync.md](../../reference/data-and-sync.md).
+
 ### 3.2 The index
 
 One new entry in `schema::CARDS_INDEXES` — the hard rule is that the sync's `swap_staging` drops
@@ -355,7 +384,9 @@ rows, the collection table, the wishlist's preferred finish and the quick-add po
 ## 8. Verification
 
 **Rust.** Grouping by `oracle_id`; the representative is the newest printing and the `substr` pick
-agrees with an explicit `ORDER BY … LIMIT 1`; `printings` and the price range describe the *matched*
+agrees with an explicit `ORDER BY … LIMIT 1` (**superseded 2026-08-14** — the rule is now the
+cheapest printing of the latest release date, at the reader's marketplace, and the equivalence test
+is written against that order; see the note in §3.1); `printings` and the price range describe the *matched*
 printings under a filter; `ownedQuantity` sums across the card's printings; the capped count counts
 cards; each sort's order; the `MATERIALIZED` CTE keeps the 10× name weighting (a test that fails if
 someone "simplifies" it to `rank`); the demotion puts the real card first; `idx_cards_collapse` is
