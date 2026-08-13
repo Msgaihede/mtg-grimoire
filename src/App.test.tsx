@@ -923,9 +923,18 @@ it("hands the caret back to the deck's card after a swap", async () => {
   // and not off the screen: the pane followed the swap onto that printing, so its facts line says
   // the same two words about the same piece of cardboard, and an unscoped query would be
   // satisfied by either surface.
+  //
+  // Scoped to the card's `<li>` rather than to its button, because the stack's data line is a
+  // **sibling** of the button and not a child of it (`CardStack.tsx`, "It is outside the button
+  // on purpose" — inside, its text was swallowed by the button's `aria-label` and the printing
+  // had no reader at all). Scoping to the button passed until that moved and then failed here
+  // with the set still plainly on screen, which is the tell for this whole class of miss: the
+  // card is the object this assertion is about, so the card is what it should have been reading.
   await waitFor(() =>
     expect(
-      within(screen.getByRole("button", { name: /^Lightning Bolt/ })).getByText("M10 · 146"),
+      within(
+        screen.getByRole("button", { name: /^Lightning Bolt/ }).closest("li") as HTMLElement,
+      ).getByText("M10 · 146"),
     ).toBeInTheDocument(),
   );
 
