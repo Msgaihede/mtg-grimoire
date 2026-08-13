@@ -215,6 +215,15 @@ virtualized or not.
    is what the field should mean and not what it computes. **Structural** — picking the
    cheapest *priced* printing per oracle card is a different (and more expensive) join, and it
    should be decided with the exporters in Plan 5, which will quote the same number.
+
+   **Still open — but the technique now exists in the codebase (2026-08-14).** The *card search*
+   changed its collapsed representative to exactly this: the cheapest printing of the card's
+   latest release date, at the reader's marketplace, an unpriced printing losing to every priced
+   one. It is done inside the aggregate that already picks the representative — the price is one
+   more fixed-width segment of `search::COLLAPSE_REP`'s `max()` string, written inverted so the
+   cheapest encodes largest — rather than as a second join. `wishlist.rs` is **unchanged** and
+   this finding is not resolved; what has changed is that "a different and more expensive join"
+   is no longer the only shape available, and there is a working spelling to copy.
 2. **The docked search panel's result grid gets ~86 px at 1280 × 800** once the stats block is
    on screen, which is a third of one tile row. It scrolls and every control is reachable, and
    the 1024 pass is clean — but the panel's vertical budget is the one place the four charts

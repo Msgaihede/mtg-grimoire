@@ -634,6 +634,100 @@ describe("prices", () => {
 });
 
 /**
+ * Which printing stands for a collapsed row — `released_at DESC, price ASC NULLS LAST, id DESC`.
+ *
+ * **The corpus cannot show this and a fixture has to.** The rule only bites when two printings
+ * share the newest release date, and none of `cards.ts`'s 36 paper groups does (measured
+ * 2026-08-14); `large`'s synthetic corpus does, in 126 of its 686 groups, which is what makes the
+ * change visible in the workbench. So every row here is cut from a real Bolt row with three
+ * columns replaced, which keeps the other thirty the ingest's.
+ *
+ * The ids are named rather than uuid-shaped and are chosen so that **`id DESC` alone would pick
+ * the wrong one in every case below** — otherwise the old rule would pass these too.
+ */
+describe("the collapsed row's representative", () => {
+  /** One printing of the Bolt oracle card: its own id, release date and dollar price, and
+   *  `oracleId` left alone so any set of these collapses into one group. */
+  const printing = (id: string, releasedAt: string, usd: number | null): FakeCard => ({
+    ...BOLT,
+    id,
+    releasedAt,
+    priceUsd: usd,
+    prices: JSON.stringify({ usd: usd === null ? null : usd.toFixed(2) }),
+  });
+
+  const repOf = (cards: FakeCard[], marketplace?: MarketplaceId) =>
+    readHandlers(makeDb({ cards })).search_cards({
+      req: { collapse: true, marketplace, limit: 10, offset: 0 },
+    }).items[0];
+
+  it("takes the cheapest printing of the newest release, and never an older cheaper one", () => {
+    const row = repOf([
+      printing("z-new-dear", "2024-04-08", 50),
+      printing("a-new-cheap", "2024-04-08", 5),
+      // Cheaper than either, and irrelevant: the date decides first, so a collapsed row always
+      // stands for the card as it is printed now.
+      printing("m-old-cheapest", "2019-01-01", 1),
+    ]);
+    expect(row.id).toBe("a-new-cheap");
+    // The span is still every printing that matched, which is what keeps it wider than the
+    // representative's own price.
+    expect([row.priceLow, row.priceHigh]).toEqual([1, 50]);
+    expect(row.printings).toBe(3);
+  });
+
+  /**
+   * `null` is "this marketplace does not quote this printing", not "free".
+   *
+   * Sorted first it would make the cheapest-of-the-latest rule hand every row to the printing
+   * nobody has a price for — the one thing the rule cannot be allowed to mean.
+   */
+  it("sorts an unpriced printing last, and falls back to the id when none is priced", () => {
+    const unpriced = printing("z-new-null", "2024-04-08", null);
+    expect(repOf([unpriced, printing("a-new", "2024-04-08", 9)]).id).toBe("a-new");
+    // With nothing of that date priced there is no price to order by, and `id DESC` — the last
+    // key, unchanged — is what still makes the pick total.
+    expect(repOf([printing("a-new-null", "2024-04-08", null), unpriced]).id).toBe("z-new-null");
+  });
+
+  /**
+   * The representative is picked at the marketplace the request named, from the same call the
+   * span below it is built from — so the row cannot choose its printing at one marketplace and
+   * quote its range at another.
+   */
+  it("picks at the marketplace the search named", () => {
+    // `z-bolt` is what `id DESC` alone would take, and no marketplace below picks it — so each
+    // assertion is one the old rule fails.
+    const db = makeDb({
+      cards: [
+        printing("z-bolt", "2024-04-08", 50),
+        printing("a-bolt", "2024-04-08", 5),
+        printing("m-bolt", "2024-04-08", 20),
+      ],
+      marketplacePrices: [
+        // Card Kingdom's order is its own: it makes the dearest of the three in dollars the
+        // cheapest here, so the pick has to move with the parameter rather than with the blob.
+        { marketplace: "cardkingdom", cardId: "z-bolt", finish: "nonfoil", price: 40 },
+        { marketplace: "cardkingdom", cardId: "a-bolt", finish: "nonfoil", price: 30 },
+        { marketplace: "cardkingdom", cardId: "m-bolt", finish: "nonfoil", price: 3 },
+        // Mana Pool has never listed the other two at all — absent rows, not zeroes.
+        { marketplace: "manapool", cardId: "m-bolt", finish: "nonfoil", price: 44 },
+      ],
+    });
+    const at = (marketplace: MarketplaceId) =>
+      readHandlers(db).search_cards({ req: { collapse: true, marketplace, limit: 10, offset: 0 } })
+        .items[0];
+
+    expect(at("tcgplayer").id).toBe("a-bolt");
+    expect(at("cardkingdom").id).toBe("m-bolt");
+    // The only printing this feed prices, so it represents the card *and* is the whole span —
+    // the two read off one call, which is what stops them quoting different marketplaces.
+    expect(at("manapool").id).toBe("m-bolt");
+    expect([at("manapool").priceLow, at("manapool").priceHigh]).toEqual([44, 44]);
+  });
+});
+
+/**
  * `sorting::order_by` as this fake implements it, over the three lists that take a spec.
  *
  * A sort is an ordered list of `{key, dir}`, the first term deciding and the rest breaking
