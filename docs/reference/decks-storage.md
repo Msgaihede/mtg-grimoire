@@ -408,8 +408,9 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   selection: after the first step the _next_ card's strip sits only ~34px below the pointer, so
   one continuous downward sweep crossed four or five strips in ~60ms, armed every one, and left
   the reader several cards below the one they aimed at. `CardStack` now holds `openIndex`, armed
-  by `pointerenter` on the `<li>` after a **70ms dwell** (`STACK_OPEN_DWELL_MS`) and closed after
-  **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card cancels the pending close so
+  by `pointerenter` on the `<li>` after an **80ms dwell** (`STACK_OPEN_DWELL_MS`, 70ms until
+  2026-08-14) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card
+  cancels the pending close so
   switching never shows a closed frame. **No new hit target was needed**: a closed card is
   overlapped 285px by its successor, which is later in DOM order and therefore paints over it,
   so the only hittable part of a closed card already _is_ its 34px reveal strip.
