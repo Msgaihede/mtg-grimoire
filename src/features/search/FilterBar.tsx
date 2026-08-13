@@ -169,6 +169,29 @@ export function FilterBar({
         onClick={search.toggleAllPrintings}
       />
 
+      {/* Its neighbour's other half, and it rides here for the same reason: both say what
+          there is to look *through* rather than what to look for, so both sit past the reset
+          and both survive it.
+
+          One title in both states rather than two, exactly as the Owned chip does it — the
+          sentence names what the chip's word names, which reads correctly whether the reader
+          is about to press it or is already inside it. It leads with the visible label
+          because the `title` is the accessible name too (WCAG 2.5.3), and it says which
+          cards it means: "unplayable" is otherwise easy to read as "banned in my format",
+          which is a different and much larger set of cards.
+
+          **It says "legal nowhere" rather than "legal in no format" deliberately.** The word
+          `format` names the select five controls to the left, and an accessible name carrying
+          it makes `getByLabelText(/format/i)` — which four tests in `SearchPage.test.tsx` use
+          to reach that select — match two controls instead of one. Two names on one row
+          sharing the word that identifies one of them is worth avoiding for a reader too. */}
+      <ToggleChip
+        label="Unplayable"
+        pressed={search.unplayable}
+        title="Unplayable — art cards, tokens and other printings that are legal nowhere"
+        onClick={search.toggleUnplayable}
+      />
+
       {layoutToggle && <ViewToggle />}
     </div>
   );

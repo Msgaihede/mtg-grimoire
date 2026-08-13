@@ -1110,6 +1110,19 @@ function matchesCardFilters(
   if (f.paperOnly ?? true) {
     if (!card?.isPaper) return false;
   }
+
+  // Omitted means **false**, which is the one place two neighbouring `…Only` flags disagree
+  // about their default — see `filters::CardFilters::playable_only`. The real predicate is
+  // `legal_mask != 0`, and the mask is `legalities` folded to one integer over the same two
+  // playable values the format filter above accepts, so asking the blob directly is the same
+  // question: is this card legal or restricted *anywhere*. An orphan fails it, as it fails
+  // format, because `NULL != 0` is NULL.
+  if (f.playableOnly ?? false) {
+    const legalities = parseJson(card?.legalities ?? null);
+    if (typeof legalities !== "object" || legalities === null) return false;
+    const values = Object.values(legalities as Record<string, unknown>);
+    if (!values.some((v) => v === "legal" || v === "restricted")) return false;
+  }
   return true;
 }
 
@@ -2667,6 +2680,10 @@ export function readHandlers(db: FakeDb) {
        * `paperOnly: false` because the base has already applied the request's own paper
        * decision — putting the default back here would drop the digital printings a
        * `paperOnly: false` search asked for.
+       *
+       * `playableOnly` needs no such line, and the asymmetry is its default rather than an
+       * oversight: it is off unless asked for, so an option's own filter object cannot put
+       * back a narrowing the base already made. The base is where the request's value lives.
        */
       const countWith = (rows: FakeCard[], f: CardFilters) =>
         rows.filter((c) => matchesCardFilters(c, { ...f, paperOnly: false }, null)).length;

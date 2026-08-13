@@ -24,6 +24,17 @@ to guess.
   0.78 MB / 0.12 ms). **986 and 1 047 are both right and mean different things** — 986 paper
   sets against 1 047 codes over every printing, because `set_ord` covers the whole corpus and
   a digital-only set still needs an ordinal (`index/mod.rs`). The picker's counts use 1 047.
+- **Two dimensions are in every base and are not facets: `paper` and `playable`.** Neither is
+  offered as a control on the row, so neither excludes its own filter — they narrow the base a
+  count is taken over, including its own dimension's. **Their defaults are opposites**, which is
+  the whole of what a reader has to keep straight: `paperOnly` is omitted-means-**true** (every
+  caller wants it), while `playableOnly` is omitted-means-**false** and is sent explicitly by the
+  search view alone (`useCardSearch`), because a collection and a wishlist list what the user owns
+  and wants and an art card in a binder is still in the binder. `playable` is
+  `cards.legal_mask != 0` — legal or restricted in at least one of the 23 keys — set per row at
+  build time from the stored integer rather than folded out of `CardIndex::formats`, so it stays
+  right for a bit this build has no name for. It cannot move a **format** count in either
+  direction: every `formats[k]` is a subset of it.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it
