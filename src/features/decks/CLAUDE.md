@@ -168,6 +168,22 @@ price | type`). An **inactive category stays its own group in all three grouping
   **34px** reveal, a legibility floor for the overlaid chip rather than a fraction. The list gets
   a fixed `stackHeight(n) = 34(n−1) + 295 + 8`, and the open card's margin turns −261 into +8:
   a **269px** push-down of every later card, out of a box whose height does not change.
+- **Every number in the bullet above is the value at zoom 1×, which is where the reader starts and
+  no longer where they stay.** Ctrl+wheel over a card section steps `useAppStore`'s `cardZoom` along
+  a ten-stop ladder from 0.5× to 2× (`src/lib/cardZoom.ts`), so each of those constants now has a
+  function beside it — `stackCardWidth`, `stackImageHeight`, `stackCardHeight`, `stackAdvance`,
+  `stackCollapsedMargin`, `stackHeight(n, zoom)`, and `stackColumnWidth(zoom)` in `StackView` — and
+  the bare constant survives as that function's documented base. **The reveal is the exception and
+  is the one to know**: `stackAdvance` is `max(34, scaled(34, zoom))`, so it grows going up and
+  **holds at 34 going down**, because it measures the chip laid over it rather than a fraction of
+  the card. Scaling it linearly is the mistake the floor exists to prevent — at 0.5× it would be
+  17px under an unscaled chip. The same grow-only rule governs the grid view's caption and gutter
+  and `CardGrid`'s caption strip: **anywhere a scaled budget has to contain unscaled chrome, the
+  budget floors rather than scales.**
+- **The column is derived from the card, not the other way round** (it used to be: 14rem minus
+  padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
+  **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
+  of a card. Scaling the two independently agrees at 1× and drifts at every other stop.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays

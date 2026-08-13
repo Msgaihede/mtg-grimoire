@@ -136,6 +136,46 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   deck tiles and folder strips (`DecksPage.tsx`), the theory diff (`TheoryDiffDialog.tsx`) and
   the cover art picker (`DeckSettingsDialog.tsx`) — where a 100-card list really is 100 mounted
   rows. (It used to say "the deck zone columns", a component the rebuild deleted.)
+- **Ctrl+wheel resizes the cards and nothing else.** The gesture is attached per _card section_ —
+  `CardGrid`'s scroller (which is the search wall, the collection wall and the deck editor's docked
+  search panel at once) and the deck editor's own `StackView` and `GridView` roots — so the sidebar,
+  the ribbon, the tables and the card pane never move. There is one `cardZoom` behind all of them
+  (`useAppStore`), because it is a statement about how the reader is reading cards rather than about
+  how one list is configured: zoom the search wall, switch to Decks, and the cards there are already
+  the size that was asked for. **The wishlist has no zoom because it has no card section** — it is
+  `VirtualTable` only.
+- **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
+  obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
+  of a 488px `grid` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
+  stops matching the content, and it desynchronises the deck editor's drag-and-drop hit testing from
+  what is painted. Rescaling the numbers keeps text crisp, lets the wall reflow to a new column
+  count, and keeps `CardGrid`'s existing `virtualizer.measure()` effect — already keyed on
+  `tileHeight` — correct for free.
+- **A ladder of ten stops (0.5×–2×), not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
+  not a magnitude worth trusting: a mouse notch arrives as 100 through Chromium's line mode and 120
+  from a driver reporting raw ticks, while a precision trackpad's pinch reaches the page as a stream
+  of ctrl-flagged wheel events in the single digits, dozens a second. The ladder makes the unit the
+  **gesture**. It also keeps the value exact — `zoom * 1.1` applied and undone eight times is
+  0.9999999999999998, which formats as "100%" while sizing every tile a hair off.
+- **Anywhere a scaled budget contains unscaled chrome, the budget floors rather than scales:**
+  `max(base, scaled(base, zoom))`. Three surfaces landed on this independently. `CardGrid`'s 28px
+  caption is set by the 24px quick-add button inside it, so a plain 0.5× gives a 14px strip under a
+  28px caption and the virtualised rows overlap by the difference. `CardStack`'s 34px reveal is a
+  legibility floor for the chip laid over it, not a fraction of the card. `GridView`'s caption and
+  gutter are the same case (4.5px type at half size; tiles touching into one sheet of card backs).
+  The stack's padding and border are the mirror rule — **added, never multiplied**, since chrome is
+  not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason.
+- **The zoom badge is driven by a pulse counter, not by the zoom value** (`CardZoomIndicator`,
+  `zoomPulse`). At either end of the ladder a gesture changes no number, and that is exactly when a
+  reader needs an answer — they are still rolling the wheel and nothing is happening. Keyed off the
+  value, the badge would fade out under their hand at the one moment it is load-bearing. It is
+  `aria-hidden` on purpose: a live region here would announce a percentage per wheel notch.
+- **The wheel listener is a native `addEventListener` with `{ passive: false }`, never React's
+  `onWheel`.** React registers `wheel` as passive on the root container, and a passive listener's
+  `preventDefault()` is defined to do nothing — so the zoom would step *and* WebView2 would apply
+  its own ctrl+wheel page zoom on top, scaling the whole window out from under a reader who asked
+  one grid of cards to get bigger. The same `preventDefault` is what suppresses trackpad pinch,
+  which arrives with `ctrlKey` set and nobody touching a key.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
   phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
