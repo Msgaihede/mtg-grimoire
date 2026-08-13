@@ -50,6 +50,13 @@ pub struct SearchRequest {
     pub rarity: Option<String>,
     /// Defaults to true: digital-only printings are hidden unless asked for.
     pub paper_only: Option<bool>,
+    /// Narrow to printings that are legal or restricted in **at least one** format —
+    /// `legal_mask != 0`, which is what hides art series, tokens, emblems and memorabilia.
+    ///
+    /// **Defaults to false**, unlike [`Self::paper_only`]: absent is what this command has
+    /// always answered, so no existing caller changes. The search view sends `true` unless
+    /// its Unplayable chip is pressed. See [`crate::filters::CardFilters::playable_only`].
+    pub playable_only: Option<bool>,
     /// `Some(true)` narrows to printings the collection has an entry for, `Some(false)` to
     /// those it does not. Spec §7's owned/wishlist status filter, buildable at last now
     /// that the table exists.
@@ -101,6 +108,7 @@ impl SearchRequest {
             mana_values: self.mana_values.clone(),
             rarity: self.rarity.clone(),
             paper_only: self.paper_only,
+            playable_only: self.playable_only,
         }
     }
 }
@@ -343,6 +351,14 @@ const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
 ///
 /// A **ranking** term and never a filter — every printing that matched is still returned, in
 /// both modes. This only decides what a relevance-ranked page puts first.
+///
+/// **[`SearchRequest::playable_only`] is the filter, and it is not this list.** The two overlap
+/// and neither replaces the other: this one is a hand-kept list of Scryfall layout words, which
+/// has to be updated by hand when Scryfall invents another and is in no index; that one is
+/// `legal_mask != 0`, computed from the card's own legalities on every sync and carried by
+/// `idx_cards_collapse`. Ranking still needs a list, because it applies to a corpus the reader
+/// has asked to include the unplayable printings in — and an art card that outranks the card it
+/// depicts is wrong whether or not it was asked for.
 const NON_CARD_LAYOUTS: &str = "('art_series','front_card','token','double_faced_token','emblem')";
 
 /// 1 for a non-card, 0 for a card — the first term of the relevance fallback.
@@ -1142,6 +1158,100 @@ mod tests {
         .unwrap();
         assert_eq!(r.total, 1);
         assert_eq!(r.items[0].name, "Lightning Helix");
+    }
+
+    /// The printings that are legal in **no** format — art series, tokens, emblems,
+    /// memorabilia — are what `playableOnly` hides, and there is no other way to name them:
+    /// they carry ordinary names, ordinary sets and (for an art card) the name of the card
+    /// they depict, twice.
+    ///
+    /// **The default still answers with them**, which is the asymmetry with `paperOnly` and
+    /// the reason this test asks both questions. Every other caller of this command omits the
+    /// field, and a default of `true` would quietly drop cards out of the deck panel, the
+    /// wishlist's picker and anything else that grows a search later.
+    ///
+    /// `restricted` is the edge the mask already encodes and this is where it is asked of a
+    /// real query: a card restricted in Vintage and legal nowhere else is playable, so a
+    /// Vintage player's search must keep returning it.
+    #[test]
+    fn playable_only_hides_the_printings_that_are_legal_nowhere() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,type_line,
+                is_paper,legalities,search_text,raw)
+             VALUES ('30','Lightning Bolt // Lightning Bolt','astx','76s','en','art_series',
+                     'Card',1,'{\"modern\":\"not_legal\"}','Lightning Bolt','{}'),
+                    ('31','Black Lotus','lea','232','en','normal','Artifact',
+                     1,'{\"vintage\":\"restricted\",\"legacy\":\"banned\"}','Black Lotus','{}')",
+            [],
+        )
+        .unwrap();
+        fill_legal_mask(&conn);
+
+        let default = run_search(
+            &conn,
+            &SearchRequest {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            default.total, 4,
+            "absent means the art card still comes back"
+        );
+
+        let playable = run_search(
+            &conn,
+            &SearchRequest {
+                playable_only: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = playable.items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Black Lotus", "Lightning Bolt", "Lightning Helix"],
+            "the art card is gone and the restricted card is not"
+        );
+        assert_eq!(playable.total, 3, "the count agrees with the page");
+
+        // `false` is the same request as no request at all — the frontend sends the field
+        // only when it means it, and either spelling has to answer the same way.
+        let explicit_off = run_search(
+            &conn,
+            &SearchRequest {
+                playable_only: Some(false),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(explicit_off.total, 4);
+
+        // And collapsed, which is the mode the search view actually runs in: the filter
+        // narrows printings *before* they are grouped, so a card whose every printing is
+        // unplayable has no group left at all.
+        let collapsed = run_search(
+            &conn,
+            &SearchRequest {
+                playable_only: Some(true),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(collapsed.total, 3);
+        assert!(
+            !collapsed
+                .items
+                .iter()
+                .any(|c| c.name.contains("// Lightning Bolt")),
+            "art series carry their own oracle_id, so collapsing alone never hid this row"
+        );
     }
 
     #[test]
@@ -2357,11 +2467,15 @@ mod tests {
     #[test]
     fn a_partial_camel_case_payload_deserializes_and_takes_the_default_page_size() {
         let req: SearchRequest = serde_json::from_str(
-            r#"{"text":"bolt","setCode":"lea","paperOnly":true,"owned":false}"#,
+            r#"{"text":"bolt","setCode":"lea","paperOnly":true,"playableOnly":true,"owned":false}"#,
         )
         .unwrap();
         assert_eq!(req.set_code.as_deref(), Some("lea"));
         assert_eq!(req.paper_only, Some(true));
+        // Two adjacent `…Only` flags whose defaults are opposites, so the spelling is pinned
+        // here as well as the value: a typo lands on `None`, which is the *off* state for
+        // this one and the *on* state for its neighbour.
+        assert_eq!(req.playable_only, Some(true));
         // `Some(false)` and `None` are different filters — "the ones I do not have" against
         // "no opinion" — so this pins the value, not merely that the key parsed.
         assert_eq!(req.owned, Some(false));
