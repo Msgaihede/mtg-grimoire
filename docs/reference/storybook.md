@@ -5,10 +5,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 `npm run storybook` · `npm run build-storybook`. **359 stories across 47 story files, 46 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the facet-ordering branch: 405
-entries, 359 `story`, 46 `docs`, 48 distinct `importPath`s. The one story over the 358 below is
-`Search/SetCombobox`'s `PickedFirst`, which pins the picked sets floating to the top of the
-paged list; no story *file* was added, which is why that count did not move.
+**Measured 2026-08-14** off a fresh `build-storybook` on the facet-ordering branch merged with
+`main`: 405 entries, 359 `story`, 46 `docs`, 48 distinct `importPath`s. The one story over the
+358 below is `Search/SetCombobox`'s `PickedFirst`, which pins the picked sets floating to the
+top of the paged list; no story *file* was added, which is why that count did not move. The
+stack-motion work `main` brought in the same window rewrote `CardStack`'s and `StackView`'s
+stories without adding one, which is why it does not appear in this arithmetic — re-counted
+after the merge rather than assumed.
 
 **Measured 2026-08-12** off the price-feed branch merged with `main`: 404 entries, 358 `story`,
 46 `docs`, 48 distinct `importPath`s. The five stories over `main`'s 353 were
