@@ -321,6 +321,7 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
     quantity: 1,
     name,
     setCode: "lea",
+    setName: "Limited Edition Alpha",
     collectorNumber: "161",
     lang: "en",
     needsReview: null,

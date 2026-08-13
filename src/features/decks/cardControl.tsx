@@ -338,16 +338,90 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
 export function DeckCardControls({
   card,
   actions,
+  layout = "row",
   className,
 }: {
   card: DeckCard;
   actions?: DeckCardActions;
+  /**
+   * How the controls are arranged, which is a question about the **space** they are given
+   * rather than about how they should look.
+   *
+   * `row` is a wide, short one — a table cell, a text line, the foot of a 150px grid tile —
+   * and wraps when it runs out. `card-column` is the deck stack's: a column standing in the
+   * right margin of a 210px card face, over the illustration, where the one dimension going
+   * spare is the vertical one. It is also the only layout drawn on art, so it is the only one
+   * whose buttons carry a backing.
+   */
+  layout?: "row" | "card-column";
   className?: string;
 }) {
   const setQuantity = actions?.setQuantity;
   const move = actions?.move;
   const targets = (actions?.moveTargets ?? []).filter((c) => c.id !== card.categoryId);
   if (!setQuantity && !(move && targets.length > 0)) return null;
+  const column = layout === "card-column";
+
+  const stepper = setQuantity && (
+    <QuantityStepper
+      size={column ? "card" : "xs"}
+      orientation={column ? "vertical" : "horizontal"}
+      tone={column ? "art" : "panel"}
+      // Inside a card frame and inside a grid tile, both of which clip their own corners.
+      focus="inset"
+      value={card.quantity}
+      // The floor is zero and zero is a real press: it is how a deck card leaves, and the
+      // only way a reader can take one out with the keyboard.
+      min={0}
+      label={`Copies of ${card.name} in ${card.categoryName}`}
+      onChange={(quantity) => setQuantity(card, quantity)}
+    />
+  );
+
+  const mover = move && targets.length > 0 && (
+    <select
+      // Named by the **slot** and not by the card: the same printing sits in two categories
+      // often enough, and two controls called "Move Sol Ring" are two a screen reader — and
+      // a test — cannot tell apart.
+      aria-label={`Move ${card.name} out of ${card.categoryName}`}
+      // Always the placeholder: this select is a *verb*, not a field holding the card's
+      // category. Leaving the last choice selected would make it read as though the card
+      // were already there, and would make picking the same target twice a no-op.
+      //
+      // The targets under it are **deliberately not alphabetical** — one of the two exceptions
+      // `src/lib/options.ts` names. They arrive in `cat.sort_order, cat.id`, the order the
+      // reader dragged their own columns into and the order all four deck views render, so
+      // this list and the deck behind it name the piles the same way. `Move…` itself is pinned
+      // first and is not one of them.
+      value=""
+      onChange={(e) => {
+        const to = Number(e.target.value);
+        if (to) move(card, to);
+      }}
+      className={cn(
+        "h-5 max-w-24 rounded-md border border-border bg-surface px-1 text-[0.625rem] text-dim",
+        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+        // **Under the stepper, not beside it, and narrower — because this control is not in
+        // the design and the art is.** The canvas draws one 24px column in the card's right
+        // margin and nothing else; a 96px select beside it covered three-fifths of the width
+        // of a 210px card face, which was measured in the shipped window and is the reason
+        // this branch exists. Below it the cluster is 24px wide at the card's top corner where
+        // the marks already are, and the select only reaches left on the card that is open.
+        //
+        // It is kept rather than dropped because it is the **only keyboard path to moving a
+        // card** in this view — the alternative here is a drag, which a caret cannot perform.
+        column && "mt-1 max-w-20",
+        FOCUS_INSET,
+      )}
+    >
+      <option value="">Move…</option>
+      {targets.map((category) => (
+        <option key={category.id} value={String(category.id)}>
+          {category.name}
+        </option>
+      ))}
+    </select>
+  );
 
   return (
     // `data-no-drag` on the wrapper rather than on each control: `cardDraggable` asks
@@ -355,54 +429,17 @@ export function DeckCardControls({
     // anyway. Without it a press on `−` plus five pixels of travel is a drag of the whole card.
     <span
       data-no-drag=""
-      className={cn("flex flex-wrap items-center justify-center gap-1", className)}
+      className={cn(
+        "flex gap-1",
+        // A column, so the whole cluster is one control wide at the card's corner. `items-end`
+        // rather than `items-center`, so the stepper and the select share a right edge with
+        // the card's margin and neither shifts when the other changes width.
+        column ? "flex-col items-end" : "flex-wrap items-center justify-center",
+        className,
+      )}
     >
-      {setQuantity && (
-        <QuantityStepper
-          size="xs"
-          // Inside a card frame and inside a grid tile, both of which clip their own corners.
-          focus="inset"
-          value={card.quantity}
-          // The floor is zero and zero is a real press: it is how a deck card leaves, and the
-          // only way a reader can take one out with the keyboard.
-          min={0}
-          label={`Copies of ${card.name} in ${card.categoryName}`}
-          onChange={(quantity) => setQuantity(card, quantity)}
-        />
-      )}
-      {move && targets.length > 0 && (
-        <select
-          // Named by the **slot** and not by the card: the same printing sits in two categories
-          // often enough, and two controls called "Move Sol Ring" are two a screen reader — and
-          // a test — cannot tell apart.
-          aria-label={`Move ${card.name} out of ${card.categoryName}`}
-          // Always the placeholder: this select is a *verb*, not a field holding the card's
-          // category. Leaving the last choice selected would make it read as though the card
-          // were already there, and would make picking the same target twice a no-op.
-          //
-          // The targets under it are **deliberately not alphabetical** — one of the exceptions
-          // `src/lib/options.ts` names. They arrive in `cat.sort_order, cat.id`, the order the
-          // reader dragged their columns into, so this list and the deck behind it name the
-          // piles in the same order. `Move…` itself is pinned first and is not one of them.
-          value=""
-          onChange={(e) => {
-            const to = Number(e.target.value);
-            if (to) move(card, to);
-          }}
-          className={cn(
-            "h-5 max-w-24 rounded-md border border-border bg-surface px-1 text-[0.625rem] text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS_INSET,
-          )}
-        >
-          <option value="">Move…</option>
-          {targets.map((category) => (
-            <option key={category.id} value={String(category.id)}>
-              {category.name}
-            </option>
-          ))}
-        </select>
-      )}
+      {stepper}
+      {mover}
     </span>
   );
 }
@@ -411,8 +448,8 @@ export function DeckCardControls({
  * How the controls are revealed on the three views that draw a card as a *picture*.
  *
  * They sit over the card rather than in it, which is the whole reason `CardStack`'s geometry
- * survived them: an absolutely positioned bar takes no height, so a card is still 312px, a
- * stack is still `34n + 286`, and the no-reflow property stays a fact about arithmetic rather
+ * survived them: an absolutely positioned bar takes no height, so a card is still 319px, a
+ * stack is still `34n + 293`, and the no-reflow property stays a fact about arithmetic rather
  * than a thing to be careful about.
  *
  * **`opacity`, never `hidden`.** `display: none` takes an element out of the tab order, so a
@@ -425,3 +462,29 @@ export const REVEALED_ON_CARD = cn(
   "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
   "transition-opacity duration-150 motion-reduce:transition-none",
 );
+
+/**
+ * The same reveal for the deck stack, driven by **which card is open** rather than by the
+ * pointer being anywhere on this one.
+ *
+ * `group-hover:` is the wrong question in a stack and was quietly answering it wrong. A
+ * collapsed card is overlapped by its successor by all but its 34px reveal strip, so hovering
+ * that strip revealed a control bar drawn hundreds of pixels below it — behind three other
+ * cards, at full opacity, painted over by every one of them. The controls belong to the card
+ * the reader has settled on, which is exactly what `CardStack`'s flip-through already knows.
+ *
+ * **`opacity`, never `hidden`**, for {@link REVEALED_ON_CARD}'s reason and it is sharper here:
+ * the caret opens a card the moment it lands on it, so a stepper that did not exist until the
+ * card opened would be a tab stop that appears in the middle of the Tab that was looking for
+ * it. At `opacity-0` it is a stable stop, and focusing it opens the card under it.
+ */
+export function revealedWhenOpen(open: boolean): string {
+  return cn(
+    // `ease-enter` rather than the default `standard`, which is the canvas's own curve and the
+    // right one by `lib/motion.ts`'s rule: these controls are *arriving*, not travelling
+    // between two positions they occupy either way. `REVEALED_ON_CARD` keeps the default
+    // because its reveal is a pointer sweeping on and off rather than a card committing.
+    "transition-opacity duration-150 ease-enter motion-reduce:transition-none",
+    open ? "opacity-100" : "opacity-0",
+  );
+}

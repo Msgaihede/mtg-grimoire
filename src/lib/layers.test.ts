@@ -24,6 +24,8 @@ describe("the layer scale", () => {
    * order — where every header comes after the filter bar it was drawn over.
    */
   it("puts a popup above a sticky header, and a lifted row below one", () => {
+    // Below everything: it orders two marks inside one card's own strip and nothing else.
+    expect(numberOf(LAYER.overlappingMark)).toBeLessThan(numberOf(LAYER.raised));
     expect(numberOf(LAYER.raised)).toBeLessThan(numberOf(LAYER.header));
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
     expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.dragTray));

@@ -160,14 +160,41 @@ price | type`). An **inactive category stays its own group in all three grouping
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
   the pre-warm reports success and every tile then fetches cold anyway.
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
-  card — no app-drawn frame, name or mana cost — so `deckCardName` on the button is the **only**
-  name a screen reader gets. **The marks go right, never left**: a printed name is left-aligned
-  and a collapsed stack is read down its reveal strip.
+  card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
+  draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,
+  because a lazy-loaded category is a wall of `<img>`s and the card is known before its bytes are.
+  The frame is the same thing that says "No image", "Retrying…" or "No card".
+- **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
+  about the _deck_ — the quantity tag, the Game Changer banner, `RULE BREAK`. Under it goes the
+  data line with facts about the _printing_. `QuantityTag` merges the tag and the copy count into
+  one mark: the count printed on the tag's own colour, grey (`UNTAGGED_COLOR`) when there is no
+  tag, so gold stays something a tag says. `TagDot` is unchanged on the other three views. It
+  costs ~34px of printed name, knowingly; the app-drawn frame insets its own name band by
+  exactly that width so a name _this app_ wrote is never clipped.
+- **The data line is a sibling of the button, not a child** — so unlike every mark over the art
+  its text is genuinely announced rather than swallowed by the button's `aria-label`. It is the
+  card's foot: a 28px bar under the face, ridden **4px** up so the face's clipped corners cover
+  its square ones.
+- **Every mark carries a `title`, and that is a second contract from the accessible name.**
+  `deckCardName` is the whole of what a screen reader gets; a pointer user sees a 6px gem, a
+  slanted colour tag and a crown, none of which is a word. Six sentences, pinned by
+  `CardStack.test.tsx`: the tag (`"Fast mana · 2 in this pile"` — the tag and the count are one
+  mark, so one title says both), `"Game changer"`, the rule break's own finding, the rarity
+  (`RarityGem` grew a `title` for this; the stack draws no rarity text), the shortage, and the
+  finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
+  wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
+  `cards.set_name` exists but `deck_card_select` does not select it.
 - **`CardStack` is arithmetic, not taste.** The card's height is _derived_ — a Magic card's aspect
-  applied to the fixed column width, **295px** — and the collapsed **−261px** margin leaves a
-  **34px** reveal, a legibility floor for the overlaid chip rather than a fraction. The list gets
-  a fixed `stackHeight(n) = 34(n−1) + 295 + 8`, and the open card's margin turns −261 into +8:
-  a **269px** push-down of every later card, out of a box whose height does not change.
+  applied to the fixed column width, plus the data line less its rise, **319px** — and the
+  collapsed **−285px** margin leaves a **34px** reveal, a legibility floor for the overlaid tag
+  rather than a fraction. The list gets a fixed `stackHeight(n) = 34(n−1) + 319 + 8`, and the open
+  card's margin turns −285 into +8: a **293px** push-down of every later card, out of a box whose
+  height does not change.
+- **The stack's controls are revealed by the card being _open_, never by `group-hover:`**
+  (`revealedWhenOpen`). A collapsed card's only hittable part is its 34px strip, so hovering it
+  used to reveal a control bar hundreds of pixels below, behind three other cards. They are a
+  vertical column in the card's right margin now — `DeckCardControls layout="card-column"`, which
+  is also the only layout whose buttons carry a backing, because it is the only one drawn on art.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -176,10 +203,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   2026-08-12). The same arithmetic that makes one card move is what broke selection: after the
   first step the next card's strip sits ~34px below the pointer, so one continuous sweep armed
   four or five cards in ~60ms. `CardStack` holds `openIndex`, armed by `pointerenter` after a
-  **70ms** dwell (`STACK_OPEN_DWELL_MS`) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`),
+  **80ms** dwell (`STACK_OPEN_DWELL_MS`) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`),
   where arming another card cancels the pending close. **No new hit target was needed** — a
-  closed card is overlapped by its successor, so its only hittable part already _is_ its 34px
-  reveal strip. `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**. The margin is no longer a
+  closed card is overlapped 285px by its successor, so its only hittable part already _is_ its
+  34px reveal strip. `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**. The margin is no longer a
   Tailwind literal either — `motion` writes it inline, so the constants are the only place these
   numbers live.
 - **The stack comes forward; a card in it never does.** The list takes `LAYER.raised` while
@@ -187,7 +214,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   a z-index at all** — they are `relative` siblings, so painting order is document order, and
   each card drawn over the one before it _is_ the stacked look. Raising the open card inverts
   that for the whole tail of the stack, on the first frame, while the cards after it are still
-  269px from where they are going: it reads as the card jumping in front and the stack catching
+  293px from where they are going: it reads as the card jumping in front and the stack catching
   up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
   this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
@@ -206,6 +233,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   reduced-motion opt-out is `useReducedMotion()` — see [the Motion rules](../../CLAUDE.md) in
   `src/CLAUDE.md`. That hook reads its value once at mount, so emulating
   `prefers-reduced-motion` _after_ mount proves nothing about it.
+- **The reflow runs on `slow` (260ms), not on the interaction tier** — `stackCard` in
+  `src/lib/motion.ts`, changed 2026-08-14 from `base`. 293px is drawer distance, and a reader
+  running down a stack watches the travel on _every_ step rather than once, so 180ms read as
+  snapping. It is the same three tiers; only which rung this preset sits on changed. The
+  **180ms** `STACK_CLOSE_DELAY_MS` is deliberately no longer equal to it: that one is gesture
+  intent and has never been derived from the tween.
 - **Four card surfaces outside the editor are drag sources, all through the one `cardDraggable`**,
   carrying `{ kind: "card"; cardId; name; typeLine }`. The `typeLine` is **normalised rather than
   validated** — `readDragData` refuses a bad `cardId` or `name`, but turns an unusable type line

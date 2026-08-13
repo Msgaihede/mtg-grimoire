@@ -127,7 +127,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the shipped window, where a tile button's name came back as bare "Foil". The whole
   `FoilOverlay` is `aria-hidden` now and the finish is stated in text where each surface has
   room (the wall's caption `sr-only`, the search table's Name cell, the pane's per-finish
-  prices). This is the same rule the owned badge follows by being a _sibling_ of the button.
+  prices, and — since 2026-08-13 — the deck stack's data line, which sits _outside_ the card's
+  button and so is genuinely announced). This is the same rule the owned badge follows by being
+  a _sibling_ of the button.
+- **`FoilOverlay mark={false}` draws the sheen without the chip**, for a frame that names the
+  finish somewhere else. The stack is its one caller: a `FinishMark` on the data line beside the
+  price says the word better than a fourth badge in a corner the rule break and the quantity tag
+  are already competing for. What must never happen is _neither_ — a sheen with nothing naming
+  it is decoration, which is the whole of why the chip existed.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
