@@ -7,6 +7,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`scrim`, `drawerRight`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
   number. The 150 ms budget it replaces existed only as a prose comment and ~100 hand-copied
   `duration-150` literals. `src/index.css` carries the same scale so CSS-only sites agree.
+- **`stackCard` moved from `base` to `slow` on 2026-08-14** — the tiers themselves are unchanged.
+  The design spec's table filed the deck stack's reflow with the popups, and 180 ms is right for
+  a surface that *appears*; this one travels **293 px**, which is drawer distance, and a reader
+  running down a stack watches that travel on every step rather than once. At 180 ms the card
+  arrived before the eye had followed it. `STACK_CLOSE_DELAY_MS` stayed at 180 ms and is now
+  deliberately unequal to the tween — it is gesture intent, never derived from it.
 - **`@theme static` is load-bearing for `--duration-*`.** Measured against tailwindcss 4.3.3 by
   compiling the block both ways: under plain `@theme` the three lines are **absent from the
   output entirely** (tree-shaken, because nothing references them), under `@theme static` they
@@ -19,7 +25,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   load-bearing rather than decorative.
 - **It only reduces `positionalKeys`, and that is a trap with a live example.** The set is
   `width, height, top, left, right, bottom` plus the transform props — read out of
-  `motion-dom/.../keys-position.mjs`. **`marginBottom` is not in it**, so the deck stack's 286px
+  `motion-dom/.../keys-position.mjs`. **`marginBottom` is not in it**, so the deck stack's 293px
   reflow would have travelled at full speed under `reducedMotion="user"` — a straight regression
   against the `motion-reduce:transition-none` it replaced. `CardStack` therefore carries its own
   `useReducedMotion()` opt-out. **Any `motion` animation of a non-positional property needs
