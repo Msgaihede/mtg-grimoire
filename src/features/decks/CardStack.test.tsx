@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import {
@@ -16,7 +17,13 @@ import {
   STACK_LIFTED_MARGIN,
   STACK_OPEN_ATTR,
   STACK_OPEN_DWELL_MS,
+  stackAdvance,
+  stackCardHeight,
+  stackCardWidth,
+  stackCollapsedMargin,
+  stackDataHeight,
   stackHeight,
+  stackImageHeight,
 } from "./CardStack";
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
@@ -170,6 +177,169 @@ describe("CardStack geometry", () => {
 });
 
 /**
+ * **The same arithmetic read at a zoom**, which is the whole of what the reader's ctrl+wheel
+ * changes here.
+ *
+ * Every claim in the suite above is a claim about 1×, and the constants it pins are the base the
+ * functions below answer with when nobody has zoomed. What is tested here is that the ladder
+ * still derives — width → face → card → advance → margin → list — at each of the ten stops, and
+ * that the one number which is *not* a proportion keeps its floor.
+ *
+ * Pure functions rather than rendered pixels, deliberately: jsdom lays nothing out, so a test
+ * that asked how wide a card came out would be reading back the number it had just written. The
+ * one render at the bottom asks the only question jsdom can answer honestly — whether the numbers
+ * reach the element at all, and as inline styles rather than as classes Tailwind never emitted.
+ */
+describe("CardStack geometry at a zoom", () => {
+  it("answers exactly the base geometry at 1×, function by function", () => {
+    expect(stackCardWidth(DEFAULT_ZOOM)).toBe(STACK_CARD_WIDTH);
+    expect(stackImageHeight(DEFAULT_ZOOM)).toBe(STACK_IMAGE_HEIGHT);
+    expect(stackCardHeight(DEFAULT_ZOOM)).toBe(STACK_CARD_HEIGHT);
+    expect(stackAdvance(DEFAULT_ZOOM)).toBe(STACK_ADVANCE);
+    expect(stackCollapsedMargin(DEFAULT_ZOOM)).toBe(STACK_COLLAPSED_MARGIN);
+    // …and the default really is 1×, so every caller that passes no zoom — the stories, the
+    // suite above, `groupHeight` — is asking the question it always asked.
+    for (const n of [0, 1, 2, 5, 17]) expect(stackHeight(n)).toBe(stackHeight(n, DEFAULT_ZOOM));
+  });
+
+  /**
+   * A card is a picture of a card, so its shape is not negotiable: the face is the printed
+   * 488×680 applied to whatever width the zoom made, and the border is a hairline that does not
+   * scale. Reading the height off the **rounded** width is what keeps the two within half a pixel
+   * of the printed proportion at every stop rather than at the round-numbered ones.
+   */
+  it("keeps a Magic card's shape at every stop on the ladder", () => {
+    for (const zoom of ZOOM_STEPS) {
+      const width = stackCardWidth(zoom);
+      expect(width).toBe(scaled(STACK_CARD_WIDTH, zoom));
+      expect(stackImageHeight(zoom)).toBe(Math.round((width * 680) / 488));
+      // The *face* is what keeps the printed proportion. The card is the face plus two hairlines
+      // and the foot standing under it, and the foot is floored rather than scaled — so the whole
+      // card is deliberately not a Magic card's shape below 1×, and only the face has to be.
+      expect(stackCardHeight(zoom)).toBe(
+        stackImageHeight(zoom) + 2 + (stackDataHeight(zoom) - STACK_DATA_RISE),
+      );
+      expect(Math.abs(stackImageHeight(zoom) / width - 680 / 488)).toBeLessThan(0.01);
+    }
+
+    // The two ends, written out, so a change to the ladder is visible here rather than merely
+    // consistent with itself. At 0.5× the foot is still its floored 28 and the face is 146, which
+    // is why the card is 172 and not the 148 the face alone would give.
+    expect([stackCardWidth(MIN_ZOOM), stackCardHeight(MIN_ZOOM)]).toEqual([105, 172]);
+    expect([stackCardWidth(MAX_ZOOM), stackCardHeight(MAX_ZOOM)]).toEqual([420, 639]);
+  });
+
+  /**
+   * The data line takes the same floor as the reveal strip, and for the same reason: it holds the
+   * printing's facts in type that is already at the app's smallest, so a bar scaled to 14px would
+   * be shorter than the words in it. Two floors in one file is two chances to "simplify" a `max`
+   * away, so both are pinned the same way — the second assertion in each loop is the one that
+   * fails if the floor stops doing work.
+   */
+  it("holds the data line at its floor going down, and grows it going up", () => {
+    for (const zoom of ZOOM_STEPS.filter((z) => z < DEFAULT_ZOOM)) {
+      expect(stackDataHeight(zoom)).toBe(STACK_DATA_HEIGHT);
+      expect(scaled(STACK_DATA_HEIGHT, zoom)).toBeLessThan(STACK_DATA_HEIGHT);
+    }
+    for (const zoom of ZOOM_STEPS.filter((z) => z > DEFAULT_ZOOM)) {
+      expect(stackDataHeight(zoom)).toBe(scaled(STACK_DATA_HEIGHT, zoom));
+      expect(stackDataHeight(zoom)).toBeGreaterThan(STACK_DATA_HEIGHT);
+    }
+    // The rise never moves: it hides the seam under a 7px corner that is a Tailwind class.
+    expect(STACK_DATA_RISE).toBe(4);
+  });
+
+  /**
+   * **The trap in this file, and the one thing here a plain multiply gets wrong.**
+   *
+   * The reveal strip is a legibility floor rather than a fraction of the card: the quantity chip
+   * is drawn over it and is 11px type at every zoom, so a strip scaled to 17px would be covered
+   * by the chip of the card below it. It grows above 1× and holds at 34 below, and the second
+   * assertion in each loop is what fails the day somebody "simplifies" the `Math.max` away — it
+   * says the floor is doing work, not merely agreeing with the multiplication.
+   */
+  it("holds the reveal strip at its floor going down, and grows it going up", () => {
+    for (const zoom of ZOOM_STEPS.filter((z) => z < DEFAULT_ZOOM)) {
+      expect(stackAdvance(zoom)).toBe(STACK_ADVANCE);
+      expect(scaled(STACK_ADVANCE, zoom)).toBeLessThan(STACK_ADVANCE);
+    }
+    for (const zoom of ZOOM_STEPS.filter((z) => z > DEFAULT_ZOOM)) {
+      expect(stackAdvance(zoom)).toBe(scaled(STACK_ADVANCE, zoom));
+      expect(stackAdvance(zoom)).toBeGreaterThan(STACK_ADVANCE);
+    }
+  });
+
+  /**
+   * …and the floor is still nowhere near the card, which is the property that actually has to
+   * hold: the collapsed margin is negative at every stop, so every card is pulled up over its
+   * neighbour and the pile is painted in document order. An advance that reached the card's own
+   * height would stack it the other way round and nothing would throw.
+   *
+   * A third of the card is a generous ceiling — the real ratio is 23 % at the tightest stop
+   * (34 of 148, at half size) and 11.6 % at 1× — chosen so this fails on a mistake rather than
+   * on a taste.
+   */
+  it("never lets one card's reveal approach the height of the card", () => {
+    for (const zoom of ZOOM_STEPS) {
+      expect(stackCollapsedMargin(zoom)).toBeLessThan(0);
+      expect(stackAdvance(zoom)).toBeLessThan(stackCardHeight(zoom) / 3);
+      // The reveal is what is left of a card once its successor has covered it, which is the
+      // same statement the collapsed margin makes from the other side.
+      expect(stackCardHeight(zoom) + stackCollapsedMargin(zoom)).toBe(stackAdvance(zoom));
+    }
+  });
+
+  /** The list's height is the collapsed stack plus one lift's slack, at whatever size the cards
+   *  are — and an empty group draws no box at any zoom. */
+  it("gives the list one advance per card and one lift of slack, at every zoom", () => {
+    for (const zoom of ZOOM_STEPS) {
+      expect(stackHeight(0, zoom)).toBe(0);
+      for (const n of [1, 2, 5, 17]) {
+        expect(stackHeight(n, zoom)).toBe(
+          stackAdvance(zoom) * (n - 1) + stackCardHeight(zoom) + STACK_LIFTED_MARGIN,
+        );
+      }
+      // One more card is one more advance — the property the flip-through's "exactly one card
+      // moves" rests on, and it survives the zoom because both sides of it come off `stackAdvance`.
+      expect(stackHeight(6, zoom) - stackHeight(5, zoom)).toBe(stackAdvance(zoom));
+    }
+
+    // And a bigger card really is a taller stack: ten stops, ten different heights, in order.
+    const heights = ZOOM_STEPS.map((zoom) => stackHeight(8, zoom));
+    expect(heights).toEqual([...heights].sort((a, b) => a - b));
+    expect(new Set(heights).size).toBe(ZOOM_STEPS.length);
+  });
+
+  /**
+   * The numbers reach the DOM, and they reach it as **inline styles**.
+   *
+   * That is the half jsdom can prove and the half that has silently broken this codebase before:
+   * Tailwind scans source text for whole class names, so a size assembled at runtime emits no CSS
+   * rule at all — the card would keep its markup, lose its height, and every test that counted
+   * elements would go on passing.
+   *
+   * Read against the 1× answers as well as the 2× ones, because a component that ignored its
+   * `zoom` prop entirely would satisfy every `toBe` here that did not.
+   */
+  it("draws the list, the cards and their margins at the zoom it is given", () => {
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" zoom={2} />);
+
+    expect(list().style.height).toBe(`${stackHeight(CARDS.length, 2)}px`);
+    expect(list().style.height).not.toBe(`${stackHeight(CARDS.length)}px`);
+
+    for (const item of items()) {
+      expect(item.style.marginBottom).toBe(`${stackCollapsedMargin(2)}px`);
+    }
+
+    // The card face: the first thing inside the button, and the one number the whole file's
+    // arithmetic is about.
+    const face = items()[0].querySelector("button")?.firstElementChild as HTMLElement;
+    expect(face.style.height).toBe(`${stackImageHeight(2)}px`);
+    expect(face.style.height).toBe("585px");
+  });
+});
+
+/**
  * **The defect this component was rebuilt for, and the two delays that close it.**
  *
  * A closed card is overlapped by 285px by its successor, so the only hittable part of one is
@@ -239,9 +409,9 @@ describe("CardStack flip-through", () => {
   /**
    * **Arming a card cancels a pending close, and this is the frame it exists for.**
    *
-   * The close is scheduled 180ms out; the second card's dwell commits at 189ms. Without the
-   * cancel the stack would be fully closed for those nine milliseconds — and in the real
-   * gesture, for however long the reader takes between two cards. The assertion at 189ms is
+   * The close is scheduled 180ms out; the second card's dwell commits at 200ms. Without the
+   * cancel the stack would be fully closed for those twenty milliseconds — and in the real
+   * gesture, for however long the reader takes between two cards. The assertion at 199ms is
    * the one that fails if the cancel is dropped.
    */
   it("never shows a closed stack while the reader crosses to the next card", async () => {
@@ -256,8 +426,8 @@ describe("CardStack flip-through", () => {
     await tick(STACK_CLOSE_DELAY_MS - 60);
     expect(openCard()).toBe(items()[0]);
 
-    // …and arriving on another card cancels it. 120 + 69 = 189ms in, nine past the moment the
-    // collapse was due, and card 0 is still the one standing.
+    // …and arriving on another card cancels it. 120 + 79 = 199ms in, nineteen past the moment
+    // the collapse was due, and card 0 is still the one standing.
     arriveOn(items()[1]);
     await tick(STACK_OPEN_DWELL_MS - 1);
     expect(openCard()).toBe(items()[0]);

@@ -2,21 +2,26 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **363 stories across 47 story files, 46 docs
+`npm run storybook` · `npm run build-storybook`. **369 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **after merging
-`main` in**: 409 entries, 363 `story`, 46 `docs`, 48 distinct `importPath`s. That branch adds
+(`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
+**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **with `main`
+merged in**: 416 entries, 369 `story`, 47 `docs`, 49 distinct `importPath`s. That branch adds
 **six** stories to four existing files (`CardArt` 2, `SearchPage` 2, `CardGrid` 1, `OwnedBadge`
-1), counted off the diff against `origin/main`; no story *file* was added, which is why that
-count did not move.
+1), counted off the diff against `origin/main`, and no story *file* — the file count moved
+because `main` gained one.
 
-**The delta and the total were measured separately, and they do not reconcile by arithmetic —
-which is the point.** 358 was the tree on 2026-08-12; this branch adds six; the tree now reads
-363, not 364. Somewhere in between a story was renamed, replaced or dropped, on `main` or in a
-merge, and no branch-local bookkeeping would have caught it. **This is the fourth time this line
-has taught the same lesson**: do not carry the old number forward with your own delta added —
-rebuild and read the index, on the tree you are actually shipping.
+**Two branches measured this line honestly on the same day and both were wrong by the time they
+merged.** The game-changer branch read 363/47/46 against one `main` and 369/48/47 against the
+next; the unplayable-cards branch read 359/47/46 and stated a story-file count that was already
+stale, because a third branch had landed a story file it could not see. Neither was careless —
+each rebuilt and read the index, which is the rule.
+
+**So the rule needs its second half: the delta and the total are two measurements, and they do
+not reconcile by arithmetic.** 359 plus this branch's six is 365; the merged tree reads 369.
+Do not carry a number forward with your own delta added, and do not treat the gap as a bug to
+hunt — rebuild and read the index **on the tree you are actually shipping**, which is the merge
+commit rather than either parent.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and
@@ -33,7 +38,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**45 of the 47 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**46 of the 48 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -97,10 +102,16 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
   `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
   `fixed inset-0`, so inline it would cover the docs page rather than its own block — and the
-  other **38 docs pages render inline** (45 autodocs pages less those seven,
-  re-counted 2026-08-12 after the merge — the seven were found in source, not assumed). A new story file
-  that writes the store needs the same parameter or its docs page shows one story's view under
-  every heading.
+  other **38 docs pages render inline** (46 autodocs pages less those seven and
+  `CardZoomIndicator`, re-counted 2026-08-14 after the merge — all eight found in source, not
+  assumed). **`CardZoomIndicator` is the eighth and it is not a file**: it sets the parameter on
+  **one story**, `WhileZooming`, because only that story writes the store and the rest take their
+  figure as an argument — so its docs page is inline apart from that one frame, and the tally
+  above counts files rather than stories only because the other seven happen to be whole files.
+  What its frame buys is different too: not "two writers, one singleton" but that pressing Zoom in
+  on the docs page cannot leave a pulse behind in the page's own store. A new story file that
+  writes the store needs the same parameter or its docs page shows one story's view under every
+  heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
@@ -122,10 +133,13 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**264** plays today, in a file of **267** tests — the other three are its own;
+  (**270** plays today, in a file of **273** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-12 after the merge), which is what puts a
-  story's own claim inside `npm run verify` —
+summary for the second, both measured 2026-08-14). **Both figures had rotted before this
+re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
+worth of drift added by branches that did not re-measure, and is the same prose-only rot the
+story totals above have taken three times. Only one of the six is this branch's
+(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.

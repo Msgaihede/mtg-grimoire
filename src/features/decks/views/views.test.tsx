@@ -1,18 +1,20 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ZOOM, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { useAppStore } from "@/lib/store";
 import { dragOnto } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
-import { stackHeight } from "../CardStack";
+import { stackCardWidth, stackHeight } from "../CardStack";
 import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { GridView } from "./GridView";
-import { StackView, STACK_COLUMN_ATTR } from "./StackView";
+import { StackView, STACK_COLUMN_ATTR, stackColumnWidth } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 
@@ -541,6 +543,10 @@ describe("StackView columns", () => {
   const headingsIn = (column: Element) =>
     [...column.querySelectorAll('[id^="group-"]')].map((n) => n.textContent);
 
+  /** The zoom is one number for the whole app and this store outlives a test, so a case that
+   *  leaves it at 2× would silently re-pack every suite that runs after it. */
+  afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+
   /**
    * Groups are packed into columns in the reader's own order and never split — so a category
    * that outgrows a column keeps every one of its cards, and the pile after it starts a fresh
@@ -588,6 +594,87 @@ describe("StackView columns", () => {
     ).toHaveLength(3);
   });
 
+  /**
+   * **The column is the card plus its chrome, and never a second number scaled beside it.**
+   *
+   * The 14rem this replaced was the *given* and the card was derived from it; the arrow points
+   * the other way now, because only one of the two can be scaled. Scaling both would agree at 1×
+   * and drift at every other stop — a column rounded up while the card inside it rounded down is
+   * padding that grows with the zoom, and a card stretched wider than the height its own aspect
+   * ratio was computed from.
+   *
+   * The 14 is the section's `p-1.5` either side and the card's two hairline borders, neither of
+   * which zooms: chrome around a card is not part of one.
+   */
+  it("sizes a column from the card it holds, at every stop on the ladder", () => {
+    for (const zoom of ZOOM_STEPS) {
+      expect(stackColumnWidth(zoom)).toBe(stackCardWidth(zoom) + 14);
+    }
+    // The design canvas's own number, which this has to keep answering where nobody has zoomed.
+    expect(stackColumnWidth(DEFAULT_ZOOM)).toBe(224);
+  });
+
+  /**
+   * …and it reaches the element as an **inline width**, in both halves of the `flex` shorthand.
+   *
+   * A computed Tailwind class emits no CSS rule at all — the scanner reads source text — so a
+   * column sized by an interpolated class would lay itself out at whatever its contents came to
+   * and the whole view would drift wider as the reader zoomed. The `flex` basis is the half worth
+   * asserting separately: these columns are `flex` children, so a basis left at the old value
+   * would win over the width and nothing about the markup would look wrong.
+   */
+  it("writes the zoomed column width onto the column, basis included", () => {
+    useAppStore.setState({ cardZoom: 2 });
+    render(
+      <StackView
+        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
+        marketplace={TCG}
+      />,
+    );
+
+    const column = columns()[0] as HTMLElement;
+    expect(column.style.width).toBe(`${stackColumnWidth(2)}px`);
+    expect(column.style.flex).toBe(`0 0 ${stackColumnWidth(2)}px`);
+    expect(column.style.width).toBe("434px");
+  });
+
+  /**
+   * **The pack has to see the zoom, and this is the failure if it does not.**
+   *
+   * The same three groups and the same desk, twice: at 1× the Commander and Ramp piles share a
+   * column, and at 2× they cannot — a stack twice as wide is more than twice as tall, so the
+   * second group no longer fits under the first. A packer working from unzoomed heights would
+   * answer the top arrangement in both cases and run the last group in every column off the
+   * bottom of the desk, which is a layout bug with no error attached to it.
+   *
+   * Written as contents rather than as a column count on purpose: both arrangements here happen
+   * to come to two columns, and it is *which groups share one* that the zoom changes.
+   */
+  it("packs fewer groups into a column when the cards are bigger", () => {
+    const three = (kind: "main" | "commander") =>
+      Array.from({ length: 3 }, (_, i) =>
+        card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
+      );
+    const groups = buildGroups(
+      [...three("commander"), ...three("main")],
+      [COMMANDER, RAMP, MAYBE],
+      "category",
+      "alphabetical",
+    );
+    // The same desk in both halves — two 1× three-card groups tall, as the pack above uses.
+    const desk = 2 * (66 + stackHeight(3));
+
+    render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
+    expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
+    expect(headingsIn(columns()[1])).toEqual(["Maybeboard"]);
+    cleanup();
+
+    useAppStore.setState({ cardZoom: 2 });
+    render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
+    expect(headingsIn(columns()[0])).toEqual(["Commander"]);
+    expect(headingsIn(columns()[1])).toEqual(["Ramp", "Maybeboard"]);
+  });
+
   /** One column when everything fits — the case the assertion above would have passed
    *  against by accident, pinned deliberately instead. */
   it("uses one column when the groups all fit in one", () => {
@@ -605,6 +692,77 @@ describe("StackView columns", () => {
     );
 
     expect(columns()).toHaveLength(1);
+  });
+});
+
+/**
+ * **The wall's own geometry under the reader's zoom.**
+ *
+ * The tile used to be a fixed-width Tailwind literal, which is the one shape a zoom cannot take:
+ * the scanner reads source text for whole class names, so a width assembled at runtime emits no
+ * CSS rule at all — the tile keeps its markup, loses its width and collapses onto its contents,
+ * and nothing in a suite that counts elements notices. Everything that moves is an inline style
+ * now, and that is what these read.
+ *
+ * The card scales in both directions; the chrome around it grows and never shrinks. Type has a
+ * floor — 9px is already the smallest thing this app writes — and so does the gutter, which is
+ * what stops a wall of cards reading as a single sheet at half size.
+ */
+describe("GridView tiles", () => {
+  afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+
+  const wall = () => screen.getByRole("list", { name: "Ramp" });
+  const tile = () => within(wall()).getAllByRole("listitem")[0];
+  /** The tile's foot — the rarity gem and the price, which is the last thing in the button. */
+  const foot = () => tile().querySelector("button")?.lastElementChild as HTMLElement;
+  /** The controls' wrapper, which is what carries their offset off the foot. */
+  const controls = () => tile().lastElementChild as HTMLElement;
+
+  const draw = (zoom: number) => {
+    useAppStore.setState({ cardZoom: zoom });
+    render(
+      <GridView
+        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
+        marketplace={TCG}
+      />,
+    );
+  };
+
+  it("draws a 150px tile at 1× and a scaled one at every other stop", () => {
+    for (const zoom of ZOOM_STEPS) {
+      draw(zoom);
+      expect(tile().style.width).toBe(`${scaled(150, zoom)}px`);
+      // The size is inline, never a class — see this block's own note. Read as whole class
+      // names rather than as a substring, which `overflow-hidden` would otherwise answer.
+      expect(tile().className.split(" ").filter((c) => c.startsWith("w-"))).toEqual([]);
+      cleanup();
+    }
+
+    draw(DEFAULT_ZOOM);
+    expect(tile().style.width).toBe("150px");
+  });
+
+  /**
+   * The foot and the gutter grow with the card and hold at their own size going down, and the
+   * controls sit **on** the foot at either end — which is the derivation worth pinning, because
+   * the bar's offset was a fixed utility for as long as the foot was a fixed height, and the two
+   * would have parted company at exactly the zoom nobody looks at.
+   */
+  it("grows the foot and the gutter with the tiles, and never shrinks them", () => {
+    draw(2);
+    expect(wall().style.gap).toBe("20px");
+    expect(foot().style.height).toBe("40px");
+    expect(foot().style.fontSize).toBe("18px");
+    expect(controls().style.bottom).toBe("40px");
+    cleanup();
+
+    // Half size: the card halves, and none of the three follows it down.
+    draw(0.5);
+    expect(tile().style.width).toBe("75px");
+    expect(wall().style.gap).toBe("10px");
+    expect(foot().style.height).toBe("20px");
+    expect(foot().style.fontSize).toBe("9px");
+    expect(controls().style.bottom).toBe("20px");
   });
 });
 

@@ -4,8 +4,11 @@ import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
+import { scaled } from "@/lib/cardZoom";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { LAYER } from "@/lib/layers";
+import { useAppStore } from "@/lib/store";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
 
@@ -32,6 +35,12 @@ export interface GridCard {
  * fit. Tiles then share out whatever is left over (see {@link tileWidthFor}), so this is
  * a floor rather than the width. A `grid` image is 488 px wide, so even a stretched tile
  * is a downscale, never a blowup.
+ *
+ * The **base** the reader's zoom scales rather than the floor itself: the wall hands
+ * `columnsFor` a floor of `scaled(this, cardZoom)`, so ctrl+wheel moves the column count and
+ * the tiles follow. At the top of the zoom range (2×) the floor is 340 px, comfortably inside
+ * the 488 px image — a *stretched* tile can pass it on a wall too narrow for a second column,
+ * which is one soft picture at the far end of the range rather than a wall of them.
  */
 const TILE_MIN_WIDTH = 170;
 
@@ -44,6 +53,9 @@ const GAP = 12;
  * Set by the quick-add button in it (24px) rather than by the text beside it (16px): the
  * virtualiser positions rows from this number, and a caption taller than it is a wall whose
  * rows overlap by the difference.
+ *
+ * **A measurement of what is in the strip, not a proportion of the tile** — which is why the
+ * zoom grows it and never shrinks it. See where it is scaled.
  */
 const CAPTION_HEIGHT = 28;
 
@@ -215,6 +227,10 @@ export function CardGrid<T extends GridCard>({
    *
    * A floor, not a width: tiles still share out the leftover ({@link tileWidthFor}), and the
    * `grid` image is 488px wide, so a smaller floor is a deeper downscale and never a blowup.
+   *
+   * The reader's zoom scales *this* rather than {@link TILE_MIN_WIDTH}, so a wall given a lower
+   * floor zooms by the same factor as a page-width one — 150 at 2× is 300, which is a 331px
+   * column drawing one card, and that is the honest answer rather than a narrower card.
    */
   minTileWidth?: number;
 }) {
@@ -237,10 +253,49 @@ export function CardGrid<T extends GridCard>({
     return () => observer.disconnect();
   }, []);
 
-  const columns = columnsFor(width, minTileWidth);
+  /**
+   * How big the reader wants their cards — the one thing about this wall that is theirs.
+   *
+   * Read from the store here rather than taken as a prop, and that is the whole reason this
+   * component was the place to put the zoom: it *is* the search's wall, the collection's wall
+   * and the deck editor's docked panel, so three of the app's card surfaces zoom together and
+   * not one of their call sites changed. A prop would have made it three settings that drift,
+   * and a reader who zoomed the search would find the collection back at 1×.
+   */
+  const cardZoom = useAppStore((s) => s.cardZoom);
+
+  // Ctrl+wheel, attached to the **scroller** rather than to the sizer inside it: the scroller is
+  // what the pointer is actually over, since the sizer sits inside this wall's padding and the
+  // rows on top of it are positioned absolutely — so a wheel over the padding, or in the gap
+  // between two rows, would miss a listener bound any further in. The listener is a native
+  // non-passive one for the usual reason (it has to `preventDefault`, or the browser zooms the
+  // whole window underneath it), which is what the hook is for; React registers its own wheel
+  // listeners passively at the root and could not.
+  useCardZoomGesture(scrollRef);
+
+  // The zoom moves the **floor**, not the tiles. Raise the narrowest a tile may be and fewer
+  // columns fit, so each one grows — and `tileWidthFor` still shares the leftover out, so the
+  // wall stays flush to both edges at every zoom instead of growing a gutter as it grows tiles.
+  // Scaling the given floor rather than the constant is what keeps the deck panel's 150 honest:
+  // that column zooms by the same factor as a page-width wall does.
+  //
+  // The other way to do this would be `transform: scale()` on the tiles, and it is wrong three
+  // times over: it resamples the art, it leaves the column count at 1× so the wall no longer
+  // reflows to the window, and it tells the virtualiser a row is a height it is not.
+  const floor = scaled(minTileWidth, cardZoom);
+
+  const columns = columnsFor(width, floor);
   const rowCount = Math.ceil(rows.length / columns);
-  const tileWidth = tileWidthFor(width, minTileWidth);
-  const tileHeight = Math.round(tileWidth * (7 / 5)) + CAPTION_HEIGHT;
+  const tileWidth = tileWidthFor(width, floor);
+
+  // The caption grows with the tiles — a card at 2× under the same 28px strip reads as a card
+  // that has outgrown its label — but never shrinks below them, and that asymmetry is arithmetic
+  // rather than taste: nothing *inside* the caption scales. It is a 24px button beside 12px text
+  // at every zoom, so a strip budgeted at 14px for a 0.5× wall would be a caption taller than the
+  // row the virtualiser positioned for it, which is exactly the overlap `CAPTION_HEIGHT` exists
+  // to prevent.
+  const captionHeight = Math.max(CAPTION_HEIGHT, scaled(CAPTION_HEIGHT, cardZoom));
+  const tileHeight = Math.round(tileWidth * (7 / 5)) + captionHeight;
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -254,6 +309,11 @@ export function CardGrid<T extends GridCard>({
   // Row heights are cached from the first `estimateSize` call, so a resize that changes
   // the column count — and with it every tile's height — has to say so, or the rows keep
   // the old pitch and overlap.
+  //
+  // **A zoom arrives through this same door and needs nothing of its own**: it moves the floor,
+  // the floor moves the tile, and `tileHeight` is what a row's pitch is made of. Keyed on the
+  // height rather than on the zoom deliberately — a zoom step that changed neither the column
+  // count nor the caption left the pitch alone, and there is nothing to remeasure.
   useEffect(() => {
     virtualizer.measure();
   }, [tileHeight, virtualizer]);

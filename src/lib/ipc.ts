@@ -88,6 +88,16 @@ export interface SearchRequest {
   /** Omitted means true: digital-only printings are hidden unless asked for. */
   paperOnly?: boolean;
   /**
+   * `true` narrows to printings that are legal or restricted in **at least one** format —
+   * `cards.legal_mask != 0`, which is what hides art series, tokens, emblems, memorabilia
+   * and the acorn half of the un-sets.
+   *
+   * **Omitted means false**, the opposite of {@link paperOnly}: absent is what this command
+   * has always answered, so nothing changes for a caller that has not heard of it. The
+   * search view sends `true` unless its Unplayable chip is pressed.
+   */
+  playableOnly?: boolean;
+  /**
    * `true` narrows to printings the collection has an entry for, `false` to those it does
    * not.
    *
@@ -446,6 +456,10 @@ export interface CardFilters {
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;
+  /** Omitted means **false** everywhere — see {@link SearchRequest.playableOnly}, which is
+   *  the only place anything sends it. A collection lists what the user owns, and an art
+   *  card in a binder is still in the binder. */
+  playableOnly?: boolean;
 }
 
 /**

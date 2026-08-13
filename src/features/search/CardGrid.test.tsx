@@ -22,7 +22,9 @@ import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { parseFinishes } from "@/lib/finish";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -87,6 +89,9 @@ beforeAll(() => {
 
 beforeEach(() => {
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  // The wall's tile size is the reader's, and it lives in a module-level store that outlives a
+  // render — so a test that zooms would hand the next one a 2× wall to measure.
+  useAppStore.setState({ cardZoom: DEFAULT_ZOOM });
 });
 
 afterEach(() => {
@@ -730,6 +735,139 @@ describe("CardGrid", () => {
     // Still a floor and not a width: the pair share out the whole column, gap included — 159px
     // each, which is what the running window measures.
     expect(tileWidthFor(330, 150)).toBeCloseTo(159);
+  });
+
+  /**
+   * The zoom is arithmetic on the **floor**, and this is the whole of it: a bigger floor fits
+   * fewer columns across the same wall, and the tiles then share out the leftover — so zooming
+   * in grows every tile *and* the wall still reaches both edges. That flushness is the reason
+   * the floor is the seam; a scaled tile would have left a widening gutter down one side.
+   *
+   * On the exported pair rather than through a render, for the reason the two tests above are:
+   * jsdom measures every container at zero, so a 1200px wall exists nowhere else.
+   */
+  it("fits fewer, larger tiles across the same wall as the reader zooms in", () => {
+    expect(columnsFor(1200, scaled(170, 0.5))).toBe(12);
+    expect(columnsFor(1200, scaled(170, DEFAULT_ZOOM))).toBe(6);
+    expect(columnsFor(1200, scaled(170, 2))).toBe(3);
+
+    for (const zoom of [0.5, DEFAULT_ZOOM, 1.25, 2]) {
+      const floor = scaled(170, zoom);
+      const columns = columnsFor(1200, floor);
+      const tile = tileWidthFor(1200, floor);
+      // Flush at every zoom, and never a tile narrower than the floor that decided the count.
+      expect(columns * tile + (columns - 1) * 12).toBeCloseTo(1200);
+      expect(tile).toBeGreaterThanOrEqual(floor);
+    }
+  });
+
+  /**
+   * A wall given its own floor is scaled by the same factor, so the deck editor's docked column
+   * zooms with the rest of the app instead of staying at the size it was scoped for. The numbers
+   * are that panel's measured 331px column: one card at 2×, three at 0.5×, and the column full
+   * either way.
+   */
+  it("scales a wall's own floor with the zoom rather than pinning it", () => {
+    expect(scaled(150, 2)).toBe(300);
+
+    expect(columnsFor(330, scaled(150, 2))).toBe(1);
+    expect(tileWidthFor(330, scaled(150, 2))).toBeCloseTo(330);
+
+    expect(columnsFor(330, scaled(150, 0.5))).toBe(3);
+    expect(tileWidthFor(330, scaled(150, 0.5))).toBeCloseTo(102);
+  });
+
+  /**
+   * The store is this wall's only zoom input, and that is the point of putting it here: the
+   * search, the collection and the deck panel are all this component, so they are one setting
+   * rather than three, and not one of those call sites passes anything.
+   *
+   * jsdom measures the container at zero and `tileWidthFor` answers a zero-width wall with its
+   * floor — so the width drawn on a tile here *is* the scaled floor, which is the number under
+   * test. Live, rather than at mount, because a reader zooms while looking at the wall.
+   */
+  it("resizes its tiles when the reader zooms, with no call site involved", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    const tile = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".group");
+
+    expect(tile()).toHaveStyle({ width: "170px" });
+
+    act(() => useAppStore.setState({ cardZoom: 2 }));
+    expect(tile()).toHaveStyle({ width: "340px" });
+
+    act(() => useAppStore.setState({ cardZoom: 0.5 }));
+    expect(tile()).toHaveStyle({ width: "85px" });
+  });
+
+  /**
+   * The caption grows with the tiles and never shrinks below them, and the asymmetry is
+   * arithmetic rather than taste: nothing *in* the strip scales — it is a 24px quick-add beside
+   * 12px text at every zoom. The row's height is what the virtualiser positions rows from, so a
+   * strip budgeted under the height of its own contents is a wall whose rows overlap.
+   */
+  it("grows the caption with the tiles but never below what stands in it", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    const row = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".absolute");
+
+    // A 170px card is 238px of art, under the measured 28px strip.
+    expect(row()).toHaveStyle({ height: "266px" });
+
+    // Twice the card is twice the strip: 476 of art and 56 of caption.
+    act(() => useAppStore.setState({ cardZoom: 2 }));
+    expect(row()).toHaveStyle({ height: "532px" });
+
+    // Half the card is *not* half the strip: 119 of art and the same 28, because the button in
+    // the caption is 24px whatever the tiles are doing.
+    act(() => useAppStore.setState({ cardZoom: 0.5 }));
+    expect(row()).toHaveStyle({ height: "147px" });
+  });
+
+  /**
+   * The gesture is on the **scroller**, which is the element the pointer is over: the sizer
+   * inside it sits within this wall's padding and the rows on top of that are positioned
+   * absolutely, so a wheel over the padding — or in the gap between two rows — would miss a
+   * listener bound any further in.
+   *
+   * Directional rather than exact on purpose. How far one notch moves the zoom, and where the
+   * range stops, are `useCardZoomGesture`'s and are tested there; what belongs to this wall is
+   * that the element the reader is over is the element listening, and that an ordinary scroll
+   * is still an ordinary scroll.
+   */
+  it("zooms on ctrl+wheel over the scroller and leaves a plain scroll alone", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    const scroller = screen.getByRole("group", { name: "Search results" });
+
+    // A wall of cards is a thing readers scroll, and 117 k results is a lot of scrolling.
+    fireEvent.wheel(scroller, { deltaY: -240 });
+    expect(useAppStore.getState().cardZoom).toBe(DEFAULT_ZOOM);
+
+    fireEvent.wheel(scroller, { ctrlKey: true, deltaY: -240 });
+    expect(useAppStore.getState().cardZoom).toBeGreaterThan(DEFAULT_ZOOM);
+
+    act(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+    fireEvent.wheel(scroller, { ctrlKey: true, deltaY: 240 });
+    expect(useAppStore.getState().cardZoom).toBeLessThan(DEFAULT_ZOOM);
   });
 
   it("asks for the next page once the reader is near the bottom of the loaded rows", () => {

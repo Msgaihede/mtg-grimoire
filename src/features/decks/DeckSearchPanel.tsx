@@ -69,6 +69,13 @@ const AUTO_LABEL = "Auto (by card type)";
  * of two of `CardGrid`'s standard 170px tiles. At the standard floor this column drew one
  * 330×490 card per row inside a 341px-tall wall: less than a whole card, ever. At 150 the same
  * 331 is two 159px tiles, which is the "~2 tiles per row" this panel was scoped around.
+ *
+ * **All of that describes 100% zoom, and only 100%.** `CardGrid` scales whatever floor it is
+ * handed by the reader's `cardZoom`, this number included, so the two-per-row scoping above is
+ * the *resting* shape rather than an invariant: at 2× this column draws one 300px tile and at
+ * 0.5× it draws four 75px ones, which is the reader asking for exactly that and getting it. The
+ * measurement is kept unqualified because it is what sets the resting value; nothing here needs
+ * a per-zoom override.
  */
 const TILE_FLOOR = 150;
 
