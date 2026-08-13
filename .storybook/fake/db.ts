@@ -1282,10 +1282,19 @@ function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): Ca
   }
 
   return [...groups.values()].map((group) => {
-    // One price per printing, at the marketplace the request named. **The representative below
-    // and the span beneath it are both read off this one call**, so the row cannot pick its
-    // printing at one marketplace and quote its range at another.
-    const priceOf = (c: FakeCard): number | null => priceColumnAt(db, c, mp);
+    // One price per printing, at the marketplace the request named, **priced once per printing
+    // and then read from this map** — by the representative below and by the span beneath it,
+    // so the row cannot pick its printing at one marketplace and quote its range at another.
+    //
+    // Priced up front rather than inside the comparator, and that is a cost rather than a
+    // tidiness point: on a feed marketplace `priceColumnAt` is up to three linear `find`s over
+    // every `marketplacePrices` row, and a comparator calls it O(n log n) times per group
+    // instead of n. Sorting the `large` seed's 686 groups through it is the fake's slowest path
+    // there is.
+    const prices = new Map<string, number | null>(
+      group.map((c) => [c.id, priceColumnAt(db, c, mp)]),
+    );
+    const priceOf = (c: FakeCard): number | null => prices.get(c.id) ?? null;
     // `released_at DESC, price ASC NULLS LAST, id DESC` — the real pick, in three keys.
     //
     // * **The date first**, because the row stands for the card as it is printed *now*: a
@@ -1316,7 +1325,7 @@ function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): Ca
     // converted: a group whose only priced printing is etched has a TCGplayer span and no
     // Cardmarket one at all, and a group a feed has never listed has none there — the hole
     // showing up as an absent range rather than as a narrower one.
-    const priced = group.map(priceOf).filter((p): p is number => p !== null);
+    const priced = [...prices.values()].filter((p): p is number => p !== null);
     return {
       ...toCardSummary(db, rep, mp),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
