@@ -257,7 +257,7 @@ export const press: PressFeedback = {
  * The deck stack's one moving card.
  *
  * Only ever one: opening card *N+1* instead of card *N* leaves every card's top unchanged
- * except that one, which travels 286px (the spec's §1 arithmetic). So this is a single
+ * except that one, which travels 293px (the spec's §1 arithmetic). So this is a single
  * `margin-bottom` tween and the values belong to `CardStack`, which owns the geometry —
  * `STACK_CARD_HEIGHT`, `STACK_ADVANCE` and the collapsed margin are not this file's to know.
  *

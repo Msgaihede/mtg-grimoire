@@ -42,6 +42,18 @@ const BUTTON =
   "motion-reduce:transition-none";
 
 /**
+ * The same buttons drawn **over a card's illustration** rather than on a panel.
+ *
+ * Two changes and both are legibility rather than taste. The app's own felt at 88 % backs each
+ * button, because a 1px outline with nothing behind it disappears over art of any brightness —
+ * it is the backing `FoilOverlay`'s chip and the collection's owned badge already use, at the
+ * same strength. And the glyph is the full text colour instead of dim: `text-dim` is a *rank*
+ * among panel controls, and there is no rank to express when the thing beside the control is a
+ * painting.
+ */
+const BUTTON_OVER_ART = "bg-bg/88 text-text disabled:hover:text-text";
+
+/**
  * The field's own **native** spin buttons, suppressed — so the two steps this control offers
  * are the two buttons it draws.
  *
@@ -77,6 +89,8 @@ export function QuantityStepper({
   label,
   size = "md",
   focus = "outside",
+  orientation = "horizontal",
+  tone = "panel",
 }: {
   value: number;
   onChange: (next: number) => void;
@@ -84,22 +98,57 @@ export function QuantityStepper({
   max?: number;
   /** The accessible name of the number itself — "Quantity of Lightning Bolt", not "Quantity". */
   label: string;
-  /** `xs` is the deck's: a stepper that has to sit inside a card frame, a 150px grid tile or a
-   *  22px text row, where `sm`'s 28px does not fit. */
-  size?: "xs" | "sm" | "md";
+  /**
+   * `xs` is the deck's row scale: a stepper inside a 150px grid tile or a 22px text row, where
+   * `sm`'s 28px does not fit.
+   *
+   * `card` is the 24px column drawn over a card face in the deck stack — between `xs` and `sm`
+   * because it is neither: at 20px a control laid on an illustration is a smudge, and at 28px
+   * three of them stacked are a seventh of the card. It carries a larger corner radius with it,
+   * which is not decoration either — a 20px box reads as a chip at `rounded-md` and as a button
+   * at `rounded-lg`, and this is the one place the reader has to tell those apart on top of art.
+   */
+  size?: "xs" | "card" | "sm" | "md";
   /** Which side of the control's own edge the focus outline is drawn on. `inset` for a stepper
    *  inside a box that clips — see {@link FOCUS_INSET}. */
   focus?: "outside" | "inset";
+  /**
+   * Which way the three controls run, and it is a question about the **space**, not the taste:
+   * a table cell and a text row are wide and short, and a card face is the other way round.
+   *
+   * `vertical` puts increase at the top, where up means more, and squares the field to the
+   * buttons' own width — a column standing in a card's margin has one dimension to spend and
+   * `w-12` of it would be the card.
+   */
+  orientation?: "horizontal" | "vertical";
+  /** What the control is drawn over. `art` for a stepper laid on a card's illustration — see
+   *  {@link BUTTON_OVER_ART}. */
+  tone?: "panel" | "art";
 }) {
-  const box = size === "xs" ? "size-5" : size === "sm" ? "size-7" : "size-9";
-  const field =
+  const vertical = orientation === "vertical";
+  // `rounded-lg` rides along with `card` and wins over `BUTTON`'s own `rounded-md` because
+  // tailwind-merge keeps the last of two conflicting radii and this is passed after it.
+  const box =
     size === "xs"
-      ? "h-5 w-8 text-[0.625rem]"
-      : size === "sm"
-        ? "h-7 w-12 text-xs"
-        : "h-9 w-14 text-sm";
+      ? "size-5"
+      : size === "card"
+        ? "size-6 rounded-lg"
+        : size === "sm"
+          ? "size-7"
+          : "size-9";
+  const text =
+    size === "xs"
+      ? "text-[0.625rem]"
+      : size === "card"
+        ? "text-[0.6875rem]"
+        : size === "sm"
+          ? "text-xs"
+          : "text-sm";
+  const wide = size === "xs" ? "h-5 w-8" : size === "sm" ? "h-7 w-12" : "h-9 w-14";
+  const field = cn(vertical ? box : wide, text);
   const icon = size === "xs" ? "size-3" : "size-3.5";
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
+  const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);
   const clamp = (n: number) => Math.min(max, Math.max(min, n));
 
   /**
@@ -142,59 +191,83 @@ export function QuantityStepper({
     void tick.start({ scale: [1, 1.1, 1] });
   }, [value, tick]);
 
+  const decrease = (
+    <button
+      type="button"
+      aria-label={`Decrease ${label}`}
+      disabled={value <= min}
+      onClick={() => onChange(clamp(value - 1))}
+      className={button}
+    >
+      <Minus className={icon} aria-hidden="true" />
+    </button>
+  );
+
+  const increase = (
+    <button
+      type="button"
+      aria-label={`Increase ${label}`}
+      disabled={value >= max}
+      onClick={() => onChange(clamp(value + 1))}
+      className={button}
+    >
+      <Plus className={icon} aria-hidden="true" />
+    </button>
+  );
+
+  const number = (
+    <motion.input
+      animate={tick}
+      transition={TRANSITION.fast}
+      type="number"
+      inputMode="numeric"
+      aria-label={label}
+      value={draft ?? value}
+      min={min}
+      max={max}
+      onChange={(e) => {
+        const raw = e.target.value;
+        const typed = Number.parseInt(raw, 10);
+        // An empty box is a box being typed in, not a zero: it is kept as typed and
+        // reported to nobody, so the value behind it is still the last real number.
+        if (Number.isNaN(typed)) {
+          setDraft(raw);
+          return;
+        }
+        const next = clamp(typed);
+        // Out of range is shown *clamped* rather than left as typed — a box reading 99
+        // over a ceiling of 3 is a promise the control has already broken.
+        setDraft(next === typed ? raw : null);
+        onChange(next);
+      }}
+      // Whatever was left half-typed, the box goes back to the number it stands for.
+      onBlur={() => setDraft(null)}
+      className={cn(
+        "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
+        NO_NATIVE_STEPS,
+        ring,
+        field,
+      )}
+    />
+  );
+
+  // Increase first when the column stands on end, because up is more. Horizontally the
+  // number keeps the middle, where `−` and `+` bracket it the way every stepper does.
   return (
-    <span className="inline-flex items-center gap-1">
-      <button
-        type="button"
-        aria-label={`Decrease ${label}`}
-        disabled={value <= min}
-        onClick={() => onChange(clamp(value - 1))}
-        className={cn(BUTTON, ring, box)}
-      >
-        <Minus className={icon} aria-hidden="true" />
-      </button>
-      <motion.input
-        animate={tick}
-        transition={TRANSITION.fast}
-        type="number"
-        inputMode="numeric"
-        aria-label={label}
-        value={draft ?? value}
-        min={min}
-        max={max}
-        onChange={(e) => {
-          const raw = e.target.value;
-          const typed = Number.parseInt(raw, 10);
-          // An empty box is a box being typed in, not a zero: it is kept as typed and
-          // reported to nobody, so the value behind it is still the last real number.
-          if (Number.isNaN(typed)) {
-            setDraft(raw);
-            return;
-          }
-          const next = clamp(typed);
-          // Out of range is shown *clamped* rather than left as typed — a box reading 99
-          // over a ceiling of 3 is a promise the control has already broken.
-          setDraft(next === typed ? raw : null);
-          onChange(next);
-        }}
-        // Whatever was left half-typed, the box goes back to the number it stands for.
-        onBlur={() => setDraft(null)}
-        className={cn(
-          "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
-          NO_NATIVE_STEPS,
-          ring,
-          field,
-        )}
-      />
-      <button
-        type="button"
-        aria-label={`Increase ${label}`}
-        disabled={value >= max}
-        onClick={() => onChange(clamp(value + 1))}
-        className={cn(BUTTON, ring, box)}
-      >
-        <Plus className={icon} aria-hidden="true" />
-      </button>
+    <span className={cn("inline-flex items-center gap-1", vertical && "flex-col")}>
+      {vertical ? (
+        <>
+          {increase}
+          {number}
+          {decrease}
+        </>
+      ) : (
+        <>
+          {decrease}
+          {number}
+          {increase}
+        </>
+      )}
     </span>
   );
 }
