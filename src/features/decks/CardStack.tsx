@@ -852,7 +852,7 @@ function StackedCard({
           announced instead of being swallowed by the button's `aria-label`. The price and the
           printing had no reader at all while they were inside it. */}
       <span
-        style={{ height: STACK_DATA_HEIGHT, marginTop: -STACK_DATA_RISE }}
+        style={{ height: stackDataHeight(zoom), marginTop: -STACK_DATA_RISE }}
         className={cn(
           "relative -mx-px box-border flex items-center gap-1.5 rounded-b-[7px] border",
           "border-t-0 border-border bg-surface pr-1.5 font-mono text-[0.625rem] text-dim",

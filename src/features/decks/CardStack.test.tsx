@@ -21,6 +21,7 @@ import {
   stackCardHeight,
   stackCardWidth,
   stackCollapsedMargin,
+  stackDataHeight,
   stackHeight,
   stackImageHeight,
 } from "./CardStack";
@@ -212,14 +213,40 @@ describe("CardStack geometry at a zoom", () => {
       const width = stackCardWidth(zoom);
       expect(width).toBe(scaled(STACK_CARD_WIDTH, zoom));
       expect(stackImageHeight(zoom)).toBe(Math.round((width * 680) / 488));
-      expect(stackCardHeight(zoom)).toBe(stackImageHeight(zoom) + 2);
+      // The *face* is what keeps the printed proportion. The card is the face plus two hairlines
+      // and the foot standing under it, and the foot is floored rather than scaled — so the whole
+      // card is deliberately not a Magic card's shape below 1×, and only the face has to be.
+      expect(stackCardHeight(zoom)).toBe(
+        stackImageHeight(zoom) + 2 + (stackDataHeight(zoom) - STACK_DATA_RISE),
+      );
       expect(Math.abs(stackImageHeight(zoom) / width - 680 / 488)).toBeLessThan(0.01);
     }
 
     // The two ends, written out, so a change to the ladder is visible here rather than merely
-    // consistent with itself.
-    expect([stackCardWidth(MIN_ZOOM), stackCardHeight(MIN_ZOOM)]).toEqual([105, 148]);
-    expect([stackCardWidth(MAX_ZOOM), stackCardHeight(MAX_ZOOM)]).toEqual([420, 587]);
+    // consistent with itself. At 0.5× the foot is still its floored 28 and the face is 146, which
+    // is why the card is 172 and not the 148 the face alone would give.
+    expect([stackCardWidth(MIN_ZOOM), stackCardHeight(MIN_ZOOM)]).toEqual([105, 172]);
+    expect([stackCardWidth(MAX_ZOOM), stackCardHeight(MAX_ZOOM)]).toEqual([420, 639]);
+  });
+
+  /**
+   * The data line takes the same floor as the reveal strip, and for the same reason: it holds the
+   * printing's facts in type that is already at the app's smallest, so a bar scaled to 14px would
+   * be shorter than the words in it. Two floors in one file is two chances to "simplify" a `max`
+   * away, so both are pinned the same way — the second assertion in each loop is the one that
+   * fails if the floor stops doing work.
+   */
+  it("holds the data line at its floor going down, and grows it going up", () => {
+    for (const zoom of ZOOM_STEPS.filter((z) => z < DEFAULT_ZOOM)) {
+      expect(stackDataHeight(zoom)).toBe(STACK_DATA_HEIGHT);
+      expect(scaled(STACK_DATA_HEIGHT, zoom)).toBeLessThan(STACK_DATA_HEIGHT);
+    }
+    for (const zoom of ZOOM_STEPS.filter((z) => z > DEFAULT_ZOOM)) {
+      expect(stackDataHeight(zoom)).toBe(scaled(STACK_DATA_HEIGHT, zoom));
+      expect(stackDataHeight(zoom)).toBeGreaterThan(STACK_DATA_HEIGHT);
+    }
+    // The rise never moves: it hides the seam under a 7px corner that is a Tailwind class.
+    expect(STACK_DATA_RISE).toBe(4);
   });
 
   /**
