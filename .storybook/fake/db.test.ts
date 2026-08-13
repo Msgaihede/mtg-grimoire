@@ -292,6 +292,44 @@ describe("the paper filter", () => {
 });
 
 /**
+ * The paper filter's neighbour, whose default is the **opposite** — omitted means off, because
+ * the search view is the only caller that sends it (`filters::CardFilters::playable_only`).
+ * Getting that backwards is the one mistake this mirror can make silently: the collection would
+ * stop listing an art card its owner really owns, and nothing would say so.
+ */
+describe("the playable filter", () => {
+  /** The three paper printings the mask reads as legal nowhere, named rather than counted so a
+   *  regenerated `cards.ts` fails here rather than one number out. */
+  const UNPLAYABLE = ["Prismatic Ending // Prismatic Ending", "Kozilek, Compleated", "Little Girl"];
+
+  it("is off unless asked for, and then hides the printings no format allows", () => {
+    const db = makeDb();
+    const seen = (req: Record<string, unknown>) =>
+      (readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
+        items: { name: string }[];
+      }).items.map((i) => i.name);
+
+    // The three really are in the corpus and really are unplayable, so the assertion below is
+    // about the filter rather than about a fixture that never had them.
+    for (const name of UNPLAYABLE) {
+      const card = CARDS.find((c) => c.name === name)!;
+      expect(card.isPaper).toBe(true);
+      expect(/"(legal|restricted)"/.test(card.legalities)).toBe(false);
+    }
+
+    expect(seen({})).toHaveLength(41);
+    expect(seen({ playableOnly: false })).toHaveLength(41);
+
+    const playable = seen({ playableOnly: true });
+    expect(playable).toHaveLength(38);
+    for (const name of UNPLAYABLE) expect(playable).not.toContain(name);
+    // `restricted` counts as playable — a Vintage search that hid Black Lotus would be wrong.
+    expect(playable).toContain("Black Lotus");
+  });
+
+});
+
+/**
  * `index::facets::compute`, mirrored.
  *
  * **Every dimension is counted over a base carrying every filter EXCEPT its own** — Solr's
@@ -360,6 +398,25 @@ describe("facet counts", () => {
     expect(c.colors.C).toBe(41);
     // W/R replaces it rather than joining it: `"RC"` would silently mean plain `"R"`.
     expect(c.colors.R).toBe(15);
+  });
+
+  /**
+   * `playableOnly` is not a facet either, so it narrows every base — and it **cannot move a
+   * format count**, because a card legal in a format is playable by definition. That equality
+   * is the assertion worth making: if it ever failed, the format select would grey an option
+   * the search returns rows for.
+   */
+  it("narrows every base by the playable decision and leaves the format counts alone", () => {
+    const off = facets(makeDb(), {});
+    const on = facets(makeDb(), { playableOnly: true });
+
+    expect(off.total).toBe(41);
+    expect(on.total).toBe(38);
+    // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), which is one of the three.
+    expect(on.manaValues["8"]).toBe(off.manaValues["8"] - 1);
+    for (const key of ["modern", "vintage", "commander", "pauper"]) {
+      expect(on.formats[key]).toBe(off.formats[key]);
+    }
   });
 
   it("counts a colour over the paper decision the request made, not over the default", () => {
