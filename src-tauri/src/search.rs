@@ -73,8 +73,9 @@ pub struct SearchRequest {
     /// recognise, means `tcgplayer`, which is what every caller before the marketplace picker
     /// existed depended on. See [`crate::sorting::Marketplace`].
     pub marketplace: crate::sorting::Marketplace,
-    /// Fold every printing of one card into a single row, represented by the newest
-    /// printing.
+    /// Fold every printing of one card into a single row, represented by the cheapest
+    /// printing of the card's latest release — see [`collapse_rep`], and note that *which*
+    /// printing that is depends on [`Self::marketplace`].
     ///
     /// Absent means **false** — uncollapsed is what this command has always answered, so
     /// every caller that does not ask keeps the shape and the behaviour it had. The search
@@ -243,15 +244,91 @@ const COLLAPSE_KEY: &str = "coalesce(c.oracle_id, c.id)";
 
 /// The representative printing's `id`, straight out of the aggregate that picks it.
 ///
-/// `released_at` is a fixed-width ISO date, so coalescing it to `'0000-00-00'` makes the
-/// concatenation order exactly as `released_at DESC, id DESC` — and because that prefix is
-/// always ten characters, `substr(…, 11)` **is** the winning row's id. That is what turns
-/// the join back into a *primary-key* lookup: 108 ms, against 767 ms for joining on the
-/// group key and matching the composite expression a second time.
+/// **The card's latest release, and the cheapest printing of it** — three keys, in priority
+/// order: `released_at` DESC, then price ASC at the reader's marketplace, then `c.id` DESC.
+/// A collapsed row stands for a card the reader might buy, so it shows the current cardboard
+/// at what the current cardboard actually costs, rather than whichever UUID happened to sort
+/// highest among a modern set's dozen showcase variants.
 ///
-/// Ties on `released_at` break to the **greatest** id, where [`ORDER_NAME`] breaks them to
-/// the least. Ids are UUIDs, so both are arbitrary; this is the one that is written down.
-const COLLAPSE_REP: &str = "substr(max(coalesce(c.released_at,'0000-00-00') || c.id), 11)";
+/// Measured over the live database 2026-08-14 (Windows, 116 703 cards / 37 556 paper oracle
+/// groups): **4 011 groups — 10.7 % — change representative, and none becomes dearer.** The
+/// second half is a property of the key rather than a lucky corpus: every printing the old
+/// `released_at DESC, id DESC` rule could have picked is still a candidate here, and price
+/// only ever breaks a tie the old rule broke by id. 163 of those groups trade an *unpriced*
+/// representative for a priced one.
+///
+/// ### There is no `set_code` term, deliberately
+///
+/// The obvious fourth key — "the latest *set*, then the cheapest printing of that set" —
+/// needs a tiebreak when two sets share a release date, and every available one is wrong.
+/// Promo sets are `p`-prefixed (`pkhm` beside `khm`, `pfrf` beside `frf`), so `set_code`
+/// DESC hands the row to the promo: Icebreaker Kraken went `khm 63` at $0.36 to `pkhm 63p`
+/// at $0.88, a rule called "cheapest" making the row dearer. 2 503 cards have a latest date
+/// spanning more than one set. Weighing all of that date's printings together instead is
+/// both simpler and cheaper — 1 155 groups cross to the cheaper side of a same-day pair
+/// (`pfrf 143s` $2.59 → `frf 143` $0.35, `peld 185s` $0.82 → `eld 185` $0.34) — and every
+/// candidate is still a printing of a set released that day, so it is still "the latest set".
+///
+/// ### Why the string
+///
+/// `released_at` is a fixed-width ISO date and the price segment is padded to twelve, so the
+/// concatenation compares exactly as those three keys and the prefix is always **22**
+/// characters — which is what makes `substr(…, 23)` *be* the winning row's id, and the join
+/// back a **primary-key** lookup: 108 ms, against 767 ms for joining on the group key and
+/// matching the composite expression a second time.
+///
+/// The price is **inverted** (`999999999999 - cents`) because the aggregate is `max()` and
+/// the cheapest printing has to carry the greatest key, and `coalesce(…, 0)` puts an
+/// unpriced printing at the bottom of it: a shop that does not quote a printing has not
+/// offered it for free, so it loses to every priced sibling and represents the card only
+/// when nothing of that date is priced — where the id tiebreak decides, as it always did.
+///
+/// The scalar `min`/`max` around the cast are a **width** fence and not a price rule.
+/// `printf('%012d', …)` pads to twelve but never truncates: it is twelve characters down to
+/// `-99999999999` and thirteen below that, so cents outside `0 … 999999999999` would widen
+/// the prefix, `substr(…, 23)` would slice into the middle of a UUID and the primary-key
+/// join would drop the card off the page — silently, which is the only reason a clamp is
+/// worth one comparison per row. `marketplace_prices.price` carries no `CHECK`, so the low
+/// end is fenced too. Both are pinned by
+/// `tests::a_price_outside_the_keys_range_still_resolves_to_a_real_printing`.
+///
+/// Ties still break to the **greatest** id, where [`ORDER_NAME`] breaks them to the least.
+/// Ids are UUIDs, so both are arbitrary; this is the one that is written down.
+///
+/// ### `{price}` appears exactly once
+///
+/// On Card Kingdom and Mana Pool [`crate::sorting::printing_price_expr`] expands to a
+/// correlated scalar subquery over `marketplace_prices`. The group step already evaluates it
+/// twice for the range it shows, and every further occurrence is another per-row subquery on
+/// the search's hot path — so this is a function of the price expression rather than a
+/// constant, and it interpolates it in one place.
+///
+/// **The pick is therefore marketplace-dependent**: two shops can disagree about which
+/// printing of the same release is cheapest, and each answer is right about its own shop.
+/// Switching marketplace changes which printing represents a card, and refetches rather than
+/// going stale, because `marketplace` is part of the search query's key.
+///
+/// Every column named here — `released_at`, `id`, and `price_usd` on the default
+/// marketplace — is already in `idx_cards_collapse`
+/// ([`crate::schema::CARDS_INDEXES`]), so the unfiltered browse's group scan stays covering —
+/// `EXPLAIN QUERY PLAN` still opens `SCAN c USING COVERING INDEX idx_cards_collapse`.
+///
+/// Measured 2026-08-14 on the live 116 703-card database, unfiltered — the worst case, since
+/// every group is built before the `LIMIT`: **108 → 127 ms** at TCGplayer, 548 → 577 ms at
+/// Cardmarket, 891 → **1 044 ms** at a feed marketplace. A *narrowed* browse is a wash
+/// (`name LIKE '%dragon%'`: 24 → 24 ms, 27 → 28 ms). So the third evaluation costs ~19 ms
+/// where the expression is an indexed column and ~150 ms where it is a correlated subquery,
+/// and the ~890 ms a feed marketplace already cost unfiltered dwarfs what this added to it.
+/// Provenance and the synthetic-feed caveat:
+/// [data-and-sync.md](../../docs/reference/data-and-sync.md).
+fn collapse_rep(price: &str) -> String {
+    format!(
+        "substr(max(coalesce(c.released_at,'0000-00-00') \
+         || printf('%012d', coalesce(999999999999 - \
+              max(0, min(999999999999, CAST(round({price} * 100) AS INTEGER))), 0)) \
+         || c.id), 23)"
+    )
+}
 
 /// Name order for a collapsed browse: the group's own name, which is also what it displays.
 ///
@@ -532,8 +609,9 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // so that last figure is the worst one there is.
     let sql = if collapse {
         // Two steps. The group step computes every aggregate **and** the representative's
-        // id, and it takes the `LIMIT` — so at most 50 rows are ever fetched out of
-        // `cards`. Then one primary-key join back for that row's own columns.
+        // id — the cheapest printing of the card's latest release, [`collapse_rep`] — and it
+        // takes the `LIMIT`, so at most 50 rows are ever fetched out of `cards`. Then one
+        // primary-key join back for that row's own columns.
         //
         // **The two status subqueries probe `c.oracle_id` — the joined representative's own
         // indexed column — and never `g.oid`.** Writing them against the group key cost
@@ -592,6 +670,10 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             )
         };
 
+        // The representative reads the same `price` the aggregates beside it do, which is
+        // what keeps the row's own figure and the shop it was chosen at from being spelled
+        // apart. See [`collapse_rep`] — the pick is marketplace-dependent by construction.
+        let rep = collapse_rep(&price);
         let group_fallback = format!("{score_term}{ORDER_NAME_COLLAPSED}");
         let group_sorts =
             crate::sorting::sorts_for(SEARCH_SORTS_COLLAPSED, SEARCH_PRICE_SORT_COLLAPSED, &price);
@@ -622,7 +704,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                        min({price}) AS lo, max({price}) AS hi,
                        min(c.name) AS nm,
                        {score_select}
-                       {COLLAPSE_REP} AS rep
+                       {rep} AS rep
                 FROM {group_from} WHERE {group_where}
                 GROUP BY {COLLAPSE_KEY}
                 ORDER BY {group_order} {group_limit}
@@ -1344,15 +1426,20 @@ mod tests {
         assert_eq!(card.price_high, card.price);
     }
 
-    /// Three printings of one card become one row, and the row says how many it stands for
+    /// Four printings of one card become one row, and the row says how many it stands for
     /// and what the cheapest and dearest of them cost.
+    ///
+    /// `b3` and `b4` are the same day's printings and `b4` is the greater id, so the row the
+    /// old `released_at DESC, id DESC` rule produced was `b4` — this fixture discriminates
+    /// between the two rules rather than agreeing with both.
     #[test]
     fn collapse_folds_every_printing_of_a_card_into_one_row() {
         let conn = seeded();
         for (id, set, released, price) in [
             ("b1", "lea", "1993-08-05", 400.0),
             ("b2", "m10", "2009-07-17", 5.0),
-            ("b3", "m11", "2010-07-16", 3.0),
+            ("b3", "m11", "2010-07-16", 1.5),
+            ("b4", "m11", "2010-07-16", 3.0),
         ] {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,
@@ -1374,14 +1461,371 @@ mod tests {
         .unwrap();
 
         let shocks: Vec<&CardSummary> = r.items.iter().filter(|c| c.name == "Shock").collect();
-        assert_eq!(shocks.len(), 1, "three printings, one row");
-        assert_eq!(shocks[0].printings, 3);
+        assert_eq!(shocks.len(), 1, "four printings, one row");
+        assert_eq!(shocks[0].printings, 4);
         assert_eq!(
             shocks[0].id, "b3",
-            "the newest printing represents the card"
+            "the cheapest of the latest release's printings represents the card"
         );
-        assert_eq!(shocks[0].price_low, Some(3.0));
+        assert_eq!(shocks[0].price_low, Some(1.5));
         assert_eq!(shocks[0].price_high, Some(400.0));
+    }
+
+    /// Printings of one card, in the shape the representative rule is argued over: a set, a
+    /// release date and a price each. Ids are chosen per test so that the rule this file uses
+    /// and the `released_at DESC, id DESC` one it replaced cannot agree by accident.
+    fn seed_printings(
+        conn: &Connection,
+        name: &str,
+        oracle: &str,
+        rows: &[(&str, &str, &str, Option<f64>)],
+    ) {
+        for (id, set, released, price) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,
+                                    price_usd,is_paper,oracle_id,search_text,raw)
+                 VALUES (?1,?2,?3,?1,'en','normal',?4,?5,1,?6,?2,'{}')",
+                rusqlite::params![id, name, set, released, price, oracle],
+            )
+            .unwrap();
+        }
+    }
+
+    /// An empty database with the schema on it — the collapse fixtures below seed every row
+    /// they reason about, so [`seeded`]'s three cards would only be noise to filter back out.
+    fn bare() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    /// The id of the printing that represents `name` in a collapsed browse of `conn`.
+    fn representative(
+        conn: &Connection,
+        name: &str,
+        marketplace: crate::sorting::Marketplace,
+    ) -> String {
+        run_search(
+            conn,
+            &SearchRequest {
+                collapse: Some(true),
+                marketplace,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("{name} did not come back from the collapsed browse"))
+        .id
+    }
+
+    /// The row stands for the printing a reader would actually buy: the card's latest release,
+    /// and the cheapest printing of it. Three printings share that date here and the middle
+    /// one is the cheapest, so neither "newest" nor "greatest id" can produce this answer.
+    #[test]
+    fn the_representative_is_the_cheapest_printing_of_the_latest_release() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("p1", "lea", "1993-08-05", Some(0.10)),
+                ("p9", "m21", "2020-07-03", Some(9.00)),
+                ("p2", "m21", "2020-07-03", Some(2.00)),
+                ("p5", "m21", "2020-07-03", Some(5.00)),
+            ],
+        );
+        assert_eq!(
+            representative(&conn, "Shock", crate::sorting::Marketplace::Tcgplayer),
+            "p2",
+            "the cheapest of the three that share the latest date"
+        );
+    }
+
+    /// The release date is weighed **before** the price. A $50 printing of this year's set
+    /// represents the card over a $0.10 printing from 1993 — the row is about which cardboard
+    /// is current — and the cheap one is still the low end of the range beside it.
+    #[test]
+    fn the_release_date_is_weighed_before_the_price() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("p1", "lea", "1993-08-05", Some(0.10)),
+                ("p2", "m21", "2020-07-03", Some(50.00)),
+            ],
+        );
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.items[0].id, "p2");
+        assert_eq!(r.items[0].price, Some(50.0), "and quotes what it costs");
+        assert_eq!(
+            r.items[0].price_low,
+            Some(0.10),
+            "the 1993 printing is still the low end of the range"
+        );
+    }
+
+    /// A printing the marketplace does not price is not a free printing: it loses to every
+    /// priced sibling of the same date. It represents the card only when nothing of that date
+    /// is priced at all, and that case still resolves — to the greatest id, deterministically.
+    #[test]
+    fn an_unpriced_printing_loses_to_a_priced_one_and_still_resolves_alone() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("q9", "m21", "2020-07-03", None),
+                ("q1", "m21", "2020-07-03", Some(900.00)),
+            ],
+        );
+        seed_printings(
+            &conn,
+            "Terror",
+            "o-terror",
+            &[
+                ("t1", "m21", "2020-07-03", None),
+                ("t8", "m21", "2020-07-03", None),
+                ("t4", "lea", "1993-08-05", Some(0.10)),
+            ],
+        );
+        use crate::sorting::Marketplace::Tcgplayer;
+        assert_eq!(
+            representative(&conn, "Shock", Tcgplayer),
+            "q1",
+            "$900 beats no price at all, greater id or not"
+        );
+        assert_eq!(
+            representative(&conn, "Terror", Tcgplayer),
+            "t8",
+            "and an entirely unpriced date falls back on the id tiebreak"
+        );
+    }
+
+    /// Two sets can share a release date — a set and its promos, `frf` and `pfrf`. They are
+    /// weighed **together**: the cheapest printing of that date wins whichever set it is in.
+    ///
+    /// The key deliberately carries no `set_code` term, and this is the fixture that says why.
+    /// Promo sets are `p`-prefixed, so a `set_code DESC` tiebreak would hand every same-day
+    /// pair to the promo — `pfrf 143s` at $2.59 over `frf 143` at $0.35 — and a rule called
+    /// "cheapest" would have made 1 155 rows dearer (measured 2026-08-14, live database).
+    #[test]
+    fn two_sets_sharing_the_latest_release_date_are_weighed_together() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("f9", "pfrf", "2014-11-28", Some(2.59)),
+                ("f1", "frf", "2014-11-28", Some(0.35)),
+            ],
+        );
+        assert_eq!(
+            representative(&conn, "Shock", crate::sorting::Marketplace::Tcgplayer),
+            "f1",
+            "the cheaper of the pair, and neither the greater id nor the greater set code"
+        );
+    }
+
+    /// Which printing represents a card is a **marketplace** decision. The same three
+    /// printings of one set are cheapest in a different order at each shop, and every answer
+    /// is right about its own — the query key carries the marketplace, so switching refetches.
+    #[test]
+    fn the_representative_follows_the_marketplace() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("m1", "m21", "2020-07-03", Some(1.00)),
+                ("m2", "m21", "2020-07-03", Some(2.00)),
+                ("m3", "m21", "2020-07-03", Some(3.00)),
+            ],
+        );
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "m1", "nonfoil", 30.00),
+                ("cardkingdom", "m2", "nonfoil", 20.00),
+                ("cardkingdom", "m3", "nonfoil", 10.00),
+                ("manapool", "m1", "nonfoil", 7.00),
+                ("manapool", "m2", "nonfoil", 4.00),
+                ("manapool", "m3", "nonfoil", 8.00),
+            ],
+        );
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+        assert_eq!(representative(&conn, "Shock", Tcgplayer), "m1");
+        assert_eq!(representative(&conn, "Shock", Cardkingdom), "m3");
+        assert_eq!(representative(&conn, "Shock", Manapool), "m2");
+        assert_eq!(
+            representative(&conn, "Shock", Cardmarket),
+            "m3",
+            "no euro price anywhere in the set, so the id tiebreak decides — not another \
+             shop's ordering"
+        );
+    }
+
+    /// Filters narrow printings first and the survivors are grouped, so the representative is
+    /// always a printing that **matched**. A search narrowed to an old set is represented by
+    /// that set's cheapest printing, never by the newest one the database happens to hold.
+    #[test]
+    fn the_representative_is_a_printing_that_matched_the_filters() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("f1", "lea", "1993-08-05", Some(300.00)),
+                ("f2", "lea", "1993-08-05", Some(400.00)),
+                ("f3", "m21", "2020-07-03", Some(0.10)),
+            ],
+        );
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                set_code: Some("lea".into()),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(
+            r.items[0].printings, 2,
+            "the two lea printings, not all three"
+        );
+        assert_eq!(
+            r.items[0].id, "f1",
+            "the cheaper lea printing — the m21 one did not match and cannot represent it"
+        );
+    }
+
+    /// A ranked collapsed search runs its group step over the `MATERIALIZED` CTE rather than
+    /// over `cards`, so the representative is picked by the same expression against a
+    /// different relation. It must answer what the browse answers.
+    #[test]
+    fn a_ranked_collapsed_search_picks_the_same_representative() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("p1", "lea", "1993-08-05", Some(0.10)),
+                ("p9", "m21", "2020-07-03", Some(9.00)),
+                ("p2", "m21", "2020-07-03", Some(2.00)),
+            ],
+        );
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("shock".into()),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(
+            r.items[0].id, "p2",
+            "the ranked path picks what the browse picks"
+        );
+    }
+
+    /// `printf('%012d', …)` pads to twelve characters but never *truncates*: a value below
+    /// `-99999999999` is thirteen (measured in this build's SQLite by the test below). A
+    /// wider segment would move the id, `substr(…, 23)` would slice into the middle of a
+    /// UUID, and the primary-key join would then drop the card off the page altogether —
+    /// silently. Both ends of the cents are clamped, so the row survives instead.
+    #[test]
+    fn a_price_outside_the_keys_range_still_resolves_to_a_real_printing() {
+        let conn = bare();
+        seed_printings(
+            &conn,
+            "Shock",
+            "o-shock",
+            &[
+                ("w1", "m21", "2020-07-03", Some(99_999_999_999.99)),
+                ("w2", "m21", "2020-07-03", Some(-5.00)),
+            ],
+        );
+        seed_printings(
+            &conn,
+            "Terror",
+            "o-terror",
+            &[
+                ("v1", "m21", "2020-07-03", Some(1e12)),
+                ("v2", "m21", "2020-07-03", Some(4.00)),
+            ],
+        );
+        use crate::sorting::Marketplace::Tcgplayer;
+        assert_eq!(
+            representative(&conn, "Shock", Tcgplayer),
+            "w2",
+            "a price below zero clamps to zero cents, the cheapest key there is"
+        );
+        assert_eq!(
+            representative(&conn, "Terror", Tcgplayer),
+            "v2",
+            "and one past the base clamps to the dearest, losing to a real price"
+        );
+    }
+
+    /// The two facts the key's fixed widths rest on, asserted against the SQLite this crate
+    /// actually links rather than against the documentation. `printf` pads a negative to
+    /// twelve *including* the sign but widens past it, which is the whole reason
+    /// [`collapse_rep`] clamps; the scalar `min`/`max` return NULL for a NULL argument, which
+    /// is what carries an unpriced printing through to the `coalesce`.
+    #[test]
+    fn the_price_segment_is_twelve_characters_and_null_survives_the_clamp() {
+        let conn = Connection::open_in_memory().unwrap();
+        let width = |n: &str| -> i64 {
+            conn.query_row(&format!("SELECT length(printf('%012d', {n}))"), [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(width("0"), 12);
+        assert_eq!(width("999999999999"), 12);
+        assert_eq!(width("-1"), 12, "the sign eats a digit, not a column");
+        assert_eq!(
+            width("-100000000000"),
+            13,
+            "and past that it widens, which is what the clamp exists for"
+        );
+        let clamped: Option<i64> = conn
+            .query_row(
+                "SELECT max(0, min(999999999999, CAST(round(NULL * 100) AS INTEGER)))",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            clamped, None,
+            "an unpriced printing stays NULL through both"
+        );
     }
 
     /// `total` is a count of **cards** when the rows are cards. A caption reading "5 cards"

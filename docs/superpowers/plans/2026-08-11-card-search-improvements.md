@@ -12,6 +12,16 @@ row's columns. A new covering index makes it affordable. The frontend adds one v
 `useCardSearch` and renders two new fields. The foil work extracts `CardGrid`'s private `Tile`
 internals into `src/components/CardArt.tsx` so five surfaces draw a card the same way.
 
+> **Superseded 2026-08-14, in one respect: which printing represents a card.** Everywhere this plan
+> says the representative is the *newest* printing — the summary above, Task 3's `COLLAPSE_REP`, its
+> tests and the doc comments it installs — the shipped rule is now the **cheapest printing of the
+> latest release date, at the reader's marketplace**. Nothing else in the plan moved: the two-step
+> shape, the group key, the status subqueries, the index and the `substr` trick are all as written.
+> The full statement, with the measurements, is in
+> [data-and-sync.md](../../reference/data-and-sync.md); the design record is the note in §3.1 of
+> [the spec](../specs/2026-08-11-card-search-improvements-design.md). This plan is left as the record
+> of what was executed on 2026-08-11.
+
 **Tech Stack:** Rust (rusqlite, SQLite FTS5), React 19, TypeScript 6, Tailwind v4, Vitest, Storybook.
 
 ## Global Constraints
@@ -666,6 +676,13 @@ const COLLAPSE_REP: &str = "substr(max(coalesce(c.released_at,'0000-00-00') || c
 /// a row under a name it does not read as.
 const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
 ```
+
+> **`COLLAPSE_REP` was replaced on 2026-08-14.** It is no longer a constant: it takes the
+> marketplace's price expression and encodes three keys — `released_at` DESC, **price ASC**, `c.id`
+> DESC — as three fixed-width segments of the same `max()` string, the price one inverted so the
+> cheapest encodes largest and an unpriced printing loses to every priced one. `COLLAPSE_KEY` and
+> `ORDER_NAME_COLLAPSED` above are unchanged, and so is every use of `{COLLAPSE_REP}` in the steps
+> below. Read `search::COLLAPSE_REP` for the current spelling.
 
 - [ ] **Step 4: Branch `run_search` on `collapse`**
 

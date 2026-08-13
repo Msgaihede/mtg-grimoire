@@ -170,6 +170,16 @@ In memory this is not a special case at all. The representative is a per-group m
 recency rank; ordering reads the representative's rank array. One pass over the base, a
 heap of 50.
 
+> **Amended 2026-08-14 — the representative is no longer a recency rank alone.** The SQL rule
+> changed that day to the **cheapest printing of the card's latest release date, at the reader's
+> marketplace**: `released_at` DESC, then price ASC (an unpriced printing losing to every priced
+> one), then `id` DESC. §5.2's `recencyRank` is therefore not enough on its own — a Plan B index
+> would need the price in the same composite rank, and the rank would be
+> **marketplace-dependent**, which is the substantive new constraint: one array per marketplace,
+> or a rank recomputed when the setting changes. Plan B has not been built; only Plan A (faceting)
+> shipped, and `src-tauri/src/index.rs` holds no ordering arrays. The current rule, with its
+> measurements, is in [data-and-sync.md](../../reference/data-and-sync.md).
+
 ## 5. Architecture
 
 ### 5.1 Schema v8
@@ -203,7 +213,8 @@ One struct, rebuilt wholesale, never patched incrementally. Per-doc arrays are i
 
 **Ordering data** (search):
 `oracleOrd: Vec<u32>` (the collapse key, `coalesce(oracle_id, id)`) ·
-`recencyRank: Vec<u32>` (which printing represents a group: `released_at` then `id`) ·
+`recencyRank: Vec<u32>` (which printing represents a group: `released_at` then `id` — **the rule
+gained a price key on 2026-08-14; see the amendment in §4**) ·
 `nameRank`, `typeRank`, `setSortRank` (set code, then *natural* collector number) ·
 `rarityRank: Vec<u8>` · `price: Vec<f32>`
 
