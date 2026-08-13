@@ -2,14 +2,15 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **358 stories across 47 story files, 46 docs
+`npm run storybook` · `npm run build-storybook`. **359 stories across 47 story files, 46 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
-**Measured 2026-08-12** off a fresh `build-storybook` on the price-feed branch merged with
-`main`: 404 entries, 358 `story`, 46 `docs`, 48 distinct `importPath`s. The five stories over
-`main`'s 353 are `Settings/MarketplacePanel`'s, which went from three to eight when Card Kingdom
-and Mana Pool became selectable and a feed gained a state to draw; no story *file* was added,
-which is why that count did not move.
+**Measured 2026-08-14** off a fresh `build-storybook` on this branch: 405 entries, 359 `story`,
+46 `docs`, 48 distinct `importPath`s. The one story over the 358 measured 2026-08-12 is
+`Search/Page`'s `Unplayable`; no story *file* was added, which is why that count did not move.
+Those 358 were themselves five over `main`'s 353 — `Settings/MarketplacePanel` went from three
+stories to eight when Card Kingdom and Mana Pool became selectable and a feed gained a state to
+draw.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and
@@ -115,10 +116,13 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**264** plays today, in a file of **267** tests — the other three are its own;
+  (**270** plays today, in a file of **273** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-12 after the merge), which is what puts a
-  story's own claim inside `npm run verify` —
+summary for the second, both measured 2026-08-14). **Both figures had rotted before this
+re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
+worth of drift added by branches that did not re-measure, and is the same prose-only rot the
+story totals above have taken three times. Only one of the six is this branch's
+(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.

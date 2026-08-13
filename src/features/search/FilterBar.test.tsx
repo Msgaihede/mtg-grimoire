@@ -81,6 +81,42 @@ describe("FilterBar", () => {
     expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
   });
 
+  /**
+   * The chip is off by default and off means *hidden*, which is the one thing about it a
+   * reader cannot see. So the tooltip — which is the accessible name too — has to name the
+   * cards rather than restate the label: "unplayable" reads to a player as "banned in my
+   * format", which is a different and much larger set of cards.
+   */
+  it("offers the printings no format allows, switched off", async () => {
+    const toggleUnplayable = vi.fn();
+    render(<FilterBar search={search({ unplayable: false, toggleUnplayable })} />);
+
+    const chip = screen.getByRole("button", { name: /^Unplayable/ });
+    expect(chip).toHaveTextContent("Unplayable");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(chip).toHaveAccessibleName(
+      "Unplayable — art cards, tokens and other printings that are legal nowhere",
+    );
+    // And it does **not** carry the word `format`, which names the select five controls to
+    // its left: `SearchPage.test.tsx` reaches that select by `getByLabelText(/format/i)`, and
+    // a second accessible name containing it makes four tests there ambiguous rather than
+    // wrong — the failure that reads as somebody else's regression.
+    expect(chip).not.toHaveAccessibleName(/format/i);
+
+    await userEvent.click(chip);
+
+    expect(toggleUnplayable).toHaveBeenCalled();
+  });
+
+  it("shows the unplayable printings as on once they are", () => {
+    render(<FilterBar search={search({ unplayable: true })} />);
+
+    expect(screen.getByRole("button", { name: /^Unplayable/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("counts what Reset all would clear, and clears it", async () => {
     const resetAll = vi.fn();
     render(<FilterBar search={search({ activeCount: 3, colors: ["W"], resetAll })} />);
