@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AnimatePresence, MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
+import { CardZoomIndicator } from "@/components/CardZoomIndicator";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
@@ -104,6 +105,18 @@ export default function App() {
             </AnimatePresence>
           </div>
         </AppShell>
+        {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
+            `LAYER.popup`, and a z-index only competes inside its own stacking context — so
+            mounting it inside a view would cap it at whatever that view's transformed or
+            positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
+            Nothing between here and the root transforms.
+
+            One instance for the whole app, because there is one zoom: the wheel gesture is
+            attached per card section (the search and collection walls, the deck editor's stack
+            and grid), but they all step the same `cardZoom`, so a reader who zooms the search
+            wall and switches to Decks finds the cards there already at the size they asked for.
+            A badge per section would be four clocks racing to describe one number. */}
+        <CardZoomIndicator />
       </QueryClientProvider>
     </MotionConfig>
   );
