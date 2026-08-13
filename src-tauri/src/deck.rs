@@ -1709,6 +1709,15 @@ pub struct DeckCardRow {
     pub quantity: i64,
     pub name: String,
     pub set_code: String,
+    /// The set's printed name, for the surfaces that show the three-letter code and have room
+    /// to say what it stands for on hover — `PF26` is not a word anybody knows.
+    ///
+    /// **From `cards`, not from `deck_cards`, and so `None` for an orphan.** The code, the
+    /// collector number and the card's name are denormalised onto the row precisely so a
+    /// printing that has left the corpus is still listed and counted; a set *name* is not part
+    /// of that promise, and inventing one for a card this build cannot find would be the only
+    /// dishonest field on the row. A caller draws the code alone when this is `None`.
+    pub set_name: Option<String>,
     pub collector_number: String,
     pub lang: String,
     pub needs_review: Option<String>,
@@ -1837,7 +1846,7 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             dc.set_code, dc.collector_number, dc.lang, dc.needs_review,
             c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
             c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
-            c.faces, c.game_changer, c.finishes,
+            c.faces, c.game_changer, c.finishes, c.set_name,
             {price} AS unit_price,
             EXISTS(SELECT 1 FROM cards u
                     WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
@@ -1953,8 +1962,9 @@ fn read_deck_cards(
                 faces: r.get(28)?,
                 game_changer: r.get(29)?,
                 finishes: r.get(30)?,
-                unit_price: r.get(31)?,
-                ever_uncommon: r.get(32)?,
+                set_name: r.get(31)?,
+                unit_price: r.get(32)?,
+                ever_uncommon: r.get(33)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -5303,6 +5313,7 @@ mod tests {
             quantity: 4,
             name: "Lightning Bolt".to_owned(),
             set_code: "lea".to_owned(),
+            set_name: Some("Limited Edition Alpha".to_owned()),
             collector_number: "161".to_owned(),
             lang: "en".to_owned(),
             needs_review: None,
@@ -5332,7 +5343,8 @@ mod tests {
                 "id": 7, "cardId": "bolt-lea", "categoryId": 2, "categoryName": "Main deck",
                 "categoryKind": "main", "categoryActive": true, "variant": "live",
                 "tagId": 5, "tagName": "Flex", "tagColor": "amber", "quantity": 4,
-                "name": "Lightning Bolt", "setCode": "lea", "collectorNumber": "161",
+                "name": "Lightning Bolt", "setCode": "lea",
+                "setName": "Limited Edition Alpha", "collectorNumber": "161",
                 "lang": "en", "needsReview": null, "oracleId": "o1", "manaCost": "{R}",
                 "cmc": 1.0, "typeLine": "Instant", "oracleText": "Deal 3 damage.",
                 "colors": "R", "colorIdentity": "R",

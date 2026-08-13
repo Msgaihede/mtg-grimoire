@@ -19,7 +19,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   load-bearing rather than decorative.
 - **It only reduces `positionalKeys`, and that is a trap with a live example.** The set is
   `width, height, top, left, right, bottom` plus the transform props — read out of
-  `motion-dom/.../keys-position.mjs`. **`marginBottom` is not in it**, so the deck stack's 286px
+  `motion-dom/.../keys-position.mjs`. **`marginBottom` is not in it**, so the deck stack's 293px
   reflow would have travelled at full speed under `reducedMotion="user"` — a straight regression
   against the `motion-reduce:transition-none` it replaced. `CardStack` therefore carries its own
   `useReducedMotion()` opt-out. **Any `motion` animation of a non-positional property needs
