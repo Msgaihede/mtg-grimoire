@@ -48,8 +48,9 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The collapsed stack: every card but the last shows only its 30px title bar, and the last is
- * drawn in full because nothing covers it.
+ * The collapsed stack: every card but the last shows only its 34px reveal strip — the card's own
+ * printed title bar, with the quantity tag laid over the left of it — and the last is drawn in
+ * full because nothing covers it.
  *
  * Run the pointer down it. Each card opens where it stands and pushes the ones after it out of
  * the bottom of the group — **the group itself never resizes**, which is what lets a reader
@@ -125,6 +126,11 @@ export const FlipThrough: Story = {
  * close. The measured third leg is a real Chromium over CDP, three-step pointer approach,
  * which reported the list at 796px before, during and after opening a card in a 15-card stack
  * while that card's margin went −278px → 8px and the next card's top went 50 → 336.
+ *
+ * **Those three figures are from the pre-data-line geometry and are kept as a record rather
+ * than as a claim** — the card is 319px now, so the same pass would read 803px, −285px → 8px
+ * and 50 → 344. A live number belongs to the build it was taken on; re-measuring is the live
+ * pass's job, not this docblock's.
  */
 export const FixedHeightFromTheCardCount: Story = {
   play: async ({ canvasElement }) => {
@@ -134,7 +140,7 @@ export const FixedHeightFromTheCardCount: Story = {
     expect(list.style.height).toBe(`${stackHeight(RAMP.length)}px`);
     // The canvas's own formula, and the slack that lets an open card overflow rather than
     // resize its group.
-    expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 269);
+    expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 293);
     expect(stackHeight(RAMP.length) - stackHeight(RAMP.length - 1)).toBe(34);
   },
 };
@@ -144,8 +150,13 @@ export const FixedHeightFromTheCardCount: Story = {
  * requires the two never be confusable, and the only honest way to check that is to draw them
  * together.
  *
- * `RULE BREAK` is red, spelled out, over the art, and it is the one mark that changes the
- * card's own edge. `GC` is gold, two letters, in the title bar, and says nothing is wrong.
+ * `RULE BREAK` is red, boxed, in the card's top-right corner, and it is the one mark that
+ * changes the card's own edge. `Game Changer` is a gold banner stamped into the title strip on
+ * the left, tucked under the quantity tag, and says nothing is wrong.
+ *
+ * **Both are spelled out here**, which is what the 210px face buys over the 150px grid tile's
+ * `GC` — so the other three separations carry the whole load, and drawing them together is the
+ * only honest way to check that they do.
  */
 export const RuleBreakAndGameChanger: Story = {
   args: {
@@ -171,7 +182,7 @@ export const RuleBreakAndGameChanger: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    expect(canvas.getAllByText("GC")).toHaveLength(2);
+    expect(canvas.getAllByText("Game Changer")).toHaveLength(2);
     // Only the card that breaks a rule carries the destructive edge.
     const items = canvas.getAllByRole("listitem");
     expect(items[0].className).toContain("border-destructive");
@@ -180,11 +191,13 @@ export const RuleBreakAndGameChanger: Story = {
 };
 
 /**
- * Tags, as 8px chips in their own colour with the name one hover away, and a card the deck
+ * Tags, as **the colour of the copy count**, with the name one hover away — and a card the deck
  * wants more copies of than the collection could give it.
  *
- * A dot rather than a word: a tag is a mark the reader put there and already knows, and a
- * 224px column has no room for a second label beside a card's name.
+ * A colour rather than a word: a tag is a mark the reader put there and already knows, and a
+ * 224px column has no room for a second label beside a card's name. It is not a separate dot
+ * either — down a fifteen-card stack the column of coloured tags *is* the structure of the pile,
+ * and the count is the thing the reader wants beside it, so the two are one object.
  */
 export const TaggedAndShortOfCopies: Story = {
   args: {
@@ -204,7 +217,7 @@ export const TaggedAndShortOfCopies: Story = {
     const canvas = within(canvasElement);
     // Both marks are decoration with a `title`; the words are in the card's own name, which
     // is the only text inside an `aria-label`-ed button that anyone hears.
-    expect(canvas.getByTitle("Wincon")).toHaveAttribute("aria-hidden", "true");
+    expect(canvas.getByTitle("Wincon · 3 in this pile")).toHaveAttribute("aria-hidden", "true");
     expect(canvas.getByRole("button", { name: /Wincon.*/ }).getAttribute("aria-label")).toContain(
       "you own 1 of 3",
     );
@@ -266,9 +279,9 @@ export const OneCard: Story = {
 };
 
 /**
- * Fifteen cards, which is where the arithmetic earns itself: the collapsed stack is 510px of
- * title bars plus one full card, and opening the first of them pushes 286px of cards out of
- * the bottom without the group growing by a pixel.
+ * Fifteen cards, which is where the arithmetic earns itself: the collapsed stack is 476px of
+ * reveal strips plus one full 319px card, and opening the first of them pushes 293px of cards
+ * out of the bottom without the group growing by a pixel.
  *
  * It is also where the dwell earns itself. Fifteen strips are 510px of travel and a sweep down
  * them crosses one every ~15ms, so under the CSS lift this replaced, a reader aiming for card
