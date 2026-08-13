@@ -20,8 +20,8 @@
  * | tier | value | for |
  * |---|---|---|
  * | {@link DURATION.fast} | 120ms | press feedback, chevrons, colour |
- * | {@link DURATION.base} | 180ms | the deck stack's reflow, popups, status lines |
- * | {@link DURATION.slow} | 260ms | drawers and dialogs, which cross the window |
+ * | {@link DURATION.base} | 180ms | popups, status lines |
+ * | {@link DURATION.slow} | 260ms | drawers and dialogs, which cross the window, and the deck stack's reflow |
  *
  * `src/index.css` carries the same three as `--duration-*` and the same three curves as
  * `--ease-*`, so a CSS-only transition and a JS one cannot drift. `motion.test.ts` compares
@@ -83,7 +83,10 @@ export const DURATION = {
   fast: 120,
   /** The interaction tier, and the app's old 150ms budget rounded to the scale. */
   base: 180,
-  /** Only for a surface that crosses the window: a docked drawer, a modal. */
+  /**
+   * For a surface that crosses the window — a docked drawer, a modal — and for the deck
+   * stack's 269px reflow, which travels about as far and is *read* rather than dismissed.
+   */
   slow: 260,
 } as const;
 
@@ -257,14 +260,21 @@ export const press: PressFeedback = {
  * The deck stack's one moving card.
  *
  * Only ever one: opening card *N+1* instead of card *N* leaves every card's top unchanged
- * except that one, which travels 286px (the spec's §1 arithmetic). So this is a single
+ * except that one, which travels 269px (`CardStack`'s own arithmetic). So this is a single
  * `margin-bottom` tween and the values belong to `CardStack`, which owns the geometry —
  * `STACK_CARD_HEIGHT`, `STACK_ADVANCE` and the collapsed margin are not this file's to know.
  *
  * `standard` and not `enter`: the card is moving between two positions it occupies either way,
- * not arriving from nowhere. `base`, because the spec's table puts the stack reflow there.
+ * not arriving from nowhere.
+ *
+ * **`slow`, and it was `base` until 2026-08-14.** The spec's table filed the stack reflow on the
+ * interaction tier with the popups, and 180ms is right for a surface that *appears* — but this
+ * one moves 269px, which is drawer distance, and a reader running down a stack watches it happen
+ * on every step rather than once. At 180ms the card arrives before the eye has followed it and
+ * the flip-through reads as snapping. The tier is unchanged and nothing else moved with it; this
+ * preset simply sits one rung further down than it did.
  */
-export const stackCard: Transition = TRANSITION.base;
+export const stackCard: Transition = TRANSITION.slow;
 
 /**
  * An {@link EnterExit} as `Variants`, for the one case a prop bag cannot do: a parent that

@@ -176,7 +176,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   2026-08-12). The same arithmetic that makes one card move is what broke selection: after the
   first step the next card's strip sits ~34px below the pointer, so one continuous sweep armed
   four or five cards in ~60ms. `CardStack` holds `openIndex`, armed by `pointerenter` after a
-  **70ms** dwell (`STACK_OPEN_DWELL_MS`) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`),
+  **80ms** dwell (`STACK_OPEN_DWELL_MS`) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`),
   where arming another card cancels the pending close. **No new hit target was needed** — a
   closed card is overlapped by its successor, so its only hittable part already _is_ its 34px
   reveal strip. `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**. The margin is no longer a
@@ -206,6 +206,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   reduced-motion opt-out is `useReducedMotion()` — see [the Motion rules](../../CLAUDE.md) in
   `src/CLAUDE.md`. That hook reads its value once at mount, so emulating
   `prefers-reduced-motion` _after_ mount proves nothing about it.
+- **The reflow runs on `slow` (260ms), not on the interaction tier** — `stackCard` in
+  `src/lib/motion.ts`, changed 2026-08-14 from `base`. 269px is drawer distance, and a reader
+  running down a stack watches the travel on _every_ step rather than once, so 180ms read as
+  snapping. It is the same three tiers; only which rung this preset sits on changed. The
+  **180ms** `STACK_CLOSE_DELAY_MS` is deliberately no longer equal to it: that one is gesture
+  intent and has never been derived from the tween.
 - **Four card surfaces outside the editor are drag sources, all through the one `cardDraggable`**,
   carrying `{ kind: "card"; cardId; name; typeLine }`. The `typeLine` is **normalised rather than
   validated** — `readDragData` refuses a bad `cardId` or `name`, but turns an unusable type line

@@ -93,7 +93,7 @@ export const STACK_LIFTED_MARGIN = 8;
  * down the stack commits to nothing on the way past — a pointer crossing four strips in 60ms
  * arms four cards and settles on none of them, which is exactly what should happen.
  */
-export const STACK_OPEN_DWELL_MS = 70;
+export const STACK_OPEN_DWELL_MS = 80;
 
 /**
  * How long an open card stays open after the pointer leaves the stack.
@@ -103,9 +103,11 @@ export const STACK_OPEN_DWELL_MS = 70;
  * from one card to the next. That it also forgives a pointer that slips off the edge is the
  * smaller half of it.
  *
- * It happens to equal the reflow's own duration and that is a coincidence, not a derivation —
- * this is an *intent* delay and belongs to the gesture, where `lib/motion.ts`'s scale belongs
- * to what the pixels do.
+ * It used to equal the reflow's own duration, and that was always a coincidence rather than a
+ * derivation — the reflow is `slow` (260ms) since 2026-08-14 and this is still 180ms, because
+ * it is an *intent* delay and belongs to the gesture, where `lib/motion.ts`'s scale belongs to
+ * what the pixels do. Nothing broke when they stopped agreeing, which is the evidence that they
+ * were never one number.
  */
 export const STACK_CLOSE_DELAY_MS = 180;
 
@@ -197,7 +199,7 @@ interface FlipThrough {
  * **{@link release} cancels a pending open as well as scheduling the close**, including when it
  * comes from the caret leaving. The one case that costs is a pointer dwelling on one card while
  * focus leaves the stack from another — the dwell is dropped and the next pointer move re-arms
- * it. That is a cheaper wrong answer than a card that opens 70ms *after* the reader left.
+ * it. That is a cheaper wrong answer than a card that opens 80ms *after* the reader left.
  */
 function useFlipThrough(): FlipThrough {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
