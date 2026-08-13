@@ -23,10 +23,18 @@ export function RarityGem({
   className?: string;
 }) {
   const color = rarityColor(rarity);
+  const word = rarity ?? "unknown";
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
       <span
         aria-hidden="true"
+        // **A `title` as well as the `sr-only` word below, because they are for two different
+        // readers.** The span is what a screen reader hears; a sighted pointer user hovering a
+        // 6px dot had nothing at all, and on the surfaces that draw the gem *without* the word
+        // — the deck stack's data line, the art grid — the colour is the only thing said. Four
+        // call sites had grown their own `title` before this component consolidated them, and
+        // consolidating meant answering both questions here rather than dropping one.
+        title={word.replace(/^./, (c) => c.toUpperCase())}
         className="size-1.5 shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />
@@ -40,7 +48,7 @@ export function RarityGem({
         style={withLabel && hasRarityColor(rarity) ? { color } : undefined}
       >
         <span className="sr-only">Rarity: </span>
-        {rarity ?? "unknown"}
+        {word}
       </span>
     </span>
   );

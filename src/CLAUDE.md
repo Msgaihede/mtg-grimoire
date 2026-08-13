@@ -128,7 +128,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   which nothing in the suite or Storybook loads. Motion ships `reducedMotion: "never"`, so that
   line is load-bearing rather than decorative.
 - **It only reduces positional keys, which is a trap with a live example.** `marginBottom` is
-  **not** among them, so the deck stack's 269px reflow would have travelled at full speed.
+  **not** among them, so the deck stack's 293px reflow would have travelled at full speed.
   **Any `motion` animation of a non-positional property needs its own `useReducedMotion()`
   opt-out.** That hook is a per-component branch: it reads its value once and **never updates
   on a live media-query change**, so it is the wrong thing to reach for as an app-wide switch.
