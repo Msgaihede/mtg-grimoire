@@ -557,8 +557,14 @@ mod tests {
         .unwrap();
 
         let ix = CardIndex::build(&conn).unwrap();
-        assert!(ix.playable.contains(doc(&conn, "1")), "Bolt is modern-legal");
-        assert!(!ix.playable.contains(doc(&conn, "3")), "Sol Ring masks to 0");
+        assert!(
+            ix.playable.contains(doc(&conn, "1")),
+            "Bolt is modern-legal"
+        );
+        assert!(
+            !ix.playable.contains(doc(&conn, "3")),
+            "Sol Ring masks to 0"
+        );
         assert!(
             !ix.playable.contains(doc(&conn, "5")),
             "an art card is legal nowhere"
@@ -567,7 +573,11 @@ mod tests {
             ix.playable.contains(doc(&conn, "6")),
             "a bit with no key is still a bit, and `legal_mask != 0` returns the row"
         );
-        assert_eq!(ix.playable.and_count(&ix.paper), 3, "Bolt, Helix and the bit");
+        assert_eq!(
+            ix.playable.and_count(&ix.paper),
+            3,
+            "Bolt, Helix and the bit"
+        );
     }
 
     #[test]

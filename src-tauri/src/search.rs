@@ -1114,7 +1114,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(default.total, 4, "absent means the art card still comes back");
+        assert_eq!(
+            default.total, 4,
+            "absent means the art card still comes back"
+        );
 
         let playable = run_search(
             &conn,
