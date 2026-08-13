@@ -3,6 +3,7 @@ import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { FoilOverlay } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
+import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { soleFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
@@ -32,15 +33,19 @@ import type { ValidationIssue } from "./validation/types";
  *
  * **A card is the card**: one whole `grid` image, edge to edge, with the app's own marks
  * overlaid on it. So its height is not a number somebody chose, it is the aspect ratio of a
- * Magic card applied to the width `StackView` gives it:
+ * Magic card applied to the width it is drawn at:
  *
  * ```
- * column 224 (StackView's COLUMN_WIDTH, a fixed 14rem — never measured)
- *   − the section's p-1.5 either side (6 + 6)   = 212
- *   − the card's own border (1 + 1)             = 210  →  STACK_CARD_WIDTH
- * 210 × 680/488                                 = 292.6 →  STACK_IMAGE_HEIGHT (293)
- *   + the border back                           = 295  →  STACK_CARD_HEIGHT
+ * STACK_CARD_WIDTH                              = 210
+ *   × 680/488                                   = 292.6 →  STACK_IMAGE_HEIGHT (293)
+ *   + the card's own border (1 + 1)             = 295   →  STACK_CARD_HEIGHT
  * ```
+ *
+ * That width was itself read *off* the column once — a fixed 14rem, less the section's `p-1.5`
+ * either side and the card's border, which is 224 − 12 − 2 — and the arrow now points the other
+ * way: the card is the given, and `StackView`'s `stackColumnWidth` is what wraps it. The sum is
+ * the same 224 at 1× and it is the only one that can survive a zoom, since a column scaled on
+ * its own would leave the padding growing with the cards. Neither number was ever measured.
  *
  * Collapsed, every card carries a **−261px** bottom margin, so each one advances the stack by
  * 295 − 261 = **34px**. That 34 is unchanged from when this frame was three app-drawn bands and
@@ -68,6 +73,23 @@ import type { ValidationIssue } from "./validation/types";
  * pointer, so one continuous downward sweep crosses four or five strips in ~60ms and, under
  * a bare CSS `:hover`, armed every one of them. The reader landed several cards below the one
  * they aimed at. See {@link useFlipThrough} for what replaced it.
+ *
+ * ## Every constant below is the value at 1×, and the functions are the geometry
+ *
+ * The reader can zoom the card surfaces (ctrl+wheel — `lib/cardZoom.ts`), so none of these sums
+ * is a fixed pixel count any more. Each constant is the **base**: the number a card measured
+ * before the zoom existed, and the number its function still answers at {@link DEFAULT_ZOOM}.
+ * {@link stackCardWidth}, {@link stackImageHeight}, {@link stackCardHeight},
+ * {@link stackAdvance}, {@link stackCollapsedMargin} and {@link stackHeight} are that same
+ * ladder read at a zoom, in that order, each derived from the one above it exactly as the block
+ * above derives them — so there is still one place a number is decided and one place it can be
+ * got wrong.
+ *
+ * **The geometry is rescaled, never transformed.** A `transform: scale()` on the list would be
+ * one line and wrong three times over: it resamples a 488px card image into blur, it draws every
+ * caption at 1× and then stretches it, and — the one that would actually break something — it
+ * leaves every sum above describing a box the card is no longer in. This editor drags cards onto
+ * real boxes and hit-tests them with real coordinates.
  */
 export const STACK_CARD_WIDTH = 210;
 /**
@@ -75,16 +97,85 @@ export const STACK_CARD_WIDTH = 210;
  * cards draw, so the frame cannot disagree with its contents about what shape a card is.
  */
 const CARD_ASPECT = 680 / 488;
+/**
+ * The card's own hairline border, one edge.
+ *
+ * **It does not zoom, and that is why it is a named number rather than part of the sums.** The
+ * border is a Tailwind `border` class — 1px at every zoom, as a hairline should be — so a card
+ * is its image plus two of these whatever size the image is, and `+ 2` in the block above is
+ * this twice rather than a rounding fudge.
+ */
+export const STACK_CARD_BORDER = 1;
 /** The image's own height at {@link STACK_CARD_WIDTH}, which is the card face and nothing else. */
 export const STACK_IMAGE_HEIGHT = Math.round(STACK_CARD_WIDTH * CARD_ASPECT);
-export const STACK_CARD_HEIGHT = STACK_IMAGE_HEIGHT + 2;
+export const STACK_CARD_HEIGHT = STACK_IMAGE_HEIGHT + 2 * STACK_CARD_BORDER;
 /** How far one card advances the stack — its printed title bar and a sliver of art. A floor for
- *  the overlaid quantity chip, not a fraction of the card. */
+ *  the overlaid quantity chip, not a fraction of the card. See {@link stackAdvance}. */
 export const STACK_ADVANCE = 34;
 /** The collapsed bottom margin, in px. Negative: each card is pulled up over its neighbour. */
 export const STACK_COLLAPSED_MARGIN = STACK_ADVANCE - STACK_CARD_HEIGHT;
-/** The bottom margin an open card takes, and therefore the slack the list is given. */
+/**
+ * The bottom margin an open card takes, and therefore the slack the list is given.
+ *
+ * **The one length here that does not zoom.** It is not a part of the card, it is the gap that
+ * says *this card is out of the stack* — and a gap says that at 8px whether the card is 148px
+ * tall or 587px. Scaled down it would be 4px, which reads as two cards that failed to separate;
+ * scaled up it would push the open card's successor further than it has to travel.
+ */
 export const STACK_LIFTED_MARGIN = 8;
+
+/** The card's width at this zoom — the one measurement everything else here is derived from,
+ *  and the one the column above has to agree with (`StackView`'s `stackColumnWidth`). */
+export function stackCardWidth(zoom: number): number {
+  return scaled(STACK_CARD_WIDTH, zoom);
+}
+
+/**
+ * The card face's height at this zoom: a Magic card's proportions applied to the width that is
+ * actually drawn.
+ *
+ * Off {@link stackCardWidth}'s **rounded** answer rather than off `210 × zoom`, because the
+ * rounded width is the box the browser paints — deriving the height from the unrounded one would
+ * put the frame a fraction out of shape at exactly the zooms where the rounding bit.
+ */
+export function stackImageHeight(zoom: number): number {
+  return Math.round(stackCardWidth(zoom) * CARD_ASPECT);
+}
+
+/** The whole card at this zoom: its face, plus the hairline border it does not zoom. */
+export function stackCardHeight(zoom: number): number {
+  return stackImageHeight(zoom) + 2 * STACK_CARD_BORDER;
+}
+
+/**
+ * How far one card advances the stack at this zoom — **it grows with the card and never shrinks
+ * below {@link STACK_ADVANCE}**.
+ *
+ * The one number in this file that is not a proportion, and therefore the one place a plain
+ * multiply is wrong. 34 is a *legibility floor*: the quantity chip is drawn over the reveal
+ * strip and has to fit inside it, and the chip does not get smaller when the card does — it is
+ * 11px type at every zoom, because 5px type is not type. Scaled linearly, a 0.5× stack would
+ * reveal 17px, the chip on each card would cover the printed name of the card above it, and a
+ * collapsed stack would stop being readable at exactly the zoom a reader picked in order to see
+ * more of it at once.
+ *
+ * So `max(floor, scaled)`, and **please do not simplify it back to `scaled(STACK_ADVANCE, zoom)`
+ * on the grounds that the `max` looks redundant** — it is doing all of the work below 1×.
+ *
+ * It stays far under the card at both ends — 34 of a 148px card at 0.5×, 68 of 587px at 2× — so
+ * {@link stackCollapsedMargin} is negative at every stop and every card is still painted over
+ * the one before it. An advance that reached the card's height would stack the pile the wrong
+ * way round with no error anywhere.
+ */
+export function stackAdvance(zoom: number): number {
+  return Math.max(STACK_ADVANCE, scaled(STACK_ADVANCE, zoom));
+}
+
+/** The collapsed bottom margin at this zoom, which is what pulls each card up over its
+ *  neighbour and leaves exactly {@link stackAdvance} of it showing. */
+export function stackCollapsedMargin(zoom: number): number {
+  return stackAdvance(zoom) - stackCardHeight(zoom);
+}
 
 /**
  * How long the pointer must stay on a card before it opens.
@@ -121,16 +212,22 @@ export const STACK_CLOSE_DELAY_MS = 180;
 export const STACK_OPEN_ATTR = "data-stack-open";
 
 /**
- * How tall the list is for `count` cards — **a function of the count and nothing else**.
+ * How tall the list is for `count` cards — **a function of the count and the zoom, and nothing
+ * else**.
  *
- * That is the property `opening_a_card_does_not_change_the_group_height` pins, and it now
- * holds by construction rather than by there being no state to depend on: the height is
- * computed from `cards.length` and reads {@link useFlipThrough}'s answer nowhere. An empty
- * stack is 0 rather than 269 — a group with nothing in it draws its header and no box.
+ * That the open card is not among those two is the property
+ * `opening_a_card_does_not_change_the_group_height` pins, and it holds by construction rather
+ * than by there being no state to depend on: the height is computed from `cards.length` and
+ * reads {@link useFlipThrough}'s answer nowhere. An empty stack is 0 rather than 269 — a group
+ * with nothing in it draws its header and no box.
+ *
+ * The zoom defaults, so every caller that has no opinion — a story, a test pinning the base
+ * arithmetic — still asks the question it always asked. `StackView` has an opinion, and passes
+ * the same one to the column it draws this in.
  */
-export function stackHeight(count: number): number {
+export function stackHeight(count: number, zoom: number = DEFAULT_ZOOM): number {
   if (count === 0) return 0;
-  return STACK_ADVANCE * (count - 1) + STACK_CARD_HEIGHT + STACK_LIFTED_MARGIN;
+  return stackAdvance(zoom) * (count - 1) + stackCardHeight(zoom) + STACK_LIFTED_MARGIN;
 }
 
 /**
@@ -305,6 +402,18 @@ export interface CardStackProps {
    * {@link stackHeight} is still a function of the count alone.
    */
   actions?: DeckCardActions;
+  /**
+   * How large the reader has asked cards to be drawn — `useAppStore`'s `cardZoom`.
+   *
+   * **Passed in rather than read here, for the reason `currency` is.** The card's width is not
+   * this component's to know: it is whatever the column gives it, and `StackView` is what sizes
+   * that column. Both numbers come off the same zoom, so a card whose image box was computed at
+   * one zoom inside a column sized at another is not a bug that can happen — the stack cannot
+   * disagree with the box it is in any more than it can quote a different marketplace from the
+   * heading above it. Defaulted, so a story or a test that has no opinion draws the base
+   * geometry.
+   */
+  zoom?: number;
   className?: string;
 }
 
@@ -332,6 +441,7 @@ export function CardStack({
   violations,
   onSelect,
   actions,
+  zoom = DEFAULT_ZOOM,
   className,
 }: CardStackProps) {
   const { openIndex, arm, openNow, release } = useFlipThrough();
@@ -353,7 +463,7 @@ export function CardStack({
     <ul
       aria-label={label}
       onPointerLeave={release}
-      style={{ height: stackHeight(cards.length) }}
+      style={{ height: stackHeight(cards.length, zoom) }}
       className={cn(
         "relative block overflow-visible",
         openIndex !== null && LAYER.raised,
@@ -367,6 +477,7 @@ export function CardStack({
           currency={currency}
           index={index}
           open={index === openIndex}
+          zoom={zoom}
           onArm={arm}
           onOpenNow={openNow}
           onRelease={release}
@@ -409,6 +520,7 @@ function StackedCard({
   currency,
   index,
   open,
+  zoom,
   onArm,
   onOpenNow,
   onRelease,
@@ -423,6 +535,10 @@ function StackedCard({
   /** Its place in the stack, which is the whole of its identity to {@link useFlipThrough}. */
   index: number;
   open: boolean;
+  /** The stack's zoom, handed down whole rather than resolved into pixels above: the two
+   *  numbers this card needs are derived here, from the same functions the list's own height
+   *  was, so there is no second arithmetic to keep in step. */
+  zoom: number;
   onArm: (index: number) => void;
   onOpenNow: (index: number) => void;
   onRelease: () => void;
@@ -468,7 +584,7 @@ function StackedCard({
       onBlur={onRelease}
       {...(open ? { [STACK_OPEN_ATTR]: "" } : {})}
       initial={false}
-      animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : STACK_COLLAPSED_MARGIN }}
+      animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : stackCollapsedMargin(zoom) }}
       transition={transition}
       className={cn(
         // `group`, so the controls below are revealed by the pointer and the caret. Nothing
@@ -509,15 +625,19 @@ function StackedCard({
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
       >
         {/* The card. An explicit height rather than an `aspect-[488/680]`, because the stack's
-            arithmetic depends on this number being exactly {@link STACK_IMAGE_HEIGHT} — and it is
-            set here, from the constant, so the frame and the file's own sums cannot drift.
+            arithmetic depends on this number being exactly {@link stackImageHeight} — and it is
+            set here, from that same function, so the frame and the file's own sums cannot drift.
 
             `object-cover` against a 210:293 box where the card is 210:292.6, which crops **0.4px**
             off it. Worth taking over `object-contain`: a fraction of a pixel of the card's border
             is invisible, and a letterbox bar between the printed frame and an overlay strip would
-            not be. */}
+            not be. The rounding is at most half a pixel at any zoom, for the same reason.
+
+            An inline style rather than a height utility, and not merely by preference: Tailwind
+            scans source text for whole class names, so a computed one emits no rule at all and
+            the card would silently have no height. */}
         <span
-          style={{ height: STACK_IMAGE_HEIGHT }}
+          style={{ height: stackImageHeight(zoom) }}
           className="relative block overflow-hidden bg-surface"
         >
           {face.src && !face.failed ? (
