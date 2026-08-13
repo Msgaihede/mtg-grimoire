@@ -24,8 +24,10 @@
  *
  * Adding a mark here means asking which of those two says it in words.
  */
+import { Crown } from "lucide-react";
+import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { tagColorCss } from "./tagColors";
+import { tagColorCss, tagFgCss, UNTAGGED_COLOR } from "./tagColors";
 
 /**
  * The one tag a card wears, as an 8px chip in its own colour with the name one hover away.
@@ -54,6 +56,73 @@ export function TagDot({
 }
 
 /**
+ * The copy count as a **filled tag in the card's own tag colour** — the deck stack's mark, and
+ * the one place the tag and the quantity are drawn as a single object.
+ *
+ * ## Why the two were merged
+ *
+ * The stack draws whole card faces, and the only part of a collapsed one the reader sees is a
+ * 34px strip. Two separate marks in it — an 8px dot and a grey count chip — spend that strip
+ * twice to say two things a reader takes in as one ("three of these, and they are my ramp").
+ * So the count is *printed on* the tag: one object, one glance, and the strip keeps room for
+ * the printed name underneath it.
+ *
+ * **An untagged card is grey**, {@link UNTAGGED_COLOR}, never the gold a missing token falls
+ * to. A filled mark has to be some colour, and if the untagged one were gold then gold would
+ * stop being something a tag says. This is the one caller that draws the distinction, which is
+ * why the constant lives beside the palette rather than here.
+ *
+ * The slanted right edge is what keeps it from reading as a button: a printed card has no
+ * rectangles in that corner, and a square chip on the art looks like something to press.
+ *
+ * {@link TagDot} is untouched and is still what the table, the text columns and the categories
+ * panel draw — a row has a column for the count and does not need the two folded together.
+ */
+export function QuantityTag({
+  quantity,
+  name,
+  color,
+  className,
+}: {
+  quantity: number;
+  /** The tag's name, or `null` for an untagged card. `deck_cards` answers `tagId`, `tagName`
+   *  and `tagColor` as a set — all three `null` together — so this decides both. */
+  name: string | null;
+  /** The stored palette token, never a CSS colour — see `tagColors.ts`. */
+  color: string | null;
+  className?: string;
+}) {
+  const paint = name === null ? UNTAGGED_COLOR : { css: tagColorCss(color), fg: tagFgCss(color) };
+  return (
+    <span
+      aria-hidden="true"
+      // Both facts, because the count alone would make the colour a riddle and the name alone
+      // would make the number one. The words themselves are in `deckCardName`, which is the
+      // only text inside a labelled button anyone hears.
+      title={name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`}
+      style={{
+        backgroundColor: paint.css,
+        color: paint.fg,
+        clipPath: "polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%)",
+      }}
+      className={cn(
+        // **The z-index is load-bearing and `relative` alone was not enough.** This tag has to
+        // cover the Game Changer banner tucked 10px under its slanted tail, and the obvious
+        // trick — leave the banner static and make this positioned — does not work on flex
+        // items: they paint in order-modified document order, so the later sibling won. The
+        // lowest rung on the scale, and `layers.ts` has the measurement.
+        "relative flex h-[22px] shrink-0 items-center pr-3 pl-1.5",
+        LAYER.overlappingMark,
+        "font-mono text-xs leading-none tabular-nums",
+        className,
+      )}
+    >
+      {quantity}
+    </span>
+  );
+}
+
+/**
  * A game changer, as two gold letters.
  *
  * Gold and abbreviated on purpose: it is a fact about the card, not a problem with the deck,
@@ -72,6 +141,69 @@ export function GameChangerBadge({ className }: { className?: string }) {
       )}
     >
       GC
+    </span>
+  );
+}
+
+/**
+ * The same fact as a **stamped gold banner**, for the one surface with room to spell it out.
+ *
+ * `GC` is what a 150px grid tile and a table row can afford; a 210px card face in the stack can
+ * carry the words, and it should — two letters are a code the reader has to have learnt, and
+ * this is the surface a new reader meets the concept on. The four separations
+ * {@link RuleBreakMark} must keep are all still kept, which is the only thing that made
+ * spelling it out safe: the **words** differ (`Game Changer` against `RULE BREAK`), the
+ * **colour** differs (the gold stamp against destructive), the **place** differs (tucked into
+ * the title strip on the left against the top-right corner), and only a rule break changes the
+ * card's own **edge**.
+ *
+ * ## The two details that are not decoration
+ *
+ * **It is deliberately not positioned, and that is no longer what decides the paint order.**
+ * It sits 10px under {@link QuantityTag}'s slanted tail, and the tag has to be the one on top.
+ * The first attempt did it by leaving this static and marking the tag `relative`, on the rule
+ * that a positioned element paints above a static sibling — **which is false for flex items**,
+ * as the shipped window then demonstrated. `LAYER.overlappingMark` on the tag is the answer;
+ * this staying static is now only tidiness.
+ *
+ * What it still buys is the fold — the dark seam that makes the ribbon read as folded rather
+ * than printed. It is a **background layer** rather than an absolutely positioned child, which
+ * costs nothing and means this element never has to be a containing block for anything.
+ *
+ * The lettering is `font-heading` at 8px, which is the one place Cinzel goes under the 18px its
+ * brief sets. A seal is the exception the brief is about the absence of: two fixed words, never
+ * body text, never a string that can grow — and the serif is what makes it read as *stamped
+ * into* the metal rather than typed on it.
+ */
+export function GameChangerBanner({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      title="Game changer"
+      style={{
+        // The ribbon's forked tail. The notch is cut into the *right* edge, so the banner
+        // points away from the tag it emerges from rather than back into it.
+        clipPath: "polygon(0 0, 100% 0, calc(100% - 10px) 50%, 100% 100%, 0 100%)",
+        backgroundImage: "linear-gradient(90deg, rgba(0,0,0,0.30), rgba(0,0,0,0.05))",
+        backgroundSize: "5px 100%",
+        backgroundPosition: "right 9px top",
+        backgroundRepeat: "no-repeat",
+      }}
+      className={cn(
+        "-ml-2.5 mt-1 flex h-3 flex-none items-center gap-1 bg-pie-gold-deep pl-3.5 pr-[21px]",
+        "text-accent-fg shadow-[0_1px_5px_rgba(0,0,0,0.45)]",
+        className,
+      )}
+    >
+      <Crown className="block size-[9px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
+      <span
+        className={cn(
+          "font-heading text-[0.5rem] leading-none font-semibold tracking-[0.06em] whitespace-nowrap",
+          "[text-shadow:0_1px_0_rgba(255,255,255,0.25)]",
+        )}
+      >
+        Game Changer
+      </span>
     </span>
   );
 }

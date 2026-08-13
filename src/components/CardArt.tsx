@@ -171,7 +171,23 @@ export function CardArt({
  *
  * The enclosing element needs `relative` and `overflow-hidden`; `CardArt` has both.
  */
-export function FoilOverlay({ finish }: { finish: Finish | null }) {
+export function FoilOverlay({
+  finish,
+  mark = true,
+}: {
+  finish: Finish | null;
+  /**
+   * Draw the chip as well as the sheen. `false` for a frame that says the finish **in words
+   * somewhere else** — the deck stack's card, whose data line under the art carries a
+   * {@link FinishMark} beside the price.
+   *
+   * That is not a weaker version of this frame, it is the rule below applied: the chip and the
+   * sheen do different jobs, and the chip's job is done better by a mark on a line the reader
+   * is already reading than by a second badge in a corner two other marks are competing for.
+   * What must not happen is *neither* — a sheen with nothing naming it is decoration.
+   */
+  mark?: boolean;
+}) {
   if (!finish) return null;
   return (
     // **`aria-hidden` over the whole overlay, chip included, and that is load-bearing.** This
@@ -203,9 +219,11 @@ export function FoilOverlay({ finish }: { finish: Finish | null }) {
           Top-right, because a tile's other two corners are spoken for: bottom-left the owned
           badge, top-left the printing count. The backing is the app's own table felt at 85 %,
           matching those two exactly. */}
-      <span className="absolute top-1 right-1 flex items-center rounded bg-bg/85 px-1 py-0.5">
-        <FinishMark finish={finish} />
-      </span>
+      {mark && (
+        <span className="absolute top-1 right-1 flex items-center rounded bg-bg/85 px-1 py-0.5">
+          <FinishMark finish={finish} />
+        </span>
+      )}
     </span>
   );
 }

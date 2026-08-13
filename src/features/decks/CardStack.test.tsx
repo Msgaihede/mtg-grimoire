@@ -11,6 +11,8 @@ import {
   STACK_CARD_WIDTH,
   STACK_CLOSE_DELAY_MS,
   STACK_COLLAPSED_MARGIN,
+  STACK_DATA_HEIGHT,
+  STACK_DATA_RISE,
   STACK_IMAGE_HEIGHT,
   STACK_LIFTED_MARGIN,
   STACK_OPEN_ATTR,
@@ -93,7 +95,7 @@ describe("CardStack geometry", () => {
    * would hide.
    *
    * They decide the whole interaction as well as the look: with card *N* open, card *k*'s top is
-   * `k·34` for `k ≤ N`, so stepping to card *N+1* moves exactly one card by 269px and leaves
+   * `k·34` for `k ≤ N`, so stepping to card *N+1* moves exactly one card by 293px and leaves
    * every other top alone.
    *
    * **None of them is a Tailwind literal any more.** The collapsed margin used to be written
@@ -105,21 +107,25 @@ describe("CardStack geometry", () => {
    * so naming it would emit a rule for a utility nothing uses.)
    */
   it("advances by one reveal strip per card and leaves one lift of slack", () => {
-    // 210px of image at 488×680, rounded, plus the card's own 1px border top and bottom.
+    // 210px of image at 488×680, rounded, plus the card's own 1px border top and bottom, plus
+    // the data line standing under the face less the 4px it rides back up over it.
     expect(STACK_CARD_WIDTH).toBe(210);
     expect(STACK_IMAGE_HEIGHT).toBe(Math.round((STACK_CARD_WIDTH * 680) / 488));
     expect(STACK_IMAGE_HEIGHT).toBe(293);
-    expect(STACK_CARD_HEIGHT).toBe(STACK_IMAGE_HEIGHT + 2);
+    expect(STACK_DATA_HEIGHT).toBe(28);
+    expect(STACK_DATA_RISE).toBe(4);
+    expect(STACK_CARD_HEIGHT).toBe(STACK_IMAGE_HEIGHT + 2 + STACK_DATA_HEIGHT - STACK_DATA_RISE);
+    expect(STACK_CARD_HEIGHT).toBe(319);
 
     expect(STACK_CARD_HEIGHT + STACK_COLLAPSED_MARGIN).toBe(STACK_ADVANCE);
     expect(STACK_ADVANCE).toBe(34);
-    expect(STACK_COLLAPSED_MARGIN).toBe(-261);
+    expect(STACK_COLLAPSED_MARGIN).toBe(-285);
     expect(STACK_LIFTED_MARGIN).toBe(8);
     // What one step down the stack costs the one card that moves.
-    expect(STACK_LIFTED_MARGIN - STACK_COLLAPSED_MARGIN).toBe(269);
+    expect(STACK_LIFTED_MARGIN - STACK_COLLAPSED_MARGIN).toBe(293);
 
-    // The canvas's own formula, `34 * cards.length + 269`.
-    for (const n of [1, 2, 5, 17]) expect(stackHeight(n)).toBe(34 * n + 269);
+    // The canvas's own formula, `34 * cards.length + 293`.
+    for (const n of [1, 2, 5, 17]) expect(stackHeight(n)).toBe(34 * n + 293);
     // The last card's bottom edge, with the slack under it.
     expect(stackHeight(5) - (STACK_ADVANCE * 4 + STACK_CARD_HEIGHT)).toBe(STACK_LIFTED_MARGIN);
   });
@@ -143,7 +149,7 @@ describe("CardStack geometry", () => {
    * the reason `lib/tokens.test.ts`'s opt-out sweep no longer has anything here to find. The
    * opt-out that replaces it is `useReducedMotion()` inside the component: the app-wide
    * `MotionConfig reducedMotion="user"` makes transforms and `width`/`height`/`top`/`left`
-   * instant and **`margin-bottom` is not in that set**, so a 286px reflow would otherwise run
+   * instant and **`margin-bottom` is not in that set**, so a 293px reflow would otherwise run
    * at full travel for a reader who asked their OS for less. That branch is a source fact — it
    * produces no DOM difference under the suite's `skipAnimations` — and the live CDP pass owns
    * proving it, exactly as it owns the paint.
@@ -151,7 +157,7 @@ describe("CardStack geometry", () => {
    * Real timers, deliberately: `motion` commits the style on an animation frame, and the fake
    * clock the flip-through tests run on does not drive one.
    */
-  it("writes the margin as an inline style, from −278px collapsed to 8px open", async () => {
+  it("writes the margin as an inline style, from −285px collapsed to 8px open", async () => {
     const user = userEvent.setup();
     render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
@@ -309,7 +315,7 @@ describe("CardStack geometry at a zoom", () => {
 /**
  * **The defect this component was rebuilt for, and the two delays that close it.**
  *
- * A closed card is overlapped by 278px by its successor, so the only hittable part of one is
+ * A closed card is overlapped by 285px by its successor, so the only hittable part of one is
  * its 34px strip — which means a continuous downward sweep crosses four or five of them in
  * ~60ms. Under the CSS `:hover` this replaced, every one of those armed instantly and the
  * reader landed several cards below the one they aimed at. What was missing was hover intent:
@@ -521,7 +527,7 @@ describe("CardStack does not reflow", () => {
    * the obvious place to put them — in the card, under the data line — would have made
    * {@link STACK_CARD_HEIGHT} a lie and every number above it with it. They are drawn *over*
    * the card instead, absolutely positioned, so they take no height at all: the same card is
-   * still 312px whether it can be edited or not, and `stackHeight` never learns that actions
+   * still 319px whether it can be edited or not, and `stackHeight` never learns that actions
    * exist.
    *
    * This is the test that fails the day somebody puts them in the flow. It is deliberately not
@@ -562,7 +568,7 @@ describe("CardStack does not reflow", () => {
    * A *card* is not, and this is the assertion that matters. These are `relative` siblings, so
    * painting order is document order — every card is drawn over the one before it, which is the
    * stacked look itself. Raising the open one inverts that against the whole tail of the stack,
-   * and it does it on the first frame, while the cards after it are still 269px from where they
+   * and it does it on the first frame, while the cards after it are still 293px from where they
    * are going: the card appears to jump in front and the stack catches up around it. Letting
    * them uncover it is the whole of the fix, and once they settle nothing is over it anyway.
    *
@@ -686,19 +692,28 @@ describe("CardStack cards", () => {
   });
 
   /**
-   * **The name and the mana cost are on the picture now, and that is the change.**
+   * **The frame is drawn under every card, whether or not a picture arrives to cover it.**
    *
-   * The card used to be three app-drawn bands with the name in text and the cost as `mana-font`
-   * pills; it is one whole `grid` image, so both are printed where every player already reads
-   * them. What must not go with them is the *accessible* name — a card whose only name is inside a
-   * decorative `<img alt="">` is a card a screen reader cannot tell from any other, so
-   * `deckCardName` carries it on the button and this is the test that says so.
+   * It used to be the picture's `else`, which made the commonest state of this component its
+   * worst: a category is a wall of lazy `<img>`s, and until each one's bytes land its card was
+   * a grey box. The card is known before its picture is, so the app now draws what it knows —
+   * name, cost, type line — and the photograph paints over it when it arrives.
+   *
+   * That is the assertion here, and its converse: the printed card is still the card, so the
+   * `<img>` is `alt=""` decoration, and the *accessible* name is still `deckCardName`'s on the
+   * button. A card whose only name were inside a decorative image is one a screen reader cannot
+   * tell from any other.
    */
-  it("leaves the name and cost to the printed card, but not the accessible name", () => {
+  it("draws the frame under the picture, and still names the card on the button", () => {
     render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
 
-    expect(screen.queryByText("Sol Ring")).not.toBeInTheDocument();
-    expect(document.querySelectorAll("i.ms-cost")).toHaveLength(0);
+    // The frame is there, under the art: the name in text and the cost as `mana-font` pills.
+    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
+    expect(document.querySelectorAll("i.ms-cost")).toHaveLength(CARDS.length);
+    // Its reason band says nothing while a picture is on its way — a backdrop is not a state.
+    for (const reason of ["No image", "No card", "Retrying…"]) {
+      expect(screen.queryByText(reason)).not.toBeInTheDocument();
+    }
 
     // The picture is the card, and it is decoration: the button beside it does the talking.
     const art = document.querySelectorAll("img");
@@ -708,7 +723,7 @@ describe("CardStack cards", () => {
   });
 
   /**
-   * …and where the picture cannot be drawn, the name comes back in text.
+   * …and where the picture cannot be drawn, the same frame says why.
    *
    * An orphan is the case that reaches it without a network: its printing has left `cards`, so
    * nothing is fetched at all, and a tile reading only "No card" would be the one place in the app
@@ -759,12 +774,19 @@ describe("CardStack cards", () => {
     expect(screen.queryByText("0/3")).not.toBeInTheDocument();
   });
 
-  it("shows a tag as a dot with its name behind it", () => {
+  /**
+   * **The tag and the copy count are one mark now**, and this is what says so: there is no
+   * second element carrying the tag, the count is drawn on it, and both facts are in the one
+   * `title`. A stack's reveal strip is 34px and was spending it twice to say two things a
+   * reader takes in as one.
+   */
+  it("shows a tag as the colour of the copy count, with both facts behind it", () => {
     render(
       <CardStack
         cards={[
           card({
             name: "Sol Ring",
+            quantity: 3,
             ownedQuantity: 1,
             tagId: 1,
             tagName: "Wincon",
@@ -776,10 +798,25 @@ describe("CardStack cards", () => {
       />,
     );
 
-    // A `title` for the pointer; the word itself in the button's name, which is the only
-    // place a reader inside a labelled button hears anything.
-    expect(screen.getByTitle("Wincon")).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByRole("button", { name: "Sol Ring, Wincon" })).toBeInTheDocument();
+    // One mark, carrying the count as its text and the tag as its colour.
+    const tag = screen.getByTitle("Wincon · 3 in this pile");
+    expect(tag).toHaveAttribute("aria-hidden", "true");
+    expect(tag).toHaveTextContent("3");
+    expect(tag.style.backgroundColor).toBe("var(--color-pie-g)");
+    // The word itself is in the button's name, which is the only place a reader inside a
+    // labelled button hears anything.
+    expect(
+      screen.getByRole("button", { name: "Sol Ring, 3 copies, you own 1 of 3, Wincon" }),
+    ).toBeInTheDocument();
+  });
+
+  /** An untagged card still needs a colour under its count, and it is the colourless deep —
+   *  never the gold a missing token falls to, or gold would stop being something a tag says. */
+  it("draws an untagged card's count on the colourless deep", () => {
+    render(<CardStack cards={[card({ name: "Sol Ring" })]} label="Ramp" currency="usd" />);
+
+    const tag = screen.getByTitle("1 in this pile");
+    expect(tag.style.backgroundColor).toBe("var(--color-pie-c)");
   });
 
   /**
@@ -821,16 +858,116 @@ describe("CardStack cards", () => {
       />,
     );
 
-    for (const label of ["GC", "RULE BREAK", "0/2"]) {
-      expect(screen.getByText(label)).toHaveAttribute("aria-hidden", "true");
+    // The banner's own words are inside it, so the element carrying `aria-hidden` is the mark
+    // rather than the text — `closest` asks the question the way the DOM answers it.
+    for (const label of ["Game Changer", "RULE BREAK", "0/2"]) {
+      expect(screen.getByText(label).closest("[aria-hidden]")).not.toBeNull();
     }
-    expect(screen.getByTitle("Fast mana")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByTitle("Fast mana · 2 in this pile")).toHaveAttribute("aria-hidden", "true");
 
     expect(
       screen.getByRole("button", {
         name: "Mana Crypt, 2 copies, you own 0 of 2, Fast mana, game changer, rule break: Mana Crypt is banned in Commander.",
       }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("CardStack tooltips", () => {
+  /**
+   * **Every mark on a card carries its own sentence for the pointer**, and that is a separate
+   * contract from the accessible name.
+   *
+   * `deckCardName` on the button is what a screen reader gets, and it is the *whole* of what one
+   * gets — an `aria-label` replaces its element's content, so every `sr-only` span inside these
+   * marks is announced to nobody. A sighted reader using a pointer has the opposite problem:
+   * they can see a 6px gold dot, a slanted colour tag and a crown, and none of those is a word.
+   * The `title` is what closes that half, and it is per mark rather than per card because the
+   * question a reader has is about the mark they are pointing at.
+   *
+   * The rarity gem is the one worth naming: it is drawn here **without** its word, so the colour
+   * was the entire message until `RarityGem` grew a `title` of its own.
+   */
+  it("gives every mark on a card its own sentence for the pointer", () => {
+    render(
+      <CardStack
+        cards={[
+          card({
+            name: "Mana Crypt",
+            quantity: 2,
+            ownedQuantity: 0,
+            rarity: "mythic",
+            gameChanger: true,
+            tagId: 1,
+            tagName: "Fast mana",
+            tagColor: "ember",
+            finishes: JSON.stringify(["foil"]),
+          }),
+        ]}
+        label="Ramp"
+        currency="usd"
+        violations={
+          new Map([
+            [
+              "c-Mana Crypt",
+              [
+                {
+                  severity: "error" as const,
+                  code: "banned",
+                  message: "Mana Crypt is banned in Commander.",
+                  cardIds: ["c-Mana Crypt"],
+                },
+              ],
+            ],
+          ])
+        }
+      />,
+    );
+
+    for (const sentence of [
+      // The tag and the count are one mark, so one `title` says both.
+      "Fast mana · 2 in this pile",
+      "Game changer",
+      "Mana Crypt is banned in Commander.",
+      // The gem's colour, in a word — the data line draws no rarity text.
+      "Mythic",
+      // What the three-letter code stands for. `PF26` is not a word anybody knows.
+      "Limited Edition Alpha · #161",
+      "You own 0 of the 2 this deck wants",
+      // `FinishMark`'s own `<title>`, which is how an SVG says it.
+      "Foil",
+    ]) {
+      expect(screen.getByTitle(sentence)).toBeInTheDocument();
+    }
+  });
+
+  /** An untagged card still answers the question the colour raises — the count alone, with no
+   *  tag name invented for it. */
+  it("says only the count on an untagged card", () => {
+    render(
+      <CardStack cards={[card({ name: "Sol Ring", quantity: 4 })]} label="Ramp" currency="usd" />,
+    );
+
+    expect(screen.getByTitle("4 in this pile")).toBeInTheDocument();
+  });
+
+  /**
+   * **An orphan's printing gets no tooltip at all, and that is the honest answer.**
+   *
+   * `setCode` and `collectorNumber` are denormalised onto `deck_cards` precisely so a printing
+   * that has left the corpus is still listed and counted; `setName` is read from `cards`, which
+   * no longer has the row. The code stands on its own rather than being annotated with a guess.
+   */
+  it("leaves the printing unannotated when the set's name is not known", () => {
+    render(
+      <CardStack
+        cards={[card({ name: "Gone Card", setName: null, needsReview: "It left the database." })]}
+        label="Ramp"
+        currency="usd"
+      />,
+    );
+
+    expect(screen.getByText("LEA · 161")).not.toHaveAttribute("title");
   });
 });
 
@@ -865,9 +1002,11 @@ describe("CardStack marks", () => {
     withIssue();
     const [first, second] = screen.getAllByRole("listitem");
     const mark = screen.getByText("RULE BREAK");
+    const banners = screen.getAllByTitle("Game changer");
 
     // The words, and the whole sentence behind them — in the mark's `title` for the pointer
-    // and in the card's own name for everyone else.
+    // and in the card's own name for everyone else. Both marks are spelled out on this
+    // surface, which is what makes the other three separations carry the whole load.
     expect(mark).toBeInTheDocument();
     expect(mark).toHaveAttribute("title", "Mana Crypt is banned in Commander.");
     expect(
@@ -875,14 +1014,18 @@ describe("CardStack marks", () => {
         name: /rule break: Mana Crypt is banned in Commander\./,
       }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("GC")).toHaveLength(2);
+    expect(screen.getAllByText("Game Changer")).toHaveLength(2);
 
-    // The colour: destructive for the break, the pie gold for the badge.
+    // The colour: destructive for the break, the deep gold stamp for the banner.
     expect(mark.className).toContain("text-destructive");
-    expect(screen.getAllByText("GC")[0].className).toContain("text-pie-gold");
+    expect(banners[0].className).toContain("bg-pie-gold-deep");
+    expect(banners[0].className).not.toContain("destructive");
 
-    // The place: the break is over the art, the badge is in the title bar.
+    // The place: the break is the card's top-right corner, the banner is in the title strip
+    // on the left, tucked under the quantity tag.
     expect(mark.className).toContain("absolute");
+    expect(mark.className).toContain("right-[5px]");
+    expect(banners[0].className).not.toContain("absolute");
 
     // The edge: only the card that breaks a rule gets one.
     expect(first.className).toContain("border-destructive");

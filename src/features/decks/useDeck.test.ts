@@ -115,6 +115,7 @@ const BOLT: DeckCard = {
   quantity: 4,
   name: "Lightning Bolt",
   setCode: "lea",
+  setName: "Limited Edition Alpha",
   collectorNumber: "161",
   lang: "en",
   needsReview: null,

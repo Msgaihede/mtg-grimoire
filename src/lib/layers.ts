@@ -28,6 +28,27 @@
  */
 export const LAYER = {
   /**
+   * A mark drawn over the mark beside it, inside one card's own 27px strip: the deck stack's
+   * quantity tag over the Game Changer banner tucked under its slanted tail.
+   *
+   * **The lowest rung, and it competes with nothing outside the card.** Both marks are siblings
+   * in one absolutely positioned strip, so all this decides is which of the two paints first —
+   * it is below {@link LAYER.raised} and therefore below everything else here, which is the
+   * whole of its relationship to the rest of the scale.
+   *
+   * It is a real z-index rather than a paint-order trick, and the reason is worth keeping
+   * because the trick *looks* like it should work. "A positioned element paints above a static
+   * sibling" is true of block and inline boxes and **false of flex items**: the flexbox spec
+   * has them paint as inline blocks in *order-modified document order*, so a `position:
+   * relative` flex item with `z-index: auto` still loses to a later sibling. Measured in the
+   * shipped window 2026-08-13 — `document.elementFromPoint` inside the 10px overlap answered
+   * the banner, with the tag computing `position: relative` and the banner `position: static`.
+   *
+   * The same sentence of that spec is what makes this entry work at all: on a flex item, a
+   * z-index other than `auto` creates a stacking context **whatever its position**.
+   */
+  overlappingMark: "z-1",
+  /**
    * Lifted above its siblings and still under a sticky header: a virtualised row holding an
    * open popup, the deck editor's drop indicator, and the deck stack's open card together
    * with the stack it is in.

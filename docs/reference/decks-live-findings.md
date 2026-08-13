@@ -6,6 +6,16 @@ The whole rebuild had been proven by tests and by Storybook, and **neither runs 
 that ships**. This is what a CDP pass over the real WebView2 added, and the three bugs it found
 are all things no suite could have seen.
 
+> **Every stack pixel figure below belongs to a geometry the 2026-08-13 `CardStack.dc.html`
+> redesign replaced, and none of it has been re-driven.** The data line moved out of the picture
+> and became the card's foot, so a card is **319px** rather than 295, the collapsed margin is
+> **−285px** rather than −261, the push-down is **293px** rather than 269, and
+> `stackHeight(n)` is `34n + 293` rather than `34n + 269`. The _findings_ all survive — what was
+> measured is that the margin trick pushes cards out of a box whose height does not change, that
+> exactly one card moves per step, and that the open card paints behind its unmoved successors —
+> and only the numbers are stale. A live number belongs to a geometry; the arithmetic that
+> replaces these is pinned by `CardStack.test.tsx`.
+
 - **The stack's push-down is real**: hovering a card moved its `margin-bottom` −278px → **8px**
   and pushed every later card down by exactly **286px**, while the list's height stayed **490px**
   across the whole gesture. `stackHeight` matched the formula for every stack on screen.
@@ -44,14 +54,52 @@ are all things no suite could have seen.
   paint-order bug needs: jsdom lays nothing out and paints nothing, so the whole suite was green
   on it, and a class assertion is all a test can ever hold.
 - **Do not aim `hover` at the card's `<li>` — aim at its marks strip.** `cdp.mjs hover` targets
-  an element's box **centre**, and a card is 295px tall in a stack that advances 34px, so the
-  centre of card 2 is painted over by card 6. The strip to aim at is the `absolute inset-x-0
-top-0` span (25px, inside the 34px reveal); tag it per card and approach sideways with
-  `--from`. This is the same trap as the old `span:first-child` note, one rewrite later, and it
-  gets worse as the card gets taller.
+  an element's box **centre**, and a card is 319px tall in a stack that advances 34px, so the
+  centre of card 2 is painted over by card 7. The strip to aim at is the marks strip — since the
+  2026-08-13 redesign an `absolute top-0 left-0 right-[5px]` span, **27px** tall inside the 34px
+  reveal; tag it per card and approach sideways with `--from`. This is the same trap as the old
+  `span:first-child` note, two rewrites later, and it gets worse as the card gets taller — which
+  it just did.
 - **`data-stack-open` exists so a probe can _count_ open cards.** The CSS lift was observable
   from neither a test nor `cdp.mjs` — `userEvent.hover` never engaged `:hover`, and nothing in
   the DOM said which card was up. Count activations, never whether one happened.
+- **`element.focus()` over CDP opens nothing, and it is not a bug in the component.** The window
+  is in the background while it is being driven, so `document.hasFocus()` is **false** and
+  Chromium sets `activeElement` without dispatching `focus` — `CardStack`'s `onFocus` never
+  runs and `[data-stack-open]` stays at 0. Measured 2026-08-13: `hasFocus()` returned `false`
+  while the button's `aria-label` read back correctly from the same eval, which is exactly how
+  this looks like a broken keyboard path. Drive the **pointer** instead —
+  `li.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))` then wait past the 70ms
+  dwell — or `cdp.mjs hover --probe`, which is what the numbers above were taken with. Testing
+  the caret path live needs the window actually focused.
+- **To read a 210px card at a legible size, clone the column rather than zoom the page.**
+  `document.documentElement.style.zoom` reflows the editor and carries the stack out of the
+  viewport; `cdp.mjs size` is fixed at `deviceScaleFactor: 1` and cannot magnify. What works is
+  cloning the column into a `position: fixed` element with its own `zoom` — inline styles and
+  `data-*` attributes come with the clone, so an open card stays open in it. Remove it before
+  any further probe: it is a second copy of every `[data-stack-column]` and `[data-stack-open]`
+  in the document, and it will double every count taken after it.
+- **"A positioned element paints above a static sibling" is false for flex items, and only the
+  window could say so.** The redesign's quantity tag has to cover the Game Changer banner tucked
+  10px under its slanted tail. The first implementation did it without a z-index — tag
+  `position: relative`, banner `position: static` — on that rule. Measured 2026-08-13 with
+  `document.elementFromPoint` inside the overlap: the answer was **the banner**, with the tag
+  computing `position: relative` and the banner `position: static`. Flex items paint as inline
+  blocks in *order-modified document order*, so a later sibling wins whatever its position. The
+  fix is `LAYER.overlappingMark`, which works for the same reason the trick did not: on a flex
+  item a z-index other than `auto` creates a stacking context whatever its position. Re-probed
+  at three depths — 5px and 8px into the overlap answer the tag, and 3px answers the banner,
+  which is correct because the tag's `clip-path` has already receded there. **jsdom paints
+  nothing and a class assertion cannot see any of this**; the suite was green throughout.
+- **Driven 2026-08-13 after the `CardStack.dc.html` redesign, on a 10-row Commander deck**
+  seeded through `deck_import_resolve`/`deck_import_commit` over `window.__TAURI_INTERNALS__`:
+  the quantity tag, the Game Changer banner, `RULE BREAK`, the data line and the stepper column
+  all draw, `[data-stack-open]` counted exactly **1** across a hover, and the printed card faces
+  paint over the app-drawn frame. **The pixel geometry was not re-measured** — no margin, top or
+  list height was read back — so the superseded note at the top of this file still stands. Two
+  defects it did find, both now fixed: the stepper was 28px with a 6px radius against the
+  canvas's 24px and 8px, and the `Move…` select — which the canvas does not draw at all — sat
+  beside the stepper and covered about three-fifths of the width of a 210px card face.
 - **Reduced motion holds**: `transitionProperty` is `none` on the view buttons under
   `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
   — the exact false failure [live-ui-verification.md](live-ui-verification.md) warns about, reproduced here on purpose.
