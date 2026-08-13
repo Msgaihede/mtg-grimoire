@@ -239,9 +239,9 @@ describe("CardStack flip-through", () => {
   /**
    * **Arming a card cancels a pending close, and this is the frame it exists for.**
    *
-   * The close is scheduled 180ms out; the second card's dwell commits at 189ms. Without the
-   * cancel the stack would be fully closed for those nine milliseconds — and in the real
-   * gesture, for however long the reader takes between two cards. The assertion at 189ms is
+   * The close is scheduled 180ms out; the second card's dwell commits at 200ms. Without the
+   * cancel the stack would be fully closed for those twenty milliseconds — and in the real
+   * gesture, for however long the reader takes between two cards. The assertion at 199ms is
    * the one that fails if the cancel is dropped.
    */
   it("never shows a closed stack while the reader crosses to the next card", async () => {
@@ -256,8 +256,8 @@ describe("CardStack flip-through", () => {
     await tick(STACK_CLOSE_DELAY_MS - 60);
     expect(openCard()).toBe(items()[0]);
 
-    // …and arriving on another card cancels it. 120 + 69 = 189ms in, nine past the moment the
-    // collapse was due, and card 0 is still the one standing.
+    // …and arriving on another card cancels it. 120 + 79 = 199ms in, nineteen past the moment
+    // the collapse was due, and card 0 is still the one standing.
     arriveOn(items()[1]);
     await tick(STACK_OPEN_DWELL_MS - 1);
     expect(openCard()).toBe(items()[0]);
