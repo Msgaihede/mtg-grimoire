@@ -35,6 +35,20 @@ to guess.
   build time from the stored integer rather than folded out of `CardIndex::formats`, so it stays
   right for a bit this build has no name for. It cannot move a **format** count in either
   direction: every `formats[k]` is a subset of it.
+- **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`npm run tauri dev`,
+  a **debug** build, live 116 703-printing corpus): of **107 346** paper printings, **9 032** are
+  legal in no format — 8.4% — leaving **98 314** the search offers by default. Both figures are
+  `facet_cards`' own exact `total`, which is printings and is not capped, read through the app's
+  `ipc` module in the page. The shape of what it removes, on `lightning bolt`: **3 cards → 7**
+  when the chip is pressed, and the four that arrive are three Mystery Booster playtest cards
+  (`cmb2 67`, `mb2 596`, `unk rz34` — each printed with *TEST CARD — Not for constructed play*)
+  and the `astx 76` art card. `Toralf's Disciple` (`mb2 261`) is in **both** answers: it is an
+  ordinary reprint that happens to share a set with the playtest cards, which is the case a
+  set-based or layout-based filter would have got wrong. The facets moved with it — mana chip 5
+  was greyed on that search with the chip off and live with it on, which is the counts describing
+  the same corpus the page does. Same numbers in the deck editor's docked panel, whose row is
+  **371px** and gains no line from the chip (6 lines, 212px, with it and with it hidden); the
+  search row at the 1024px floor is 4 lines and 124px either way.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it
