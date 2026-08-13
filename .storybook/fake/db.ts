@@ -96,6 +96,11 @@ import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
 import { CURRENT_VERSION, NEXT_VERSION, release } from "./fixtures";
+import {
+  DEFAULT_PRINTING_GROUP_BY,
+  PRINTING_GROUP_BY_OPTIONS,
+  isPrintingGroupBy,
+} from "@/features/card/printings";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -486,6 +491,16 @@ export interface FakeDb {
    */
   marketplace: string | null;
   /**
+   * `app_meta.printing_group_by` — how the card pane groups its printings list.
+   *
+   * A **stored string** and `null` for the row not being there, for {@link FakeDb.marketplace}'s
+   * reason and it is the same reason twice: a fresh install has never written it, and a value
+   * written by a different build may name a grouping this one has never heard of. Both read as
+   * `artist`, and only a *write* refuses — so storing it narrowed would put the two states this
+   * setting actually has out of a story's reach.
+   */
+  printingGroupBy: string | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -523,6 +538,18 @@ export interface FakeFeedMeta {
   feedBuiltAt: string | null;
   rowCount: number;
 }
+
+/**
+ * `card::PRINTING_GROUP_BY_MODES` — every way the card pane groups its printings, in the order
+ * the picker offers them and the order the backend's refusal names them in.
+ *
+ * Derived from `PRINTING_GROUP_BY_OPTIONS` rather than re-listed, for the reason
+ * `isMarketplaceId` is imported one setting over: the modes are a *list*, the Rust validates
+ * against a copy of that list, and a third copy living in the fake would be the one nothing
+ * ever checks — it would keep passing its own tests while telling stories about a mode the app
+ * had dropped.
+ */
+const PRINTING_GROUP_BY_MODES: readonly string[] = PRINTING_GROUP_BY_OPTIONS.map((o) => o.value);
 
 /**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
@@ -597,6 +624,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
+    // The same, one row over: `printing_group_by` answers `artist` for a card pane nobody has
+    // told, which is the grouping every story that says nothing about it is standing in.
+    printingGroupBy: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -3149,6 +3179,25 @@ export function readHandlers(db: FakeDb) {
         : DEFAULT_MARKETPLACE,
 
     /**
+     * `card::printing_group_by` — the stored grouping, or the default.
+     *
+     * The second `app_meta` setting and the same shape as the one above it, deliberately: both
+     * ways to the default are here, because they are the two the command exists to absorb — the
+     * row has never been written, or it holds a mode this build does not recognise.
+     *
+     * What is different is what the fallback protects. A marketplace falling back costs a
+     * reader the prices they wanted; this one costs them a grouping, on **the surface they
+     * opened to look at a card**. A stale row must never be the reason a printings list refuses
+     * to draw, which is why the read narrows and shrugs where the write refuses in words.
+     *
+     * A read, so it answers through a sync like every other one here — the write below does not.
+     */
+    printing_group_by: (): string =>
+      db.printingGroupBy !== null && isPrintingGroupBy(db.printingGroupBy)
+        ? db.printingGroupBy
+        : DEFAULT_PRINTING_GROUP_BY,
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -5302,6 +5351,33 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.marketplace = args.id;
+    },
+
+    /**
+     * `card::set_printing_group_by` — choose how the card pane groups its printings, and refuse
+     * anything else.
+     *
+     * **The refusal is the half a fake is easiest to get wrong by leaving out**, and the one
+     * this file's job description is about: the read side falls back on a mode it does not
+     * know, so a fake that accepted any string would let a story save `"rarity"`, read back
+     * `"artist"`, and look like it worked — the exact bug the backend's validation exists to
+     * make impossible. `card::store_group_by`'s sentence, verbatim.
+     *
+     * It honours `busy` like every other ordinary write here — the command takes the write
+     * connection through `db::lock_for`, not `sync::lock_db`. **The lock comes first and the
+     * mode is checked inside it**, which is the Rust's own order and `set_marketplace`'s: a bad
+     * mode sent while a sync holds the connection answers BUSY, because nothing has looked at
+     * the mode yet.
+     */
+    set_printing_group_by: (args: { mode: string }): void => {
+      refuseIfBusy(db);
+      if (!isPrintingGroupBy(args.mode)) {
+        throw refuse(
+          `"${args.mode}" is not a way this app groups printings. ` +
+            `Expected one of: ${PRINTING_GROUP_BY_MODES.join(", ")}.`,
+        );
+      }
+      db.printingGroupBy = args.mode;
     },
 
     /**

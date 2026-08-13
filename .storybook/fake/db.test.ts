@@ -26,6 +26,7 @@ import type {
   WishlistPage,
   WishlistSortKey,
 } from "@/lib/ipc";
+import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 import type { MarketplaceId } from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
 
@@ -2230,6 +2231,10 @@ describe("the busy fault", () => {
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
       marketplace: "cardkingdom",
+      // `set_printing_group_by`'s. Never actually read on this path — the lock is taken before
+      // the mode is looked at, which is the order the Rust has — but it is here because the
+      // rule this record stands for is that `invoke` matches by name, not by position.
+      mode: "artist",
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -2243,10 +2248,14 @@ describe("the busy fault", () => {
     // (`deck_import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
     // `db_read` and answers through every second of a sync.
     //
+    // The card pane's grouping selector then added `set_printing_group_by`, on the same split
+    // again: the write refuses under a sync, the read (`printing_group_by`, on `db_read`) does
+    // not. Re-measured 2026-08-14, on a branch whose siblings touch no handler in this table.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(37);
+    expect(names).toHaveLength(38);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -2308,6 +2317,49 @@ describe("the whole command table", () => {
     );
     // Refused, and the row it would have overwritten is still the one that was chosen.
     expect(db.marketplace).toBe("cardmarket");
+  });
+
+  /**
+   * The second `app_meta` row, and the same three questions asked of it — because they are the
+   * three every stored preference has, not three facts about marketplaces.
+   *
+   * The refusal is the one worth the assertion. `printing_group_by` discards a mode it does not
+   * know *in silence*, so a fake that accepted `"rarity"` would save it, read back `"artist"`,
+   * and look to a story exactly like a preference that worked — which is the bug the backend's
+   * validation exists to make unreachable, and therefore the bug this file has to be capable of
+   * refusing in the same place.
+   */
+  it("falls back to artist on a missing or unknown grouping row, and refuses a bad write", () => {
+    expect(readHandlers(makeDb()).printing_group_by()).toBe("artist");
+    expect(readHandlers(makeDb({ printingGroupBy: "rarity" })).printing_group_by()).toBe("artist");
+    expect(readHandlers(makeDb({ printingGroupBy: "price" })).printing_group_by()).toBe("price");
+
+    // Every mode the picker offers, not just the default: the setting outlives the process, so
+    // what matters about it is that what went in comes back out.
+    const db = makeDb();
+    let chosen = "";
+    for (const { value: mode } of PRINTING_GROUP_BY_OPTIONS) {
+      writeHandlers(db).set_printing_group_by({ mode });
+      expect(db.printingGroupBy).toBe(mode);
+      expect(readHandlers(db).printing_group_by()).toBe(mode);
+      chosen = mode;
+    }
+
+    expect(() => writeHandlers(db).set_printing_group_by({ mode: "rarity" })).toThrow(
+      /is not a way this app groups printings/,
+    );
+    // Refused, and the row it would have overwritten is still the one that was chosen.
+    expect(db.printingGroupBy).toBe(chosen);
+  });
+
+  /** Two rows of one key/value table: writing either must not be a way to lose the other. */
+  it("keeps the grouping and the marketplace rows apart", () => {
+    const db = makeDb();
+    writeHandlers(db).set_printing_group_by({ mode: "set" });
+    writeHandlers(db).set_marketplace({ id: "cardmarket" });
+
+    expect(readHandlers(db).printing_group_by()).toBe("set");
+    expect(readHandlers(db).get_marketplace()).toBe("cardmarket");
   });
 
   /**
