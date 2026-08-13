@@ -85,7 +85,7 @@ export const DURATION = {
   base: 180,
   /**
    * For a surface that crosses the window — a docked drawer, a modal — and for the deck
-   * stack's 269px reflow, which travels about as far and is *read* rather than dismissed.
+   * stack's 293px reflow, which travels about as far and is *read* rather than dismissed.
    */
   slow: 260,
 } as const;
@@ -260,7 +260,7 @@ export const press: PressFeedback = {
  * The deck stack's one moving card.
  *
  * Only ever one: opening card *N+1* instead of card *N* leaves every card's top unchanged
- * except that one, which travels 269px (`CardStack`'s own arithmetic). So this is a single
+ * except that one, which travels 293px (`CardStack`'s own arithmetic). So this is a single
  * `margin-bottom` tween and the values belong to `CardStack`, which owns the geometry —
  * `STACK_CARD_HEIGHT`, `STACK_ADVANCE` and the collapsed margin are not this file's to know.
  *
@@ -269,7 +269,7 @@ export const press: PressFeedback = {
  *
  * **`slow`, and it was `base` until 2026-08-14.** The spec's table filed the stack reflow on the
  * interaction tier with the popups, and 180ms is right for a surface that *appears* — but this
- * one moves 269px, which is drawer distance, and a reader running down a stack watches it happen
+ * one moves 293px, which is drawer distance, and a reader running down a stack watches it happen
  * on every step rather than once. At 180ms the card arrives before the eye has followed it and
  * the flip-through reads as snapping. The tier is unchanged and nothing else moved with it; this
  * preset simply sits one rung further down than it did.

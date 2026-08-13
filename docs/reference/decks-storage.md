@@ -370,37 +370,49 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   part of a card that does not say what it is: no printed frame, no type line, no rules text, no
   P/T. Now the picture _is_ the card and the frame is gone — with it went `identityTint` (a
   printed frame is already that colour) and the app-drawn name and mana cost, which is why
-  `deckCardName` on the button is the **only** name a screen reader gets and the fallback writes
-  the name in text. **The marks go right, never left**: a printed name is left-aligned and a
-  collapsed stack is read down its reveal strip, so a quantity chip on the left would cover the
-  one thing identifying the card. It covers the printed mana cost instead — the table view, the
-  pane and the curve all still carry that.
+  `deckCardName` on the button is the **only** name a screen reader gets and the frame under the
+  picture writes the name in text.
+- **The marks go left, and they used to go right** (changed 2026-08-13, off the `CardStack.dc.html`
+  canvas). The old rule was right about a grey chip: a rectangle of app furniture over the first
+  four characters of a printed name buys nothing. What sits there now is not a chip —
+  `QuantityTag` is the card's **tag, in the tag's colour, with the copy count printed on it**, cut
+  to a banner rather than a box, and down a fifteen-card stack that column of colour _is_ the
+  structure of the pile. `TagDot` is gone from this surface and unchanged on the other three.
+  The cost is ~34px of printed name, paid knowingly; the app-drawn frame insets its own name band
+  by exactly that width, so the one case where the app writes the name never hides a character.
+- **The data line left the picture and became the card's foot** (same change). It was an overlay
+  across the bottom of the art, which cost the reader the card's printed text box to say five
+  things that fit underneath it. It is now a 28px bar below the face, pulled **4px** up so the
+  face's clipped corners cover its square ones and the two read as one object. It is also a
+  **sibling of the button** rather than a child, so unlike every mark over the art its text —
+  rarity, printing, finish, price — is genuinely announced instead of being swallowed by the
+  button's `aria-label`.
 - **`CardStack` is the signature interaction, and it is arithmetic, not taste — and the card's
   height is now _derived_ rather than chosen.** It is a Magic card's aspect (the `grid` image's own
   488×680) applied to the 210px that `StackView`'s **fixed** `14rem` column leaves after its
-  padding and the card's border: **295px**. Collapsed it carries a **−261px** bottom margin, so
-  each card advances by **34px** — a legibility floor for the overlaid chip rather than a
-  fraction, and unchanged from when 34 was the app's own title bar. The list is given a **fixed**
-  `stackHeight(n) = 34(n−1) + 295 + 8`, and the open card's margin turns −261 into +8:
-  **a 269px push-down of every card after it, out of the box and over what is below, without the
-  box changing size.** The column is never measured, which is what keeps `stackHeight` a function
-  of the count alone.
+  padding and the card's border, plus the data line less its 4px rise: **319px**. Collapsed it
+  carries a **−285px** bottom margin, so each card advances by **34px** — a legibility floor for
+  the overlaid tag rather than a fraction, and unchanged from when 34 was the app's own title bar.
+  The list is given a **fixed** `stackHeight(n) = 34(n−1) + 319 + 8`, and the open card's margin
+  turns −285 into +8: **a 293px push-down of every card after it, out of the box and over what is
+  below, without the box changing size.** The column is never measured, which is what keeps
+  `stackHeight` a function of the count alone.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.** With
-  card _N_ open, card _k_'s top is `k·34` for `k ≤ N` and `N·34 + 303 + (k−N−1)·34` for `k > N`;
-  open card _N+1_ instead and every top is unchanged **except card N+1's**, which travels 269px
-  up from `N·34 + 303` to `N·34 + 34`. So the reflow is one card sliding out of the stack, not a
+  card _N_ open, card _k_'s top is `k·34` for `k ≤ N` and `N·34 + 327 + (k−N−1)·34` for `k > N`;
+  open card _N+1_ instead and every top is unchanged **except card N+1's**, which travels 293px
+  up from `N·34 + 327` to `N·34 + 34`. So the reflow is one card sliding out of the stack, not a
   list resettling — and the pointer that armed it stays inside it for every frame, because the
-  card is 295px tall and slides up _underneath_ a stationary pointer.
+  card is 319px tall and slides up _underneath_ a stationary pointer.
 - **The lift used to be pure CSS and is now state, because pure CSS could not be given hover
   intent** (changed 2026-08-12). The same arithmetic that makes one card move is what broke
   selection: after the first step the _next_ card's strip sits only ~34px below the pointer, so
   one continuous downward sweep crossed four or five strips in ~60ms, armed every one, and left
   the reader several cards below the one they aimed at. `CardStack` now holds `openIndex`, armed
   by `pointerenter` on the `<li>` after an **80ms dwell** (`STACK_OPEN_DWELL_MS`, 70ms until
-  2026-08-14) and closed after
-  **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card cancels the pending close so
+  2026-08-14) and closed after **180ms** (`STACK_CLOSE_DELAY_MS`), where arming another card
+  cancels the pending close so
   switching never shows a closed frame. **No new hit target was needed**: a closed card is
-  overlapped 261px by its successor, which is later in DOM order and therefore paints over it,
+  overlapped 285px by its successor, which is later in DOM order and therefore paints over it,
   so the only hittable part of a closed card already _is_ its 34px reveal strip.
   `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**, and `data-stack-open` exists so a test or a
   `cdp.mjs --probe` can _count_ open cards, which the CSS lift was observable from neither.
@@ -414,10 +426,10 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   every card is drawn over the one before it, and that _is_ the stacked look — the reveal strip
   a reader runs down is the top 34px of a card its successor has not covered. Raising the open
   card inverts that against the whole tail of the stack, and it does it on the **first frame**,
-  while the cards after it are still 269px from where they are going, so the card appears to
+  while the cards after it are still 293px from where they are going, so the card appears to
   jump in front of the stack and then have the stack catch up around it. Letting them uncover it
   is the whole fix, and once they settle nothing is over it anyway: an open card's bottom is
-  `N·34 + 295` and its successor's top is `N·34 + 303`, 8px clear.
+  `N·34 + 319` and its successor's top is `N·34 + 327`, 8px clear.
   **Measured in the shipped window 2026-08-12** with `document.elementFromPoint` at a point both
   cards cover (y=541): mid-tween the painted card is **6** — the successors have not moved and
   the open card is correctly behind them — and settled it is **2**. Every card reads
