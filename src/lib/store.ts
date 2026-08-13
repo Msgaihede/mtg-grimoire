@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { DEFAULT_ZOOM, stepZoom } from "./cardZoom";
 import type { DeckVariant } from "./ipc";
 
 /** The five top-level destinations in the sidebar. */
@@ -64,6 +65,46 @@ interface AppState {
    *  for looking at cards, the collection is usually for counting them. */
   collectionView: SearchView;
   setCollectionView: (view: SearchView) => void;
+  /**
+   * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
+   * own — one of `ZOOM_STEPS`, starting at `DEFAULT_ZOOM`.
+   *
+   * One number for every card section rather than one per view, because the reader is adjusting
+   * *how they are reading cards* and not how one list is configured: a zoom set while comparing
+   * art in the search and then lost on the way to the collection is a setting that has to be made
+   * twice for one intention. It sits beside the two layout toggles above, which are the opposite
+   * case and argue their own separateness there.
+   *
+   * Session-only and deliberately so — this store is UI state, and nothing here reaches SQLite or
+   * `localStorage`. See `cardZoom.ts` for why restoring it on launch would be the wrong kindness.
+   */
+  cardZoom: number;
+  /**
+   * A counter that ticks on **every** zoom gesture, including the ones that change nothing.
+   *
+   * The zoom badge is a HUD: it appears on a gesture and fades a moment later, so something has
+   * to tell it "that was a gesture" — and `cardZoom` cannot, because at either end of the ladder
+   * a reader who keeps scrolling produces a stream of gestures that all leave it identical.
+   * Keyed off the value, the badge would fade out under their fingers at exactly the moment they
+   * are asking for more, which reads as the app having stopped listening rather than as the
+   * ladder having ended. So: the pulse is the *event*, `cardZoom` is the *value*, and the timer
+   * watches the pulse.
+   *
+   * A monotonic counter rather than a timestamp or a boolean, because both of those have a
+   * degenerate repeat — `Date.now()` twice inside one frame is one value, and a flag that is
+   * already `true` is not a change anything re-renders on.
+   */
+  zoomPulse: number;
+  /**
+   * Step the tiles one stop bigger (`1`) or smaller (`-1`), and pulse either way.
+   *
+   * An action rather than a `setCardZoom`, because the ladder is the point: a setter would let a
+   * caller write 1.37, and the exactness `stepZoom` buys — ten values, `=== 1` meaning something
+   * — survives only as long as this is the one door. It is also the only writer of `zoomPulse`,
+   * which is what keeps "every gesture pulses" true by construction instead of by every call site
+   * remembering to say so.
+   */
+  zoomCards: (direction: 1 | -1) => void;
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
@@ -153,6 +194,14 @@ export const useAppStore = create<AppState>((set) => ({
   // in it — counts, conditions, what it is worth — and forty tiles answer none of that.
   collectionView: "table",
   setCollectionView: (collectionView) => set({ collectionView }),
+  cardZoom: DEFAULT_ZOOM,
+  zoomPulse: 0,
+  // The pulse is outside the `if` that the clamp would tempt you to write, and that is the
+  // whole reason it exists as a second field: `stepZoom` answers a gesture at 200% with 200%,
+  // so a badge keyed off `cardZoom` would go quiet exactly while the reader is still scrolling.
+  // Zustand notices this even when the zoom did not move, because the pulse did.
+  zoomCards: (direction) =>
+    set((s) => ({ cardZoom: stepZoom(s.cardZoom, direction), zoomPulse: s.zoomPulse + 1 })),
   selectedCardId: null,
   // **And forgets which deck row the last card came from.** Every surface in the app that
   // opens a card goes through here — search tiles, collection rows, wishlist rows, the docked

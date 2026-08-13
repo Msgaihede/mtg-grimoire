@@ -195,6 +195,26 @@ price | type`). An **inactive category stays its own group in all three grouping
   used to reveal a control bar hundreds of pixels below, behind three other cards. They are a
   vertical column in the card's right margin now — `DeckCardControls layout="card-column"`, which
   is also the only layout whose buttons carry a backing, because it is the only one drawn on art.
+- **Every number in the two bullets above is the value at zoom 1×, which is where the reader starts
+  and no longer where they stay.** Ctrl+wheel over a card section steps `useAppStore`'s `cardZoom`
+  along a ten-stop ladder from 0.5× to 2× (`src/lib/cardZoom.ts`), so each of those constants now
+  has a function beside it — `stackCardWidth`, `stackImageHeight`, `stackDataHeight`,
+  `stackCardHeight`, `stackAdvance`, `stackCollapsedMargin`, `stackHeight(n, zoom)`, and
+  `stackColumnWidth(zoom)` in `StackView` — and the bare constant survives as that function's
+  documented base. **Two of them are floors rather than proportions and they are the ones to know**:
+  `stackAdvance` is `max(34, scaled(34, zoom))` and `stackDataHeight` is `max(28, scaled(28, zoom))`,
+  so both grow going up and **hold at their base going down**. Each measures something laid over or
+  inside the card — the quantity tag on the reveal strip, the type in the data line — and type does
+  not shrink because a card did. Scaling either linearly is the mistake the floor exists to prevent:
+  at 0.5× the reveal would be 17px under an unscaled tag, and the data bar would be 14px around 11px
+  type. The same grow-only rule governs the grid view's caption and gutter and `CardGrid`'s caption
+  strip: **anywhere a scaled budget has to contain unscaled chrome, the budget floors rather than
+  scales.** `STACK_DATA_RISE` is the third kind — 4px at every zoom, because the 7px corner radius
+  it hides the seam of is a Tailwind class that does not scale either.
+- **The column is derived from the card, not the other way round** (it used to be: 14rem minus
+  padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
+  **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
+  of a card. Scaling the two independently agrees at 1× and drifts at every other stop.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
