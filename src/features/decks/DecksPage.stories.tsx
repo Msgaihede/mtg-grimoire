@@ -400,11 +400,15 @@ export const Empty: Story = {
  * Making one — and the tile a deck has before it has chosen a face.
  *
  * Two questions and no more: what it is called, and what it is for. The format list is the
- * seeded `format_specs` table read in its own `sort_order` and filtered to `enabled_in_picker`,
- * which the fake serves from `validation/fixtures.ts`'s `SPECS` — **12 rows**, measured
- * 2026-08-10 over `format_specs_list()`, against the 25 the real migration seeds. The select
- * starts on Casual, which is `decks.format_key`'s own DDL default: a deck that has not been
- * given a format yet should not be a deck full of complaints.
+ * seeded `format_specs` table filtered to `enabled_in_picker` and then sorted **alphabetically
+ * by display name** — the picker's own order, not the `sort_order` the fake answers in, because
+ * a reader looking for Modern looks under M. The fake serves the table from
+ * `validation/fixtures.ts`'s `SPECS` — **12 rows**, measured 2026-08-10 over
+ * `format_specs_list()`, against the 25 the real migration seeds — so this select reads Brawl,
+ * Casual, Commander, Duel Commander, Gladiator, Limited, Modern, Oathbreaker, Old School,
+ * Pauper Commander, Tiny Leaders: Reborn, Vintage, and the shipped app's is twice as long. The
+ * select starts on Casual, which is `decks.format_key`'s own DDL default: a deck that has not
+ * been given a format yet should not be a deck full of complaints.
  *
  * The new tile says **"No cover"** rather than showing a grey rectangle, and it draws no credit
  * line — the two are different facts, and `Cover` tells them apart in as many words: "No cover"

@@ -722,6 +722,11 @@ function DeleteCategory({
           <label htmlFor={`delete-${category.id}-cards`} className="text-[0.6875rem] text-dim">
             Its {count}
           </label>
+          {/* **Deliberately not alphabetical** — one of the exceptions `src/lib/options.ts`
+              names. `others` is the panel's own list minus this row, in `sort_order`: the order
+              the reader dragged these piles into, on the very screen where they dragged them.
+              Alphabetising it would make the dropdown disagree with the list it sits inside.
+              The destructive answer stays **last** whatever the order, below. */}
           <select
             id={`delete-${category.id}-cards`}
             value={choice}
@@ -736,6 +741,8 @@ function DeleteCategory({
                 move to “{c.name}”
               </option>
             ))}
+            {/* Last, and never first: the destructive answer must not be what the select opens
+                on. Pinned below the moves whatever order they are in. */}
             <option value="delete">are deleted with it</option>
           </select>
         </div>

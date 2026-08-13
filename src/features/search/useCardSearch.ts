@@ -12,7 +12,15 @@ export const PAGE_SIZE = 50;
 /** How long the search box stays quiet before a keystroke becomes a query. */
 export const DEBOUNCE_MS = 300;
 
-/** The `legalities` keys the format picker offers, in the order players rank them. */
+/**
+ * The `legalities` keys the format picker offers, in the order those keys rank — which is a
+ * fact about the formats and **not** the order anybody sees.
+ *
+ * Every picker draws this through `sortOptions` (`@/lib/options`): alphabetically by `label`,
+ * with the formats this search has nothing legal in sunk to the bottom. So reordering the
+ * array below moves nothing on screen and only costs the keys their one written order — a
+ * picker drawn wrong is a bug in that picker's `sortOptions` call, never in this list.
+ */
 export const FORMATS = [
   { value: "standard", label: "Standard" },
   { value: "pioneer", label: "Pioneer" },

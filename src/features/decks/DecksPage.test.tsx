@@ -457,10 +457,12 @@ describe("DecksPage", () => {
   });
 
   /**
-   * The picker is the seeded table read in `sortOrder`, and `enabled_in_picker` is what
-   * keeps Future Standard — a format you can test against but cannot build for — out of it.
+   * The seeded table, offered **alphabetically** rather than in the `sortOrder` Rust answers
+   * in: the ranking is a fact about `format_specs`, and a reader looking for Modern looks
+   * under M. `enabled_in_picker` is what keeps Future Standard — a format you can test
+   * against but cannot build for — out of it altogether.
    */
-  it("offers the seeded formats in their own order, without the one that is switched off", async () => {
+  it("offers the seeded formats alphabetically, without the one that is switched off", async () => {
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
 
@@ -469,7 +471,7 @@ describe("DecksPage", () => {
       .getAllByRole("option")
       .map((o) => o.textContent);
 
-    expect(options).toEqual(["Standard", "Modern", "Commander", "Casual"]);
+    expect(options).toEqual(["Casual", "Commander", "Modern", "Standard"]);
     expect(format).toHaveValue("casual");
   });
 

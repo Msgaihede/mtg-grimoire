@@ -203,6 +203,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   replaces the sort with that one term, and the control reads `Custom…` once the sort starts
   somewhere it has no option for. The wishlist's Printing column is deliberately not
   sortable at all — an any-printing wish names no set.
+- **Every option list is drawn through `sortOptions` in `src/lib/options.ts`: alphabetical by
+  the display label, with a faceted control's greyed rows sunk below its pickable ones.** The
+  label is the words on screen, never the key — `standard` and `Standard Brawl` sort by what
+  the reader reads. One `Intl.Collator` pinned to `"en"`, `sensitivity: "base"` and
+  `numeric: true`: case is not a sort key ("The List" used to land above "the list" under a
+  bare `localeCompare`), an accent is a spelling, and "Arena League 1999" belongs above "Arena
+  League 2001" rather than wherever a code-unit read of `1` against `2` puts it. It **copies**
+  before sorting, because the arrays reaching it are React Query's session-cached
+  `list_sets()` and `formatSpecs()` and every other reader of that key shares them.
+  - **Ordering is a display decision and therefore lives in TS.** Rust answers in whatever
+    order the query produced — `list_sets` newest-first, `format_specs_list` by a seeded
+    `sort_order`, deck categories by the reader's own drag — and each of those is still the
+    right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
+  - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
+    `Custom…` a table-header sort leaves behind, `Auto (by card type)`, the permanent `Move…`
+    verb, `Top level`. `CategoriesPanel`'s `are deleted with it` is pinned **last** — the
+    destructive answer is not allowed to become the default by alphabet.
+  - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
+    Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
+    reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesPanel`
+    and rendered in that order by all four deck views, so an alphabetical dropdown would
+    disagree with the panel beside it. Both carry a comment at the site saying so, because
+    the next sweep for unsorted selects will otherwise "fix" them.
 
 ## Vendored components and tokens
 

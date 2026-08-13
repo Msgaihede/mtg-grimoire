@@ -16,7 +16,10 @@ import { autoCategoryDisplayOrder, autoCategoryFor } from "./autoCategory";
 
 export type SortBy = "alphabetical" | "manaCost" | "price" | "type";
 
-/** The toolbar's Sort select, so the four are named in one place. */
+/** The toolbar's Sort select, so the four are named in one place. **The order here is not the
+ *  order they are offered in** — a picker sorts by label (`src/lib/options.ts`), so this array
+ *  is free to read in whatever order explains the sorts and a fifth entry may be appended
+ *  without deciding where it appears. */
 export const SORT_OPTIONS: readonly { value: SortBy; label: string }[] = [
   { value: "alphabetical", label: "Alphabetical" },
   { value: "manaCost", label: "Mana cost" },

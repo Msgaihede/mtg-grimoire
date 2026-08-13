@@ -324,7 +324,13 @@ export function DeckSearchPanel({
             {/* A `<select>` speaks strings and a category is addressed by number, so the id
                 makes the round trip through `String`/`Number` here rather than anywhere the
                 write can see it: every value in this list is one this component wrote out of a
-                `DeckCategory.id`, so the parse cannot meet anything else. */}
+                `DeckCategory.id`, so the parse cannot meet anything else.
+
+                **Deliberately not alphabetical**, and one of the exceptions `src/lib/options.ts`
+                names. The categories arrive in `cat.sort_order, cat.id` — the order the reader
+                dragged them into in `CategoriesPanel`, and the order every deck view draws its
+                columns in. Sorting them here would make this dropdown disagree with the deck
+                beside it and would overwrite an order the reader chose. */}
             <select
               id={categoryFieldId}
               value={String(targetCategoryId)}

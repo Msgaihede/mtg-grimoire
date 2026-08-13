@@ -394,6 +394,52 @@ describe("DeckEditor", () => {
     expect(built).toHaveAttribute("title", "Reserves your copies for this deck");
   });
 
+  /**
+   * **Alphabetically by display name, not in the `sortOrder` Rust answers in.** The seed ranks
+   * the formats by how the game groups them and the mock keeps that ranking — Modern,
+   * Commander, Gladiator, Casual — so the sequence below is the picker's own doing. A reader
+   * changing a deck's format looks for Modern under M, not in seventh place.
+   *
+   * The whole sequence rather than one position: an ordering asserted a row at a time still
+   * passes once somebody adds a format that lands in the wrong half of it.
+   */
+  it("offers the formats alphabetically, whatever order the table answered in", async () => {
+    await open();
+
+    const format = screen.getByLabelText("Deck format");
+    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Gladiator",
+      "Modern",
+    ]);
+  });
+
+  /**
+   * A deck on a format the seed no longer offers still shows its own format — `decks.format_key`
+   * is deliberately not a foreign key, so this state can exist, and a select that cannot show
+   * its own value would silently re-format the deck on the first other change.
+   *
+   * **The row is folded into the alphabet rather than pinned first**: it is an option like any
+   * other, and the select's own `value` is what marks it as the current one. Historic sits
+   * between Gladiator and Modern here, which is the whole assertion — pinned, it would be
+   * first, and the list would be telling the reader something the `value` already says.
+   */
+  it("folds a deck's own format into the list when the seed no longer offers it", async () => {
+    deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
+    await open();
+
+    const format = screen.getByLabelText("Deck format");
+    expect(format).toHaveValue("historic");
+    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Gladiator",
+      "Historic",
+      "Modern",
+    ]);
+  });
+
   /** The caret starts in the editor rather than on `<body>`: the gallery's New deck button —
    *  which is what had it — unmounts the moment this view takes over. */
   it("takes the caret when it opens", async () => {
@@ -704,6 +750,36 @@ describe("DeckEditor", () => {
     await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
     expect(screen.getByRole("list", { name: "Mana value 1" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Instant" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two toolbar pickers, alphabetically — the app-wide rule (`src/lib/options.ts`), applied
+   * to lists that already happened to read that way.
+   *
+   * That coincidence is exactly why this is pinned: `GROUP_BY_OPTIONS` and `SORT_OPTIONS` are
+   * written in the order that explains the modes, and the first entry appended to either would
+   * land at the end of the dropdown with nothing to notice it. The sequences are asserted whole
+   * so the *property* fails, not one position.
+   */
+  it("offers both toolbar pickers alphabetically", async () => {
+    await open();
+
+    const labels = (select: HTMLElement) =>
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent);
+
+    expect(labels(screen.getByLabelText("Group by"))).toEqual([
+      "Categories",
+      "Mana value",
+      "Type",
+    ]);
+    expect(labels(screen.getByLabelText("Sort"))).toEqual([
+      "Alphabetical",
+      "Mana cost",
+      "Price",
+      "Type",
+    ]);
   });
 
   /** The order *inside* a heading, which the grouping does not decide. Alphabetical by default,

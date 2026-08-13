@@ -258,7 +258,11 @@ export const Cleared: Story = {
  * The rule is one sentence — *an option greys when turning it on would not change the result
  * set* — and this is the plain reading of it. 15 of the corpus' 41 paper printings are
  * castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
- * ignore a press. Standard goes with them in the format select.
+ * ignore a press. Standard goes with them in the format select — and **falls to the bottom of
+ * it**, which is the second rule this row reads plainly: everything still pickable is listed
+ * above everything that is not, each half alphabetical by the word on screen, under a pinned
+ * "Any format". `FORMATS` writes Standard *first*; that order is a fact about the keys and
+ * reaches the screen nowhere.
  *
  * **The colour chips all stay live, and that is the interesting half.** `colors` is *subset*
  * semantics, so pressing White with Red already on asks for "castable in RW" — a **superset**,
@@ -314,6 +318,21 @@ export const SomeUnavailable: Story = {
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     const off = [...format.options].filter((o) => o.disabled).map((o) => o.value);
     await expect(off).toEqual(["standard"]);
+    // …and it is drawn *last*, which is the half of the ordering only a faceted story can
+    // show: `FORMATS` writes Standard first, the alphabet would put it sixth, and the one
+    // format this search has nothing legal in belongs under the six that would return cards.
+    // Asserted as the whole sequence, because an ordering bug that swapped two rows past each
+    // other satisfies every assertion about one row's position.
+    await expect([...format.options].map((o) => o.value)).toEqual([
+      "",
+      "commander",
+      "legacy",
+      "modern",
+      "pauper",
+      "pioneer",
+      "vintage",
+      "standard",
+    ]);
   },
 };
 

@@ -116,7 +116,9 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * The dialog as it opens: the caret in the field the reader has to fill, and the seeded
- * formats in `sort_order` behind it.
+ * formats behind it — **alphabetically**, which is not the `sort_order` the fake answers in.
+ * A picker sorts by the words on screen (`src/lib/options.ts`); the table's own ranking is a
+ * fact about `format_specs` and no help to a reader looking for Modern under M.
  *
  * The play writes a real deck through the fake's `deck_create`, which is what a story adds
  * over the unit tests beside it — `onCreated` is handed the row the backend answered with, and
