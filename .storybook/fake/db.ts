@@ -1965,6 +1965,11 @@ function toDeckCard(
     quantity: dc.quantity,
     name: dc.name,
     setCode: dc.setCode,
+    // Off the **card**, not off the row, exactly as `deck_card_select` reads `c.set_name`:
+    // the code and the number are denormalised onto `deck_cards` so an orphan is still listed
+    // and counted, and the set's name is not part of that promise. An orphan gets `null` here
+    // for free, which is the behaviour `orphanDeckCard` pins.
+    setName: card?.setName ?? null,
     collectorNumber: dc.collectorNumber,
     lang: dc.lang,
     needsReview: dc.needsReview,

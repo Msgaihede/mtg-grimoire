@@ -11,14 +11,6 @@ import { cn } from "@/lib/utils";
  *
  * Never a filled badge: the direction's colour budget is spent on mana and card art, and a
  * mythic-orange pill would out-shout the art it annotates.
- *
- * **The word is always there; what changes is who it reaches.** It is drawn where the surface
- * has a column for it (`withLabel`) and `sr-only` where it has not, because a colour is not
- * information anyone can be required to see — and in that second case it is *also* a `title`,
- * for the reader who can see the dot perfectly well and has no idea what it means. A tooltip
- * is what those call sites had reached for on their own before this component existed; the
- * affordance was right and the several wordings were not, which is the whole argument for
- * having one component at all.
  */
 export function RarityGem({
   rarity,
@@ -33,21 +25,16 @@ export function RarityGem({
   const color = rarityColor(rarity);
   const word = rarity ?? "unknown";
   return (
-    <span
-      // A tooltip **only** where the word is not drawn — where this is a 6px dot and nothing
-      // else, and a pointer resting on it has no other way to be told. Deliberately absent
-      // when the word *is* drawn: a tooltip repeating a label an inch away is noise.
-      // `Rarity:` is kept in front of it for the reason the `sr-only` span keeps it — a bare
-      // "common" beside a set code and a number could be about any of them.
-      //
-      // The accessible name is untouched by this either way. Every node here already has text
-      // content, and a `title` is the *last* fallback in name computation — so it is read by
-      // a pointer and by nothing else.
-      title={withLabel ? undefined : `Rarity: ${word}`}
-      className={cn("inline-flex min-w-0 items-center gap-1.5", className)}
-    >
+    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
       <span
         aria-hidden="true"
+        // **A `title` as well as the `sr-only` word below, because they are for two different
+        // readers.** The span is what a screen reader hears; a sighted pointer user hovering a
+        // 6px dot had nothing at all, and on the surfaces that draw the gem *without* the word
+        // — the deck stack's data line, the art grid — the colour is the only thing said. Four
+        // call sites had grown their own `title` before this component consolidated them, and
+        // consolidating meant answering both questions here rather than dropping one.
+        title={word.replace(/^./, (c) => c.toUpperCase())}
         className="size-1.5 shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />

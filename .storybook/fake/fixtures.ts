@@ -186,6 +186,9 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     // Denormalised on the row, like the collection's — the one name an orphaned row still has.
     name: card.name,
     setCode: card.setCode,
+    // From `cards` rather than denormalised onto the row, so an orphan has none — see
+    // `orphanDeckCard` below, which is the fixture that says so.
+    setName: card.setName,
     collectorNumber: card.collectorNumber,
     lang: card.lang,
     needsReview: null,
@@ -267,6 +270,10 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     quantity: 1,
     name: "Sword of the Meek",
     setCode: "dst",
+    // `null`, and that is the whole point of this fixture: the code, the number and the name
+    // are denormalised onto `deck_cards` so an orphan is still listed, and the set's *name*
+    // lives only in `cards`, which no longer has the row.
+    setName: null,
     collectorNumber: "132",
     lang: "en",
     needsReview: MISSING,

@@ -44,8 +44,9 @@ const meta = {
           "belongs to the *printing*; a game changer belongs to the *card* — every printing of " +
           "Rhystic Study is one — so a card carries either, both or neither, and both means one " +
           "chip with two glyphs rather than two boxes over the same corner. The crown is the " +
-          "same fact the deck views draw as `GameChangerBadge`'s gold `GC`, in the same gold, " +
-          "where there is no room for letters.\n\n" +
+          "deck stack's `GameChangerBanner` glyph without its ribbon, and the same fact the " +
+          "other three deck views abbreviate as `GameChangerBadge`'s gold `GC` — one gold, " +
+          "three amounts of room.\n\n" +
           "**Art is synthetic here** unless the Live toolbar switch is on, so a checkout with " +
           "no network renders these exactly as one with it.",
       },

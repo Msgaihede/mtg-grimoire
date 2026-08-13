@@ -188,24 +188,47 @@ export function CardArt({
  * rather than two chips, because a tile's fourth corner is the only one left and a second box
  * beside it would start a row of stickers.
  *
- * The crown is the same fact the deck views draw as `GameChangerBadge`'s gold `GC`; see
- * `GameChangerMark` for why one fact is drawn twice.
+ * The crown is the same glyph the deck stack's `GameChangerBanner` stamps on its ribbon, and the
+ * same fact the other three deck views abbreviate as `GameChangerBadge`'s gold `GC`; see
+ * `GameChangerMark` for why one fact is drawn three ways.
  *
  * The enclosing element needs `relative` and `overflow-hidden`; `CardArt` has both.
  */
 export function FoilOverlay({
   finish,
   gameChanger = false,
+  mark = true,
 }: {
   finish: Finish | null;
   /**
    * Optional, and it has to stay optional: three callers outside `CardArt` draw this overlay
    * (the pane's main art, the deck stack's card, the deck grid's tile) and none of them says
-   * anything about the bracket.
+   * anything about the bracket. The deck's surfaces have their own drawings of it —
+   * `GameChangerBanner` on the stack, `GameChangerBadge` on the other three views.
    */
   gameChanger?: boolean;
+  /**
+   * Draw the chip as well as the sheen. `false` for a frame that says the finish **in words
+   * somewhere else** — the deck stack's card, whose data line under the art carries a
+   * {@link FinishMark} beside the price.
+   *
+   * That is not a weaker version of this frame, it is the rule below applied: the chip and the
+   * sheen do different jobs, and the chip's job is done better by a mark on a line the reader
+   * is already reading than by a second badge in a corner two other marks are competing for.
+   * What must not happen is *neither* — a sheen with nothing naming it is decoration.
+   *
+   * **It governs the crown too, and has to.** The chip is the only thing a crown can be drawn
+   * as here, so a frame that has moved the finish into words has moved the whole corner: the
+   * one caller that passes `false` is the deck stack, which draws `GameChangerBanner` across
+   * the card instead. A crown surviving that switch would be the second badge this prop exists
+   * to remove.
+   */
+  mark?: boolean;
 }) {
-  if (!finish && !gameChanger) return null;
+  // Two marks, one chip, and either of them is reason enough to draw it — but only if the
+  // caller wanted a chip at all.
+  const chip = mark && (finish !== null || gameChanger);
+  if (!finish && !chip) return null;
   // What the chip's own padding says on hover, since a `<title>` inside a glyph only covers
   // the 12px the glyph occupies. Joined with the separator the app uses between card facts
   // everywhere else, so "Game changer · Foil" reads as one line rather than a sentence.
@@ -265,14 +288,16 @@ export function FoilOverlay({
           so a click on the chip bubbles and opens the card exactly as a click on the art does.
           `data-card-marks` is the handle a test finds it by; a hit target is otherwise
           invisible to the DOM. */}
-      <span
-        data-card-marks
-        title={chipTitle}
-        className="pointer-events-auto absolute top-1 right-1 flex items-center gap-0.5 rounded bg-bg/85 px-1 py-0.5"
-      >
-        {gameChanger && <GameChangerMark />}
-        {finish && <FinishMark finish={finish} />}
-      </span>
+      {chip && (
+        <span
+          data-card-marks
+          title={chipTitle}
+          className="pointer-events-auto absolute top-1 right-1 flex items-center gap-0.5 rounded bg-bg/85 px-1 py-0.5"
+        >
+          {gameChanger && <GameChangerMark />}
+          {finish && <FinishMark finish={finish} />}
+        </span>
+      )}
     </span>
   );
 }

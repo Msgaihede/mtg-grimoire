@@ -39,9 +39,11 @@ Every one of these has its measurement and its story in
   no-art fallback and the foil marking, in one place.
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
-  printing fact in two boxes start a row of stickers. The crown is the same fact the deck views
-  spell `GC`; one gold (`text-pie-gold`) for it everywhere, never the destructive colour, which
-  belongs to a rule break.
+  printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph
+  without its ribbon — one fact drawn three ways (the stack's banner, the other deck views' `GC`,
+  this), differing only in the room each has. One gold (`text-pie-gold`) everywhere, never the
+  destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns the whole
+  chip off, crown included, for a frame that names these somewhere else.
 - **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
   `pointer-events-none` is a tooltip that can never be shown — and nothing goes red.** A hit
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is
@@ -138,7 +140,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   which nothing in the suite or Storybook loads. Motion ships `reducedMotion: "never"`, so that
   line is load-bearing rather than decorative.
 - **It only reduces positional keys, which is a trap with a live example.** `marginBottom` is
-  **not** among them, so the deck stack's 269px reflow would have travelled at full speed.
+  **not** among them, so the deck stack's 293px reflow would have travelled at full speed.
   **Any `motion` animation of a non-positional property needs its own `useReducedMotion()`
   opt-out.** That hook is a per-component branch: it reads its value once and **never updates
   on a live media-query change**, so it is the wrong thing to reach for as an app-wide switch.

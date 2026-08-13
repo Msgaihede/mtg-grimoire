@@ -1243,6 +1243,16 @@ export interface DeckCard {
   /** Denormalized at write time, and the one name an orphaned row still has. */
   name: string;
   setCode: string;
+  /**
+   * The set's printed name, for a surface that shows the three-letter code and has room to say
+   * what it stands for on hover — `PF26` is not a word anybody knows.
+   *
+   * **From `cards`, so `null` for an orphan**, unlike `setCode` beside it: the code, the
+   * collector number and the name are denormalized onto `deck_cards` precisely so a printing
+   * that has left the corpus is still listed and counted, and a set name is not part of that
+   * promise. Draw the code alone when this is `null` rather than inventing one.
+   */
+  setName: string | null;
   collectorNumber: string;
   lang: string;
   /** A sentence when a sync could not keep this row's printing, `null` otherwise — the

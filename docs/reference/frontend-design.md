@@ -127,18 +127,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the shipped window, where a tile button's name came back as bare "Foil". The whole
   `FoilOverlay` is `aria-hidden` now and the finish is stated in text where each surface has
   room (the wall's caption `sr-only`, the search table's Name cell, the pane's per-finish
-  prices). This is the same rule the owned badge follows by being a _sibling_ of the button.
-- **A game changer is a crown on a search card and `GC` in a deck view, and that is one fact
-  drawn twice.** `components/GameChangerMark` is the crown — lucide's `Crown` in
-  `text-pie-gold`, the same gold `features/decks/CardMarks.tsx` tints its badge with, because
-  the spec is explicit that a game changer (a fact about a powerful card) and a rule break (a
-  problem) must never be confusable, and the destructive colour belongs to the second. The
-  deck views keep their letters: a 224px stacked card has a title bar to put an abbreviation
-  on, and a search tile has about two glyphs of chip left in its fourth corner. It shares the
-  finish chip rather than taking a corner of its own — **a card fact and a printing fact in
-  one box**, since a card can be either, both or neither, and a second box beside it starts a
-  row of stickers. Nothing derives it: the backend flattens `cards.game_changer`'s NULL into
-  `false` (the column is nullable; only `card_row.rs`'s parser struct is a `bool`).
+  prices, and — since 2026-08-13 — the deck stack's data line, which sits _outside_ the card's
+  button and so is genuinely announced). This is the same rule the owned badge follows by being
+  a _sibling_ of the button.
+- **`FoilOverlay mark={false}` draws the sheen without the chip**, for a frame that names the
+  finish somewhere else. The stack is its one caller: a `FinishMark` on the data line beside the
+  price says the word better than a fourth badge in a corner the rule break and the quantity tag
+  are already competing for. What must never happen is _neither_ — a sheen with nothing naming
+  it is decoration, which is the whole of why the chip existed. **It governs the crown too**,
+  since the chip is the only thing a crown can be drawn as and the stack has its banner instead.
+- **One game changer, three drawings, and the difference is room rather than meaning.** The deck
+  stack stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a
+  card is 295px tall; the other three deck views abbreviate to `GameChangerBadge`'s gold `GC`
+  where a cell has a column; and a search card gets `components/GameChangerMark`, **the banner's
+  crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
+  is a sticker over the picture the reader came to look at. `text-pie-gold` in all three: the spec
+  is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
+  must never be confusable, and the destructive colour belongs to the second. It shares the finish
+  chip rather than taking a corner of its own — **a card fact and a printing fact in one box**,
+  since a card can be either, both or neither. Nothing derives it: the backend flattens
+  `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
+  struct is a `bool`).
 - **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
   tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
   overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once

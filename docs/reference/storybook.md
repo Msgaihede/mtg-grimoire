@@ -5,12 +5,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 `npm run storybook` · `npm run build-storybook`. **363 stories across 47 story files, 46 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch: 409 entries,
-363 `story`, 46 `docs`, 48 distinct `importPath`s. The five over the 358 measured 2026-08-12 are
-the crown's — two on `CardArt`, one on `CardGrid`, two on `SearchPage` — and again no story
-*file* was added, which is why that count did not move. (The 2026-08-12 figure was itself five
-over `main`'s 353, from `Settings/MarketplacePanel` going from three stories to eight when Card
-Kingdom and Mana Pool became selectable and a feed gained a state to draw.)
+**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **after merging
+`main` in**: 409 entries, 363 `story`, 46 `docs`, 48 distinct `importPath`s. That branch adds
+**six** stories to four existing files (`CardArt` 2, `SearchPage` 2, `CardGrid` 1, `OwnedBadge`
+1), counted off the diff against `origin/main`; no story *file* was added, which is why that
+count did not move.
+
+**The delta and the total were measured separately, and they do not reconcile by arithmetic —
+which is the point.** 358 was the tree on 2026-08-12; this branch adds six; the tree now reads
+363, not 364. Somewhere in between a story was renamed, replaced or dropped, on `main` or in a
+merge, and no branch-local bookkeeping would have caught it. **This is the fourth time this line
+has taught the same lesson**: do not carry the old number forward with your own delta added —
+rebuild and read the index, on the tree you are actually shipping.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and

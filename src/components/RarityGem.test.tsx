@@ -56,20 +56,6 @@ describe("RarityGem", () => {
     });
   });
 
-  /**
-   * A 6px dot with no word beside it says nothing to a sighted reader either, which is what
-   * the `title` is for — the affordance those call sites had reached for on their own before
-   * this component existed. It is deliberately absent when the word *is* drawn: a tooltip
-   * repeating a label an inch away is noise.
-   */
-  it("says the rarity on hover only when the gem is all there is", () => {
-    const { container, rerender } = render(<RarityGem rarity="mythic" />);
-    expect(container.firstChild).toHaveAttribute("title", "Rarity: mythic");
-
-    rerender(<RarityGem rarity="mythic" withLabel />);
-    expect(container.firstChild).not.toHaveAttribute("title");
-  });
-
   /** The dot is decoration; the word beside it already carries the fact. */
   it("hides the gem from assistive tech", () => {
     const { container } = render(<RarityGem rarity="common" withLabel />);

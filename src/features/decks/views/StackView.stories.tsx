@@ -45,9 +45,10 @@ export const Default: Story = {
     expect(canvas.getAllByText("RULE")).toHaveLength(2);
     expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
     expect(canvas.getByText("Nothing here yet.")).toBeInTheDocument();
-    // The rule break and the game changer, side by side and unmistakable.
+    // The rule break and the game changer, side by side and unmistakable. This view has room
+    // for the words, so the game changer is the banner rather than the grid tile's `GC`.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    expect(canvas.getByText("GC")).toBeInTheDocument();
+    expect(canvas.getByText("Game Changer")).toBeInTheDocument();
   },
 };
 

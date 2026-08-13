@@ -76,6 +76,7 @@ function card(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     quantity: 1,
     name: "A card",
     setCode: "lea",
+    setName: "Limited Edition Alpha",
     collectorNumber: "1",
     lang: "en",
     needsReview: null,
