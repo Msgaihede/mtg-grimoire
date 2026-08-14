@@ -148,6 +148,19 @@ export interface DeckSearchPanelProps {
    */
   add: Deck["addCard"];
   /**
+   * A press on this panel's Add button landed in a deck row — `EntryChange.id`, which is the row
+   * the write **created or folded into**.
+   *
+   * It exists because this panel is the one add path in the editor that does not go through the
+   * editor's own `addTo`: it holds the mutation and presses it itself, which is what makes the
+   * button predictable (see the button's own note on never being disabled). The editor marks
+   * that row as freshly landed for ten seconds so the reader can find it in a deck they are not
+   * looking at, and nothing here knows or cares what it does with it.
+   *
+   * Optional, so a story or a test can mount this panel with a mutation and nothing else.
+   */
+  onAdded?: (entryId: number) => void;
+  /**
    * Where a card may be put, in the order the select offers them — the editor's own list of
    * the open deck's categories, so this panel offers exactly the columns beside it.
    *
@@ -245,6 +258,7 @@ export interface DeckSearchPanelProps {
  */
 export function DeckSearchPanel({
   add,
+  onAdded,
   categories,
   targetCategoryId,
   onTargetCategoryChange,
@@ -318,13 +332,18 @@ export function DeckSearchPanel({
   // card `MIN_PANEL_WIDTH_PX` is measured from. The `max` around the cap matters at exactly one
   // moment — a desk too narrow for the minimum, where `roomy` is already false and this element
   // is 36px of rail whose width nothing reads.
-  const drawnWidth = Math.min(Math.max(width, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX));
+  const drawnWidth = Math.min(
+    Math.max(width, MIN_PANEL_WIDTH_PX),
+    Math.max(maxWidth, MIN_PANEL_WIDTH_PX),
+  );
 
   // The drag's own clamp, which is the drawn one plus the fact that a drag cannot ask for a
   // width the editor has already refused.
   const resize = useCallback(
     (next: number) =>
-      setWidth(Math.min(Math.max(next, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX))),
+      setWidth(
+        Math.min(Math.max(next, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX)),
+      ),
     [maxWidth],
   );
 
@@ -517,6 +536,7 @@ export function DeckSearchPanel({
         <div className={shown ? "contents" : "hidden"} hidden={!shown}>
           <OpenPanel
             add={add}
+            onAdded={onAdded}
             categories={categories}
             targetCategoryId={targetCategoryId}
             defaultFormat={defaultFormat}
@@ -681,10 +701,14 @@ function ResizeHandle({
  */
 function OpenPanel({
   add,
+  onAdded,
   categories,
   targetCategoryId,
   defaultFormat,
-}: Pick<DeckSearchPanelProps, "add" | "categories" | "targetCategoryId" | "defaultFormat">) {
+}: Pick<
+  DeckSearchPanelProps,
+  "add" | "onAdded" | "categories" | "targetCategoryId" | "defaultFormat"
+>) {
   // The deck's format seeds the Format select and nothing else — the hook owns what a default
   // does to filter state, this panel owns only handing it the deck's answer. See
   // {@link DeckSearchPanelProps.defaultFormat} for why that is a seed rather than a fence.
@@ -891,11 +915,18 @@ function OpenPanel({
                 // puts the rule on `useDeck`'s single definition rather than here: this component
                 // computes the *word on the button* and the hook computes the word it sends, from
                 // the same function over the same fact.
+                // The per-call `onSuccess` carries the row the write landed in back to the
+                // editor, which marks it for ten seconds — the whole point being that the deck
+                // is over *there* and the reader is looking *here*. It is per call rather than
+                // on the mutation because the mutation is shared: `useDeck`'s own `onSuccess`
+                // answers for every surface that borrows it, including one with no editor on
+                // screen. See {@link DeckSearchPanelProps.onAdded}.
                 onClick={() =>
                   add.mutate(
                     auto
                       ? { cardId: card.id, typeLine: card.typeLine, quantity: 1 }
                       : { cardId: card.id, categoryId: targetCategoryId, quantity: 1 },
+                    { onSuccess: (change) => onAdded?.(change.id) },
                   )
                 }
                 className={cn(

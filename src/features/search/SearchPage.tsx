@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
@@ -403,19 +404,26 @@ function Results({ search }: { search: CardSearch }) {
             // database almost every tile has nothing to say, and says nothing.
             badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
             // How many printings this tile stands for, opposite the owned badge. Past one
-            // only: on a wall where every tile said "×1" the mark would be chrome.
+            // only: on a wall where every tile said "1" the mark would be chrome.
             //
-            // The `title` is the abbreviation in plain words, which the corner can finally
-            // surface now that it takes its own pointer events (`CardGrid`'s `Tile`). It says
-            // *matched* rather than "exist", because that is what the number counts: a
-            // collapsed row groups the printings that got past the filters, so a search
-            // narrowed to one set reports the printings in that set and not the card's whole
-            // print run.
+            // **The same object the deck editor counts copies with** — `CountTag`, the filled
+            // banner cut off at a slant, in its neutral grey because a printing count is only a
+            // count and has no tag to take a colour from. It used to be a `×N` in the wall's own
+            // grey chip; a number laid on a card is drawn one way in this app, and the `×` was
+            // a second glyph in a 22px box saying what the banner's shape already says.
+            //
+            // The `title` is the number in plain words, which the corner can surface now that it
+            // takes its own pointer events (`CardGrid`'s `Tile`) — and it is the whole of what a
+            // pointer user gets, since the mark is `aria-hidden`. It says *matched* rather than
+            // "exist", because that is what the number counts: a collapsed row groups the
+            // printings that got past the filters, so a search narrowed to one set reports the
+            // printings in that set and not the card's whole print run.
             topLeft={(card) =>
               card.printings > 1 ? (
-                <span title={`${card.printings} printings matched these filters`}>
-                  ×{card.printings}
-                </span>
+                <CountTag
+                  count={card.printings}
+                  title={`${card.printings} printings matched these filters`}
+                />
               ) : null
             }
             // The 12 366 foil-only and 892 etched-only printings, which Scryfall's art has

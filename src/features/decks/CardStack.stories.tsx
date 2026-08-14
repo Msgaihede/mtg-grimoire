@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { CardStack, STACK_OPEN_ATTR, stackHeight } from "./CardStack";
+import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import type { ValidationIssue } from "./validation/types";
 
 /**
@@ -310,4 +311,72 @@ export const LongStack: Story = {
     // a list, and a list is what a screen reader counts.
     expect(canvas.getAllByRole("listitem")).toHaveLength(15);
   },
+};
+
+/**
+ * **The picked card**: the one the card pane docked beside the deck is open on.
+ *
+ * Two things at once, and the second is the one to look at. It wears the search wall's own gold
+ * ring, so a reader who learned "gold ring means the pane is about this one" on that wall is not
+ * learning a second vocabulary here — and **the pile rests open on it**. Move the pointer down
+ * the stack and the hover wins as it always did; take the pointer away and the pile comes back
+ * to this card rather than closing, which is the whole fix: reading a card in the pane used to
+ * mean watching it drop out of the deck the moment you looked away from it.
+ *
+ * Still exactly one card open, which the geometry at the top of `CardStack.tsx` depends on.
+ */
+export const PickedCard: Story = {
+  args: { selectedCardId: RAMP[2].cardId },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByRole("list", { name: "Ramp" });
+    const cards = canvas.getAllByRole("listitem");
+
+    expect(list.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(1);
+    expect(list.querySelectorAll(`[${STACK_OPEN_ATTR}]`)).toHaveLength(1);
+    expect(cards[2]).toHaveAttribute(SELECTED_ATTR);
+    expect(cards[2]).toHaveAttribute(STACK_OPEN_ATTR);
+  },
+};
+
+/**
+ * **Just landed**: a card the reader has this second added, saying so for ten seconds and fading
+ * the whole way.
+ *
+ * Parchment rather than gold, because gold is already focus, the picked card and both halves of
+ * the drop affordance — and because a card that has just arrived should read as *lit up* rather
+ * than as tinted. It is drawn inside the card's face, which is the half that matters here: in a
+ * fanned pile a card shows only the 34px of its own printed title bar, so what the reader sees
+ * from four cards away is a bright hairline across the top of one card and a lit strip under it.
+ * That is the difference between "somewhere in this pile" and "this one".
+ *
+ * The third card here is mid-pile deliberately. Watch the fade: full strength for two seconds,
+ * then eight seconds down to nothing.
+ */
+export const JustLanded: Story = {
+  args: { landed: new Map([[RAMP[2].id, 1]]) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const cards = canvas.getAllByRole("listitem");
+    const marks = canvasElement.querySelectorAll(`[${LANDED_ATTR}]`);
+
+    expect(marks).toHaveLength(1);
+    // Inside the card's *face* — the button — rather than on the card's outer box, which is
+    // what a collapsed neighbour would paint over on three sides.
+    expect(cards[2].contains(marks[0])).toBe(true);
+    expect(marks[0].closest("button")).not.toBeNull();
+  },
+};
+
+/**
+ * Both marks on one card, which is the ordinary end of an add: the reader presses Add in the
+ * panel, the card lands, and they click it to read what it does.
+ *
+ * They have to stay tellable apart while they overlap. The ring is gold and stands **outside**
+ * the card's edge; the landed mark is parchment and is drawn **inside** the face. So the card
+ * has a gold outline, a bright hairline just inside its picture, and a wash between them that is
+ * gone ten seconds later.
+ */
+export const PickedAndJustLanded: Story = {
+  args: { selectedCardId: RAMP[2].cardId, landed: new Map([[RAMP[2].id, 1]]) },
 };
