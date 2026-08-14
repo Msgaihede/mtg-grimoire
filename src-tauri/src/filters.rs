@@ -241,10 +241,17 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // collection's joined query too, and the id is a claim only a card row can answer — the
     // same reasoning as the format, colour, rarity and mana-value arms, none of which fall
     // back to `rows` either.
-    if let Some(oracle_id) = &f.oracle_id {
+    //
+    // `nonblank`, like every other string filter in this function (`set_code` two lines up,
+    // `format`, `colors`, `rarity` below): a cleared control sends `Some("")`, and taken
+    // literally that binds `oracle_id = ''`, which matches nothing — the search's own
+    // `useCardSearch` clears this filter to exactly `""` on `resetAll`, so a blank reaches
+    // here for real. Skipping `nonblank` would fail *closed*, an empty wall with no filter
+    // chip drawn to explain it — the opposite of every neighbouring arm.
+    if let Some(oracle_id) = nonblank(&f.oracle_id) {
         p.push(
             format!("{alias}.oracle_id = ?"),
-            Box::new(oracle_id.clone()),
+            Box::new(oracle_id.to_owned()),
         );
     }
 

@@ -73,6 +73,15 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("search_cards", {
       req: { sets: ["lea"], manaValues: [1, 8], limit: 50, offset: 0 },
     });
+
+    // Same trap for `oracleId`: `#[serde(rename_all = "camelCase")]` makes a mismatch
+    // silent on the Rust side too — a wrapper spelling this `oracle_id` would deserialize
+    // to `None` with no error anywhere, and an unset filter returns the whole corpus rather
+    // than one card's printings.
+    await ipc.searchCards({ oracleId: "o1", limit: 50, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("search_cards", {
+      req: { oracleId: "o1", limit: 50, offset: 0 },
+    });
   });
 
   /**

@@ -2507,11 +2507,17 @@ mod tests {
     /// from the front end. Also pins the camelCase spelling Task 10 has to mirror.
     #[test]
     fn a_partial_camel_case_payload_deserializes_and_takes_the_default_page_size() {
-        let req: SearchRequest = serde_json::from_str(
-            r#"{"text":"bolt","setCode":"lea","paperOnly":true,"playableOnly":true,"owned":false}"#,
+        let mut req: SearchRequest = serde_json::from_str(
+            r#"{"text":"bolt","setCode":"lea","oracleId":"o1","paperOnly":true,"playableOnly":true,"owned":false}"#,
         )
         .unwrap();
         assert_eq!(req.set_code.as_deref(), Some("lea"));
+        // Pins the wire spelling `oracleId`, not merely that the struct carries a field of
+        // that name: `#[serde(rename_all = "camelCase")]` makes a mismatch silent — the field
+        // reads `None` with no error anywhere, and `oracleId === undefined` on the TypeScript
+        // side is the failure `ipc.ts`'s own module doc warns about, returning the whole
+        // corpus rather than one card's printings.
+        assert_eq!(req.oracle_id.as_deref(), Some("o1"));
         assert_eq!(req.paper_only, Some(true));
         // Two adjacent `…Only` flags whose defaults are opposites, so the spelling is pinned
         // here as well as the value: a typo lands on `None`, which is the *off* state for
@@ -2523,7 +2529,11 @@ mod tests {
         assert_eq!(req.limit, 0, "omitted limit means unset, not a parse error");
         assert_eq!(req.offset, 0);
 
-        // And "unset" has to behave as the default page size, not as "return nothing".
+        // `seeded()`'s rows carry no `oracle_id` (NULL, like most fixtures in this file that
+        // predate this filter), so it is cleared before the search half of this test runs —
+        // this block is pinning "unset behaves as the default page size", not the oracle_id
+        // filter itself, which has its own tests above.
+        req.oracle_id = None;
         let r = run_search(&seeded(), &req).unwrap();
         assert_eq!(r.items.len(), 1);
         assert_eq!(r.items[0].name, "Lightning Bolt");
@@ -3814,6 +3824,25 @@ mod tests {
             ("shock-m21", "o-shock", "Shock", "m21", "159"),
         ]);
         let req = SearchRequest {
+            limit: 50,
+            ..Default::default()
+        };
+        assert_eq!(run_search(&conn, &req).unwrap().total, 2);
+    }
+
+    /// A cleared control sends `Some("")`, not `None` — `useCardSearch`'s `resetAll` does
+    /// exactly this — and it must read as no filter, like every other string filter here
+    /// (`format`, `colors`, `setCode`, `rarity`). Binding it literally as `oracle_id = ''`
+    /// would fail *closed*: an empty result with nothing on screen to explain it, the
+    /// opposite of what a cleared filter means everywhere else in this file.
+    #[test]
+    fn a_blank_oracle_id_is_no_filter() {
+        let conn = fixture_with_cards(&[
+            ("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161"),
+            ("shock-m21", "o-shock", "Shock", "m21", "159"),
+        ]);
+        let req = SearchRequest {
+            oracle_id: Some("".into()),
             limit: 50,
             ..Default::default()
         };

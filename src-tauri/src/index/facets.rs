@@ -99,14 +99,24 @@ struct Prepared {
 
 /// The result set under every filter except `skip`'s.
 ///
-/// **Two filters the request can carry are missing here, both deliberately, and both erring
-/// in the direction that costs a press rather than hiding a card.**
+/// **Three filters the request can carry are missing here, and two of them are deliberate and
+/// err in the direction that costs a press rather than hiding a card.**
 ///
 /// * `rarity` has no dimension in [`CardIndex`] to narrow by, so a rarity-filtered request
 ///   is faceted as though it were unfiltered — every count reads high. Closing it means a
 ///   sixth bitset dimension in the index, which is a change to the build and not to this
 ///   file. Nothing in the app sends it with facets today: the search view's filter bar has
 ///   no rarity control.
+/// * `oracleId` is the same shape as `rarity`: `CardIndex` has no oracle-id dimension, so a
+///   search narrowed to one oracle card is faceted as though it were unfiltered too — every
+///   count over-reads by the printings of every *other* card. **Fails open on purpose, not by
+///   oversight**: `facets.ts` states the rule verbatim — an absent or over-read count only
+///   ever leaves a control *live* that a real count would have greyed, never the reverse — so
+///   the failure mode is a facet a reader can press to zero results, not one that hides a card
+///   they could otherwise find. Nothing in the app sends `oracleId` with a facet request today
+///   either (the context menu that grows this filter calls `search_cards` directly), so this is
+///   the same trade as `rarity`, made for the same reason, and would take the same sixth-
+///   dimension change to close.
 /// * `collapse` is not a filter at all. The search folds printings into cards for display
 ///   and these counts are printings either way — spec §2 says so, and the tooltip says
 ///   "printings" for exactly this reason.
