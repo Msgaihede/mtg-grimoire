@@ -670,7 +670,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   documented base. **The desk's zoom is independent of the docked card search column beside it**:
   that column is its own section (`deckSearch`), so sizing the wall a reader is browsing no longer
   resizes the deck they are building, which is the whole reason the zoom stopped being one number
-  on 2026-08-14. **Two of them are floors rather than proportions and they are the ones to know**:
+  on 2026-08-14. **Driven in the shipped window that day** (debug build, 1280×800, over
+  `scripts/cdp.mjs`, both directions with the panel open): ctrl+wheel over a deck card took the card
+  **208 → 229px** while the panel's tile held at **159px**, and ctrl+wheel over the panel took its
+  tile **159 → 330px** while the deck card held at **229px**. The badge anchored to whichever of the
+  two the gesture landed in — the desk's box read `top 263 / right 830` and the panel's wall
+  `top 551 / right 1230`. Full figures in
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+  **Two of them are floors rather than proportions and they are the ones to know**:
   `stackAdvance` is `max(34, scaled(34, zoom))` and `stackDataHeight` is `max(28, scaled(28, zoom))`,
   so both grow going up and **hold at their base going down**. Each measures something laid over or
   inside the card — the quantity tag on the reveal strip, the type in the data line — and type does

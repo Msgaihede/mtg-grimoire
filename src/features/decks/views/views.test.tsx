@@ -60,10 +60,17 @@ function setDeckZoom(zoom: number) {
  * The store outlives a test — it is a module singleton — so a case that leaves the desk at 2×
  * silently re-packs every suite that runs after it. `zoomPulse`/`zoomSection` are reset here
  * because the gesture case below writes them and the badge's own suite reads them.
+ *
+ * Spread into a **copy**, the way {@link setDeckZoom} above and `store.ts`'s own initialiser
+ * spread it: `Readonly<>` is a compile-time fence and nothing more, so state holding the exported
+ * object itself would let one in-place write corrupt the module constant every other suite in this
+ * process resets from — and the failure would surface as an unrelated file going red much later.
+ * Nothing writes in place today, because `zoomCards` is the single writer and it spreads; the
+ * spelling is kept identical everywhere so that stays the obvious thing to do.
  */
 function resetZoom() {
   useAppStore.setState({
-    cardZoom: DEFAULT_SECTION_ZOOMS,
+    cardZoom: { ...DEFAULT_SECTION_ZOOMS },
     zoomPulse: 0,
     zoomSection: null,
   });

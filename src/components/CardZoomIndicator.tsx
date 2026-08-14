@@ -71,7 +71,25 @@ export function anchorFor(section: ZoomSection | null): ZoomAnchor {
     // `right` in CSS is measured from the viewport's right edge inwards, and a rect's `right` is
     // measured from its left edge outwards — so the section's own inset is the difference, and
     // the badge stays in the section's corner however far from the window's that is.
-    right: window.innerWidth - rect.right + ZOOM_BADGE_INSET,
+    //
+    // **`documentElement.clientWidth` and not `window.innerWidth`, and the difference is exactly
+    // one scrollbar.** `innerWidth` counts the classic vertical scrollbar; the initial containing
+    // block a `fixed` element is positioned against does not. Subtracting the wider number puts
+    // the badge a scrollbar-width to the left of the corner it is meant to hug — measured live in
+    // the shipped window at 1280×800, where the deck editor really does scroll: `innerWidth` 1280
+    // against `clientWidth` 1265, and a desk whose right edge is 830 drew its badge at 807 where
+    // 822 was wanted. The search wall, on a page with no scrollbar, was exact, which is why this
+    // was invisible until the editor.
+    //
+    // It was found by driving the real window rather than by reasoning, and the suite is
+    // structurally incapable of finding it unaided: **jsdom hard-returns 0 from every
+    // `clientWidth`** — `Element-impl.js`, no layout engine and no special case for the document
+    // element — so neither number in a test is a viewport, and a test has to *state* one. The
+    // first version of `CardZoomIndicator.test.tsx` stated `window.innerWidth`, which is to say
+    // it pinned this line's bug as the expected answer. It now states a viewport a scrollbar
+    // narrower than `innerWidth` for the whole file, so every anchor assertion there is also an
+    // assertion about which of the two widths this line reads.
+    right: document.documentElement.clientWidth - rect.right + ZOOM_BADGE_INSET,
   };
 }
 

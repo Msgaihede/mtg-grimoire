@@ -57,7 +57,8 @@ vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
  * 2026-08-09 with no stub: `VirtualTable` and `CollectionTable` each render **1** element with
  * `role="row"` — the header — and `CardGrid` renders **0** tile buttons. It scrolls through
  * `Element.scrollTo`, which jsdom does not implement either. The same three lines
- * `VirtualTable.test.tsx:14-18` and the three views' own suites use, for the same reason.
+ * `VirtualTable.test.tsx`'s own `beforeAll` and the three views' own suites use, for the same
+ * reason.
  *
  * **Here and not in a story's `play`, and that is the whole point of putting it in this file.**
  * A `play` runs in the Storybook *browser* as well as under Vitest, and `offsetHeight` is a
@@ -82,8 +83,8 @@ vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
  *    a green assertion that silently re-measures the day anyone touches these two numbers, the
  *    row pitch, or `overscan`.
  * 2. **`CardGrid`'s column count.** That wall does not ask the virtualiser how wide it is: it
- *    measures its own rows container with `clientWidth` and a `ResizeObserver`
- *    (`CardGrid.tsx:191-198`), and `src/test-setup.ts` stubs `ResizeObserver` to a no-op. So
+ *    measures its own rows container with `clientWidth` and a `ResizeObserver` (`CardGrid`'s
+ *    effect over `rowsRef`), and `src/test-setup.ts` stubs `ResizeObserver` to a no-op. So
  *    `clientWidth` stays 0, `columnsFor` floors at one column, and every tile is
  *    `TILE_MIN_WIDTH` wide. Tiles render — which is what this stub is for — but a claim about
  *    *how many fit across* is still a claim only a browser can settle.
@@ -223,8 +224,8 @@ for (const { file, plays } of SCANNED) {
  *
  * * `DecksPage` reads through TanStack Query.
  * * `AppShell` does not. Its card count comes from `useSync`, which is `setState` and a
- *   chained `setTimeout` by deliberate choice (`useSync.ts:88-93`), and its first poll is made
- *   straight out of a **mount effect**.
+ *   chained `setTimeout` by deliberate choice (the *plain hooks rather than TanStack Query*
+ *   paragraph on `useSync`), and its first poll is made straight out of a **mount effect**.
  *
  * **Measured 2026-08-10, by breaking each half of the fix in turn and re-running this block**,
  * because "two mechanisms cover this" is worth nothing unless someone has checked which:

@@ -120,28 +120,35 @@ it says `tags: ["autodocs"]`.
   store's `set`. So the four story files that write it during render (`AppShell`,
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
-  **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
-  `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
-  `fixed inset-0`, so inline it would cover the docs page rather than its own block. **A third
-  kind arrived 2026-08-14 with the zoom work**: `CardZoomIndicator` sets the parameter on **one
-  story** rather than in its meta, because only that story writes `cardZoom` and the four beside
-  it take their figure as an argument — so what the frame buys there is that pressing Zoom in on
-  the docs page cannot leave a pulse behind in the page's own store. The other **39 docs pages
-  render inline** — `47 − 7 − 1`, the 47 autodocs pages the merged tree's index counted less the
-  seven framed wholesale and the one framed in part. **The framed side of that subtraction is
-  settled and is not a build number**: re-checked in source on the merged tree 2026-08-14
-  (`inline: false` under `src/**/*.stories.tsx`), still the same **eight** files — seven framing
-  in a meta (`AppShell`, `CardDetailPane`, `CollectionPage`, `SearchPage`, `CreateDeckDialog`,
-  `DeckSettingsDialog`, `import/ImportDeckDialog`) and `CardZoomIndicator` framing one story.
-  Every story file that arrived across the 2026-08-14 merges frames nothing — `Decks/QuickAdd`
-  was a ninth story file and framed none of its six, which is why only the total moved then — so
-  only the minuend has ever moved. **The arithmetic has changed under this figure without moving
-  it, twice** — `45 − 7` on 2026-08-12, `46 − 7 − 1` before the 2026-08-14 merges, `47 − 7 − 1`
-  after the first of them — which is exactly the way a derived count goes stale while still
-  looking right: **every term moved and the figure did not**. This merge is the opposite case and
-  is not a third: every story it adds goes into a story file that already existed and frames
-  nothing, so **both** terms held and the 39 is re-derived rather than carried. Re-derive it,
-  never carry it. A new story file that writes the store needs the same parameter or its docs
+  **frame** and with it its own module graph. `DeckDialog`, `DeckSettingsDialog`,
+  `CreateDeckDialog` and `import/ImportDeckDialog` — **four** files — carry the same parameter for
+  an unrelated reason: their scrim is `fixed inset-0`, so inline it would cover the docs page
+  rather than its own block. **A third kind arrived 2026-08-14 with the zoom work**:
+  `CardZoomIndicator` sets the parameter on **one story** rather than in its meta, because that
+  story is the only one on its page that writes the store — every other story there takes its
+  figure as an argument, so there is no second view for a write to overwrite — and what the frame
+  buys is that pressing Zoom in on the docs page cannot leave a pulse behind in the page's own
+  store. That sentence deliberately carries **no count of the stories beside it**: the file gained
+  one on the per-section-zoom branch, and a number there would need re-counting every time it
+  gains another.
+  **Nine story files carry `inline: false`** — re-counted in source 2026-08-14 on the
+  per-section-zoom branch, sweeping `inline: false` under `src/**/*.stories.tsx`: **eight** frame
+  wholesale in a meta, four of them because they write `useAppStore` during render (`AppShell`,
+  `CardDetailPane`, `CollectionPage`, `SearchPage`) and four because of the scrim (`DeckDialog`,
+  `DeckSettingsDialog`, `CreateDeckDialog`, `import/ImportDeckDialog`), and `CardZoomIndicator`
+  frames a single story. **`DeckDialog` was missing from this list** and is the correction that
+  found the rot below: the shell arrived with the deck-dialog work, framed from the day it landed,
+  and no prose-only edit routes to a CI job that would have said so.
+  **The count of docs pages rendering inline used to be written here and has been deleted.** It
+  read "39 render inline — `47 − 7 − 1`", and by the time anybody re-derived it **both** terms had
+  moved: the framed side is eight rather than seven, and the minuend is a fact about whichever tree
+  you are standing in. It had already survived two rewrites of its own arithmetic (`45 − 7`,
+  `46 − 7 − 1`, `47 − 7 − 1`) with the answer never once moving, which is exactly how a derived
+  count goes stale while still looking right — **every term moved and the figure did not**. It goes
+  the way the story and plays totals went on 2026-08-14, for the reason the root `CLAUDE.md` gives:
+  **a count is a fact about a tree, and every open branch has a different one.** What is worth
+  writing down is the list above, which a grep settles in a second, and the rule it exists for.
+  A new story file that writes the store needs the same parameter or its docs
   page shows one story's view under every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of

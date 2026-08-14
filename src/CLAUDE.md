@@ -157,7 +157,24 @@ Every one of these has its measurement and its story in
   gesture landed in**, anchored by measuring that section's box (`useCardZoomGesture` registers the
   element; `anchorFor` reads its rect). One badge because a reader makes one gesture at a time, not
   because there is one zoom: `zoomPulse` stays a single counter and `zoomSection` says which section
-  the badge is about.
+  the badge is about. All of that is driven in the shipped window (2026-08-14, debug build,
+  1280×800) — the figures are in
+  [frontend-design.md](../docs/reference/frontend-design.md) — with one carve-out that matters to
+  the rules above and is stated there: the wheel was dispatched **synthetically**, so the
+  `preventDefault`/WebView2 rule was exercised but **not** re-proved on that pass.
+- **Anything `fixed` positioned from a measured rect takes its viewport width from
+  `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
+  classic vertical scrollbar; the initial containing block a `fixed` box is laid out against
+  excludes it, so the two differ by the scrollbar on every surface that has one — **1280 against
+  1265**, measured 2026-08-14, which is how the zoom badge came to sit 15px left of the corner it
+  was anchored to. **Two things hide it, and the second does worse than hide it**: a surface with
+  no page scrollbar reads correct at every size; and **jsdom has no layout engine, so
+  `clientWidth` is a hard `0` on every element, the document element included** (probed in this
+  repo: `innerWidth` **1024**, `documentElement.clientWidth` **0**). A jsdom test therefore has to
+  **state a viewport width itself** — and the helper stated `window.innerWidth`, which is the
+  buggy expression. The suite did not merely miss the defect, it **pinned the defect as the
+  expected answer**: the assertion reads as a check on the anchor and checks nothing. Only a live
+  pass finds this one.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns are
   data; only `renderRow` and `extraHeight` stay callbacks. **A header sorts by what its column
   shows**, Shift builds a multi-key sort, and `aria-sort` goes on **every** sorted column. A

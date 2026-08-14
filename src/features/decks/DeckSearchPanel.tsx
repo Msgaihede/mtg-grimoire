@@ -219,15 +219,16 @@ export function DeckSearchPanel({
    *
    * **Per editor-open, and deliberately not remembered.** This is `useState` and not a
    * `useAppStore` field, so a reader who opens the panel, leaves the deck and comes back finds it
-   * collapsed again. That is the choice rather than the omission it looks like: `cardZoom`,
-   * `searchView` and `collectionView` are session-wide answers to questions about the *app*, and
-   * which way a reader last left one particular deck's search column is not one of them. It is
-   * not the deck's either — `rememberView` keeps `lastVariant`/`lastGroupBy`/`lastSortBy` on the
-   * deck row because they say where the reader had got to *in that deck*, and a search column is
-   * a thing you open to do a job and shut when the job is done. (`cardZoom` is a number per card
-   * *section* now, and this column is one of those sections — `deckSearch`. That does not move
-   * the line above: a section is still one answer for every deck the reader opens rather than one
-   * per deck, which is exactly the kind of answer this flag is not.)
+   * collapsed again. That is the choice rather than the omission it looks like: what the store
+   * keeps — `searchView`, `collectionView`, and `cardZoom`'s one number per card *section* — are
+   * answers about a **surface**, held for the session and the same whichever deck is open. This
+   * column is itself one of those sections (`deckSearch`), so the size of the tiles in it really
+   * does survive being collapsed here and reopened three decks later; whether it is open at all
+   * does not, because that is which way a reader last left *one particular deck's* search column
+   * and no answer about the app can say it. It is not the deck's either — `rememberView` keeps
+   * `lastVariant`/`lastGroupBy`/`lastSortBy` on the deck row because they say where the reader
+   * had got to *in that deck*, and a search column is a thing you open to do a job and shut when
+   * the job is done.
    *
    * **The search comes up with the disclosure and costs nothing before it** — {@link OpenPanel}
    * is where `useCardSearch` lives, and **this flag on its own is what mounts it**. Closed is

@@ -16,13 +16,51 @@ import { CardZoomIndicator, ZOOM_BADGE_INSET, ZOOM_QUIET_MS, anchorFor } from ".
  * inline offsets asserted below are the `style` prop's own and not animated values, so they are
  * on the element from its first frame whatever the animation is doing.
  */
+/** What a classic vertical scrollbar costs, and what the shipped window measured on the pass that
+ *  found the bug {@link VIEWPORT_WIDTH} exists for: `innerWidth` 1280 against `clientWidth` 1265,
+ *  2026-08-14, debug build. */
+const SCROLLBAR = 15;
+
+/**
+ * The viewport a `fixed` badge is actually laid out against, stated for the whole file.
+ *
+ * **jsdom hard-returns 0 from every `clientWidth`** — `Element-impl.js`, no layout engine and no
+ * special case for the document element — so left alone this file would anchor the badge against
+ * a zero-width viewport and every expectation in it would be a negative number no browser could
+ * produce. Stating a width is the same move {@link mountSection} makes for each section's rect:
+ * this file fakes layout, and this is the last piece of layout it needs.
+ *
+ * **It is stated a scrollbar narrower than `window.innerWidth`, and that gap is load-bearing.**
+ * `innerWidth` counts the scrollbar; the initial containing block a `fixed` element is laid out
+ * against does not, and `anchorFor` must read the narrower one or the badge sits that far left of
+ * the corner it is anchored to — which is exactly what the live pass caught. Keeping the two
+ * numbers apart for the whole file makes every anchor assertion here *also* an assertion about
+ * which width the component reads. The first version of this file used `window.innerWidth` in
+ * {@link expectedAnchor}, which is to say it pinned the bug as the expected answer and passed.
+ */
+const VIEWPORT_WIDTH = window.innerWidth - SCROLLBAR;
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // An own data property on the element, shadowing the prototype getter jsdom answers 0 from.
+  // `configurable` is what lets the teardown below hand the real one back rather than leaving a
+  // width behind for the next file that shares this jsdom.
+  Object.defineProperty(document.documentElement, "clientWidth", {
+    value: VIEWPORT_WIDTH,
+    configurable: true,
+  });
   // The store is a module singleton, so a zoom left behind by one test would be another one's
   // starting state — and `zoomPulse` in particular decides whether the badge is up at all.
   // `zoomSection` has to go back to null with them: it is what the badge reads to know which of
   // the four sizes it is about, and a leftover section would point the next test at the wrong one.
-  useAppStore.setState({ cardZoom: DEFAULT_SECTION_ZOOMS, zoomPulse: 0, zoomSection: null });
+  //
+  // A **copy** of `DEFAULT_SECTION_ZOOMS`, never the constant itself, for the reason `store.ts`
+  // gives at its own initialiser: `Readonly<>` is a compile-time fence and nothing more, so any
+  // in-place write to `state.cardZoom` would go straight through into the exported object and
+  // hand every later file in this process a corrupted default. Harmless while `zoomCards` is the
+  // only writer and spreads — and this is the reset every one of these files runs, so it is the
+  // last place to spell the rule a second way.
+  useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS }, zoomPulse: 0, zoomSection: null });
 });
 
 /** Sections mounted by {@link mountSection}, which are outside any Testing Library container and
@@ -31,6 +69,7 @@ const sections: HTMLElement[] = [];
 
 afterEach(() => {
   vi.useRealTimers();
+  Reflect.deleteProperty(document.documentElement, "clientWidth");
   for (const el of sections.splice(0)) el.remove();
 });
 
@@ -42,10 +81,12 @@ afterEach(() => {
  * would pass on the fallback, which is the one answer these tests must be able to tell apart
  * from a real measurement.
  *
- * **jsdom lays nothing out and answers every `getBoundingClientRect` with zeroes**, so the box
- * has to be stated. Every expectation below is derived from the same numbers through
- * {@link expectedAnchor} rather than typed out, so neither {@link ZOOM_BADGE_INSET} nor jsdom's
- * window width can drift away from what this file claims.
+ * **jsdom lays nothing out and answers every `getBoundingClientRect` with zeroes**, so the box has
+ * to be stated — the same reason {@link VIEWPORT_WIDTH} states the viewport it sits in. Every
+ * expectation below is derived from those numbers through {@link expectedAnchor} rather than typed
+ * out, so neither the inset nor the viewport can drift away from what this file claims. Keep each
+ * `right` below {@link VIEWPORT_WIDTH}: a section wider than the window it is in would put the
+ * badge's own offset off the left of the corner and prove nothing.
  */
 function mountSection(section: ZoomSection, box: { top: number; right: number }) {
   const el = document.createElement("div");
@@ -70,15 +111,18 @@ function mountSection(section: ZoomSection, box: { top: number; right: number })
 
 /**
  * Where the badge belongs for a section with that box: {@link ZOOM_BADGE_INSET} in from its
- * top-right corner, in the viewport coordinates `position: fixed` measures in.
+ * top-right corner, in the coordinates `position: fixed` measures in.
  *
- * The `right` sum is the one worth spelling out — a rect's `right` counts from the window's left
- * edge and CSS's `right` counts from its right, so the two are not the same number and a test
- * that asserted the rect's own value would pass only for a section flush against the window.
+ * The `right` sum is the one worth spelling out — a rect's `right` counts from the left edge of
+ * the viewport and CSS's `right` counts from its right, so the two are not the same number and a
+ * test that asserted the rect's own value would pass only for a section flush against the window.
+ *
+ * The width is {@link VIEWPORT_WIDTH} and **not `window.innerWidth`**, which is the difference
+ * between a helper that checks this arithmetic and one that pins a scrollbar-wide error into it.
  */
 const expectedAnchor = (box: { top: number; right: number }) => ({
   top: box.top + ZOOM_BADGE_INSET,
-  right: window.innerWidth - box.right + ZOOM_BADGE_INSET,
+  right: VIEWPORT_WIDTH - box.right + ZOOM_BADGE_INSET,
 });
 
 /** The window's own corner — what {@link anchorFor} answers with no section to measure. */
@@ -250,17 +294,32 @@ describe("CardZoomIndicator", () => {
   });
 
   /**
-   * Two classes, asserted because neither is visible to any behavioural claim jsdom can settle
-   * and both fail **silently**. Without `pointer-events-none` the badge sits over the very
-   * scroller that carries the ctrl+wheel listener — it is drawn inside that section now, so this
-   * is a certainty rather than a likelihood — and swallows the notches that put it there;
-   * without a rung off `LAYER` it is painted under a table's sticky header.
+   * The classes, asserted because not one of them is visible to a behavioural claim jsdom can
+   * settle and every one of them fails **silently**. Without `pointer-events-none` the badge sits
+   * over the very scroller that carries the ctrl+wheel listener — it is drawn inside that section
+   * now, so this is a certainty rather than a likelihood — and swallows the notches that put it
+   * there; without a rung off `LAYER` it is painted under a table's sticky header.
+   *
+   * **`origin-top-right` is in that same category and is guarded here for the same reason.** The
+   * badge is held by its `top` and `right` offsets and arrives from `popup`'s `scale: 0.96`, so a
+   * pill scaled about its *middle* would travel on the way in — sliding up and in from outside the
+   * corner it belongs to, which reads as an object flying in rather than as a figure appearing
+   * where the reader is already looking. Dropping the class breaks nothing a test asserts, changes
+   * nothing in the DOM, and costs two frames of animation nobody will screenshot; asserting the
+   * string is the only thing between it and a silent deletion. Note it is the pill's own corner
+   * rather than a wrapper's — the badge is one box now, so this class has to be on the same
+   * element as the offsets, which is exactly what a single `toHaveClass` here says.
    */
-  it("floats over the page without taking the pointer", async () => {
+  it("floats over the page without taking the pointer, and grows from its own corner", async () => {
     render(<CardZoomIndicator />);
     await notch();
 
-    expect(screen.getByText("110%")).toHaveClass("pointer-events-none", "fixed", LAYER.popup);
+    expect(screen.getByText("110%")).toHaveClass(
+      "pointer-events-none",
+      "fixed",
+      "origin-top-right",
+      LAYER.popup,
+    );
   });
 });
 
@@ -269,7 +328,11 @@ describe("anchorFor", () => {
    * The measurement the whole per-section badge rests on. The section's box is stated by the
    * stub, and the expectation is built from those same numbers — the claim being made is about
    * the *arithmetic* (inset down from `top`, and CSS's `right` counted from the other edge of
-   * the window than the rect's), not about any figure jsdom happens to invent.
+   * the viewport than the rect's), not about any figure jsdom happens to invent.
+   *
+   * It is a check on *which* width that subtraction starts from too, because {@link VIEWPORT_WIDTH}
+   * keeps the two candidates a scrollbar apart for the whole file — but only implicitly, which is
+   * why the test after it names the failure it is guarding against out loud.
    */
   it("answers a mounted section's top-right corner, inset", () => {
     const box = { top: 120, right: 900 };
@@ -280,6 +343,39 @@ describe("anchorFor", () => {
     // never received the element would answer the window's corner here and every assertion
     // above about the section's own corner would still be checking the arithmetic of a constant.
     expect(anchorFor("collection")).not.toEqual(WINDOW_CORNER);
+  });
+
+  /**
+   * **The scrollbar. A regression test for a bug no test in this repo could have found unaided,
+   * and the stated viewport is the whole of what makes it possible.**
+   *
+   * `window.innerWidth` includes the classic vertical scrollbar; the initial containing block a
+   * `fixed` element is positioned against excludes it. Measuring from the wider one drew the
+   * badge a scrollbar-width left of its corner — found by driving the shipped window at
+   * 1280×800, where the deck editor really does scroll: `innerWidth` 1280 against `clientWidth`
+   * 1265, and a desk ending at 830 whose badge landed at 807 where 822 was wanted. The search
+   * wall, on a page with no scrollbar, was exact, which is how it stayed hidden.
+   *
+   * **A test can only ask this question if it states a viewport**, because jsdom's own answer to
+   * `clientWidth` is a hard-coded 0 — there being no layout — while `innerWidth` is a real width
+   * off its configured viewport. A file measuring against `innerWidth` does not fail to cover
+   * this line; it
+   * pins the wrong answer, which is worse, and is what this file did before the live pass.
+   * {@link VIEWPORT_WIDTH} is stated a scrollbar below `innerWidth` for that reason, and the
+   * second assertion below names the bug's own answer so it cannot come back quietly.
+   */
+  it("measures from the initial containing block and not from the scrollbar-inclusive window", () => {
+    const box = { top: 120, right: 900 };
+    mountSection("collection", box);
+
+    // The premise, asserted rather than assumed: the two widths this test discriminates between
+    // really are apart, and by a scrollbar.
+    expect(document.documentElement.clientWidth).toBe(window.innerWidth - SCROLLBAR);
+
+    expect(anchorFor("collection").right).toBe(VIEWPORT_WIDTH - box.right + ZOOM_BADGE_INSET);
+    expect(anchorFor("collection").right).not.toBe(
+      window.innerWidth - box.right + ZOOM_BADGE_INSET,
+    );
   });
 
   /** Before the first gesture of a session there is no section to be about. Not an error: the

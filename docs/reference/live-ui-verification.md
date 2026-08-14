@@ -61,6 +61,13 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
   window back, so read `innerWidth`/`innerHeight` before the first override and end the run
   with an explicit `size 1280 800`.
+  **`innerWidth` is the right width to _restore_ and the wrong width to _position_ from.** It
+  includes the classic vertical scrollbar and `document.documentElement.clientWidth` does not —
+  **1280 against 1265**, measured in the 2026-08-14 zoom pass. A `fixed` element is laid out
+  against the initial containing block, which excludes the scrollbar, so a rect-derived offset
+  that reads `innerWidth` lands 15px off. **jsdom cannot referee this**: it has no layout engine,
+  `clientWidth` is a hard 0, so a test has to state a viewport width and stating `innerWidth`
+  pins the bug. See [frontend-design.md](frontend-design.md).
   **Probe `transitionProperty`, never `transitionDuration`.** Tailwind's `transition-none`
   sets `transition-property: none` and leaves `duration-150` alone, so a reduced-motion check
   that reads the duration reports `0.15s` on a control that is correctly still — a false
