@@ -2,11 +2,17 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **384 stories across 49 story files, 48 docs
+`npm run storybook` · `npm run build-storybook`. **385 stories across 49 story files, 48 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the last `importPath` is the `.mdx`).
 **Measured 2026-08-14** off a fresh `build-storybook` on the merge of the X-mana-category branch
-and `origin/main`: **432 entries, 384 `story`, 48 `docs`, 50 distinct `importPath`s.**
+and `origin/main`: **433 entries, 385 `story`, 48 `docs`, 50 distinct `importPath`s.**
+
+**This figure was measured twice in one hour and moved between them**, which is the strongest
+form of the lesson below: the first build of the merged tree answered **384** (432 entries), and
+a further `main` — PR #46's stack-border work, adding stories to a file that already existed —
+took it to 385 without moving the file or docs-page counts. A branch that sits open while `main`
+advances does not have a story total; it has one *per merge*.
 
 **Both sides of this merge measured honestly, and neither figure survived it — the third time
 running.** On 2026-08-14 the X-mana-category branch built **383** stories across 49 files with the
@@ -208,7 +214,7 @@ forward.)
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**293 plays, in a file of 296 tests** — the other three are its own; measured 2026-08-14 on the
+  (**294 plays, in a file of 297 tests** — the other three are its own; measured 2026-08-14 on the
   merge commit, `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first and **the
   runner's own summary** for the second, from an actual `vitest run src/stories.test.tsx`. The
   `plays + 3` relation has now held on every measurement it has ever had, and the second number is
@@ -221,7 +227,8 @@ forward.)
 
   **That pair has rotted or conflicted on every measurement it has ever had** — 264/267, then
   270/273, then 279/282 and 283/286 on two branches at once, then 291/294 on one side of the
-  2026-08-14 merges and 292 plays on the other, and **293/296** on the merge of those two. The
+  2026-08-14 merges and 292 plays on the other, **293/296** on the merge of those two and
+  **294/297** one `main` later the same hour. The
   shape never changes: 264/267 was written
   against a tree already answering 269/272, and 270/273 against one already answering 278, and
   twice the branch that found the drift had contributed almost none of it — prose-only rot rather
