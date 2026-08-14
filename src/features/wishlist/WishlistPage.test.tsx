@@ -501,6 +501,38 @@ describe("WishlistPage", () => {
     expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
   });
 
+  /**
+   * Alphabetical by the words on screen, the one order an option list in this app is drawn
+   * in (`lib/options.ts`). These four are named for what they *answer* — "Most wanted",
+   * "Highest price" — so the order they are declared in is a train of thought rather than
+   * anything a reader can see, and a picker showing it would be showing the author's notes.
+   * The whole sequence is asserted rather than one entry, because that is the only thing
+   * that tells a sorted list from the constant passed straight through.
+   *
+   * "Custom…" is pinned above them: it is the state of the control rather than an order to
+   * pick, and it must not drift into the middle of the list if either it or an order is
+   * ever renamed.
+   */
+  it("offers the sort orders alphabetically, under a pinned Custom…", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const options = () =>
+      within(sortSelect())
+        .getAllByRole("option")
+        .map((o) => o.textContent);
+    const orders = ["Highest price", "Most wanted", "Name", "Recently added"];
+    expect(options()).toEqual(orders);
+
+    // A header this select has no option for is the only way to reach "Custom…": Cost sorts
+    // by what finishing the wish costs, where the select offers the *unit* price.
+    await user.click(screen.getByRole("button", { name: /^Cost/ }));
+
+    await waitFor(() => expect(sortSelect()).toHaveValue(""));
+    expect(options()).toEqual(["Custom…", ...orders]);
+  });
+
   /** Opening a card from a wish is how the reader checks what they are about to buy. */
   it("opens the card a wish is about", async () => {
     wrap(<WishlistPage />);

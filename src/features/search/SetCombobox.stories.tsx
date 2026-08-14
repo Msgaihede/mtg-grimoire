@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { compareLabels } from "@/lib/options";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { SetCombobox } from "./SetCombobox";
 
@@ -99,18 +100,28 @@ const meta = {
           "reveals — which is where the caret goes and what `aria-activedescendant` is read " +
           "from. The keyboard never leaves that field: arrows move a highlight, they do not " +
           "move focus.\n\n" +
+          "The rows are ordered by **picked, then whether this search has printings for the " +
+          "set, then the code rank a typed query produces, then the set's name** — the shared " +
+          "`sortOptions` (`src/lib/options.ts`), given three grouping levels. `list_sets` " +
+          "answers newest-first and none of that order survives here, deliberately: what the " +
+          "backend says and what a picker draws are different questions. `Open` and " +
+          "`PickedFirst` are the two halves of it this corpus can show.\n\n" +
           "**Four of its states cannot be reached from the story corpus, and none is faked " +
           "here.** The fake backend derives `list_sets` from the 43 fixture printings, which is " +
           "**31 sets with a paper printing** (measured by the `Open` story's own assertion): " +
-          "too few for the `Showing N of M` footer, which needs more than the 50 options " +
-          "`MAX_OPTIONS` renders (`SetCombobox.tsx:19`), and far too few for the ceiling " +
-          "sentence, which needs 64 picked (`SetCombobox.tsx:30`). `Loading sets…` and " +
+          "too few for the `Showing N of M` footer *and the `Show 50 more` button beside it* — " +
+          "they appear and disappear together — which need more than the 100 options " +
+          "`MAX_OPTIONS` renders (`SetCombobox.tsx:28`), and far too few for the ceiling " +
+          "sentence, which needs 64 picked (`SetCombobox.tsx:50`). The `large` seed does not " +
+          "help: its 5 200 synthetic printings take their `setCode` from the same 33 real rows, " +
+          "so it is a bigger corpus in the same sets. `Loading sets…` and " +
           "`Could not read the set list` are the query's pending and error states: the fake " +
           "resolves in a microtask and its `list_sets` handler cannot throw, so neither is " +
           "observable. Closing any of them means a corpus regeneration or a fault the fake " +
           "backend does not have, and both are worth more than a hand-written set list here. " +
-          "The first two are not unpinned facts, only unstoried ones: `SetCombobox.test.tsx:141` " +
-          "covers the footer and `:186` the ceiling, each against a set list built for it.",
+          "The first two are not unpinned facts, only unstoried ones: `SetCombobox.test.tsx:158` " +
+          "covers the footer, `:177` the paging control and `:276` the ceiling, each against a " +
+          "set list built for it.",
       },
     },
   },
@@ -171,14 +182,23 @@ export const Selected: Story = {
  * Open, and what the whole list is: **31 sets**, not the 33 the fixture corpus prints cards in.
  *
  * A set with no paper printing can never match a search, so offering it would be offering an
- * empty result (`SetCombobox.tsx:114`). The two missing here are the two the corpus knows only
+ * empty result (`SetCombobox.tsx:182`). The two missing here are the two the corpus knows only
  * as digital printings — Vintage Masters and Final Fantasy — and the assertion names them,
  * because "31" alone would pass just as happily if the filter had dropped the wrong two. Final
  * Fantasy: Through the Ages is the control: same words at the front of its name, a paper
  * printing, and it is offered.
  *
- * The real database is ~1 050 sets, which is why the list is capped and why the cap has a
- * footer. Neither is reachable here; see the note on this page.
+ * **And they are alphabetical**, which is the whole of the order when nothing is picked, nothing
+ * is typed and no facet counts have arrived: Amonkhet Invocations first, Zendikar Rising last,
+ * where `list_sets` would have answered Assassin's Creed first and Limited Edition Alpha last.
+ * Asserted against `compareLabels` rather than against 31 written-out names — the corpus is
+ * generated and a regeneration must move this story rather than break it — which does mean the
+ * assertion shares the app's collator and cannot catch a *wrong* one. `options.test.ts` is where
+ * the collator itself is pinned.
+ *
+ * The real database is ~1 050 sets, which is why the list opens on a page of 100 and why that
+ * page has a footer and a way to ask for the next one. Neither is reachable here; see the note
+ * on this page.
  */
 export const Open: Story = {
   play: async ({ canvasElement }) => {
@@ -186,13 +206,48 @@ export const Open: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Set" }));
 
     const list = canvas.getByRole("listbox");
-    await expect(within(list).getAllByRole("option")).toHaveLength(31);
+    const options = within(list).getAllByRole("option");
+    await expect(options).toHaveLength(31);
     await expect(within(list).queryByText("Vintage Masters")).toBeNull();
     await expect(within(list).queryByText("Final Fantasy")).toBeNull();
     await expect(within(list).getByText("Final Fantasy: Through the Ages")).toBeInTheDocument();
+
+    const names = options.map((option) => option.querySelector("span")?.textContent ?? "");
+    await expect(names).toEqual([...names].sort(compareLabels));
     // Focus goes to the search box and stays there: the arrows move `aria-activedescendant`
     // rather than the caret, so a reader can type, narrow and pick without leaving the field.
     await expect(canvas.getByRole("combobox", { name: "Search sets" })).toHaveFocus();
+  },
+};
+
+/**
+ * The one level that outranks the alphabet: **a set that is on is drawn first.**
+ *
+ * The list is a page of 100 out of ~1 050, and a picked set that sorted past the end of it would
+ * be a filter the reader can see counted on the button and cannot see, reach or switch off. So
+ * "picked" is the first grouping key and the alphabet is the last — Limited Edition Alpha and
+ * Modern Horizons 2 sit at the top here, above Amonkhet Invocations, which is where the A-Z
+ * would otherwise start.
+ *
+ * The second half of the assertion is that the rule is a *partition* and not a shuffle: the 29
+ * rows below the two picked ones are still in alphabetical order, so ticking a set moves exactly
+ * one row and leaves the list the reader had learned to scan.
+ */
+export const PickedFirst: Story = {
+  args: { initial: ["lea", "mh2"] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Set" }));
+
+    const list = canvas.getByRole("listbox");
+    const names = within(list)
+      .getAllByRole("option")
+      .map((option) => option.querySelector("span")?.textContent ?? "");
+    await expect(names.slice(0, 2)).toEqual(["Limited Edition Alpha", "Modern Horizons 2"]);
+
+    const rest = names.slice(2);
+    await expect(rest[0]).toBe("Amonkhet Invocations");
+    await expect(rest).toEqual([...rest].sort(compareLabels));
   },
 };
 
@@ -204,13 +259,18 @@ export const Open: Story = {
  * `un` shows both at once: Unfinity and Unhinged are code matches (`unf`, `unh`), and Unlimited
  * Edition is a name match whose code is `2ed`.
  *
- * `rank` then sorts exact code, code prefix, name — but **this corpus cannot show that working**:
- * the backend's own order is newest set first, and Unlimited Edition (1993) is the oldest of the
- * three, so it would come last either way. What would separate the two is a name-matching set
- * newer than a code-matching one, and the 31 offered here do not contain such a pair. The
- * ordering asserted below is therefore the *result*, not a proof of its cause;
- * `SetCombobox.test.tsx:219` and `:272` are where the rule itself is pinned, each against a set
- * list built to separate it from the date order.
+ * `rank` then sorts exact code, code prefix, name — but **this corpus still cannot show that
+ * working**, and it is a different confound from the one that used to be written here. The old
+ * note said the backend's newest-first order would have produced the same three anyway; the
+ * order under `rank` is now the *alphabet*, and the alphabet produces the same three too —
+ * Unfinity, Unhinged, Unlimited Edition is both the rank order and plain A-Z. What would
+ * separate them is a name-matching set that sorts *before* a code-matching one, and the 31
+ * offered here do not contain such a pair. The ordering asserted below is therefore the
+ * *result*, not a proof of its cause. `SetCombobox.test.tsx:315` is where the rule is pinned
+ * against a set list the alphabet alone would fail — `lea` first, with Arena League 1999 behind
+ * it. `:469` pins the middle rank, exact code over a longer code that starts with it, and that
+ * pair is a real one (`pls` is Planeshift, `plst` is The List) whose two names happen to agree
+ * with A-Z; it is the rank that is being separated there, not the alphabet.
  */
 export const Filtered: Story = {
   play: async ({ canvasElement }) => {

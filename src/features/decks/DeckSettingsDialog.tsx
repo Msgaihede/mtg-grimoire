@@ -15,6 +15,7 @@ import {
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { dialog as dialogMotion, scrim } from "@/lib/motion";
+import { compareLabels } from "@/lib/options";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -23,7 +24,7 @@ import { writeFailure } from "@/lib/writes";
 import { FOCUS, FOCUS_INSET } from "./cardControl";
 import { useDeck } from "./useDeck";
 import { useDeckFolders } from "./useDeckFolders";
-import { useFormatSpecs } from "./useFormatSpecs";
+import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 
 /** A field's label: 11px and dim, the direction's caption size, used for every one here. */
 const CAPTION = "block text-[0.6875rem] text-dim";
@@ -678,15 +679,13 @@ function Fields({
   const notes = useDeckField(deck.notes ?? "", writeNotes);
 
   /** The picker, plus the deck's own format when the seed no longer offers it — `DeckEditor`'s
-   *  rule: a select that cannot show its own value would silently re-format the deck on the
-   *  first other change. */
-  const formats = useMemo(() => {
-    const picker = specs
-      .filter((s) => s.enabledInPicker)
-      .map((s) => ({ key: s.key, name: s.displayName }));
-    if (picker.some((f) => f.key === deck.formatKey)) return picker;
-    return [{ key: deck.formatKey, name: deck.formatName ?? deck.formatKey }, ...picker];
-  }, [specs, deck.formatKey, deck.formatName]);
+   *  rule and `pickerFormats`' code, so the header select and this one cannot come to two
+   *  answers about the same deck. Alphabetical, with the deck's own row folded in rather than
+   *  pinned first. */
+  const formats = useMemo(
+    () => pickerFormats(specs, { key: deck.formatKey, name: deck.formatName ?? deck.formatKey }),
+    [specs, deck.formatKey, deck.formatName],
+  );
 
   return (
     <>
@@ -873,6 +872,9 @@ function FolderRow({
           FOCUS,
         )}
       >
+        {/* Pinned above the folders, and the one row here that is not a folder: the top level
+            is where a deck goes when it is in none of them. Everything under it is
+            `folderPaths`' alphabetical order, by the whole rendered path. */}
         <option value="">Top level</option>
         {paths.map((f) => (
           <option key={f.id} value={f.id}>
@@ -917,6 +919,12 @@ const rank = (card: DeckCard): number => (card.categoryKind === "commander" ? 0 
  * The depth fence is not decoration. The backend refuses a move that would make a cycle, but a
  * read is a read: a walk with no fence is an infinite loop in exactly the case nobody can
  * reproduce.
+ *
+ * Alphabetically by the **rendered path**, through the app's one collator (`compareLabels`)
+ * rather than a bare `localeCompare`. The bare call reads the host locale, which is the trap
+ * `sorting.ts` names: the collation is part of what the app does, and a list that reorders
+ * itself on a different machine is a list two readers cannot compare. It also brings the
+ * numeric rule with it, so a reader's `Cube 2` sits above their `Cube 10`.
  */
 export function folderPaths(folders: readonly DeckFolder[]): { id: number; path: string }[] {
   const byId = new Map(folders.map((f) => [f.id, f]));
@@ -931,5 +939,5 @@ export function folderPaths(folders: readonly DeckFolder[]): { id: number; path:
   };
   return folders
     .map((f) => ({ id: f.id, path: pathOf(f) }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) => compareLabels(a.path, b.path));
 }

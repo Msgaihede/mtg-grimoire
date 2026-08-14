@@ -387,6 +387,12 @@ export function DeckCardControls({
       // Always the placeholder: this select is a *verb*, not a field holding the card's
       // category. Leaving the last choice selected would make it read as though the card
       // were already there, and would make picking the same target twice a no-op.
+      //
+      // The targets under it are **deliberately not alphabetical** — one of the two exceptions
+      // `src/lib/options.ts` names. They arrive in `cat.sort_order, cat.id`, the order the
+      // reader dragged their own columns into and the order all four deck views render, so
+      // this list and the deck behind it name the piles the same way. `Move…` itself is pinned
+      // first and is not one of them.
       value=""
       onChange={(e) => {
         const to = Number(e.target.value);

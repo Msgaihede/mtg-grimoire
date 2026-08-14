@@ -16,6 +16,7 @@ import {
 import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
+import { sortOptions } from "@/lib/options";
 import { pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
@@ -33,7 +34,7 @@ import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { SORT_OPTIONS, type SortBy } from "./sorting";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
-import { useFormatSpecs } from "./useFormatSpecs";
+import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateDeck } from "./validation/engine";
 import { violationsByCard } from "./violations";
@@ -41,6 +42,17 @@ import { GridView } from "./views/GridView";
 import { StackView } from "./views/StackView";
 import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
+
+/**
+ * The toolbar's two option lists, as the toolbar draws them: alphabetically by label.
+ *
+ * Sorted here rather than trusted from `grouping.ts` and `sorting.ts`, whose arrays are named
+ * in domain order and happen to read alphabetically today — which is exactly how an ordering
+ * drifts the day somebody appends a fourth grouping or a fifth sort. Module level, so the sort
+ * is paid once per session rather than once per render of the largest component in the app.
+ */
+const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
+const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
 /** A header/toolbar control that is not a chip: a select, a field, a plain press. 32px, so the
  *  two rows read as rows rather than as a pile of differently sized boxes. The property list is
@@ -694,14 +706,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [deck.update, dropDraft, row]);
 
   /** The picker, plus the deck's own format when the seed no longer offers it — a select that
-   *  cannot show its own value would silently re-format the deck on the first other change. */
-  const formats = useMemo(() => {
-    const picker = specs
-      .filter((s) => s.enabledInPicker)
-      .map((s) => ({ key: s.key, name: s.displayName }));
-    if (!row || picker.some((f) => f.key === row.formatKey)) return picker;
-    return [{ key: row.formatKey, name: row.formatName ?? row.formatKey }, ...picker];
-  }, [specs, row]);
+   *  cannot show its own value would silently re-format the deck on the first other change.
+   *  Both halves are `pickerFormats`', including that the deck's own row is *folded into* the
+   *  alphabet rather than pinned in front of it. */
+  const formats = useMemo(
+    () =>
+      pickerFormats(specs, row && { key: row.formatKey, name: row.formatName ?? row.formatKey }),
+    [specs, row],
+  );
 
   /**
    * How many rows the two lists disagree about — a **row** count, which is what "cards differ"
@@ -1160,7 +1172,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               onChange={(e) => setGroupBy(e.target.value as GroupBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
-              {GROUP_BY_OPTIONS.map((option) => (
+              {GROUP_BY_PICKER.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -1178,7 +1190,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               onChange={(e) => setSortBy(e.target.value as SortBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
-              {SORT_OPTIONS.map((option) => (
+              {SORT_BY_PICKER.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
