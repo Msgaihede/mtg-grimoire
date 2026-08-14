@@ -90,6 +90,13 @@ export interface SearchRequest {
   /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
   colors?: string;
   setCode?: string;
+  /**
+   * Every printing of one oracle card — the card, not the cardboard. Absent means unset,
+   * like every other filter here; it ANDs with the rest. Mirrors
+   * `CardFilters::oracle_id`/`SearchRequest::oracle_id` in `src-tauri/src/filters.rs` and
+   * `search.rs`.
+   */
+  oracleId?: string;
   /** Set codes. ORed with each other, ANDed with every other filter. */
   sets?: string[];
   /** Mana-value chips: 0–7 match exactly, 8 means "8 or more". */
@@ -2877,6 +2884,24 @@ export const ipc = {
    */
   onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Promise<UnlistenFn> =>
     listen<OracleTagProgressEvent>("oracle-tags:progress", (evt) => cb(evt.payload)),
+  /**
+   * The Scryfall CDN URL for one printing at one size, or `null`.
+   *
+   * A command rather than a field on the list DTOs, and called **on the press** — see
+   * `card_image_uri` in the crate. Three ways to `null`, all of them answers: an unknown
+   * card, a card with no `image_uris`, and a variant the source lacked.
+   */
+  cardImageUri: (cardId: string, variant: ImageVariant) =>
+    invoke<string | null>("card_image_uri", { cardId, variant }),
+  /**
+   * Write an export at a path the reader chose in the OS save dialog.
+   *
+   * Rust writes the file because `dialog:allow-save` answers a *path* and nothing more, and
+   * writing at it from here would need an `fs:` permission this app grants nowhere. Same
+   * shape as `deck_set_cover_image`.
+   */
+  exportWriteFile: (path: string, contents: string) =>
+    invoke<void>("export_write_file", { path, contents }),
 };
 
 /**

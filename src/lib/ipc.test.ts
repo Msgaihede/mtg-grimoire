@@ -828,6 +828,31 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("error_log_clear");
     expect(gone).toBe(3);
   });
+
+  /**
+   * `card_image_uri(cardId, variant)` — the context menu's one round trip for an image URL.
+   * `variant` is a bare string on the wire, so a wrapper that reached for `imageVariant` or
+   * dropped it silently would be a runtime deserialization error no type here catches.
+   */
+  it("sends a card image request under `cardId` and `variant`", async () => {
+    invoke.mockResolvedValue("https://cards.scryfall.io/display/x.webp?1");
+    const uri = await ipc.cardImageUri("p1", "display");
+    expect(invoke).toHaveBeenCalledWith("card_image_uri", { cardId: "p1", variant: "display" });
+    expect(uri).toBe("https://cards.scryfall.io/display/x.webp?1");
+  });
+
+  /**
+   * `export_write_file(path, contents)` — the save-dialog path Rust writes at, since no `fs:`
+   * permission is granted anywhere for the webview to write it itself.
+   */
+  it("sends an export write under `path` and `contents`", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.exportWriteFile("C:\\decks\\out.txt", "1 Lightning Bolt\n");
+    expect(invoke).toHaveBeenCalledWith("export_write_file", {
+      path: "C:\\decks\\out.txt",
+      contents: "1 Lightning Bolt\n",
+    });
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {
