@@ -19,6 +19,7 @@ import { GameChangerBanner, QuantityTag, RuleBreakMark } from "./CardMarks";
 import {
   DECK_CARD_VARIANT,
   deckCardName,
+  deckCardMenuProps,
   deckCardProps,
   DeckCardControls,
   FOCUS_INSET,
@@ -688,6 +689,11 @@ function StackedCard({
       // stepping from the card into its own stepper would otherwise close the card under it.
       onFocus={() => onOpenNow(index)}
       onBlur={onRelease}
+      // The whole card, face and foot together: a right-click on the price or the set code is a
+      // right-click on the card. The keydown half is here rather than on the button because the
+      // controls drawn over the card are siblings of that button — Shift+F10 with the caret on
+      // the stepper is still a question about this card.
+      {...deckCardMenuProps(card, actions)}
       {...(open ? { [STACK_OPEN_ATTR]: "" } : {})}
       initial={false}
       animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : stackCollapsedMargin(zoom) }}

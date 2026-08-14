@@ -344,6 +344,10 @@ function DeckTableRow({
   if (row.kind === "group")
     return bandRow(props, row.group, columns, marketplace, ref, over, eligible);
 
+  // A band has no card, so it has no card menu — the *heading's* menu is a different question
+  // and a different builder. Read after the band's early return for that reason.
+  const menu = actions?.menu?.(row.card);
+
   return (
     <div
       {...props}
@@ -351,6 +355,18 @@ function DeckTableRow({
       // The caret's way home after a printing swap, on the row because the row is what takes
       // focus in this table (`VirtualTable` owns the click, Enter and Space on it).
       {...deckCardProps(row.card)}
+      // The row is this view's card, so the menu hangs on the row. **Chained rather than
+      // spread**, and that is the one place the other three views differ from this one: the row
+      // already carries `VirtualTable`'s own `onKeyDown`, which is Enter and Space opening the
+      // card, and a spread here would silently replace it — a table whose rows had stopped
+      // answering the keyboard, with a right-click menu as the only sign anything had changed.
+      // Both run: `menuKey` returns early for every key but Shift+F10 and the ContextMenu key,
+      // neither of which `VirtualTable` claims.
+      onContextMenu={menu?.onContextMenu}
+      onKeyDown={(e) => {
+        props.onKeyDown?.(e);
+        menu?.onKeyDown(e);
+      }}
       // The shared pair, as in the other three views. `ring-inset` on top of it because a row
       // here is absolutely positioned inside a scroller and an outset ring is drawn over its
       // neighbours; the colour and the weight are `AppShell`'s.

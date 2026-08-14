@@ -27,7 +27,14 @@
  * drew before: a labelled button and nothing else. That is what lets a story or a test mount a
  * view without a deck behind it, and it is why adding these changed no existing view test.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   dropTargetForElements,
   monitorForElements,
@@ -170,6 +177,49 @@ export interface DeckCardActions {
    * apart.
    */
   drop?: (write: DeckWrite) => void;
+  /**
+   * What this card offers on a right-click — **the handlers already built**, never a list of
+   * rows.
+   *
+   * It travels in this bag rather than as a fifth prop on each view for the reason the bag
+   * exists at all: it goes three components deep — the view, the group, the card — and a bag
+   * passed on whole cannot be passed on incompletely. And it is the *handlers* rather than the
+   * items because only `DeckEditor` knows what a deck card's menu offers: the deck's
+   * categories, its format spec and its tags are three facts no view has, and four views
+   * assembling them would be four copies of one rule.
+   *
+   * Absent is a view with no menu — a story, a read-only mount — and the reader gets the app's
+   * plain suppression. Read on render rather than registered, so nothing is torn down when it
+   * changes.
+   */
+  menu?: (card: DeckCard) => DeckCardMenuHandlers;
+}
+
+/**
+ * The two handlers a card element spreads to offer a menu, and both are owed.
+ *
+ * `onContextMenu` is the pointer's way in. `onKeyDown` is Shift+F10 and the ContextMenu key,
+ * and it is **not** an optional extra here: the per-card `Move…` select was removed on
+ * 2026-08-14 and there has been no keyboard path to moving a card since ({@link
+ * DeckCardControls} records the cost). This menu is that path, so a menu only a mouse could
+ * open would restore nothing.
+ *
+ * They go on the element carrying {@link deckCardProps} or on its box — a keydown from the
+ * card's own button bubbles either way, and `menuKey` anchors the panel at the element it is
+ * attached to.
+ */
+export interface DeckCardMenuHandlers {
+  onContextMenu: (e: ReactMouseEvent) => void;
+  onKeyDown: (e: ReactKeyboardEvent) => void;
+}
+
+/** A card's menu handlers, or nothing at all — spread onto whichever element a view calls the
+ *  card. `{}` rather than `undefined` so a view can spread it unconditionally. */
+export function deckCardMenuProps(
+  card: DeckCard,
+  actions?: DeckCardActions,
+): Partial<DeckCardMenuHandlers> {
+  return actions?.menu?.(card) ?? {};
 }
 
 /**

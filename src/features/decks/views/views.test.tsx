@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   DEFAULT_SECTION_ZOOMS,
   DEFAULT_ZOOM,
@@ -505,6 +506,90 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     render(renderView({ groups: GROUPS, marketplace: TCG }));
     expect(screen.queryByLabelText(/^Copies of/)).toBeNull();
     expect(screen.queryByLabelText(/^Move /)).toBeNull();
+  });
+});
+
+/**
+ * **The right-click, across all four views.**
+ *
+ * A sweep for the reason the editing one is: the menu is built **once**, by `DeckEditor`, and
+ * handed down as one more field of `DeckCardActions` — so what each view owes is that it hangs
+ * the handlers on the card rather than on the pile, and that it hangs *both* of them. Four
+ * copies of that would be four chances for one surface to quietly lose the affordance, and the
+ * reader would find it by switching view.
+ *
+ * The menu itself is `deckCardMenu.test.tsx`'s and `DeckEditor.test.tsx`'s. What is asserted
+ * here is the wiring, so the fake records **which card** each press was about: a view that
+ * attached the handler to the group would answer about the wrong card or about none.
+ */
+describe.each(VIEWS)("$name right-click", ({ render: renderView }) => {
+  /** The card every case below asks about, found by the slot every view stamps on its own
+   *  focusable element — a button in three of them, the row itself in the table. */
+  const anchor = () =>
+    document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+    )!;
+
+  const draw = () => {
+    const asked: string[] = [];
+    const menu = (card: DeckCard) => ({
+      onContextMenu: (e: ReactMouseEvent) => {
+        e.preventDefault();
+        asked.push(`pointer:${card.name}`);
+      },
+      onKeyDown: (e: ReactKeyboardEvent) => {
+        if (e.key === "F10" && e.shiftKey) asked.push(`keyboard:${card.name}`);
+      },
+    });
+    const onSelect = vi.fn();
+    render(
+      renderView({
+        groups: GROUPS,
+        marketplace: TCG,
+        onSelect,
+        actions: { setQuantity: vi.fn(), drop: vi.fn(), menu },
+      }),
+    );
+    return { asked, onSelect };
+  };
+
+  it("asks the card that was right-clicked, not the pile it is in", () => {
+    const { asked } = draw();
+    fireEvent.contextMenu(anchor());
+    expect(asked).toEqual(["pointer:Sol Ring"]);
+  });
+
+  /**
+   * **Shift+F10, because this menu is the keyboard's only route to moving a card.**
+   *
+   * The per-card `Move…` select was removed on 2026-08-14 and `cardControl.tsx` records what
+   * that cost: a caret cannot drag, so there has been no keyboard path to a move at all. The
+   * menu is the replacement, and a menu a keyboard cannot open would not be one.
+   */
+  it("answers the keyboard's own way of asking for a menu", () => {
+    const { asked } = draw();
+    fireEvent.keyDown(anchor(), { key: "F10", shiftKey: true });
+    expect(asked).toEqual(["keyboard:Sol Ring"]);
+  });
+
+  /** Every other key still belongs to whatever was listening for it — the table's row
+   *  activation above all, which is `VirtualTable`'s and must survive a second handler being
+   *  hung on the same element. */
+  it("opens the card on Enter with a menu wired beside it", async () => {
+    const { onSelect } = draw();
+    anchor().focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: "Sol Ring" }));
+  });
+
+  /** A view given no menu is exactly the view it was — which is what lets a story or a test
+   *  mount one with no editor behind it. */
+  it("attaches nothing at all when it is given no menu", () => {
+    render(renderView({ groups: GROUPS, marketplace: TCG, actions: { setQuantity: vi.fn() } }));
+    // No throw, and the native menu is left alone: nothing calls `preventDefault` on it.
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    anchor().dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 });
 

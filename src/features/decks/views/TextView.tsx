@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
   deckCardName,
+  deckCardMenuProps,
   deckCardProps,
   DeckCardControls,
   deckGroupProps,
@@ -246,7 +247,10 @@ function TextRow({
     // The controls are drawn *over* the end of the line rather than in it, so this view stays
     // what it is for: a decklist you read down, at 22px a line, with no room spent on chrome
     // that is only wanted on the one card being edited.
-    <li ref={dragRef} className="group relative">
+    // The whole line, the controls drawn over its tail included — a right-click anywhere on it
+    // is a question about this card, and the keydown reaches here from the caret wherever it
+    // sits inside the row.
+    <li ref={dragRef} {...deckCardMenuProps(card, actions)} className="group relative">
       <button
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words

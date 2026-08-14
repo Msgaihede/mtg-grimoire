@@ -23,6 +23,7 @@ import { GameChangerBadge, RuleBreakMark, TagDot } from "../CardMarks";
 import {
   DECK_CARD_VARIANT,
   deckCardName,
+  deckCardMenuProps,
   deckCardProps,
   DeckCardControls,
   deckGroupProps,
@@ -255,6 +256,10 @@ function GridCard({
   return (
     <li
       ref={dragRef}
+      // The whole tile, art and foot: a right-click on the rarity gem or the price is a
+      // right-click on the card. The keydown rides here too, so Shift+F10 with the caret on the
+      // stepper drawn over the art still asks about this card.
+      {...deckCardMenuProps(card, actions)}
       // The width is the tile's whole geometry — the picture below is `aspect-[488/680]`, so its
       // height follows without a second number to keep in step. An inline style rather than the
       // fixed width utility this used to carry: Tailwind scans source text for whole class
