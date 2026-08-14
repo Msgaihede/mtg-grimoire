@@ -2,24 +2,25 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **386 stories across 49 story files, 48 docs
+`npm run storybook` · `npm run build-storybook`. **387 stories across 49 story files, 48 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 50th `importPath` is the `.mdx`).
 **Measured 2026-08-14** off a fresh `build-storybook` on the column-overflow branch **with the
-per-deck-view-memory `main` merged in**: 434 entries, 386 `story`, 48 `docs`, 50 distinct
-`importPath`s.
+borderless-stacks and deck-stats-band `main` merged in**: 435 entries, 387 `story`, 48 `docs`, 50
+distinct `importPath`s.
 
-**That figure is one low from the moment the borderless-stacks `main` (`cf13568`) merges in, and
-the +1 is deliberately not written into the headline.** That commit adds one story —
-`PinnedSideboard`, into `StackView.stories.tsx`, a file that already existed — so the arithmetic
-says 387 across the same 49 files and 48 docs pages, and arithmetic is exactly what the paragraphs
-below record being wrong about. `main`'s own copy of this headline is stale by the same story for
-the same reason: it was measured before that commit landed. **The number here moves on a rebuild
-and on nothing else** — re-derive all four figures off a fresh `build-storybook` and let the ones
-that did not move say so.
+**An earlier draft of this headline said 386 and added a paragraph explaining that it was one low,
+because `cf13568`'s `PinnedSideboard` had not been counted yet and arithmetic said 387.** The
+arithmetic was right this time. That is not why the number here is 387: it is 387 because the tree
+was rebuilt and the index read. **Writing down a figure you have reasoned to, alongside a note
+saying it is the figure you reasoned to, is still not a measurement** — and this file is four
+paragraphs of branches whose arithmetic was also nearly right. Re-derive all four figures off a
+fresh `build-storybook` on the merge commit you are shipping, and let the ones that did not move
+say so.
 
-The eleven over the 375 that `main` carried this morning arrived in three shapes, and the shapes
-are the point. `Decks/QuickAdd`'s **six** came in a story file that did not exist before, so the
+The twelve over the 375 that `main` carried this morning arrived in three shapes, and the shapes
+are the point. `Decks/StackView`'s `PinnedSideboard` is the twelfth, from the borderless-stacks
+branch, and it went into a file that already existed. `Decks/QuickAdd`'s **six** came in a story file that did not exist before, so the
 file, docs-page and `importPath` counts moved with them, as they had the last time a whole file
 arrived. `Decks/Editor`'s **one** — `ReopensOnThePlan`, the deck that reopens on the tab, grouping
 and sort it was left on — and the deck views' **four** — `WrappedColumns` and `SideboardRail` in
@@ -194,7 +195,7 @@ found it independently, which is the only reason it did not survive a third merg
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**295** plays today, in a file of **298** tests — the other three are its own;
+  (**296** plays today, in a file of **299** tests — the other three are its own;
   `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the file's own
   structure for the second — one `it` per play, plus the glob tripwire and the two
   mounted-together stories — both re-derived 2026-08-14 on the merge commit being shipped).
