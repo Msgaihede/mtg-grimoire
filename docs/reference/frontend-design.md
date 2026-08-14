@@ -435,9 +435,34 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DEFAULT_COLUMN_HEIGHT`'s doc is explicit that the editor measures the scroller and passes the
   height — and a second reading of the same box answers a frame behind the layout it is reacting
   to, which at exactly this threshold is one frame of the scrollbar the whole change exists to
-  remove. **Not yet driven in the shipped window** (2026-08-14): every figure in these two
-  entries is either quoted from `DeckEditor`'s own measurements or derived from the two column
-  widths, and the wrap, the drop and the rail's own position are what a live pass still owes.
+  remove. **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build,
+  a seeded 16-category deck — twelve named piles plus the four predefined), and the two
+  derived thresholds came back exact:
+  - **No horizontal scrollbar at any width tested.** `document.body.scrollWidth ===
+    clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched itself at
+    every one — 602 = 602 at 1280, 1257 at 1920, 331 at 1024. It scrolls **down** instead:
+    **5888px** at 1280 against a 384px box.
+  - **The rail's wrap threshold is the arithmetic, to the pixel.** The text view's rail wrapped
+    below the flow at 1280 — its view is **602**, under the derived **624** — while the stack
+    view's, needing only 464, stayed beside it. At 2× the stack column is 434 and the threshold
+    884, and the rail wrapped there too, still with no sideways scroll.
+  - **`ml-auto` is what puts a wrapped rail back on the right**, and it does: at 1024 the rail
+    took its own line with its right edge on the flow's, 15px of scrollbar in from the
+    scroller's own edge.
+  - **The sticky machinery really is gone** — the rail computes `position: static`,
+    `box-shadow: none`, `z-index: auto` and a transparent background — and **`content-start`
+    is on the box that has a height**: the view root computes `align-content: flex-start`.
+  - **The one case that can still scroll sideways behaves better than this entry claimed.**
+    At 2× in a 1024px window a single 434px column does not fit the 331px view, and the
+    overflow is **103px inside the deck view** — `document.body` never moved. The app does not
+    slide under the reader; one panel scrolls, which is the failure the popup rule above
+    forbids only for the *page*.
+  - **What the live pass found that no test could**: at the app's own 1280×800 with the search
+    panel docked the view is 602px, and the rail's 224 plus the gap leave **362 — one column**.
+    A 13-column deck is therefore thirteen lines and fifteen screens of scrolling, where the
+    old sideways layout showed about 2.7 columns at once. The horizontal scrollbar is gone and
+    the density went with it; that is the trade this change makes, and it is worth knowing
+    before widening the rail or narrowing the columns.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

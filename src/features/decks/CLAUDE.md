@@ -231,7 +231,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
   rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
   wider than its box, and clipping a card is worse than a scrollbar the reader asked for. Wrapping
-  is what makes that the rare case instead of the ordinary one.
+  is what makes that the rare case instead of the ordinary one. **Driven 2026-08-14** on a seeded
+  16-category deck: no X scrollbar at 1024, 1280 or 1920, the two wrap thresholds exact, and the
+  rare case contained to the view rather than the page — every figure in
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **The rail costs a column of flow, and at the app's own window that is the column.** Measured
+  live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
+  16px gap leave **362 — room for exactly one**. The same deck that used to show ~2.7 columns
+  across a sideways scroll is thirteen stacked lines now. That is the trade and it was made
+  deliberately: the reader asked for the Sideboard to be somewhere fixed, and a pile they can
+  always find is worth more than a column they have to scroll to. **It is also the number to
+  check first** if the rail is ever widened or the columns narrowed.
 - **The Sideboard is a rail pinned to the right of the flow, and is never packed.** `splitSideboard`
   in `views/columns.ts` takes it out before the pack runs, on **`kind === "side"` and nothing else**
   — the name is the user's (`DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so any pile may be called
