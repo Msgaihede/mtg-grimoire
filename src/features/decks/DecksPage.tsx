@@ -14,7 +14,7 @@ import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
-import { ipc, ipcError, type DeckRow } from "@/lib/ipc";
+import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
@@ -26,6 +26,7 @@ import { FOCUS } from "./cardControl";
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
+import { buildFolderMenu, type FolderMenuDeps } from "./folderMenu";
 import {
   buildFolderTree,
   deckDraggable,
@@ -40,6 +41,7 @@ import {
   type DeckDrag,
   type FolderNaming,
   type FolderNode,
+  type FolderRowMenu,
 } from "./FolderTree";
 import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
 import { RenameField } from "./metaRows";
@@ -137,7 +139,10 @@ export function deckBadge(deck: DeckRow): DeckBadge {
  * which never depended on any of it.
  */
 type Panel =
-  | { kind: "createDeck" }
+  /** Where the deck being made will be filed — `null` is the top level, which is what the
+   *  heading's own "New deck" has always meant. A folder row's menu passes its folder, because
+   *  "New deck **here**" has to be true. */
+  | { kind: "createDeck"; folderId: number | null }
   | { kind: "importDeck" }
   | { kind: "deleteDeck"; deckId: number }
   | { kind: "moveDeck"; deckId: number }
@@ -167,6 +172,9 @@ export function DecksPage() {
   const decks = useDecks();
   const folders = useDeckFolders();
   const { query } = decks;
+  /** The gallery's two right-click surfaces — the tile's menu is built in {@link DeckTile}, the
+   *  folder row's here, because a row's menu reads writes only this component has. */
+  const { menu, menuKey } = useContextMenu();
   /**
    * What format a deck made from this screen starts on — the one the reader last created a deck
    * in, else Commander.
@@ -203,7 +211,11 @@ export function DecksPage() {
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /**
-   * The tile a menu was opened on — the opener for every layer that menu's rows raise.
+   * The element a menu was opened on — the opener for every layer that menu's rows raise.
+   *
+   * **One note for both of this screen's menus**, the tile's and the folder row's: at most one
+   * menu is open at a time, and each writes itself here as it opens, so a second ref would be a
+   * second thing to keep in step for no fact the first cannot hold.
    *
    * **A menu row has no element of its own, which is the whole reason this exists.** A
    * `MenuAction.onSelect` is a bare callback; the panel keeps the element that was right-clicked
@@ -390,7 +402,11 @@ export function DecksPage() {
     // A refusal from the last attempt is not news about this one.
     decks.create.reset();
     openerRef.current = newDeckRef.current;
-    setPanel({ kind: "createDeck" });
+    // The top level, and deliberately not the drawer the reader happens to be standing in:
+    // this control says "New deck" and promises nothing about where, while the folder row's
+    // menu says "New deck here" and promises exactly that. Changing this one would move a
+    // behaviour nobody asked to have moved.
+    setPanel({ kind: "createDeck", folderId: null });
   }, [decks.create]);
 
   // `null` is a real answer for the opener and not a missing argument: a layer raised from a
@@ -574,6 +590,68 @@ export function DecksPage() {
     [folders.rename],
   );
 
+  /**
+   * The folder row's menu, as data — five callbacks, every one of them a write or a layer this
+   * screen already has.
+   *
+   * **Built here rather than in the tree, and that is not only tidiness**: three of these five
+   * are things the tree has no way to do (a deck is created by a dialog the gallery hosts, a
+   * folder is moved and deleted by writes the gallery owns), and `folderMenu.tsx` reads
+   * `folderDescendants` out of `FolderTree.tsx`, so building the menu inside that file would be
+   * an import cycle. The tree draws rows; the page says what a row offers.
+   *
+   * **The opener is {@link menuOpenerRef}, read when a row is chosen rather than captured when
+   * this object is built** — the deck tile's arrangement exactly, and for its reason: a
+   * `MenuAction.onSelect` is a bare callback with no element behind it, so a layer raised from a
+   * menu would otherwise have nothing to hand the caret back to, and every layer on this screen
+   * moves the caret into itself on mount. `startRename` is the one that passes no opener, and
+   * that is its own rule rather than an omission: the rename field **replaces** the row, so the
+   * caret goes back to a row that does not exist yet — `refocusFolderRef` finds it by attribute
+   * after the render that redraws it.
+   */
+  const moveFolder = folders.move.mutate;
+  const folderMenuDeps = useMemo<FolderMenuDeps>(
+    () => ({
+      newDeck: (folderId) => {
+        decks.create.reset();
+        open({ kind: "createDeck", folderId }, menuOpenerRef.current);
+      },
+      newSubfolder: (parentId) => {
+        folders.create.reset();
+        open({ kind: "newFolder", parentId }, menuOpenerRef.current);
+      },
+      startRename,
+      moveFolder: (folderId, parentId) => moveFolder({ id: folderId, parentId }),
+      // **The drawer is opened on the way, and the question is asked over it.** The gallery
+      // asks this once, in the heading row, about the folder the reader is standing in — so
+      // reaching it from a row that is not that folder means standing in that folder. It is
+      // also the honest order for a question about what is *inside* something: the wall behind
+      // the sentence is then the thing the sentence is about. The confirm names the folder, and
+      // its own Cancel and Escape leave the selection where this put it.
+      askDelete: (folder) => {
+        setSelectedFolderId(folder.id);
+        open({ kind: "deleteFolder", folderId: folder.id }, menuOpenerRef.current);
+      },
+    }),
+    [decks.create, folders.create, open, startRename, moveFolder],
+  );
+
+  /**
+   * One row's pair of handlers. The item list is a **thunk** inside `menu`, so a cabinet of
+   * thirty drawers builds no menu until a reader right-clicks one of them.
+   *
+   * `menuKey` is beside `menu` because the reader chose "open by keyboard, arrows and Escape"
+   * over a pointer-only menu — and because this row's own F2 already proves a keyboard reader
+   * gets here. The tree composes it with that F2 rather than in its place.
+   */
+  const folderRowMenu = useCallback(
+    (folder: DeckFolder): FolderRowMenu => {
+      const build = () => buildFolderMenu(folder, folderMenuDeps);
+      return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
+    },
+    [menu, menuKey, folderMenuDeps],
+  );
+
   /** The tree's one field, as the tree needs to know it. */
   const naming: FolderNaming | null =
     panel?.kind === "newFolder"
@@ -661,6 +739,8 @@ export function DecksPage() {
           busy={folders.create.isPending || folders.rename.isPending}
           failure={folders.query.isError ? ipcError(folders.query.error) : null}
           pending={folders.query.isPending}
+          rowMenu={folderRowMenu}
+          menuOpenerRef={menuOpenerRef}
         />
 
         <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
@@ -822,6 +902,11 @@ export function DecksPage() {
                 // call above. The dialog seeds its draft with it at mount, which it can only do
                 // because the value is already real by the time the button is pressed.
                 defaultFormatKey={newDeckFormatKey}
+                // Where the deck lands, which is a fact about *which control opened this*: the
+                // button beside it means the top level, a folder row's "New deck here" means
+                // that folder. Read off the open `Panel` for the same reason the format is read
+                // off state — the dialog seeds its draft at mount and never again.
+                defaultFolderId={panel?.kind === "createDeck" ? panel.folderId : null}
                 open={panel?.kind === "createDeck"}
                 onOpen={openCreate}
                 onDismiss={dismiss}
@@ -1212,9 +1297,12 @@ function DeckTile({
 }) {
   const ref = useRef<HTMLLIElement>(null);
   const { id, name } = deck;
-  const { menu } = useContextMenu();
-  /** This tile's rows, built when the reader right-clicks it and never before. */
-  const openMenu = menu(() => buildDeckMenu(deck, menuDeps));
+  const { menu, menuKey } = useContextMenu();
+  /** This tile's rows, built when the reader right-clicks it and never before — and from **one**
+   *  thunk for both doors, so the pointer and the keyboard cannot come to two menus. */
+  const build = () => buildDeckMenu(deck, menuDeps);
+  const openMenu = menu(build);
+  const openMenuByKey = menuKey(build);
 
   // The gesture half of filing. The whole tile is the handle — the art is the deck — and the
   // controls in the corner mark themselves `data-no-drag` so a press on Delete is a press on
@@ -1265,7 +1353,21 @@ function DeckTile({
         // (`FolderTree`'s row answers the same press), and the keyboard's route to the field
         // below. A shortcut rather than the only way in: the tile's context menu is the
         // pointer's route to the same field.
+        //
+        // **Shift+F10 and the ContextMenu key open the same menu the right-click does, and they
+        // are composed with F2 rather than put in its place.** The reader chose a menu that
+        // opens by keyboard over a pointer-only one, and this is the element the press has to
+        // land on for the same reason the right-click is here: an `<li>` cannot take the caret
+        // back. A `menuKey` that *replaced* this handler would open a menu and take the rename
+        // with it — which the F2 case in this file's suite is what catches.
+        //
+        // The stash is this handler's own line for the reason the right-click's is, and is
+        // written even for a press `menuKey` declines: nothing reads the opener until a menu
+        // *row* is chosen, which can only follow a menu that opened.
         onKeyDown={(e) => {
+          menuOpenerRef.current = e.currentTarget;
+          openMenuByKey(e);
+          if (e.defaultPrevented) return;
           if (e.key !== "F2") return;
           e.preventDefault();
           onStartRename(deck, e.currentTarget);
@@ -1689,6 +1791,7 @@ function DeleteFolderConfirm({
 function NewDeck({
   buttonRef,
   defaultFormatKey,
+  defaultFolderId,
   open,
   onOpen,
   onDismiss,
@@ -1700,6 +1803,9 @@ function NewDeck({
   /** The format the dialog's draft starts on, resolved by {@link DecksPage} and passed straight
    *  through — this component holds no state of its own and decides nothing about it. */
   defaultFormatKey: string;
+  /** The folder it starts in, decided by whichever control opened the dialog — passed straight
+   *  through for {@link defaultFormatKey}'s reason. */
+  defaultFolderId: number | null;
   open: boolean;
   onOpen: () => void;
   /** Escape, the dialog's ✕ and the trigger pressed a second time: the caret comes back here. */
@@ -1733,6 +1839,7 @@ function NewDeck({
       <CreateDeckDialog
         create={create}
         defaultFormatKey={defaultFormatKey}
+        defaultFolderId={defaultFolderId}
         open={open}
         onCreated={onCreated}
         onDismiss={onDismiss}

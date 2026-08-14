@@ -1346,3 +1346,220 @@ describe("DecksPage folders", () => {
     ).toBeInTheDocument();
   });
 });
+
+/* ------------------------------------------------------------------------------------------ *
+ * The keyboard's door to both menus
+ * ------------------------------------------------------------------------------------------ */
+
+/** The row for a folder, addressed the way a reader hears it: the name, then what is in it. */
+const rowFor = (label: string) => screen.findByRole("button", { name: label });
+
+/** Shift+F10 — the press Windows spells "open the context menu" with on a keyboard that has no
+ *  dedicated key for it. Sent to wherever the caret already is, never to an element handed in:
+ *  `user.type` focuses what it is given and would repair the very thing these cases assert. */
+async function menuKeyPress() {
+  await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+  await screen.findByRole("menu");
+}
+
+describe("the menus' keyboard route", () => {
+  /**
+   * The tile's menu without a mouse.
+   *
+   * The pointer half was wired with the menu itself; this is the half the reader **chose** —
+   * "open by keyboard, arrows and Escape" — and a menu only a mouse can open delivers the option
+   * they turned down. The tile is a `<button>`, so it is the element the press lands on.
+   *
+   * F2 on the same element is what the composition has to survive, and it has its own case
+   * above ("renames a deck in place, from the tile the caret is on"): a `menuKey` that
+   * *replaced* the tile's `onKeyDown` rather than joining it would open a menu and take the
+   * rename with it, which is a menu bought with the affordance beside it.
+   */
+  it("opens the tile's menu on Shift+F10, from the tile the caret is on", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+
+    await menuKeyPress();
+
+    expect(screen.getAllByRole("menuitem").map((row) => row.textContent)).toEqual([
+      "Open deck",
+      "Rename…",
+      "Move to",
+      "Deck settings…",
+      "Duplicate",
+      "Delete…",
+    ]);
+  });
+
+  it("opens the folder row's menu on Shift+F10, from the row the caret is on", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    const row = await rowFor("Commander, 2 decks");
+    row.focus();
+
+    await menuKeyPress();
+
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "New deck here",
+      "New subfolder…",
+      "Rename…",
+      "Move to",
+      "Delete…",
+    ]);
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * The folder row's menu
+ * ------------------------------------------------------------------------------------------ */
+
+describe("the folder row's menu", () => {
+  /**
+   * The five things you do to a folder, on the folder — where three of them have never been.
+   *
+   * `Rename folder…`, `Move folder…` and `Delete folder…` speak only for the drawer the reader
+   * is *standing in*, from the heading row above the wall; the tree's own controls are one
+   * "New folder in …" per row and F2. So this is the first surface where a folder that is not
+   * open can be acted on at all, and what the cases below assert is the **wiring** — that this
+   * screen's own writes and layers are what `buildFolderMenu` was built with, which is the half
+   * a pure builder's test cannot see.
+   */
+  it("offers the five things you do to a folder, on the row itself", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Commander, 2 decks"));
+
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "New deck here",
+      "New subfolder…",
+      "Rename…",
+      "Move to",
+      "Delete…",
+    ]);
+  });
+
+  /**
+   * The pointer's route to the field F2 already opens — the *same* field, in the same place,
+   * and not a second rename control.
+   *
+   * The caret is the interesting half. This field **replaces the row**, so the element the menu
+   * hands the caret back to is unmounted before the field is even focused, and the row that
+   * comes back is a different element again: `openerRef.current?.focus()` cannot serve, and the
+   * page's `refocusFolderRef` is what does. That path already existed for F2 and this is the
+   * first thing to prove it still holds when the field was opened from a menu.
+   */
+  it("opens the row's rename field from the menu and hands the caret back to the row", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Commander, 2 decks"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(field).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+    expect(await rowFor("Commander, 2 decks")).toHaveFocus();
+    expect(deckFolderRename).not.toHaveBeenCalled();
+  });
+
+  it("makes a subfolder in the folder the menu was opened on", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Commander, 2 decks"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New subfolder…" }));
+
+    // The tree's own field, at the indent the new folder will have, saying whose it is.
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    await userEvent.keyboard("Partners");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(1, "Partners");
+  });
+
+  /**
+   * A move without the trip to the heading row — which is the whole reason this menu exists.
+   *
+   * `Move to` is a **lazy** submenu: the folder list is read when the row is expanded and never
+   * when the menu opens, so a right-click costs one render and no query. Its fences are
+   * `folderDestinations`', tested there; what is proved here is that the row's pick reaches
+   * `deck_folder_move` with this row's folder.
+   */
+  it("moves the folder from the menu", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Legends, 1 deck"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "All decks" }));
+
+    expect(deckFolderMove).toHaveBeenCalledWith(2, null);
+  });
+
+  /**
+   * The destructive row asks rather than writes, because a menu opens by accident — and a
+   * folder's delete is the one a reader guesses wrong, since the decks inside are kept and the
+   * folders inside are not. The question is the gallery's own, so it is asked about the folder
+   * the reader pointed at: the drawer is opened on the way, which is what puts the wall behind
+   * the sentence on the thing it is about.
+   */
+  it("asks before deleting a folder from the menu", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Legends, 1 deck"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    expect(await screen.findByRole("dialog", { name: /delete legends/i })).toBeInTheDocument();
+    expect(deckFolderDelete).not.toHaveBeenCalled();
+  });
+
+  /**
+   * "New deck here" has to mean *here*.
+   *
+   * `CreateDeckDialog` seeded `folderId: null` whatever opened it, so a host that merely opened
+   * the dialog would make the deck at the top level and the row would be a lie — the one gap
+   * this wiring could not close on its own.
+   */
+  it("creates a deck in the folder the menu was opened on", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Commander, 2 decks"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New deck here" }));
+
+    await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
+    // The dialog opens on the folder rather than making the reader find it in the form.
+    expect(screen.getByLabelText("Folder")).toHaveValue("1");
+    await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
+
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith({
+        name: "Aristocrats",
+        formatKey: "commander",
+        theoryEnabled: false,
+        folderId: 1,
+      }),
+    );
+  });
+
+  /** …and the heading's own "New deck" still makes one at the top level, which is what makes the
+   *  assertion above about the *folder* rather than about the dialog's default. */
+  it("still creates at the top level from the heading's New deck", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
+
+    expect(screen.getByLabelText("Folder")).toHaveValue("");
+  });
+});

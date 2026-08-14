@@ -98,6 +98,22 @@ export interface CreateDeckDialogProps {
    */
   defaultFormatKey: string;
   /**
+   * The folder the draft starts in — `null` for the top level, which is where a deck made from
+   * the gallery's own "New deck" has always started.
+   *
+   * **It exists because a folder row's menu offers "New deck here", and "here" has to be true.**
+   * The draft used to seed `folderId: null` whatever opened it, so that row would have made the
+   * deck at the top level and said otherwise. Seeded exactly as {@link defaultFormatKey} is, in
+   * the same mount-only initializer and for the same reason: this is a *default*, not a
+   * constraint, and the form's own Folder select is right there for a reader who changes their
+   * mind.
+   *
+   * Optional, unlike the format, and the asymmetry is deliberate: the format is a question every
+   * deck must answer and Casual is a wrong answer to have arrived at by accident, while the top
+   * level is a real, ordinary answer and the only one a host with no folder in mind could give.
+   */
+  defaultFolderId?: number | null;
+  /**
    * **A mount, not a class**, exactly as `TheoryDiffDialog`'s is: everything with state — the
    * half-typed name, the picked format, the chosen cover, the caret — lives one component down,
    * so closing unmounts all of it and reopening starts a genuinely new question rather than one
@@ -166,6 +182,7 @@ export interface CreateDeckDialogProps {
 export function CreateDeckDialog({
   create,
   defaultFormatKey,
+  defaultFolderId = null,
   open,
   onCreated,
   onDismiss,
@@ -183,6 +200,7 @@ export function CreateDeckDialog({
           key="create-deck"
           create={create}
           defaultFormatKey={defaultFormatKey}
+          defaultFolderId={defaultFolderId}
           onCreated={onCreated}
           onDismiss={onDismiss}
           onClose={onClose}
@@ -242,6 +260,7 @@ export function CreateDeckDialog({
 function Panel({
   create,
   defaultFormatKey,
+  defaultFolderId = null,
   onCreated,
   onDismiss,
   onClose,
@@ -259,6 +278,10 @@ function Panel({
   const [value, setValue] = useState<DeckSettingsValue>(() => ({
     ...BLANK,
     formatKey: defaultFormatKey,
+    // The same mount-only seed, for a folder row's "New deck here" — see {@link
+    // CreateDeckDialogProps.defaultFolderId}. `null` is the top level and is what every other
+    // way into this dialog passes.
+    folderId: defaultFolderId,
   }));
   /**
    * The printing whose art the new deck wears. Not part of {@link DeckSettingsValue} — that is
