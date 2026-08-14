@@ -183,6 +183,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   since a card can be either, both or neither. Nothing derives it: the backend flattens
   `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
   struct is a `bool`).
+- **The rule break's edge is the fourth separation, and on the stacked card it is drawn by _two_
+  elements** (fixed 2026-08-14). `CardStack`'s data line is a sibling of the face, not a band
+  inside it: `-mx-px` puts its own border exactly where the card's is, and being `relative` and
+  later in the document it paints **over** it. So the card's `border-destructive` was interrupted
+  by 28px of `border-border` down both edges, starting exactly at the seam where the foot joins
+  the face — the one place a reader looks to decide whether they are seeing one object or two,
+  which is the whole job of a mark that changes the card's own edge. The fix is that both elements
+  read the same `ruleBreakText` expression, and the bar draws `border-x` only: its bottom border
+  sat 1px _above_ the card's rather than on top of it, so leaving it would have given a red card a
+  2px foot under a 1px everything-else. Verified in Storybook over CDP
+  (`Decks/CardStack` → `RuleBreakAndGameChanger`, headless Edge, the card focused open): the face
+  computes 1px `oklch(0.704 0.191 22.216)` on all four sides and the bar the same colour at
+  `0px | 1px | 0px | 1px`. **The general rule this is an instance of**: anything positioned over a
+  card's border is part of that border, and a new bordered sibling under the face has to carry the
+  card's colour or it re-opens this.
 - **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
   tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
   overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once

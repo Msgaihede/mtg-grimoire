@@ -722,6 +722,9 @@ function StackedCard({
           : "shadow-[0_10px_15px_-3px_rgb(0_0_0/0.45),0_4px_6px_-4px_rgb(0_0_0/0.45)]",
         // A card that breaks a rule is outlined in the destructive colour — the loudest of the
         // three signals it can carry, and the only one that changes the card's own edge.
+        //
+        // **The data line below repeats this expression and has to**: it draws the same edge for
+        // the length of its own box, over the top of this one. See the comment on it.
         ruleBreakText ? "border-destructive" : "border-border",
       )}
     >
@@ -849,6 +852,18 @@ function StackedCard({
           `-mx-px` puts its own border exactly on top of the card's, so the two are one line
           rather than two.
 
+          **That one line is therefore drawn by two elements, and both have to carry the card's
+          colour.** This bar is `relative` and later in the document than the face, so its own
+          border paints *over* the card's along every pixel of its height — a rule break outlined
+          the card in destructive and then this bar put 28px of `border-border` back through the
+          left and right edges of it, which is the one thing the outline exists to prevent: the
+          card stopped reading as a single object exactly where the foot joins the face. So the
+          colour is `ruleBreakText`'s, the same expression the card's own edge uses, and the two
+          must move together. **`border-x` and no bottom edge** for the other half of the same
+          idea: the bar's bottom border sat 1px *above* the card's rather than on top of it, so a
+          red card would have had a 2px foot and a 1px everything-else. The card's own border is
+          the bottom edge, at every zoom, in whichever colour it is.
+
           It is **outside** the button on purpose. The button is the card face, which is what
           `FOCUS_INSET` traces and what the reader thinks they are pressing; and everything here
           is a fact rather than a mark, so unlike the overlays above it this text is genuinely
@@ -857,8 +872,9 @@ function StackedCard({
       <span
         style={{ height: stackDataHeight(zoom), marginTop: -STACK_DATA_RISE }}
         className={cn(
-          "relative -mx-px box-border flex items-center gap-1.5 rounded-b-[7px] border",
-          "border-t-0 border-border bg-surface pr-1.5 font-mono text-[0.625rem] text-dim",
+          "relative -mx-px box-border flex items-center gap-1.5 rounded-b-[7px] border-x",
+          "bg-surface pr-1.5 font-mono text-[0.625rem] text-dim",
+          ruleBreakText !== null ? "border-destructive" : "border-border",
         )}
       >
         <RarityGem rarity={card.rarity} className="ml-1.5" />
