@@ -249,6 +249,11 @@ export const Cleared: Story = {
  *
  * Present at all because a `<select>` showing nothing looks broken, and disabled because
  * picking it would be picking the sort you already have.
+ *
+ * It sits **above** the five, outside the alphabetical order they are drawn in
+ * (`lib/options.ts`): it says what the control is doing rather than naming an order to pick,
+ * so it belongs where the reader is already looking. Alphabetically it would land first today
+ * as well — which is the reason to pin it rather than to trust that.
  */
 export const CustomSort: Story = {
   args: { preset: (collection) => collection.toggleSort("value", false) },
@@ -260,8 +265,21 @@ export const CustomSort: Story = {
     // in a screenshot of a `<select>` that simply reads "Custom…".
     const custom = within(sort).getByRole("option", { name: "Custom…" });
     await expect(custom).toBeDisabled();
-    // And the five real orders are still all there to switch to.
-    await expect(within(sort).getAllByRole("option")).toHaveLength(6);
+    // And the five real orders are still all there to switch to — as a sequence rather than
+    // a count, because the order they are drawn in is the claim above and a length of 6 is
+    // equally true of the constant passed straight through.
+    await expect(
+      within(sort)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual([
+      "Custom…",
+      "Highest price",
+      "Most copies",
+      "Name",
+      "Recently added",
+      "Set and number",
+    ]);
   },
 };
 

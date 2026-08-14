@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
-import { useFormatSpecs } from "./useFormatSpecs";
+import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 
 /**
  * What a new deck's format is until the reader says otherwise — `decks.format_key`'s own DDL
@@ -22,10 +22,12 @@ export const DEFAULT_FORMAT = "casual";
  *
  * **Lifted out of `CreateDeckDialog` when the import dialog needed the same question**, and the
  * lift is worth it for the three rules inside rather than for the markup: the list is
- * `format_specs` in its own `sort_order` **filtered to `enabled_in_picker`** — which is the whole
- * of why Future Standard, a format you can test a card against but cannot build for, is not
- * offered — and the empty case answers {@link DEFAULT_FORMAT} in words. Copied into a second
- * dialog those three become three things to keep in step; here they are one.
+ * `pickerFormats(specs)` — `format_specs` filtered to `enabled_in_picker`, which is the whole of
+ * why Future Standard, a format you can test a card against but cannot build for, is not
+ * offered, and then **alphabetically by display name** rather than in the seed's `sort_order`,
+ * because a reader looking for Modern looks under M — and the empty case answers
+ * {@link DEFAULT_FORMAT} in words. Copied into a second dialog those three become three things
+ * to keep in step; here they are one.
  *
  * The name field beside it in both dialogs is deliberately **not** lifted with it. That one is a
  * labelled `<input>` and carries no rule at all, and the two dialogs already disagree about it —
@@ -45,7 +47,9 @@ export function FormatSelect({
   onChange: (formatKey: string) => void;
 }): React.JSX.Element {
   const { specs } = useFormatSpecs();
-  const picker = useMemo(() => specs.filter((s) => s.enabledInPicker), [specs]);
+  // No `keep` row: this control is only ever asked before a deck exists, so there is no format
+  // already chosen that the seed might no longer offer.
+  const picker = useMemo(() => pickerFormats(specs), [specs]);
 
   return (
     <>
@@ -71,9 +75,9 @@ export function FormatSelect({
         {picker.length === 0 ? (
           <option value={DEFAULT_FORMAT}>Casual</option>
         ) : (
-          picker.map((s) => (
-            <option key={s.key} value={s.key}>
-              {s.displayName}
+          picker.map((f) => (
+            <option key={f.key} value={f.key}>
+              {f.name}
             </option>
           ))
         )}

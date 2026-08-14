@@ -20,6 +20,7 @@ import {
 } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
+import { sortOptions } from "@/lib/options";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
@@ -448,13 +449,20 @@ function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
         {/* Reachable by reading only: picking it would be picking the sort you already
             have. Present because a select showing nothing at all looks broken, and because
             "Custom…" is the honest name for a sort built from a header this control has no
-            option for. */}
+            option for.
+
+            Pinned first, outside the sorted list below: it is the state of the control
+            rather than an order to pick. `disabled` and not `aria-disabled` — the house
+            rule's one exception is a native `<option>`. */}
         {wishlist.sortSelection === "" && (
           <option value="" disabled>
             Custom…
           </option>
         )}
-        {WISHLIST_SORTS.map((s) => (
+        {/* Alphabetical by label, like every other option list (`lib/options.ts`) — a
+            reader looks up the words on screen. `WISHLIST_SORTS` is declared in the order
+            the orders were reasoned about; the display order is decided here. */}
+        {sortOptions(WISHLIST_SORTS, (s) => s.label).map((s) => (
           <option key={s.value} value={s.value}>
             {s.label}
           </option>

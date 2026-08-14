@@ -118,6 +118,17 @@ Every one of these has its measurement and its story in
   shows**, Shift builds a multi-key sort, and `aria-sort` goes on **every** sorted column. A
   column's own description belongs on the `columnheader`, not on the button inside it —
   name-from-content does not reach into a descendant's `aria-label`.
+- **Every option list — `<select>` or hand-rolled listbox — is drawn through `sortOptions` in
+  `src/lib/options.ts`.** Alphabetical by the **display label**, never the key, through one
+  `Intl.Collator` pinned to `"en"`; a faceted control passes grouping levels so its greyed rows
+  sink below its pickable ones (`SetCombobox` also floats the picked ones to the top, because
+  the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
+  is not the bug when a picker reads wrong. Pinned rows (`Any format`, `Custom…`,
+  `Auto (by card type)`, `Move…`, `Top level`) stay outside the sort, and `CategoriesPanel`'s
+  `are deleted with it` stays pinned **last**. **Exactly two exemptions**: a grade scale (card
+  condition, Near Mint → Damaged) and an order the reader arranged themselves (deck categories).
+  Both carry a comment at the site; see
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.

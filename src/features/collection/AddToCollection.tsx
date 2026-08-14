@@ -346,6 +346,12 @@ function AddPopup({
           <label htmlFor={`${id}-condition`} className="block text-xs text-dim">
             Condition
           </label>
+          {/* **Deliberately not alphabetical — one of the exceptions `lib/options.ts` names,
+              the kind whose order *is* the information.** `CONDITIONS` is a grade scale,
+              best to worst, and the order every listing these cards were bought from prints
+              it in. Sorted by label it would open on "Damaged" and read Damaged / Heavily
+              played / Lightly played / Moderately played / Near mint, which is not a scale
+              in either direction. Leave `sortOptions` out of here. */}
           <select
             id={`${id}-condition`}
             value={condition}

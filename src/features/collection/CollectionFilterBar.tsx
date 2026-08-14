@@ -12,6 +12,7 @@ import { SetCombobox } from "@/features/search/SetCombobox";
 import { CONDITIONS, CONDITION_LABEL } from "@/lib/conditions";
 import { FINISHES, FINISH_LABEL } from "@/lib/finish";
 import { MANA_KEYS } from "@/lib/mana";
+import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { COLLECTION_SORTS, type Collection, type CollectionSort } from "./useCollection";
@@ -84,8 +85,20 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
             collection.format ? "border-accent text-accent" : "border-border text-dim",
           )}
         >
+          {/* Pinned above the sorted list because it is the *absence* of this filter and not
+              a format. It happens to sort first as well today, so nothing on screen tells the
+              two apart — which is the reason to write it down: rename it to "No format
+              filter" and, sorted, it would land between Modern and Pauper. */}
           <option value="">Any format</option>
-          {FORMATS.map((f) => (
+          {/* Alphabetical by the words on screen, the app's one order for an option list
+              (`lib/options.ts`): a reader hunting Modern looks under M, not in the position
+              somebody decided the formats rank in. `FORMATS` is declared in that ranking
+              order and shared with the search, so the sort is done here, at the point of
+              display, rather than by reordering a constant two views read.
+
+              No `groups`: unlike the search's copy this select wires no facets, so nothing
+              here greys and there is one group to order. */}
+          {sortOptions(FORMATS, (f) => f.label).map((f) => (
             <option key={f.value} value={f.value}>
               {f.label}
             </option>
@@ -146,13 +159,22 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
           {/* Reachable by reading only: picking it would be picking the sort you already
               have. Present because a select showing nothing at all looks broken, and
               because "Custom…" is the honest name for a sort built from headers this
-              control has no option for. */}
+              control has no option for.
+
+              Pinned first, outside the sorted list below: it is the state of the control
+              rather than an order to pick, and a reader who sees it needs to see it without
+              hunting. `disabled` and not `aria-disabled`: an `<option>` is the house rule's
+              one exception, because the reason behind that rule — a disabled control leaves
+              the tab order — is about something that was in it to begin with. */}
           {collection.sortSelection === "" && (
             <option value="" disabled>
               Custom…
             </option>
           )}
-          {COLLECTION_SORTS.map((s) => (
+          {/* Alphabetical by label, like every other option list (`lib/options.ts`).
+              `COLLECTION_SORTS` is declared in the order the orders were reasoned about;
+              the display order is decided here. */}
+          {sortOptions(COLLECTION_SORTS, (s) => s.label).map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
