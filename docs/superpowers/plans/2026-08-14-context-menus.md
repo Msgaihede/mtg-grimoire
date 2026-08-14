@@ -72,6 +72,25 @@ Every task's requirements implicitly include all of these. Each is copied verbat
 | `.storybook/fake/db.ts` | The three new commands. |
 | Ten card surfaces + deck tile + folder row + category heading | One `onContextMenu` each. |
 
+> **Correction (2026-08-15) — "ten" and "thirteen" were both wrong, and this plan is where they
+> came from.** Every file that quoted a surface count quoted it from here. Neither figure survives
+> contact with the tree: "thirteen surfaces" is far more than `useContextMenu()` has app call
+> sites (`rg "useContextMenu\(\)" src` answers, and no comment should), and the card-menu
+> enumeration this plan prints beside "ten" — Task 10's file header, further down — names more
+> surfaces than that in its own sentence. No single counting rule yields both, which is how the
+> contradiction was caught. The row above and the three other numbered
+> sentences in this document — Task 10's `cardMenu.tsx` header, its commit message, and Task 9's
+> `pendingCardSearch` doc comment — are left standing as the record of what was planned. (The
+> `10`–`15` in the Task Order block below are *task numbers*, not surface counts; nothing there
+> needs correcting.)
+>
+> **The counts were deleted rather than corrected downstream.** A count is a fact about a *tree*
+> and every open branch has a different one — the repo's standing rule — and this one had already
+> been wrong three times on this branch, so a fourth guess was refused. Where an enumeration told
+> the reader *which* surfaces, the list stayed and only the numeral left; elsewhere the thing is
+> named ("every card surface", "every caller"). Where a count was an *argument*, the point was
+> kept and the arithmetic dropped. See `31590d1` and the `docs:` commit that finished the sweep.
+
 ---
 
 ## Task Order
@@ -1826,6 +1845,11 @@ Expected: FAIL.
   pendingCardSearch: { oracleId: string; name: string } | null;
 ```
 
+> **Correction (2026-08-15):** "from ten surfaces, nine of which are not Search" is one of this
+> plan's false counts — see the note under **Files this plan touches**. The shipped comment keeps
+> the argument and drops the arithmetic ("pressed from every card surface, nearly all of which
+> are not Search"), and `useCardSearch.ts` names the one exception rather than subtracting it.
+
 ```ts
   pendingCardSearch: null,
   // The intent and the navigation in **one** `set`, because `setActiveView` clears the open
@@ -2124,6 +2148,11 @@ Straight from the tests. Notes that belong at the code:
  */
 ```
 
+> **Correction (2026-08-15):** this is the sentence the whole error came from — "Ten surfaces
+> call it" over a list whose own items do not add up to ten. The list is right and the numeral was
+> not, so the shipped header keeps the enumeration verbatim and opens "Every card surface calls
+> it —". See the note under **Files this plan touches**.
+
 The finish rule:
 
 ```tsx
@@ -2172,6 +2201,10 @@ picker is a lazy row that mounts on expand.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
+
+> **Correction (2026-08-15):** "because ten surfaces call it" carries the same false count as the
+> header above. The point stands with the numeral gone — a pure builder because *every* card
+> surface calls it and each owns its own writes. See the note under **Files this plan touches**.
 
 ---
 

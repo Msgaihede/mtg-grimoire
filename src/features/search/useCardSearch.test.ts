@@ -587,12 +587,12 @@ describe("the default format filter", () => {
 });
 
 /**
- * "View all printings" — a card picked in one of ten surfaces, answered by this hook.
+ * "View all printings" — a card picked on any card surface, answered by this hook.
  *
  * The filters live in component-local `useState` inside `SearchPage`, so the menu cannot reach
- * one: it writes `pendingCardSearch` on the store instead and this hook consumes it. Nine of the
- * ten surfaces are in another view, so `SearchPage` mounts fresh and the first render picks the
- * intent up; the tenth is the search view itself, where nothing mounts and nothing re-renders
+ * one: it writes `pendingCardSearch` on the store instead and this hook consumes it. Every
+ * surface but one is in another view, so `SearchPage` mounts fresh and the first render picks the
+ * intent up; the exception is the search view itself, where nothing mounts and nothing re-renders
  * unless this hook is *subscribed* to the field. Both paths are below, and they fail differently.
  */
 describe("the pending card search", () => {
@@ -637,7 +637,7 @@ describe("the pending card search", () => {
   });
 
   /**
-   * The tenth surface — a card right-clicked in the search results themselves. No view change,
+   * The one exception — a card right-clicked in the search results themselves. No view change,
    * no remount, so an intent read with a bare `getState()` during render would sit on the store
    * forever and the wall would never narrow.
    */

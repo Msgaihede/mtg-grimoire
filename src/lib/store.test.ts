@@ -196,9 +196,9 @@ describe("the deck row a card was opened from", () => {
  * The channel between a card's menu and the Search view.
  *
  * `useCardSearch` keeps every filter in component-local `useState` inside `SearchPage`, so
- * nothing outside that component can set one — and "View all printings" is pressed from ten
- * surfaces, nine of which are not Search. Same shape as `returnToDeckId` above: written by one
- * view, read and cleared once by another.
+ * nothing outside that component can set one — and "View all printings" is pressed from every
+ * card surface, nearly all of which are not Search. Same shape as `returnToDeckId` above:
+ * written by one view, read and cleared once by another.
  */
 describe("the card a reader asked to see every printing of", () => {
   const BOLT = { oracleId: "o-bolt", name: "Lightning Bolt" };

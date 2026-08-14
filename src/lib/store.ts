@@ -190,9 +190,9 @@ interface AppState {
    * A card the reader asked to see every printing of, waiting for Search to pick it up.
    *
    * `useCardSearch` keeps every filter in component-local `useState` inside `SearchPage`, so
-   * nothing outside that component can set one — and "View all printings" is pressed from ten
-   * surfaces, nine of which are not Search. This is the channel, and it is the same shape as
-   * {@link returnToDeckId}: written by one view, read and cleared once by another.
+   * nothing outside that component can set one — and "View all printings" is pressed from every
+   * card surface, nearly all of which are not Search. This is the channel, and it is the same
+   * shape as {@link returnToDeckId}: written by one view, read and cleared once by another.
    *
    * The name travels with the id because the chip that draws the filter says the card's name,
    * and Search would otherwise have to fetch a card to caption a filter it was handed.

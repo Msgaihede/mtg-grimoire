@@ -172,8 +172,8 @@ describe("FilterBar", () => {
   /**
    * A wall narrowed to one card, with the card's name on the row saying so.
    *
-   * The filter arrives from somewhere else entirely — a right-click on a card in any of ten
-   * surfaces — so it is the one filter on this row the reader did not set here, and the only
+   * The filter arrives from somewhere else entirely — a right-click on a card anywhere in the
+   * app — so it is the one filter on this row the reader did not set here, and the only
    * one they could not otherwise account for. It is drawn as the same `ToggleChip` its
    * neighbours are, switched on, and clearing it is the press every other on-chip here answers.
    */

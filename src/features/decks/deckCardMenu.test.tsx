@@ -14,7 +14,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { buildDeckCardMenu, deckCardTagRows, type DeckCardMenuDeps } from "./deckCardMenu";
 import { card, spec } from "./validation/fixtures";
 
-/** The ten-surface builder's own dependencies, stubbed — this file is about the deck's extras,
+/** The shared builder's own dependencies, stubbed — this file is about the deck's extras,
  *  and `cardMenu.test.tsx` owns the rows above the rule. */
 const CARD_DEPS: CardMenuDeps = {
   marketplace: MARKETPLACES.tcgplayer,
@@ -108,8 +108,8 @@ const has = (items: MenuItem[], label: string | RegExp) =>
   );
 
 describe("buildDeckCardMenu", () => {
-  /** The deck's rows are an *addition*: a card in a deck is still a card, so everything the
-   *  other nine surfaces offer is here and in the same order. */
+  /** The deck's rows are an *addition*: a card in a deck is still a card, so everything every
+   *  other card surface offers is here and in the same order. */
   it("keeps the card menu's own rows in front of the deck's", () => {
     const items = buildDeckCardMenu(bolt(), deps());
     expect(labels(items).slice(0, 5)).toEqual([

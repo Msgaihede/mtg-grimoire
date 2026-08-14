@@ -1,18 +1,18 @@
 /**
- * Everything a card menu needs that is not the card, for the surfaces **outside the deck
- * editor**: the two search views, the two collection views and the wishlist.
+ * Everything a card menu needs that is not the card, for every host that draws one — the search
+ * views, the collection views, the wishlist, the card pane and the deck editor.
  *
  * **One definition, not one per page, and the reason is the invalidation rather than the
  * typing.** A menu's "Add to → Collection" changes what every wish counts as owned, what every
  * search row is badged with and what every deck reads as claimed; a wishlist add changes the
  * heart on a result row and nothing else. Those two sets are already written down once, in
  * `AddToCollection`'s popup, with a paragraph each saying why the collection add takes
- * `["decks"]` and the wish does not. Three pages writing them out again is three places for one
- * rule to drift, and the drift would be silent — a stale badge is not a test failure.
+ * `["decks"]` and the wish does not. Every page writing them out again is a place per page for
+ * one rule to drift, and the drift would be silent — a stale badge is not a test failure.
  *
  * `buildCardMenu` stays a pure builder taking its dependencies as an argument; this is the one
- * argument these five surfaces all have. The deck editor builds its own, because it answers
- * `viewPrintingsInPane` and carries the deck extras.
+ * argument all of those surfaces have in common. The deck editor spreads over it rather than
+ * taking it plain, because it answers `viewPrintingsInPane` and carries the deck extras.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -71,7 +71,7 @@ export function useCardMenuDeps(): CardMenuWiring {
     mutationFn: ({ cardId, finish }: { cardId: string; finish: Finish }) =>
       ipc.collectionAdd({ cardId, finish, condition: MENU_CONDITION, quantity: 1 }),
     // **Cleared when the next add starts, not when one succeeds**, which is what every other
-    // banner on these three pages does — each is derived from the *latest* mutation's state, so
+    // banner on these pages does — each is derived from the *latest* mutation's state, so
     // a new write supersedes the last one's complaint. Cleared only on success, a refusal would
     // stand on screen while the reader dealt with it some other way: `CollectionPage` carries a
     // comment about exactly that bug being found live and fixed for the stepper and the removal.

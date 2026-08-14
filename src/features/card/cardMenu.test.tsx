@@ -70,7 +70,7 @@ function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
     marketplace: MARKETPLACES.tcgplayer,
     addToCollection: vi.fn(),
     addToWishlist: vi.fn(),
-    // Null is "not inside the deck editor", which is nine of the ten surfaces.
+    // Null is "not inside the deck editor", which is every card surface outside it.
     viewPrintingsInPane: null,
     requestAllPrintings: vi.fn(),
     DeckTargetSubmenu: () => null,
@@ -547,9 +547,9 @@ function Surface() {
  * **`nesting` is the whole subject of one of the tests below and is `App.tsx`'s arrangement by
  * default.** `ContextMenuProvider` draws its panel as a **sibling** of its children, so a
  * provider mounted *inside* it — which is where `AppShell` sits — is around every view and
- * around none of the menu's rows. That shipped: the picker's leaf threw on all ten surfaces
- * while every test here passed, because this harness had the order right and nothing pinned
- * `App.tsx`'s.
+ * around none of the menu's rows. That shipped: the picker's leaf threw on every card surface
+ * at once while every test here passed, because this harness had the order right and nothing
+ * pinned `App.tsx`'s.
  *
  * The deck list and the folder list are **seeded into the cache** rather than awaited. The picker
  * is a consumer of the cascade here, and every assertion below is about the caret and the
@@ -687,8 +687,8 @@ describe("the deck picker inside the real cascade", () => {
      *
      * `ContextMenuProvider` renders its panel as a **sibling** of its children, so a provider
      * around the *shell* is around every view and around none of the menu's rows. Mounted that
-     * way, the picker's leaf reaches `useAddCardToDeck`, finds no context and throws — on all ten
-     * surfaces at once, at the moment the reader expands "Add to → Deck". Nothing on the page
+     * way, the picker's leaf reaches `useAddCardToDeck`, finds no context and throws — on every
+     * card surface at once, at the moment the reader expands "Add to → Deck". Nothing on the page
      * says so; the panel simply dies.
      *
      * The harness above always had the order right, so every test here passed while the shipped

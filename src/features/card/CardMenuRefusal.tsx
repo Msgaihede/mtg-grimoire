@@ -2,10 +2,12 @@
  * The sentence a refused card-menu add leaves behind, wherever a page draws one.
  *
  * **One component rather than a copy per page**, for the reason {@link useCardMenuDeps} is one
- * hook: five surfaces report the same two writes, and the same thirteen lines pasted three times
- * is three places for a colour, a role or the growth to drift. It is deliberately *not* folded
- * into the hook — a hook that rendered its own banner would decide where on the page it sits,
- * and that is the one part of this each view genuinely owns.
+ * hook: every page that offers a card menu reports the same two writes, and the same markup
+ * pasted once per page is a place per page for a colour, a role or the growth to drift. Grep the
+ * import for which pages draw it — that list is a fact about the tree rather than about this
+ * comment. It is deliberately *not* folded into the hook — a hook that rendered its own banner
+ * would decide where on the page it sits, and that is the one part of this each view genuinely
+ * owns.
  *
  * It exists at all because the menu cannot report its own refusals: `ctx.run` closes the panel
  * before a row's handler runs, so by the time an answer arrives there is no menu left to put a

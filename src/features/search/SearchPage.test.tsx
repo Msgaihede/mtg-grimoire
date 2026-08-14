@@ -124,7 +124,8 @@ const cards = (n: number, from = 0): CardSummary[] =>
  * The page, under the two providers `App` mounts above it.
  *
  * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
- * is above it (so that thirteen surfaces stay renderable on their own), which means a page
+ * is above it (so that every surface offering a right-click stays renderable on its own), which
+ * means a page
  * rendered bare would suppress nothing, open nothing, and pass every menu assertion below by
  * never being asked.
  *

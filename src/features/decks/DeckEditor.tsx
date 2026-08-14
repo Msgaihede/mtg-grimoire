@@ -591,9 +591,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * The right-click, and everything a card menu needs that is not the card.
    *
-   * **One `CardMenuDeps` for this whole screen**, from the hook the other five surfaces use:
+   * **One `CardMenuDeps` for this whole screen**, from the hook every other card surface uses:
    * the collection add's four invalidation keys and the wishlist add's two are written down once
-   * there, and a sixth page spelling them out again would be a sixth place for one rule to
+   * there, and this page spelling them out again would be one more place for one rule to
    * drift. What this editor answers differently is `viewPrintingsInPane`, which is a *per
    * surface* answer — the deck's cards open as deck rows, the docked panel's tiles do not — so
    * it is spread over at each of the two builders below rather than fixed here.

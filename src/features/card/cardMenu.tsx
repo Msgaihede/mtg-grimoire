@@ -214,8 +214,8 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
  * this row in particular.** The category menu leaves Delete *absent* on the four predefined
  * zones on the grounds that "an item that exists only to be refused is worse than one that is
  * not there" — but that item is refused on one kind of category and offered on every other,
- * so its absence reads as a property of the row it is missing from. This row is on all ten card
- * surfaces and on every other card of the surface it greys on, so removing it from one would
+ * so its absence reads as a property of the row it is missing from. This row is on every card
+ * surface and on every other card of the surface it greys on, so removing it from one would
  * read as a bug in the menu rather than as a fact about the card. Greyed, it teaches the rule;
  * that is the commander row's argument and it is this one's.
  *

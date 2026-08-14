@@ -3,7 +3,7 @@
  * surface draws, plus the four things that only mean something about a card that is in a deck.
  *
  * ```
- * … the ten-surface card menu …
+ * … the card menu every surface draws …
  * ─────────────────────
  * Move to              ▸  every category of the deck, in the reader's own order
  * Set as commander        (only where the format has a command zone)
@@ -75,7 +75,7 @@ const ALREADY_HERE = "already here";
 /** Everything the deck's own rows need that is not the card. Built once per surface, never
  *  once per row. */
 export interface DeckCardMenuDeps {
-  /** The ten-surface menu's dependencies, whole — this file adds to that menu, it does not
+  /** The shared card menu's dependencies, whole — this file adds to that menu, it does not
    *  reimplement any of it. */
   card: CardMenuDeps;
   /**
