@@ -10,7 +10,8 @@ import {
   printing,
 } from "../../../../.storybook/fake/fixtures";
 import { buildGroups } from "../grouping";
-import { StackView, STACK_COLUMN_ATTR, STACK_PINNED_ATTR } from "./StackView";
+import { SIDEBOARD_ATTR } from "./columns";
+import { StackView, STACK_COLUMN_ATTR } from "./StackView";
 
 const meta = {
   title: "Decks/Views/StackView",
@@ -122,9 +123,11 @@ function wideGroups() {
  *
  * Five piles, and each one shows a different part of a header — the Commander's `RULE`, the
  * Maybeboard's `INACTIVE`, an empty Sideboard that still draws because it is where the next
- * sideboard card goes, and two categories the reader named. Four of them pack; the Sideboard is
- * the pinned column, empty and still saying so. {@link PinnedSideboard} is the story about what
- * that pin is *for*, since a desk this narrow never scrolls far enough to show it.
+ * sideboard card goes, and two categories the reader named.
+ *
+ * Four of the five are packed. The fifth is the Sideboard, and it is in the rail on the right —
+ * {@link SideboardRail} is the story about the rail itself, and {@link PinnedSideboard} the one
+ * about what taking that pile out of the pack is *for*.
  *
  * **No pile is drawn as a box.** The hairline is still there — `border-transparent`, stopped from
  * painting rather than removed, because `stackColumnWidth` counts it alongside the section's
@@ -155,27 +158,21 @@ export const Default: Story = {
 };
 
 /**
- * The desk wider than the window, which is the case the pinned column exists for: the Sideboard
- * stays where it is while the whole deck scrolls under it.
+ * A deck with more piles than the desk is wide, which is the case the rail exists for: seven
+ * columns wrapping down the page, and the Sideboard beside them rather than somewhere inside
+ * them.
  *
  * Eight piles in a canvas capped at 768px. Seven of them pack, one to a column — at 1× no two
- * of these groups share a 640px desk, since the smallest pair is 393 + 427 = 820px — so the
- * pack is 7 × 224px with 16px gutters, 1 664px of columns in a box that shows three of them.
- * The Sideboard is in none of it: it is `kind: "side"`, so it is taken out of the list before
- * `packColumns` is given one, and drawn afterwards as a column of its own.
+ * of these groups share a 640px desk, since the smallest pair is 393 + 427 = 820px — so the pack
+ * is 7 × 224px with 16px gutters, laid into a box that holds one column beside the rail and
+ * wraps the rest onto the lines below. The Sideboard is in none of it: it is `kind: "side"`, so
+ * it is taken out of the list before `packColumns` is given one, and drawn in the rail after.
  *
- * **What to look at.** Drag the desk sideways and watch the Sideboard. It must not move, and
- * the deck must pass *beneath* it. The two failures look nothing alike:
- *
- * * the sideboard scrolls away with everything else — the pin is gone, and the one pile a
- *   reader keeps checking back against is the first thing to leave the screen;
- * * a scrolling column shows *through* it — cards travelling over the sideboard's own stack
- *   rather than under it, which is the opaque background and the raised layer failing together
- *   and reads as a double exposure rather than as a missing rule.
- *
- * The shadow down its left edge is the third thing to check: it is what says the desk continues
- * underneath rather than ending there, and without it the pinned column reads as a second panel
- * the columns happen to stop at.
+ * **What to look at.** The rail is on the right, level with the top of the flow, and it holds
+ * still while the pack grows *downward* past it. The failure it replaces is the one this fixture
+ * is shaped for: a Sideboard packed like any other category lands at the far end of a long run,
+ * which on the old sideways layout was off the right edge of the window and is now several
+ * screens below the fold — the same pile out of reach, by the other axis.
  *
  * **The Sideboard's `sortOrder` is 2 here** — the seeded one's, third of the eight, between Ramp
  * and Removal — and it is still drawn last. That is the whole of the change, and the distinction
@@ -186,8 +183,7 @@ export const PinnedSideboard: Story = {
   args: { groups: wideGroups() },
   decorators: [
     // Narrower than the pack on purpose — the meta's decorator sizes the desk's height and this
-    // one caps its width, because a column that never leaves the viewport proves nothing about
-    // a column that stays when the others do.
+    // one caps its width, so the flow has to wrap and the rail has to hold its side of the line.
     (Story) => (
       <div className="flex w-full max-w-3xl">
         <Story />
@@ -198,8 +194,8 @@ export const PinnedSideboard: Story = {
     const columns = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_COLUMN_ATTR}]`)];
     // The heading each column opens with, found by the id its section is `aria-labelledby`
     // rather than by a guess at the header's shape. No column here holds a second group, so one
-    // heading names a whole column — and the list reads in the reader's own order with the
-    // Sideboard moved from third to last.
+    // heading names a whole column — and the seven read in the reader's own order with the
+    // Sideboard simply absent from them.
     expect(columns.map((column) => column.querySelector('[id^="group-"]')?.textContent)).toEqual([
       "Commander",
       "Ramp",
@@ -208,13 +204,12 @@ export const PinnedSideboard: Story = {
       "Threats",
       "Lands",
       "Maybeboard",
-      "Sideboard",
     ]);
-    // Last in the document *and* marked, which is the pair that makes it stay put: a sticky
-    // column holds against the right edge only for as long as there is desk left to scroll
-    // past it, and there is only ever one of these.
-    expect(columns[columns.length - 1]).toHaveAttribute(STACK_PINNED_ATTR);
-    expect(canvasElement.querySelectorAll(`[${STACK_PINNED_ATTR}]`)).toHaveLength(1);
+    // And it is in the rail, which is **not** one of the boxes above: `STACK_COLUMN_ATTR` marks
+    // what `packColumns` produced, and the rail is the one box it never saw.
+    const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${SIDEBOARD_ATTR}]`);
+    expect(within(rail).getByText("Sideboard")).toBeInTheDocument();
+    expect(canvasElement.querySelectorAll(`[${SIDEBOARD_ATTR}]`)).toHaveLength(1);
   },
 };
 
@@ -224,11 +219,92 @@ export const PinnedSideboard: Story = {
  * more in and puts the Maybeboard between Ramp and Removal.
  *
  * **The Sideboard is no longer an example of that and cannot be one again**: it leaves the list
- * before `packColumns` sees it, so at every `columnHeight` it is the pinned column on the right
- * rather than a packed one somewhere in the middle. Four columns pack here — Commander, Ramp,
- * Removal, Maybeboard — where five did before the pin.
+ * before `packColumns` sees it, so at every `columnHeight` it is in the rail on the right rather
+ * than in a packed column somewhere in the middle. Four columns pack here — Commander, Ramp,
+ * Removal, Maybeboard — where five did before the split.
  */
 export const NarrowColumns: Story = { args: { columnHeight: 420 } };
+
+/**
+ * Four columns in a 1024px desk: they wrap **down** rather than running off the right edge.
+ *
+ * `packColumns` opens each new column to the right, so a deck with more categories than a window
+ * is wide used to grow sideways and hand the reader an X scrollbar across the whole desk — at
+ * exactly the 1024px this decorator is, which is the app's own floor. Nothing about the packing
+ * changed; the row it lays its columns into wraps now, and the reader scrolls down, which this
+ * view already did for the card a stack lifts out of the bottom of a column.
+ *
+ * Four columns out of four flowing piles, at the **default** column height and with no argument
+ * saying so: a three-card pile costs the packer **461px** — a 46px header block, the 395px stack
+ * itself (`stackHeight(3, 1×)`) and the 20px gap to the next group — so two piles have never
+ * fitted in one 640px column. That is the ordinary state of this view rather than a state a
+ * story arranged.
+ */
+export const WrappedColumns: Story = {
+  decorators: [
+    // Width only, and 1024px on purpose: the narrowest window this app promises to be usable in,
+    // which is the width the sideways run was forbidden at. A story's own decorators run
+    // *inside* the meta's, so this box takes its 42rem of height from the column above rather
+    // than declaring a second one — two boxes each setting a height would leave the inner one
+    // deciding and the outer one lying. 1024 less the rail and the gap leaves three columns to a
+    // line, so the fourth is a second line. `shrink-0` because that box is a flex item: without
+    // it a docs canvas narrower than 1024px would shrink the decorator instead of scrolling, and
+    // the story would be a picture of a width nobody asked for.
+    (Story) => (
+      <div className="flex w-[64rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Every pile is still drawn, and that is the whole claim: wrapping moves a column, it never
+    // costs one. A pile that had run off the right edge was drawn too — just nowhere the reader
+    // was going to look.
+    for (const pile of ["Commander", "Ramp", "Removal", "Maybeboard", "Sideboard"]) {
+      expect(canvas.getByText(pile)).toBeInTheDocument();
+    }
+  },
+};
+
+/**
+ * The Sideboard as its own column, pinned to the right of the flowing ones.
+ *
+ * It is a category like any other to the greedy in-order pack, which dropped it wherever it
+ * landed — usually the far end of a long sideways run, which is a poor place for the one pile a
+ * reader looks for by position. It is lifted out before the pack runs instead, so `packColumns`
+ * never sees it and never reorders anything to make room for it. Where the flow wraps to is not
+ * its business either: the rail is right of it at every width that has room for the two.
+ *
+ * The fixture's Sideboard is **empty** and the rail is drawn anyway: an empty pile is where the
+ * next sideboard card goes, and a rail that only appeared with the first card would shove the
+ * layout sideways under the hand that was dropping it.
+ */
+export const SideboardRail: Story = {
+  decorators: [
+    // 832px, which leaves two of the four columns to a line beside the rail. Width only and
+    // `shrink-0`, for {@link WrappedColumns}' reasons.
+    (Story) => (
+      <div className="flex w-[52rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${SIDEBOARD_ATTR}]`);
+    expect(rail).toBeInTheDocument();
+    // Which side of the desk it is drawn on is not a question jsdom can be asked — it lays
+    // nothing out — but which box it is in is, and that is the claim: the heading is in the rail
+    // and in none of the packed columns. A Sideboard the pack had seen would be inside one of
+    // them, wherever the run happened to put it.
+    expect(within(rail).getByText("Sideboard")).toBeInTheDocument();
+    const columns = [...canvasElement.querySelectorAll(`[${STACK_COLUMN_ATTR}]`)];
+    expect(columns.some((column) => column.textContent?.includes("Sideboard"))).toBe(false);
+    // And it is still a drop target, because a group in the rail is the same `StackGroup` as a
+    // group in the flow — the empty pile says so in its own words.
+    expect(within(rail).getByText("Nothing here yet.")).toBeInTheDocument();
+  },
+};
 
 /**
  * Grouped by mana value instead of by category.
@@ -238,11 +314,13 @@ export const NarrowColumns: Story = { args: { columnHeight: 420 } };
  * would count a scratchpad into the deck; dropping the pile would make it vanish the moment
  * the reader changed a select.
  *
- * **And no pinned column here, which is not a special case.** The pinned column is whatever
- * `side` groups there are, and this grouping keeps only the buckets and the switched-off piles —
- * this deck's Sideboard is empty *and* switched on, so it is neither and is not drawn at all. A
- * Sideboard the reader had switched off would survive as itself with its `kind` intact, and
- * would be pinned here exactly as it is under `Categories`.
+ * **And no rail here, which is not a special case: the fixture is why, not the mode.** The rail
+ * is whatever `side` groups there are, and this grouping keeps only the buckets and the
+ * switched-off piles — a derived bucket carries `kind: null`, so the curve flows, and this deck's
+ * Sideboard is empty *and* switched on, so it is neither and is not drawn at all. Switch that one
+ * boolean off and `buildGroups` would append the pile as itself, `kind: "side"` and all — exactly
+ * as it appends the Maybeboard below — and this layout would draw a rail beside the curve, as it
+ * does under `Categories`.
  */
 export const ByManaValue: Story = {
   args: { groups: deckGroups("manaValue", "manaCost") },

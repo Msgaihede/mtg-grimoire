@@ -50,7 +50,7 @@ function Dialog({
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="grid min-h-[22rem] place-items-start">
+    <div className="grid min-h-[30rem] place-items-start">
       <button
         type="button"
         aria-expanded={open}
@@ -93,19 +93,26 @@ const meta = {
     // the only one anybody could read. `inline: false` gives each story an iframe, which is the
     // viewport the fixed positioning is then relative to.
     docs: {
-      story: { inline: false, height: "26rem" },
+      story: { inline: false, height: "640px" },
       description: {
         component:
-          "Two questions and no more: what the deck is called, and what it is for.\n\n" +
-          "**It used to be an anchored popup** pinned to the New deck button and dismissed by " +
-          "focus leaving it, which is the right shape for a quick-add and the wrong one for " +
-          "the app's one creating act. Three defects went with the change: a refusal can no " +
-          "longer be swallowed by the button disabling itself mid-write, Tab cannot walk out " +
-          "into a gallery the reader is not looking at, and a `fixed` surface cannot hang off " +
-          "the right of the window.\n\n" +
-          "Driven end to end by `.storybook/fake/`: `deck_create` really writes and " +
-          "`format_specs_list` really answers, so **Default** creates a deck and **Refused** " +
-          "shows what a busy database says about it.",
+          "The whole deck, described before it exists.\n\n" +
+          "**It used to ask two questions** — name and format — and everything else a deck " +
+          "carries was reachable only from the settings dialog, so the app's one *creating* " +
+          "act produced a deck the reader then had to go and configure. It hosts one " +
+          "`DeckSettingsForm` now, in the same 55rem two-column panel, and one `deck_create` " +
+          "writes every answer at once: create-then-patch-then-file would be three " +
+          "transactions and a half-made deck to unwind by hand when the second one fails.\n\n" +
+          "Driven end to end by `.storybook/fake/`: `deck_create`, `format_specs_list`, " +
+          "`deck_folder_list`, `search_cards` and `card_detail` all really answer, so " +
+          "**Default** writes a configured deck, **A cover from the search** credits the art " +
+          "it picked, and **Refused** shows what a busy database says about it.\n\n" +
+          "**Two states are unit tests rather than stories, and the reason is the file " +
+          "picker.** `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and " +
+          "outside the app window there is nothing behind it — so no story can produce a path, " +
+          "and neither the upload that follows a create nor the state after it is refused (the " +
+          "deck exists, the line says so, and the control becomes **Open deck**) can be " +
+          "reached from here. Both are in `CreateDeckDialog.test.tsx`.",
       },
     },
   },
@@ -115,14 +122,16 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The dialog as it opens: the caret in the field the reader has to fill, and the seeded
- * formats behind it — **alphabetically**, which is not the `sort_order` the fake answers in.
- * A picker sorts by the words on screen (`src/lib/options.ts`); the table's own ranking is a
- * fact about `format_specs` and no help to a reader looking for Modern under M.
+ * The dialog as it opens: the caret in the field the reader has to fill, every other question a
+ * deck carries beside it, and the seeded formats behind the select — **alphabetically**, which
+ * is not the `sort_order` the fake answers in. A picker sorts by the words on screen
+ * (`src/lib/options.ts`); the table's own ranking is a fact about `format_specs` and no help to
+ * a reader looking for Modern under M.
  *
- * The play writes a real deck through the fake's `deck_create`, which is what a story adds
- * over the unit tests beside it — `onCreated` is handed the row the backend answered with, and
- * the gallery's own handler opens it.
+ * The play fills five of them and writes a real deck through the fake's `deck_create` — one
+ * call, carrying the lot. The folder is asserted against the **select's own value** rather than
+ * against a literal, because the id belongs to the seed and the claim is that whatever was
+ * chosen is what was sent.
  */
 export const Default: Story = {
   play: async ({ args, canvasElement }) => {
@@ -130,13 +139,78 @@ export const Default: Story = {
 
     await userEvent.type(await canvas.findByLabelText("Name"), "Sunday burn");
     await userEvent.selectOptions(canvas.getByLabelText("Format"), "modern");
+    await userEvent.type(canvas.getByLabelText("Description"), "Twenty damage, quickly.");
+    await userEvent.click(canvas.getByRole("switch", { name: /Theory deck/ }));
+
+    const folder = canvas.getByLabelText("Folder");
+    await userEvent.selectOptions(folder, "Constructed › Commander");
+
     await userEvent.click(canvas.getByRole("button", { name: "Create deck" }));
 
-    await waitFor(() =>
-      expect(args.onCreated).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "Sunday burn", formatKey: "modern" }),
-      ),
+    await waitFor(async () => {
+      await expect(args.onCreated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Sunday burn",
+          formatKey: "modern",
+          description: "Twenty damage, quickly.",
+          folderId: Number((folder as HTMLSelectElement).value),
+          // Set at create, and it seeds nothing: a deck being born has no live cards to copy
+          // into the plan, unlike the patch's off → on transition.
+          theoryEnabled: true,
+        }),
+      );
+    });
+  },
+};
+
+/**
+ * A cover chosen before the deck exists.
+ *
+ * **The search arm is the one that works here.** "Pick art from cards in this deck" has nothing
+ * to offer at create — that is what the empty grid says — so the box above it offers every
+ * printing in the database instead, uncollapsed, because different printings are different art
+ * and collapsing them would hide exactly the choice being made.
+ *
+ * The picked id travels in the `deck_create` itself: `coverKind` is not settable at create and
+ * keeps its `card_art` default, which is the kind a picked card *is*.
+ *
+ * **The preview draws it, credit and all — and the credit is a round trip.** An `art` crop has
+ * no printed frame, so Scryfall's image policy credits the illustrator wherever one is shown,
+ * and the preview refuses to draw a crop it cannot credit. Every other surface reads that name
+ * off `DeckRow.coverArtist`; there is no `DeckRow` here yet and `CardSummary` carries no
+ * `artist`, so this host asks `card_detail` for the one field it needs. The tile's
+ * `aria-pressed` is the immediate feedback and the picture follows with its credit — never the
+ * credit first, and never an uncredited crop.
+ */
+export const ACoverFromTheSearch: Story = {
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.type(await canvas.findByLabelText("Name"), "Bolt tribal");
+    await expect(canvas.getByText(/Nothing to pick from yet/)).toBeVisible();
+
+    // 300 ms of debounce before a keystroke becomes a query, which is why the wait is generous.
+    await userEvent.type(canvas.getByLabelText("Search every card"), "Lightning Bolt");
+    const results = await canvas.findByRole(
+      "list",
+      { name: "Pick art from any card" },
+      { timeout: 5000 },
     );
+    const tile = within(results).getAllByRole("button", { name: "Lightning Bolt" })[0];
+    await userEvent.click(tile);
+    await expect(tile).toHaveAttribute("aria-pressed", "true");
+
+    // The illustrator, whoever the fake's corpus gives this printing — the claim is that a line
+    // appears at all, because before the fetch there was none and the preview stayed empty.
+    await expect(await canvas.findByText(/^Art by /)).toBeVisible();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Create deck" }));
+
+    await waitFor(async () => {
+      await expect(args.onCreated).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Bolt tribal", coverCardId: expect.any(String) }),
+      );
+    });
   },
 };
 
@@ -144,8 +218,8 @@ export const Default: Story = {
  * A write the database refuses, in the app's own words.
  *
  * **The dialog is the only place this sentence can land** — `writeFailure` covers the writes a
- * *tile* makes and not this one — so the surface has to outlive the press, and what was typed
- * has to outlive the refusal. Both are what this story shows.
+ * *tile* makes and not this one — so the surface has to outlive the press, and every answer
+ * typed into it has to outlive the refusal. Both are what this story shows.
  */
 export const Refused: Story = {
   parameters: { fake: { fault: "busy" } },
@@ -153,13 +227,15 @@ export const Refused: Story = {
     const canvas = within(canvasElement);
 
     await userEvent.type(await canvas.findByLabelText("Name"), "Sunday burn");
+    await userEvent.type(canvas.getByLabelText("Notes"), "Bring the burn.");
     await userEvent.click(canvas.getByRole("button", { name: "Create deck" }));
 
     await waitFor(async () => {
       await expect(await canvas.findByRole("alert")).toHaveTextContent("Could not create the deck");
     });
-    // Still holding the name, so the reader presses again rather than retyping.
+    // Still holding them, so the reader presses again rather than retyping.
     await expect(canvas.getByLabelText("Name")).toHaveValue("Sunday burn");
+    await expect(canvas.getByLabelText("Notes")).toHaveValue("Bring the burn.");
   },
 };
 
@@ -167,9 +243,11 @@ export const Refused: Story = {
  * The one launch where `format_specs` has not answered yet.
  *
  * The select still has to *say* something, and what it says is what it would create: Casual,
- * which is `decks.format_key`'s own DDL default. A real `disabled` is right here and nowhere
- * else on this surface — there is no reader input to make it grey, and a select with a single
- * option is not a choice worth keeping in the tab order.
+ * which is `decks.format_key`'s own DDL default. **The words come from this host, not from the
+ * form** — `DeckSettingsValue` carries a format *key* and no display name, so a form handed an
+ * empty list can do no better than label the option with the key, and the control would read
+ * `casual`. So the empty list is never passed: a one-row fallback goes down instead, and the
+ * select stays live because a list of one is still a list.
  */
 export const NoFormats: Story = {
   args: { noFormats: true },
@@ -177,10 +255,9 @@ export const NoFormats: Story = {
     const canvas = within(canvasElement);
 
     const format = await canvas.findByLabelText("Format");
-    await waitFor(async () => {
-      await expect(format).toBeDisabled();
-    });
     await expect(format).toHaveValue("casual");
     await expect(within(format).getAllByRole("option")).toHaveLength(1);
+    await expect(within(format).getByRole("option")).toHaveTextContent("Casual");
+    await expect(format).toBeEnabled();
   },
 };

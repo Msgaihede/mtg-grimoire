@@ -5,10 +5,16 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
 /**
  * Everything about a deck that is not the cards in it.
  *
+ * **The fields themselves are `DeckSettingsForm`'s**, which `CreateDeckDialog` draws too — see
+ * `Decks/Settings form` for the questions on their own, with no deck behind them, and
+ * `Decks/Cover picker` for the picture column. What is storied *here* is the half that only
+ * exists because the deck does: the read, the writes, and the dialog around them.
+ *
  * **Every backend on this screen is the fake's now** — `deck_get`, `deck_update`,
- * `format_specs_list`, `deck_folder_list`, `deck_set_folder` and `deck_set_cover_image` — so
- * picking art really writes, the credit line underneath the picture really changes, the Folder
- * select really files the deck, and the notes field and the theory switch really stick.
+ * `format_specs_list`, `deck_folder_list`, `deck_set_folder`, `deck_set_cover_image` and
+ * `search_cards` (the cover picker's "Search every card" box) — so picking art really writes,
+ * the credit line underneath the picture really changes, the Folder select really files the
+ * deck, and the notes field and the theory switch really stick.
  *
  * **One gap is left, and it is not the fake's to close.** The upload's picker is the operating
  * system's: `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and outside the

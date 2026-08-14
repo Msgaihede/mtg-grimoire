@@ -26,7 +26,7 @@ import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns } from "./columns";
+import { packColumns, SIDEBOARD_ATTR, splitSideboard } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /** Row pitch and header height, for the packer. Read off the classes below. */
@@ -34,7 +34,19 @@ const ROW_HEIGHT = 22;
 const HEADER_HEIGHT = 26;
 const GROUP_GAP = 16;
 
-/** 300px, off the design canvas — a card name plus its cost with nothing truncated. */
+/**
+ * 300px, off the design canvas — a card name plus its cost with nothing truncated.
+ *
+ * Fixed, unlike `StackView`'s: nothing here is drawn at a size the reader picked, because a line
+ * of text is not a card and Ctrl+wheel never reaches this view.
+ *
+ * **One constant, read three times**: the packed column's width, both halves of its `flex`
+ * shorthand, and the flowing area's `minWidth` — which is the number that decides whether the
+ * sideboard rail fits beside the columns. A second spelling of "300px" would let the rail wrap at
+ * a width the columns had stopped agreeing with, and the layout would be wrong only in the narrow
+ * window nobody develops in. It stays an **inline style** rather than a Tailwind class for the
+ * usual reason: the scanner reads source text, so a class built from a constant emits no rule.
+ */
 const COLUMN_WIDTH = "18.75rem";
 
 /** How tall a group is here, so `packColumns` can fill a column without measuring. */
@@ -62,17 +74,80 @@ export function TextView({
   columnHeight?: number;
   className?: string;
 }) {
-  const columns = packColumns(groups, groupHeight, columnHeight);
+  // The Sideboard is lifted out before anything is packed, so `packColumns` is handed a shorter
+  // list and none of its own rules change. It is a category like any other to a greedy in-order
+  // pack, which drops it wherever it lands — usually the far end of a long run, i.e. the one pile
+  // a reader looks for by position, in the one place it can never be.
+  const { flow, sideboard } = splitSideboard(groups);
+  const columns = packColumns(flow, groupHeight, columnHeight);
 
   return (
-    <div className={cn("flex min-w-0 flex-1 items-start gap-6 overflow-auto", className)}>
-      {columns.map((column, index) => (
+    // Scrolls **down**, and sideways only when a single 300px column will not fit the desk at
+    // all. Columns used to run off the right edge — `packColumns` opens the next one to the
+    // right, so a fifteen-category deck was wider than the window and the reader got an X
+    // scrollbar across the whole desk, which is the thing the editor's 1024px floor exists to
+    // prevent, arriving by a route that floor never measured. `overflow-auto` stays rather than
+    // becoming `overflow-y-auto`: clipping a card name is worse than a scrollbar in the one case
+    // that can still produce one.
+    //
+    // `content-start` is on this box because this is the box the editor gives a height to — a
+    // `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as the scroller and not as
+    // tall as its lines. The moment the rail wraps there are two of those lines, and
+    // `align-content`'s initial `normal` is a **stretch** that shares the leftover height out
+    // between them, hanging the rail in the middle of the desk under a short list. `items-start`
+    // aligns an item inside its line and can say nothing about this.
+    <div
+      className={cn(
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-auto",
+        className,
+      )}
+    >
+      {/* The flowing columns, one column wide at minimum — and that `minWidth` is what decides,
+          in CSS and without measuring anything, whether the rail fits beside them. Too narrow
+          for a column *and* the rail, and the outer box's own `flex-wrap` drops the rail onto
+          the next line instead of restoring the sideways scroll. `flex-1 min-w-0` cannot say
+          that; a `ResizeObserver` could, and is refused — a view has no business observing its
+          own box. `items-start` keeps a column its own height rather than its line's.
+
+          It carries no `content-start`: the outer `items-start` never stretches this box, so it
+          is exactly as tall as the lines inside it and an `align-content` here would have no
+          free space to work in. The root above is where that rule bites. */}
+      <div style={{ minWidth: COLUMN_WIDTH }} className="flex flex-1 flex-wrap items-start gap-6">
+        {columns.map((column, index) => (
+          <div
+            key={index}
+            style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
+            className="flex flex-col gap-4"
+          >
+            {column.map((group) => (
+              <TextGroup
+                key={group.key}
+                group={group}
+                marketplace={marketplace}
+                violations={violations}
+                onSelect={onSelect}
+                actions={actions}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Drawn for an **empty** Sideboard too, which is the case worth stating: an empty pile is
+          where the next sideboard card goes, and a rail that appeared with the first card would
+          shove the whole layout sideways under the reader's hand mid-drag. A group in here is the
+          same `TextGroup` as one in the flow, so its heading, its aria and its drop target need
+          no second definition — the rail is where it is drawn, not what it is. */}
+      {sideboard.length > 0 && (
         <div
-          key={index}
+          {...{ [SIDEBOARD_ATTR]: "" }}
           style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
-          className="flex flex-col gap-4"
+          // `ml-auto` is a no-op while the flowing area is `flex-1` and does the whole job in the
+          // one case that matters: the rail has wrapped onto a line of its own and should still
+          // be on the right, where the reader last saw it.
+          className="ml-auto flex flex-col gap-4"
         >
-          {column.map((group) => (
+          {sideboard.map((group) => (
             <TextGroup
               key={group.key}
               group={group}
@@ -83,7 +158,7 @@ export function TextView({
             />
           ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }

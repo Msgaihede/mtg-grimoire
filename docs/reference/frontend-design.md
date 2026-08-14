@@ -235,7 +235,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `background-color: oklab(0.21 1.43099e-10 -0.012 / 0.6)` with its `<ul>` at `opacity: 0.6`; an
   active pile computed `rgba(0, 0, 0, 0)` and `opacity: 1`. The drag marks came through the same
   pass and cost the borders nothing: during a drag **every** eligible pile computed a ring — the
-  pinned Sideboard included — the pile under the pointer additionally computed `DROP_OVER`'s gold
+  Sideboard included — the pile under the pointer additionally computed `DROP_OVER`'s gold
   `oklab(0.75 0.0104587 0.119543 / 0.1)`, and the drag source's own pile computed neither. That is
   now measured rather than reasoned from "a ring is a box shadow outside the border box". **The
   harness caveat stands**: `cdp.mjs drag` intercepts, so a green pass proves nothing about a real
@@ -246,48 +246,39 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   on the first pass and the figure above needed a card moved into it first. The wash and
   `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
   the argument for having three.
-- **The sideboard is a pinned column, not a packed one.** `StackView` splits `kind === "side"` out
-  of `groups` before `packColumns` sees them and draws them as one extra column after the packed
-  ones: `sticky right-0`, `LAYER.raised`, an opaque `bg-bg`, the same inline width and `flex` basis
-  as every other column, and a soft shadow down its left edge for the seam — a shadow because the
-  borders had just gone, and a hairline reinstated here would have been the only one left in the
-  view. The `bg-bg` is what makes pinning worth anything: the packed columns have to pass _under_
-  it, and a translucent surface over sliding card art is a smear rather than a rest. The failure it
-  prevents is a drag with no destination on screen — the Sideboard sorts last, so on a deck wide
-  enough to scroll it packs off the right edge, and a card dragged out of the main deck has nowhere
-  to be let go of. It carries `STACK_COLUMN_ATTR` and `STACK_PINNED_ATTR` both, so "every column"
-  and "the pinned column" stay two questions of one element rather than one question with a special
-  case in it; and it is rendered only when a `side` group exists, which is a real condition for a
-  story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES` seeds a Sideboard
-  into every deck, a category group is drawn whether or not anything is in it, and a predefined
-  pile cannot be deleted — so in `category` mode the pinned column is there from the moment a deck
-  is created. **Its z-index is the interesting part, because it is not a number.** An open card's
-  list takes `LAYER.raised` too, and equal z-indexes resolve by document order, so the pinned
-  column winning is a fact about it being drawn last. That is the only reading an opaque pinned
-  column can survive: a card lifted out of a column scrolling past has to pass under the sideboard,
-  not over it. **The cost is permanent, unconditional and paid at every zoom** —
-  `stackColumnWidth(zoom)`: **224px at 1×, measured** in the window on 2026-08-14, and 434px at 2×
-  **derived from the same function rather than measured** (the live pass ran at 1× only), which at
-  2× is a third of a 1280px window reserved for a pile that on a new deck holds nothing at all.
-  **Measured 2026-08-14** (debug build, 1280×800, the same deck as the bullet above): the pinned
-  column computed `position: sticky`, `right: 0px`, `z-index: 10`,
-  `background-color: oklch(0.16 0.01 270)` — opaque `--color-bg`, not a wash —
-  `box-shadow: rgba(0, 0, 0, 0.45) -8px 0px 16px -4px`, and `width: 224px`. It was the last of the
-  6 columns and held exactly one section, the Sideboard. **Sticky, proven rather than asserted**:
-  1424px of columns in a 632px scrollport (321px earlier, with the stats aside open), and the
-  column's viewport `left` stayed **325px** across `scrollLeft` 0 → 1103 → 0. **Occlusion, proven**:
-  with the desk scrolled, `document.elementFromPoint` at the centre of a card in the Instant column
-  returned the pinned Sideboard's own "Nothing here yet." paragraph rather than the card. The
-  packed columns really do pass _under_ it, with nothing showing through.
-- **A card scrolled under the pinned column is not hittable there — and that is the correct
-  behaviour, not a bug.** It cannot be clicked, opened or picked up until it is scrolled clear.
-  This is what the occlusion measured above _means_, and it is inherent to any opaque sticky
-  overlay: the card is hidden, so it should not be grabbable. It is also the thing that will read
-  as a bug to whoever meets it next, so **know the symptom** — it is what made the first
-  `cdp.mjs drag` of the 2026-08-14 pass fail with "the browser never started a drag": the source
-  card's centre was under the pinned column, so the press landed on the Sideboard instead. Scroll
-  the source clear of the pinned column before pressing, and suspect this before suspecting the
-  harness.
+- **The sideboard is a rail, not a packed column — and the rail is a plain flex child.** Both
+  column views split `kind === "side"` out of `groups` before `packColumns` sees them
+  (`splitSideboard`, `views/columns.ts`) and draw them in one box after the packed ones, at the
+  same inline width and `flex` basis, held right by `ml-auto`. The failure it prevents is a drag
+  with no destination on screen: the Sideboard sorts last, so packed it was the far end of the run,
+  and a card dragged out of the main deck had nowhere to be let go of. It carries `SIDEBOARD_ATTR`
+  and nothing else — `STACK_COLUMN_ATTR` means "a box `packColumns` produced", and the rail is by
+  construction the one box it never saw, so a sweep that counts columns must not find it; the name
+  is unprefixed because `TextView` draws the same rail. It is rendered only when a `side` group
+  exists, which is a real condition for a story or a test and **not** one for the app:
+  `schema::PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group is drawn
+  whether or not anything is in it, and a predefined pile cannot be deleted — so in `category` mode
+  the rail is there from the moment a deck is created. **The cost is `stackColumnWidth(zoom)`
+  beside the flow** — 224px at 1× and 434px at 2×, both derived from that one function — which at
+  2× is a third of a 1280px window standing beside a pile that on a new deck holds nothing at all;
+  below one column plus the rail it takes its own line instead, which is the wrap in the entry
+  further down.
+- **A rail this view used to hold sticky is the one thing not to reinstate.** For one commit
+  (`cf13568`, 2026-08-14) the sideboard column was `sticky right-0`, opaque `bg-bg`, `LAYER.raised`
+  and a `-8px 0 16px -4px` seam shadow, and every one of those four existed to keep it in view
+  **while the packed columns scrolled sideways underneath it** — measured in the window that day at
+  1280×800: `position: sticky`, `right: 0px`, `z-index: 10`, `width: 224px`, a viewport `left` held
+  at 325px across a full scroll of a 1424px desk in a 632px scrollport, and
+  `document.elementFromPoint` over a scrolled-under card returning the Sideboard's own text rather
+  than the card. **Those figures describe a layout that no longer exists**: the columns wrap
+  downward now, so nothing passes under the rail — an opaque backdrop occludes nothing, and the
+  seam shadow would draw a permanent divider across a layout in which nothing moves. Two
+  consequences went with it, and both were real while it lasted: a card scrolled under the column
+  was genuinely not hittable there (correct for an opaque overlay, and the reason the first
+  `cdp.mjs drag` of that pass failed with "the browser never started a drag"), and the rail shared
+  `LAYER.raised` with an open card's list, ordered only by document order. Neither applies to a
+  rail that asks for no z-index and covers nothing. `views.test.tsx` asserts the four absences, not
+  merely the classes that replaced them.
 - **The zoom badge is driven by a pulse counter, not by the zoom value** (`CardZoomIndicator`,
   `zoomPulse`). At either end of the ladder a gesture changes no number, and that is exactly when a
   reader needs an answer — they are still rolling the wheel and nothing is happening. Keyed off the
@@ -321,11 +312,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   The part a number cannot fix: a popup inside a virtualised row is capped by that row's
   layer whatever it asks for, because the row is `absolute` _and_ `transform`ed and is
   therefore its own stacking context. That is why the row lift exists and why it sits
-  _below_ the header — a row has to scroll under one. **Document order is load-bearing in the
-  other direction too, and there deliberately**: the deck stack's pinned sideboard column and an
-  open card's list are both `LAYER.raised`, and the pinned column is drawn last precisely so the
-  lifted card passes under it (the stack bullets above). Nothing but the JSX order enforces that,
-  and inverting it would go unnoticed by every test. Variant spellings
+  _below_ the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
 - **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
@@ -396,6 +383,86 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `scrollLeft` stayed 0 — and Escape closed the list while leaving the card pane open, then
   closed the pane on the second press. Every figure is in
   `src/features/decks/CLAUDE.md`.
+- **A fixed-width column layout that opens the next column to the right is a horizontal
+  scrollbar with extra steps.** The deck editor's two column views pack a deck's groups into
+  columns of a fixed width — `stackColumnWidth(zoom)`, 224px at 1×, and `TextView`'s
+  `COLUMN_WIDTH`, a flat 300px that does not zoom — and both used to lay those columns in one
+  non-wrapping row inside an `overflow-auto` box. That is not a decision at 1280px and five
+  columns; it is a decision at the app's floor. **The floor is a 1024px window**, where the
+  editor's desk row — the view and the docked search panel, with a stats block between them at
+  the time these were taken, since moved to a band under the deck — measures
+  **376px** with the card pane docked (361 once the page's own scrollbar is out), and **the view
+  itself — the box the columns are actually in — gets 313 of it**, from `DeckEditor.tsx`'s own
+  measured table: `| 1024 | open | 361 | 313 | rail |`. Only 376 is pinned to the pixel, as
+  `DeckEditor.test.tsx`'s `desk(376)`; 361 and 313 live there in prose. **313 is the column
+  budget**, and against it one 224px stack column leaves 89px and one 300px text column 13 — one
+  column, either way. `packColumns` fills a column before opening the next, so a deck is always
+  fewer columns than it has categories; it is nonetheless **more columns than the desk is wide**
+  the moment it has two, and every column after the first opened to the right, off the edge, with
+  an X scrollbar across the whole desk. Same failure as the popup above, from the other
+  direction — and it is the one route `DECK_FLOOR` never measured: **192
+  is the width the deck side is _guaranteed_, and it does not hold even one column**, because
+  that floor was written for how the desk row is *divided* and never for what the pack does
+  inside the view's share of it. It has only ever moved away from holding one: 224 → 208 → 192,
+  each drop a scrollbar the row's arithmetic had not counted. The fix is `flex-wrap` on the packed row: the column that will not fit goes below the line
+  and the reader scrolls **down**, which every deck view already does. `packColumns` is
+  untouched by it — the wrap is a property of the box the columns are laid in, not of how they
+  were filled — and `overflow-auto` stays rather than narrowing to `overflow-y-auto`, since one
+  column zoomed past the desk's own width genuinely is wider than its box and clipping a card is
+  worse than a scrollbar the reader asked for. Wrapping is what makes that the rare case.
+- **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
+  — never a `ResizeObserver`.** The Sideboard was the pack's worst case. `packColumns` is greedy
+  and in the reader's own order (never reordering, never splitting a group), so a category like
+  any other lands wherever the run puts it, and the pile a reader most often wants beside the
+  deck sat at the far end of a long sideways run, off screen. `splitSideboard` takes the `side`
+  groups out before the pack runs and draws them as one column pinned right; the pack keeps its
+  whole contract and is handed fewer groups. Whether there is room for that rail is decided by
+  the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
+  the desk holds two columns and the gap between them the rail sits beside the flow, and below
+  that width it wraps onto its own line, where `ml-auto` keeps it on the right. **`content-start`
+  belongs on the view's root and nowhere else**, and it is what keeps a wrapped rail immediately
+  under the flow: that root is a `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as
+  the scroller rather than as tall as its content, and `align-content`'s initial `normal` behaves
+  as _stretch_ — two lines in a box with slack means the slack is dealt out between them, hanging
+  the rail in mid-desk under a small deck. `items-start` cannot say it (it aligns an item within
+  its line), and the flowing box inside cannot carry it (that box is never stretched, so it has no
+  free cross-space to align). **That threshold
+  is arithmetic rather than a measurement** — 224 + 16 + 224 = **464px** in the stack view at 1×,
+  whose gap is `gap-4` (884 at 2×, where a column is 434), and 300 + 24 + 300 = **624px** in the
+  text view, whose gap is `gap-6` and whose 300px column has no zoom to move it. `min-w-0` and
+  `flex-1` cannot express it, because a flex item that may shrink to nothing never wraps at all.
+  An observer could, and is refused: **a view has no business observing its own box** —
+  `DEFAULT_COLUMN_HEIGHT`'s doc is explicit that the editor measures the scroller and passes the
+  height — and a second reading of the same box answers a frame behind the layout it is reacting
+  to, which at exactly this threshold is one frame of the scrollbar the whole change exists to
+  remove. **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build,
+  a seeded 16-category deck — twelve named piles plus the four predefined), and the two
+  derived thresholds came back exact:
+  - **No horizontal scrollbar at any width tested.** `document.body.scrollWidth ===
+    clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched itself at
+    every one — 602 = 602 at 1280, 1257 at 1920, 331 at 1024. It scrolls **down** instead:
+    **5888px** at 1280 against a 384px box.
+  - **The rail's wrap threshold is the arithmetic, to the pixel.** The text view's rail wrapped
+    below the flow at 1280 — its view is **602**, under the derived **624** — while the stack
+    view's, needing only 464, stayed beside it. At 2× the stack column is 434 and the threshold
+    884, and the rail wrapped there too, still with no sideways scroll.
+  - **`ml-auto` is what puts a wrapped rail back on the right**, and it does: at 1024 the rail
+    took its own line with its right edge on the flow's, 15px of scrollbar in from the
+    scroller's own edge.
+  - **The sticky machinery really is gone** — the rail computes `position: static`,
+    `box-shadow: none`, `z-index: auto` and a transparent background — and **`content-start`
+    is on the box that has a height**: the view root computes `align-content: flex-start`.
+  - **The one case that can still scroll sideways behaves better than this entry claimed.**
+    At 2× in a 1024px window a single 434px column does not fit the 331px view, and the
+    overflow is **103px inside the deck view** — `document.body` never moved. The app does not
+    slide under the reader; one panel scrolls, which is the failure the popup rule above
+    forbids only for the *page*.
+  - **What the live pass found that no test could**: at the app's own 1280×800 with the search
+    panel docked the view is 602px, and the rail's 224 plus the gap leave **362 — one column**.
+    A 13-column deck is therefore thirteen lines and fifteen screens of scrolling, where the
+    old sideways layout showed about 2.7 columns at once. The horizontal scrollbar is gone and
+    the density went with it; that is the trade this change makes, and it is worth knowing
+    before widening the rail or narrowing the columns.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

@@ -6,7 +6,6 @@ import { useRef } from "react";
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { DEFAULT_ZOOM } from "@/lib/cardZoom";
 import type { DeckCard } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import type { Marketplace } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
@@ -16,7 +15,7 @@ import { deckGroupProps, useCategoryDrop, type DeckCardActions } from "../cardCo
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns } from "./columns";
+import { packColumns, SIDEBOARD_ATTR, splitSideboard } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -69,25 +68,14 @@ export function stackColumnWidth(zoom: number): number {
  * only claim worth pinning is that it decided rather than dropped everything into one box.
  * `DropIndicator`'s `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for
  * the same reason.
+ *
+ * **The Sideboard's rail is deliberately not one of these.** This attribute means "a box
+ * `packColumns` produced", and the rail is by construction the one box it did not: it is taken
+ * out of the packer's input, so a sweep that counts columns is counting what the pack decided
+ * and must not find it. It carries `SIDEBOARD_ATTR` (`columns.ts`) alone — one name, shared with
+ * `TextView`, which has no columns of this kind to be confused with.
  */
 export const STACK_COLUMN_ATTR = "data-stack-column";
-
-/**
- * How a test finds the one column that does **not** scroll — the sideboard, held against the
- * right edge while the deck runs past under it.
- *
- * It is a second attribute rather than a value on {@link STACK_COLUMN_ATTR}, because the element
- * carries both and the two claims are independent: it *is* a column (same width, same gap, same
- * `StackGroup`s inside, and a sweep counting columns must still count it) and it is *also* the
- * pinned one. A test that wants "every column" and a test that wants "the pinned column" then ask
- * two questions of one element instead of one question with a special case in it.
- *
- * **The pinned column exists only when a `side` group does**, which is why a probe that finds
- * nothing here is an answer rather than a failure: a deck with no sideboard draws no such column,
- * and neither do the two derived grouping modes — see {@link StackView} for why that needs no
- * check of its own.
- */
-export const STACK_PINNED_ATTR = "data-stack-pinned";
 
 /**
  * A group's height in the column, header and padding included, so the packer can fill a
@@ -153,111 +141,106 @@ export function StackView({
   // chrome at every stop on the ladder. A px number in an inline style rather than the `14rem`
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
-  // **The split happens before the pack, and it has to.** `packColumns` fills a column to
-  // `columnHeight` in the reader's own order and never re-orders anything — so a sideboard left
-  // in that stream lands in whichever column happened to have room for it, twelve columns to the
-  // right of the window's edge on a deck of any size. A column held against that edge is not a
-  // column the packer may put anything in, so it is taken out of the packer's input rather than
-  // pulled back out of its answer. Both halves keep their existing order: this is a partition,
-  // never a sort.
-  //
-  // **`kind === "side"` is the whole test, and there is deliberately no grouping-mode check to go
-  // with it** — not because the other two modes cannot produce a pinned column, but because
-  // `kind` is already the honest answer in all three.
-  //
-  // Under `Group by mana value` and `Group by type`, `buildGroups` buckets only the *active*
-  // cards, and each bucket it invents carries `kind: null` — "Mana value 3" has no rules role, so
-  // it can never be pinned. But the derived arm does not stop there: it appends every
-  // **switched-off** pile as itself, `categoryGroup` and all, so a Sideboard the reader has
-  // switched off arrives in those modes still carrying `kind: "side"` and this split still pins
-  // it. That is the right answer — it is the same pile, it is still a drop target, and
-  // `buildGroups` was already sending it to the right-hand end of the list — and reading it off
-  // `kind` is what gets it right for free.
-  //
-  // A mode check would be a second place to state what `CardGroup` already carries, and it would
-  // get exactly that case wrong: it would unpin a pile that ought to stay pinned, in the two
-  // modes where it is the only category on the desk.
-  const pinned = groups.filter((group) => group.kind === "side");
-  const flowing = groups.filter((group) => group.kind !== "side");
+  // **The split happens before the pack, and it has to.** `packColumns` fills a column in the
+  // reader's own order and never re-orders anything, so a sideboard left in that stream lands
+  // in whichever column happened to have room for it. A rail held against the right edge is not
+  // a column the packer may put anything in, so it is taken out of the packer's *input* rather
+  // than pulled back out of its answer — which would mean lifting a group out of a column
+  // somebody else is already sharing and re-flowing the rest. Why `kind === "side"` is the whole
+  // test, and why there is no grouping-mode check beside it: {@link splitSideboard}.
+  const { flow, sideboard } = splitSideboard(groups);
   // The pack has to see the zoom too — a taller stack is fewer groups to a column. Wrapped
   // rather than passed by name, because `packColumns` takes a measurement of one item and knows
   // nothing about decks, let alone about how big the reader is drawing them.
-  const columns = packColumns(flowing, (group) => groupHeight(group, cardZoom), columnHeight);
+  const columns = packColumns(flow, (group) => groupHeight(group, cardZoom), columnHeight);
 
   return (
-    // Scrolls both ways: sideways because a fifteen-category deck is more columns than a
-    // window is wide, and down because a lifted card at the foot of a column overflows its
-    // group on purpose and has to have somewhere to go.
+    // Scrolls **down**, and that is the whole of this layout. A column that will not fit opens
+    // *below* the line rather than off the right edge: a fifteen-category deck used to run
+    // sideways and put an X scrollbar across the entire desk, which is the one thing the app's
+    // 1024px floor forbids — reached by the route `DeckEditor`'s `DECK_FLOOR` never measured,
+    // since 208 is the width this view is guaranteed and it does not hold even one column.
+    // Down is also where a lifted card at the foot of a column has always had to go, so there
+    // is one direction to scroll rather than two.
+    //
+    // `overflow-auto` and not `overflow-y-auto`: one column at 2× really is wider than a narrow
+    // desk, and clipping a card is worse than a scrollbar the reader asked for by zooming.
+    // Wrapping is what makes that the rare case instead of the ordinary one.
+    //
+    // The `flex-wrap` *here* is what decides the narrow desk. With the flowing box below
+    // refusing to go under one column wide, a desk too narrow to hold a column beside the rail
+    // drops the rail onto its own line — CSS answering it, with nothing in this view measuring
+    // its own box, which its `DEFAULT_COLUMN_HEIGHT` is equally explicit about.
+    //
+    // `content-start` belongs on *this* box and only here, because this is the box with height
+    // to spare: `DeckEditor` renders it as a `flex-1` item of a `min-h-0 flex-col` parent, so
+    // its height is the scroller's rather than its content's. Once the rail has wrapped, that
+    // makes two flex lines in a box taller than both — and `align-content`'s initial `normal`
+    // behaves as **stretch**, dealing the slack out between them. A freshly created deck — four
+    // nearly empty piles, one short column — would draw that column at the top and the Sideboard
+    // floating a couple of hundred pixels under it with nothing in between. `items-start` cannot
+    // prevent it: that aligns an item within its line, never the lines within the box.
     <div
       ref={scrollRef}
-      className={cn("flex min-w-0 flex-1 gap-4 overflow-auto pb-2", className)}
+      className={cn(
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-auto pb-2",
+        className,
+      )}
     >
-      {columns.map((column, index) => (
+      {/* The flowing half. `minWidth` is one column, and that number is the whole mechanism
+          above: below it the rail wraps, rather than this box squeezing under a column's fixed
+          width and scrolling sideways. `min-w-0`/`flex-1` cannot say it — they describe how a
+          box shares slack, not the width at which it must stop sharing. `flex-wrap` is what
+          sends the column that will not fit onto the next line, and `items-start` keeps a column
+          its own height: stretched, a switched-off pile's `bg-surface/60` wash would grow to the
+          tallest thing on its line and read as an empty box nobody drew. (It was the dashed
+          outline that made this obvious, until 2026-08-14 took the outline away — the wash it
+          left behind stretches exactly as far.)
+
+          **No `content-start` here, on purpose.** This box is a flex item of a line the outer
+          `items-start` never stretches, so its height is exactly its content's, there is no free
+          cross-space in it, and an `align-content` would have nothing to align. The one place
+          that rule can act is the root above. */}
+      <div style={{ minWidth: columnWidth }} className="flex flex-1 flex-wrap items-start gap-4">
+        {columns.map((column, index) => (
+          <div
+            // By position, and that is safe here in the way a table row's key is not: a column
+            // is not a thing the reader can address, and its identity is exactly "the nth
+            // column of this layout".
+            key={index}
+            {...{ [STACK_COLUMN_ATTR]: "" }}
+            style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
+            className="flex flex-col gap-5"
+          >
+            {column.map((group) => (
+              <StackGroup
+                key={group.key}
+                group={group}
+                marketplace={marketplace}
+                violations={violations}
+                onSelect={onSelect}
+                actions={actions}
+                zoom={cardZoom}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      {/* The rail: the Sideboard, on the right, never packed and never wrapped away from the
+          edge while there is room for it. It draws for an **empty** Sideboard too — an empty
+          pile is where the next sideboard card goes, and a rail that appeared with the first
+          card would move the whole layout under the reader's hand at the moment they were
+          using it. `ml-auto` is a no-op while the flowing half is `flex-1`, and does the work
+          in the one case that matters: the rail on its own line, still right. The width is the
+          same `stackColumnWidth` the columns are, inline and in both halves of the shorthand,
+          because a Tailwind class built from a number emits no CSS rule at all. */}
+      {sideboard.length > 0 && (
         <div
-          // By position, and that is safe here in the way a table row's key is not: a column
-          // is not a thing the reader can address, and its identity is exactly "the nth
-          // column of this layout".
-          key={index}
-          {...{ [STACK_COLUMN_ATTR]: "" }}
+          {...{ [SIDEBOARD_ATTR]: "" }}
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
-          className="flex flex-col gap-5"
+          className="ml-auto flex flex-col gap-5"
         >
-          {column.map((group) => (
-            <StackGroup
-              key={group.key}
-              group={group}
-              marketplace={marketplace}
-              violations={violations}
-              onSelect={onSelect}
-              actions={actions}
-              zoom={cardZoom}
-            />
-          ))}
-        </div>
-      ))}
-
-      {/* **The sideboard, held against the right edge while the deck scrolls under it.**
-
-          Drawn last in the document on purpose, and not merely because that is where the flex
-          line puts it. `sticky right-0` inside this scroller keeps it in view at every scroll
-          offset, `bg-bg` is what makes the columns passing behind it *pass* rather than show
-          through, and {@link LAYER.raised} is what puts it over them at all.
-
-          **Document order is doing real work at that rung.** An open card's list takes
-          `LAYER.raised` too (`CardStack`), and equal z-indexes resolve by document order — so the
-          last element at the rung wins, and this is the last element. That is the outcome wanted
-          rather than a coincidence tolerated: a card opened in a column halfway off the screen
-          overflows its group by 293px on purpose, and it must pass *under* the pinned sideboard,
-          not over it, or the reader is reading a card through a column that is meant to be
-          covering it.
-
-          **No height, deliberately.** A flex line stretches its items (`align-items: stretch` is
-          the default), so this column is already exactly as tall as the tallest packed column
-          beside it — which is what makes the `bg-bg` backdrop cover the full height of whatever
-          scrolls behind it. Any height here would be a second answer to a question the flex line
-          has already answered correctly, and a wrong one at every zoom but the one it was
-          measured at. */}
-      {pinned.length > 0 && (
-        <div
-          // Both attributes, because both claims are true of this element — see
-          // {@link STACK_PINNED_ATTR}. The same inline width as every packed column, off the same
-          // `stackColumnWidth`: a pinned column is a column, and a sideboard drawn at a different
-          // width from the pile beside it would read as a panel rather than as part of the deck.
-          {...{ [STACK_COLUMN_ATTR]: "", [STACK_PINNED_ATTR]: "" }}
-          style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
-          className={cn(
-            "sticky right-0 flex flex-col gap-5 bg-bg",
-            LAYER.raised,
-            // A soft shadow thrown *leftward*, onto what is sliding under it. It is the only
-            // thing that says this column is in front: every column here is the same width on
-            // the same background, so without it a reader watching the deck scroll sees one
-            // column mysteriously refusing to move. Deep alpha for the app's felt, as
-            // `CardStack`'s own shadows are and for the same reason — 0.1 is not a shadow at
-            // 0.16 lightness.
-            "shadow-[-8px_0_16px_-4px_rgb(0_0_0/0.45)]",
-          )}
-        >
-          {pinned.map((group) => (
+          {sideboard.map((group) => (
             <StackGroup
               key={group.key}
               group={group}

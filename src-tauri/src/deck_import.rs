@@ -1556,7 +1556,7 @@ mod tests {
             &crate::deck::DeckInput {
                 name: "Imported".to_owned(),
                 format_key: "commander".to_owned(),
-                description: None,
+                ..Default::default()
             },
         )
         .unwrap()

@@ -79,17 +79,19 @@ deliberately**: no screenshots are stored.
 
 - **`tags: ["autodocs"]` is declared per file in the meta** — a new story file gets no docs page
   unless it says so.
-- **Re-count the story totals in the same commit that adds a story**, and **count the files too,
-  not just the stories.** `storybook-static/index.json` is the only place the numbers agree.
-  This has rotted twice: it read 326 stories for three stories' worth of drift, and by
-  2026-08-12 it named 43 story files when 44 were on disk — a whole file can go missing from the
-  prose while the story total still looks plausible.
-- **Re-count after a merge, not just after your own commit.** 2026-08-14 two branches each
-  measured 359 correctly against their own base and the merged tree was 365: a count is a
-  measurement of a *tree*, so taking either side of that conflict would have shipped a figure
-  true of no checkout. The same trap eats derived counts — "38 docs pages render inline" was
-  `45 − 7` and is now `46 − 7 − 1`, unchanged in value and stale in every term. Re-derive from
-  the built index and from source, never from the last number plus your own diff.
+- **Do not write a story, story-file, docs-page or plays total into any document** (removed
+  2026-08-14). The reference page used to carry them and the figure conflicted on **five
+  consecutive merges of `main`**, each resolution correct and each obsolete within the hour: a
+  count is a fact about a *tree*, so every open branch has its own and none is the one being
+  shipped. The archaeology defending it had grown longer than the rules it sat above. If a number
+  is genuinely needed, measure it at the moment of need — `npm run build-storybook` then
+  `storybook-static/index.json` for everything except plays, and a grep for those, since **the
+  index knows nothing about plays** and a branch that re-derived every other figure off a fresh
+  build left that one stale exactly that way.
+- **The lesson that outlived the numbers: rebuild and read the index on the merge commit you are
+  shipping, and never add one branch's delta to another's total.** No side of a merge has ever
+  predicted the merge here — two branches once measured 283 and 285 plays, each accounting for
+  its own honestly, and the merge answered 291.
 - **Every drag is held in `try { … } finally { await held.cancel(); }`, and every assertion about
   a drag's result goes through `waitFor`.** A throw mid-drag leaks pdnd's one global drag flag into
   the _next_ story, which is why one broken assertion reported two failures.

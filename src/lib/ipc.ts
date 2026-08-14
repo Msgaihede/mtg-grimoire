@@ -1106,19 +1106,87 @@ export interface DeckAuditEntry {
 }
 
 /**
- * One new deck, as the "New deck" dialog sends it.
+ * One new deck, as the "New deck" dialog sends it — **the whole deck, in one INSERT**.
  *
  * Rust carries `#[serde(default)]` so both strings are optional on the wire, but they stay
  * required here: a deck with no name is refused in words (`"A deck needs a name."`), and a
  * blank `formatKey` is not an error but a *decision* — it means `casual`, which is
  * `decks.format_key`'s own DDL default. A call site that wants casual should say so.
+ *
+ * Everything below `formatKey` is a field the "New deck" dialog now offers, and they travel
+ * together on purpose: create-then-patch-then-file is three transactions and a half-made deck
+ * to unwind by hand when the second one fails — the trap {@link ipc.deckImportCommit} exists to
+ * avoid. One call, one row.
+ *
+ * **And one audit row.** A deck's birth stays the single `{field:"name", from:null, to:name}`
+ * however many fields it was born with. {@link ipc.deckUpdate} writes one row per changed field
+ * because each of those is an event; being born is one event.
+ *
+ * **Nothing here follows {@link DeckPatch}'s `coalesce` rule, because this is an INSERT.**
+ * There is no previous value to leave alone: an absent field means the column's own default,
+ * and for {@link DeckInput.folderId} that difference is the whole meaning of the field.
  */
 export interface DeckInput {
   name: string;
   /** A `format_specs.key`. Validated against the table, not by a foreign key — see
    *  {@link FormatSpec}. Blank means `"casual"`. */
   formatKey: string;
+  /** The one-line blurb the gallery tile shows — **not** {@link DeckInput.notes}. Two fields
+   *  because they are two things: a caption and a notebook. The "New deck" dialog fills this
+   *  now that it hosts the whole settings form; before that it sent name and format alone, and
+   *  a blurb could only arrive afterwards through {@link ipc.deckUpdate}. */
   description?: string;
+  /** The deck's long-form notes — the v8 column, and not {@link DeckInput.description}. */
+  notes?: string;
+  /**
+   * Point the new deck's cover at a printing's art crop.
+   *
+   * **`coverKind` is not settable at create**: it keeps its DDL default, `card_art`, which is
+   * the kind this field *is* — so a deck born with a card cover already draws it and needs no
+   * follow-up. A *custom picture* does need one, and always will: that is
+   * {@link ipc.deckSetCoverImage}, which takes a path on disk and a **deck id**, so it cannot
+   * run until the deck exists. The create dialog holds a chosen file until the deck is made
+   * and uploads it after. See {@link DeckCoverKind} for why a deck carries both at once.
+   *
+   * A soft reference like every card id in a user table: nothing checks the printing is in
+   * `cards`, and an orphaned cover heals on the next sync.
+   */
+  coverCardId?: string;
+  /**
+   * Which folder to file the new deck in — and **absent is the top level, deliberately**.
+   *
+   * **{@link DeckPatch.folderId}'s `coalesce` trap does not apply here, and a reader who knows
+   * that rule will assume it does.** A patch writes `coalesce(?n, folder_id)`, which reads a
+   * bound NULL as "leave it", so no patch can un-file a deck and {@link ipc.deckSetFolder} is
+   * the only command that reaches the root. This is an INSERT with nothing to leave: omitting
+   * `folderId` writes the root because that is what the caller asked for. Nothing about
+   * `deckSetFolder` changes — it is still the way to un-file a deck that already **exists**.
+   *
+   * Typed `number | undefined` rather than `number | null` for the same reason: there is one
+   * way to say the root here, which is to leave it out. A form whose draft holds
+   * `number | null` sends `folderId ?? undefined`.
+   *
+   * Fenced by a real foreign key — `decks.folder_id REFERENCES deck_folders(id)`, enforced
+   * because both are user tables — so a folder id that is not there is refused by SQLite
+   * rather than checked in Rust.
+   */
+  folderId?: number;
+  /**
+   * Whether the new deck keeps a theory list beside its live one.
+   *
+   * **At create this sets the column and moves nothing**, because a deck being born has no live
+   * cards to move. Contrast {@link DeckPatch.theoryEnabled}, where switching it on makes the
+   * deck the reader already has into the plan and leaves the live list empty — there is nothing
+   * here for that to move, so the two routes differ in what they *do* and agree exactly on what
+   * a new deck ends up with.
+   *
+   * Worth knowing one step further out: the patch acts on the **transition** off → on, so a deck
+   * born with theory already on has made that transition at birth and no later patch will ever
+   * move anything for it. Filling the plan from a live list built up afterwards is
+   * {@link ipc.deckTheoryCopyFromLive}, which is the reader's button for exactly that and is
+   * unchanged.
+   */
+  theoryEnabled?: boolean;
 }
 
 /**
@@ -1136,13 +1204,18 @@ export interface DeckInput {
  * Un-filing through a patch would need a double-`Option` (absent versus null) across this
  * whole struct — a change to make once and deliberately, not as a side effect of adding a
  * field.
+ *
+ * **The rule is this struct's, not the deck module's.** {@link DeckInput} carries the same
+ * field names and is an INSERT, where an absent `folderId` really does mean the top level —
+ * see {@link DeckInput.folderId}, which says so at the field.
  */
 export interface DeckPatch {
   name?: string;
   formatKey?: string;
-  /** The one-line blurb the "New deck" dialog fills and the gallery tile shows — **not**
-   *  {@link DeckPatch.notes}. Two fields because they are two things: a caption and a
-   *  notebook. */
+  /** The one-line blurb the gallery tile shows — **not** {@link DeckPatch.notes}. Two fields
+   *  because they are two things: a caption and a notebook. Both dialogs write it now: the
+   *  "New deck" one through {@link DeckInput.description} at birth, the settings one through
+   *  here. */
   description?: string;
   /** Point the cover at a printing's art crop. Sending it also sets `coverKind` back to
    *  `card_art`, so a deck showing an uploaded picture returns to card art without the file
@@ -2215,6 +2288,16 @@ export const ipc = {
    */
   deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
+  /**
+   * Make a deck — **the whole deck, in one INSERT**, with its four predefined categories and
+   * its one birth row of history in the same transaction. Every field of {@link DeckInput}
+   * travels in this one call rather than as a create followed by a patch and a filing, which
+   * would be three transactions with a half-made deck to unwind between them.
+   *
+   * The one thing it cannot do is a *custom* cover picture: that is
+   * {@link ipc.deckSetCoverImage}, which needs the id this call answers with, so it is always
+   * a follow-up and always has to handle failing on its own — the deck exists by then.
+   */
   deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
   /** Rename, re-format, cover, build and archive all arrive here. Sending `isBuilt`
    *  reallocates the deck in the same transaction. */
