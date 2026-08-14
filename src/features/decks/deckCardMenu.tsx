@@ -109,8 +109,11 @@ export interface DeckCardMenuDeps {
    *
    * **It keeps this file's purity contract**: every write arrives as an argument, so the builder
    * *and* its one component are testable with no provider and no query client. The body used to
-   * mount `useDeckMeta` for the create, which is **four** reads — the categories as a priced
-   * aggregate, the tags of both lists, and the global suggestion palette — to draw a text field.
+   * mount `useDeckMeta` itself, which is **four** reads — the categories as a priced aggregate,
+   * the tags of both lists, and the global suggestion palette — fired to draw a text field the
+   * reader may never type in. The editor mounts that hook now, for the *category* menu, and
+   * hands the one write down; four reads inside opening a deck are a different price from four
+   * inside expanding a submenu.
    *
    * **And it is what keeps the write alive.** A `mutate`-scoped `onSuccess` belongs to the
    * *observer*, and TanStack drops it when the observer unmounts — so a create started here and

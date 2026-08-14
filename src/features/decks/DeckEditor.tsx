@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import {
   dropTargetForElements,
@@ -55,6 +54,7 @@ import { DEFAULT_TAG_COLOR } from "./tagColors";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
+import { useDeckMeta } from "./useDeckMeta";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateDeck } from "./validation/engine";
@@ -587,40 +587,63 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const tookFocus = useRef(false);
 
   /**
+   * The deck's piles and labels **as things in themselves** — what the category menu writes
+   * through, and where the menu's "New tag…" now makes its label.
+   *
+   * **Four local-SQLite reads on every deck opened, and they are paid deliberately.** The
+   * categories (a *priced* per-category aggregate), the tags of the list on screen, the tags of
+   * the **other** list, and the global suggestion palette — counted off `useDeckMeta.ts`'s four
+   * `useQuery` calls, every one of them `enabled` on nothing but the deck id. Two things make
+   * that the right trade *here* and made it the wrong one inside a lazy menu body, which is
+   * where this hook was refused a round earlier: a reader **opening a deck** already pays a
+   * `deck_get` of the whole deck, its cards, its categories and its tags, so four more local
+   * reads sit inside an act that is already a read; and what they buy is not one write but every
+   * write the category menu makes — rename, the switch, delete — each from its single
+   * definition. The lazy body paid the same four to draw a text field the reader might never
+   * type in.
+   *
+   * The Categories dialog mounts the same hook against the same `["decks"]`-rooted keys, so
+   * opening it after this is free rather than four reads again.
+   */
+  const meta = useDeckMeta(deckId, variant);
+
+  /**
    * The menu's "New tag…" — a label made and put on the card, as one act.
    *
-   * **Mounted here rather than in the menu body, and that is a correctness fence rather than
-   * tidiness.** A `useMutation`'s callbacks belong to its *observer*, and TanStack drops them
-   * when the observer unmounts. The chain's second half therefore has to be owned by something
-   * that outlives the panel: started from inside the menu, an Escape or an outside press landing
-   * during the round trip would leave the label created and silently never attached — the exact
-   * shape `cardMenu.tsx` mounts the app's one deck-add *above* the menu to avoid. This editor is
-   * still on screen when the answer comes back, so the `onSuccess` below really runs.
+   * **`useDeckMeta.createTag`, the single definition**, now that the hook is mounted above for
+   * the category menu. It replaced a hand-rolled `useMutation` over `ipc.deckTagCreate` whose
+   * whole justification was avoiding this mount; that justification stopped being true, so it
+   * was deleted rather than corrected.
    *
-   * **`ipc.deckTagCreate` rather than `useDeckMeta.createTag`, and the cost is named.** That hook
-   * is the single definition of this app's tag CRUD, and mounting it here for one write would
-   * cost the editor **four reads on every deck opened** — the categories (a *priced* per-category
-   * aggregate), the tags of the list on screen, the tags of the **other** list, and the global
-   * suggestion palette, every one of them `enabled` on nothing but the deck id, and none of them
-   * drawn by this screen. (Counted off `useDeckMeta.ts`'s four `useQuery` calls, not off its
-   * prose; this comment said three until it was re-counted.) So this is
-   * a second caller of one command rather than a second definition of a rule: there is no refusal
-   * policy on that mutation to copy (`useDeckMeta`'s shared `writes` is an invalidation), and the
-   * invalidation this owes is `setTag`'s own, which runs on both of that mutation's arms.
+   * **The chain's second half is still the editor's, which is the part that must not regress.**
+   * A `useMutation`'s callbacks belong to its *observer*, and TanStack drops them when the
+   * observer unmounts — so a create started from inside the menu and chained there loses its
+   * attach to any dismissal landing during the round trip, leaving the label made and silently
+   * never worn. This observer is **this component's**, and the editor is still on screen when
+   * the answer arrives, so the per-call `onSuccess` below really runs. `DeckEditor.test.tsx`'s
+   * "attaches a label whose create was still in flight when the menu was dismissed" is the proof
+   * and holds Escape between the press and the answer.
    *
    * The colour is `DEFAULT_TAG_COLOR` and the menu does not ask: recolouring a label is what the
-   * Tags dialog is for. `deck.setTag.mutate` rather than the `writeTag` alias below, because this
-   * has to be declared before the banner family it joins.
+   * Tags dialog is for.
    */
-  const attachNewTag = useMutation({
-    mutationFn: ({ name }: { card: DeckCard; name: string }) =>
-      ipc.deckTagCreate(deckId, name, DEFAULT_TAG_COLOR.token),
-    onSuccess: (tag, { card }) =>
-      deck.setTag.mutate({ cardId: card.cardId, categoryId: card.categoryId, tagId: tag.id }),
-  });
-  const startTagCreate = attachNewTag.mutate;
+  const startTagCreate = meta.createTag.mutate;
+  const setTagOnSlot = deck.setTag.mutate;
+  const createTagFor = useCallback(
+    (card: DeckCard, name: string) =>
+      startTagCreate(
+        { name, color: DEFAULT_TAG_COLOR.token },
+        {
+          onSuccess: (tag) =>
+            setTagOnSlot({ cardId: card.cardId, categoryId: card.categoryId, tagId: tag.id }),
+        },
+      ),
+    [startTagCreate, setTagOnSlot],
+  );
 
-  // The five writes the editor's **own banner** speaks for. The *latest* of them owns it, not
+  // Every write the editor's **own banner** speaks for — the array is the list, deliberately not
+  // a number in this sentence, because it has been recounted twice in one day. The *latest* of
+  // them owns it, not
   // whichever is still holding an error: a refused move used to leave its sentence up while the
   // reader went on to rename the deck successfully (the collection table's lesson). That rule
   // is `lib/writes.ts` now, shared with the gallery, the settings dialog and the categories
@@ -629,19 +652,25 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // panel, beside the button that was pressed, and two banners for one refusal would be worse
   // than one in the wrong place.
   //
-  // **`setTag` and the tag create joined them on 2026-08-14, when the card's right-click gave
-  // both their first control.** `setTag` was outside this family for as long as nothing in the
-  // app could reach it; a write a reader can now make from every one of the four views is a
-  // write whose refusal has to be said somewhere, and the menu that started it has closed by the
-  // time an answer arrives. {@link attachNewTag} is here for the same reason and is the one
-  // entry that is not a `useDeck` mutation — a refused create is otherwise a field the reader
-  // typed into and a label that never appeared.
+  // **The two right-click menus of 2026-08-14 are what the tail of this list is.** `setTag` sat
+  // outside the family for as long as nothing in the app could reach it, and the four
+  // `useDeckMeta` writes below it had no control in this view at all — they were the Categories
+  // dialog's, which draws its own sentence for its own observer. A write a reader can now make
+  // from a card's menu or a pile's heading is a write whose refusal has to be said somewhere,
+  // and the menu that started it has closed by the time an answer arrives.
+  //
+  // **`useDeckMeta`'s four are a *different observer* from the dialog's** — TanStack shares a
+  // query's cache between observers and a mutation's state with nobody — so this banner speaks
+  // only for presses made out here, and the dialog goes on speaking for its own.
   const writes = [
     deck.setQuantity,
     deck.moveCard,
     deck.update,
     deck.setTag,
-    attachNewTag,
+    meta.createTag,
+    meta.renameCategory,
+    meta.setCategoryActive,
+    meta.deleteCategory,
   ] as const;
   const bannerFailure = writeFailure(writes);
 
@@ -875,7 +904,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
   //
-  // **All seven writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
+  // **Every write above plus three, banner or no banner.** `add_card` calls `touch_deck` like the rest and
   // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
   // panel or on the stats block reaches the same sentence — and without them here that surface
   // would report a deck that is gone while the view beside it went on painting it, with every
@@ -1103,11 +1132,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: DeckCard, tagId: number | null) =>
       writeTag({ cardId: card.cardId, categoryId: card.categoryId, tagId }),
     [writeTag],
-  );
-
-  const createTagFor = useCallback(
-    (card: DeckCard, name: string) => startTagCreate({ card, name }),
-    [startTagCreate],
   );
 
   /**
