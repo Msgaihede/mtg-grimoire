@@ -13,6 +13,7 @@ import {
   makeDb,
   neverCheckedUpdate,
   oracleTagCards,
+  pluginHandlers,
   readHandlers,
   writeHandlers,
 } from "./db";
@@ -1270,6 +1271,56 @@ describe("writing an export", () => {
     expect(() => w.export_write_file({ path: "E:\\removal.txt", contents: "1 Shock\n" })).toThrow(
       /could not write E:\\removal\.txt/,
     );
+  });
+});
+
+/**
+ * The three Tauri **plugin** commands, which mirror no module in the crate and belong to neither
+ * table above.
+ *
+ * They exist because the fake `invoke` is the whole IPC layer in Storybook, so a Copy, an Open on
+ * or a Save as… reaches one of them or is answered `No fake handler registered` — a rejection
+ * about the workbench, drawn in a `role="alert"` the app wrote about the reader's disk. The path
+ * `save` builds is asserted here rather than only through the export dialog's story, because a
+ * story that goes green on the wrong file name is a story about nothing.
+ */
+describe("the plugin commands", () => {
+  it("builds the save path from the dialog's own defaultPath", () => {
+    // The name really does travel: `ExportDialog` seeds `defaultPath` with
+    // `${suggestedFileName}.${extension}`, so switching format changes the file this answers with,
+    // exactly as it does in the window.
+    const p = pluginHandlers();
+    expect(p["plugin:dialog|save"]({ options: { defaultPath: "Ramp.txt" } })).toBe(
+      "D:\\Storybook\\Ramp.txt",
+    );
+    expect(p["plugin:dialog|save"]({ options: { defaultPath: "Ramp.csv" } })).toBe(
+      "D:\\Storybook\\Ramp.csv",
+    );
+  });
+
+  it("still answers a path when the caller named no default", () => {
+    // `save()` takes `options = {}`, so `defaultPath` really is optional on the wire. Answering
+    // `undefined` here would put the literal string "undefined" through `export_write_file`.
+    expect(pluginHandlers()["plugin:dialog|save"]({})).toBe("D:\\Storybook\\export.txt");
+  });
+
+  it("accepts a clipboard write and an opened URL, and stores neither", () => {
+    const p = pluginHandlers();
+    // `write_text` only — this app grants `clipboard-manager:allow-write-text` and never the
+    // read, so there is no command a story could get the string back with and keeping it would
+    // offer a check the app itself cannot make.
+    expect(p["plugin:clipboard-manager|write_text"]()).toBeUndefined();
+    expect(p["plugin:opener|open_url"]()).toBeUndefined();
+  });
+
+  it("is reachable through the dispatch table a story registers", async () => {
+    // Through `invoke`, by the name and the argument name the plugin wrapper really sends —
+    // `{ options }`, which is the half only a dispatcher can check.
+    resetCommands();
+    registerCommands(allHandlers(makeDb()));
+    await expect(
+      invoke<string>("plugin:dialog|save", { options: { defaultPath: "Sideboard.txt" } }),
+    ).resolves.toBe("D:\\Storybook\\Sideboard.txt");
   });
 });
 
