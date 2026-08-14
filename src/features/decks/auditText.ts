@@ -352,7 +352,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         text: flag(p.to) ? "Filed the deck away" : "Took the deck out of the archive",
         detail: null,
       };
-    // `decks.separate_x_group` (schema v12). **The one multi-word field name in this switch** —
+    // `decks.separate_x_group` (schema v13). **The one multi-word field name in this switch** —
     // every other arm is a single lowercase word, so this is the first place the backend's
     // `field(…)` spelling could drift from ours without anything going red: the `default` arm
     // below answers an unrecognised field with a sentence that is true of every deck edit, so a

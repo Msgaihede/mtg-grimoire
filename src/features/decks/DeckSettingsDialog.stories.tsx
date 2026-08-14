@@ -100,9 +100,13 @@ export const FilingTheDeck: Story = {
  * The notebook and the plan switch, both of which write and stick.
  *
  * `notes` is **not** `description` — a caption is what the gallery tile shows and this is the
- * long-form thing nothing else draws. And switching the theory list on **seeds it from live**
- * in the same write when it is empty, because an empty plan beside a full deck reads as data
- * loss rather than as a blank page; switching it off keeps every row.
+ * long-form thing nothing else draws.
+ *
+ * And switching the theory list on **moves the live list into it**, in the same write: the deck
+ * the reader built becomes the plan, the live list starts empty, and the copies it was holding
+ * go back to every other deck. Only when the plan is empty, and only on the way on — a plan
+ * somebody has already started is not something a re-press may pour the deck over. Switching it
+ * off keeps every row: it hides a switch, it does not delete a list.
  */
 export const NotesAndTheory: Story = {
   play: async ({ canvasElement }) => {

@@ -29,14 +29,19 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
-  // The four v8 deck columns and `separateXGroup` from v12. Every real row carries all five,
-  // so the fixture does too — and `folderId` is the one this hook can never write: filing is
-  // `deckSetFolder`, because a patch reads a bound null as "leave it" and so cannot reach the
-  // root of the tree.
+  // The four v8 deck columns, the three v12 view-state ones and `separateXGroup` from v13.
+  // Every real row carries all eight, so the fixture does too — and `folderId` is the one this
+  // hook can never write: filing is `deckSetFolder`, because a patch reads a bound null as
+  // "leave it" and so cannot reach the root of the tree.
   coverKind: "card_art",
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // How the editor was last read — written by `deckSetViewState` and by nothing this hook
+  // offers, since looking at a deck is not editing one.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
   separateXGroup: false,
 };
 

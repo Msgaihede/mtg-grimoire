@@ -56,10 +56,11 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s
-  `newestWrite([...])` counts **six** of them: update (rename, cover, Built toggle, the `Split X`
-  chip), add-card, set-quantity, move, missing-to-wishlist, swap-printing. The X chip is a
-  **deck-row** write riding the same `update` as the other three, so it is not a seventh mutation
-  and it touches not one `deck_cards` row.
+  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle,
+  the `Split X` chip), add-card, set-quantity, move, missing-to-wishlist, swap-printing. The X
+  chip is a **deck-row** write riding the same `update` as the other three, so it is not a seventh
+  mutation and it touches not one `deck_cards` row. The two outside the six are `setTag` and
+  `rememberView`, each for its own reason stated on its definition.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
@@ -67,6 +68,16 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   (`useSwapFromPane`, `useSidebarDrops`) borrow a mutation whole and own only their own reporting.
 - The deck _row_ is a different hook: the gallery's `useDecks` owns create, update, remove and
   duplicate.
+- **Switching the theory list on _moves_ the live deck into it — it does not copy it.** What the
+  reader has built is the plan, so it becomes the theory list and `live` starts empty and fills as
+  they acquire cards; the same write sets `last_variant = 'theory'`, so the editor lands where
+  the deck now is instead of on a blank page nobody emptied. Only on the false→true transition,
+  and only when the theory list is empty. **The rule it replaces copied**, on the reasoning that
+  an empty theory list beside a full live one reads as data loss. Right danger, wrong half:
+  nothing is deleted either way — the two lists are the same table — and what the copy actually
+  handed the reader was two identical lists with no way to tell which one they were editing.
+  `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
+  plan".
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
@@ -169,6 +180,31 @@ panel, nothing written until Import). The Rust half and every measurement:
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes**.
+- **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
+  switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
+  one holding cards and `live` is the column that fills as the reader acquires them. Reading
+  left to right is then plan → reality, which is the direction the difference readout beside it
+  already counts in.
+- **The editor reopens on the view the reader left, and the deck row is where that is kept.**
+  `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
+  `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
+  history and reallocates nothing — looking at a deck is not editing it. It is deliberately
+  **not** `useAppStore`: `cardZoom`, `searchView` and `collectionView` are one session-wide
+  answer, and which list of a _particular_ deck the reader was reading is a fact about that deck.
+- **The narrowing is TypeScript's, and that is the boundary rather than a missing constraint.**
+  `ALTER TABLE ADD COLUMN` cannot add a CHECK, so Rust validates only `last_variant`, whose
+  vocabulary the crate owns, and stores the other two verbatim as facts. `GroupBy` and `SortBy`
+  are this layer's words, so `asGroupBy` (`grouping.ts`) and `asSortBy` (`sorting.ts`) narrow
+  them on read and fall back to the default — a stored word nothing offers reopens the editor on
+  `category`/`alphabetical` rather than in a state no control can draw.
+- **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
+  interesting part.** The editor is already showing what the reader picked; this write only makes
+  it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
+  back the three fields it *restores from* a beat after the press, which is how a second press
+  made inside that beat gets undone by the first one's echo. It is also outside `DeckEditor`'s
+  refused-write family on purpose — **that family is writes to what is _in_ the deck**, and this
+  one changes no card — so its failure is silent, the cost being a deck that reopens on its old
+  tab.
 - **`Split X` is a _modifier_ of the mana-value grouping and not a fourth mode.** The chip is
   drawn only under `groupBy === "manaValue"`, and it lives inside that select's own `gap-1.5`
   cluster rather than out in the toolbar's `gap-x-4`, because a control that persists across a
@@ -193,13 +229,16 @@ price | type`). An **inactive category stays its own group in all three grouping
   `validation/engine.ts`'s `symbolValue` scores all three as 0 and is right to: it answers _what
   is this cost worth_. A heading answers _what is this pile called_, and a `{Y}` un-card filed
   under X is a heading telling the reader a lie about the cardboard in front of them.
-- **The switch is the _deck's_, not the editor's**: `decks.separate_x_group` (schema v12), read off
-  the loaded row as `separateXGroup` and written through `useDeck.update` — **never `useState`
-  beside `groupBy` and `sortBy`**, which are how the reader is looking _now_ and are thrown away
-  with the editor. This one is an answer about a particular curve: a storm list where half the
-  spells are `{X}` reads quite differently from an aggro deck with one Fireball in it. It reaches
-  no rule — not size, not copies, not legality, not the allocator — and nothing in `validation/`
-  has heard of it or should.
+- **The switch is the _deck's_, not the editor's**: `decks.separate_x_group` (schema v13), read off
+  the loaded row as `separateXGroup` and written through `useDeck.update` — **never `useState`**,
+  and never `rememberView` either. Both halves of that matter. `groupBy` and `sortBy` are also
+  remembered per deck now (`lastGroupBy`/`lastSortBy`), but they are remembered as _where the
+  reader had got to_, which is why the command that stores them moves no `updated_at` and writes
+  no history. Splitting the X spells out is a **change to the deck**, rides the same `deck_update`
+  as the rename and the cover, and is audited as one. This one is an answer about a particular
+  curve: a storm list where half the spells are `{X}` reads quite differently from an aggro deck
+  with one Fireball in it. It reaches no rule — not size, not copies, not legality, not the
+  allocator — and nothing in `validation/` has heard of it or should.
 - **`DeckStats` honours the flag under _every_ grouping while the chip that sets it is drawn under
   one, and that is a decision with a known cost rather than an oversight.** `DeckEditor` reads the
   flag once and hands the same value to `buildGroups` and to `DeckStats`, because a curve counting
@@ -208,6 +247,13 @@ price | type`). An **inactive category stays its own group in all three grouping
   not stop being true because the reader went back to their categories. So a reader grouped by
   `category` or `type` can see a split curve with **no control on screen to unsplit it**; the
   pairing is what must hold, and this is what it costs.
+  **`lastGroupBy` narrows that cost to a session, and knowing which kind of gap it is decides
+  whether it is worth repairing.** The grouping is stored on the deck too, so a deck left under
+  `manaValue` reopens under `manaValue` and the chip comes back beside it — nobody _returns_ to a
+  split curve with no control for it, which was the version of this worth worrying about. What is
+  left takes a deliberate press in the same sitting: group by something else and the chip goes
+  with the mode it belongs to, while the curve keeps answering for the deck. One press back
+  brings it, and that press is now remembered.
 - **The average mana value does not move when the flag flips**, and it is the one number the
   split deliberately does not reach. An `{X}` spell costs what it costs with X at zero
   (CR 202.3b) — `{X}{B}{B}{B}` is 3 — and the toggle is a display choice about which bar a card is

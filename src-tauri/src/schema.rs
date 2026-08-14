@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -1258,6 +1258,51 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 12 {
         let tx = conn.unchecked_transaction()?;
+        // Where the reader was last looking, per deck: which variant, and how the editor was
+        // grouping and sorting it. Three columns on `decks` and nothing else — an editor that
+        // opens on the Live tab sorted alphabetically however the reader left it is an editor
+        // that forgets, and forgetting is a thing the app does *to* the reader once per deck
+        // per session.
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // (the error log) and v11 (the price tables) left it. Nothing here is FTS-indexed and
+        // no rowid is renumbered, so no `cards_fts` rebuild is owed either: the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // **`last_variant` carries no CHECK, and it is not an oversight — `ALTER TABLE ADD
+        // COLUMN` cannot add one.** SQLite accepts a `DEFAULT` on an added column and refuses a
+        // `CHECK`, so the fence [`DECK_VARIANTS`] would have been in the DDL lives in Rust
+        // instead: `crate::deck::set_view_state` refuses anything else **by name**, through the
+        // one `deck_meta::valid_variant` every deck write already opens with. A reader who
+        // comes here looking for the missing CHECK is looking in the right place, and this
+        // paragraph is what they should find.
+        //
+        // **`last_group_by` and `last_sort_by` hold a TypeScript vocabulary this crate
+        // deliberately does not know.** `category | manaValue | type` and `alphabetical |
+        // manaCost | price | type` are the deck editor's words; how a deck is grouped and
+        // sorted is domain logic, and domain logic is TypeScript's (CLAUDE.md's boundary —
+        // Rust supplies facts, TS draws conclusions). So Rust stores the reader's answer
+        // verbatim, as the fact it is, and TypeScript narrows it on read with a fallback. A
+        // mode the editor renames or drops then costs one reader one remembered choice instead
+        // of costing everybody a migration, and a mode it *adds* needs nothing here at all.
+        // What Rust does refuse is a blank: an empty string is not an answer, and
+        // `set_view_state` says so.
+        //
+        // The three defaults are what the editor opens on with nothing stored, which is also
+        // exactly what every deck that predates this step gets: `live` is the deck the user
+        // actually has, and `category`/`alphabetical` are the editor's own opening pair.
+        tx.execute_batch(
+            "ALTER TABLE decks ADD COLUMN last_variant TEXT NOT NULL DEFAULT 'live';
+             ALTER TABLE decks ADD COLUMN last_group_by TEXT NOT NULL DEFAULT 'category';
+             ALTER TABLE decks ADD COLUMN last_sort_by TEXT NOT NULL DEFAULT 'alphabetical';",
+        )?;
+        // Literal `12`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 12;")?;
+        tx.commit()?;
+    }
+    if v < 13 {
+        let tx = conn.unchecked_transaction()?;
         // Whether this deck files its variable-cost cards under a heading of their own.
         //
         // **A per-deck column and not a preference**, for [`crate::deck::DeckRow`]'s
@@ -1265,10 +1310,19 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // of the deck must read the same way and a second deck must be free to disagree. A
         // global setting would have made opening one deck change the shape of every other.
         //
+        // **Its own rung rather than a fourth column on v12, and that was not a choice.** This
+        // step and the one above it were written the same day on two branches, each numbered 12
+        // against a ladder whose head was 11 — a collision `git` cannot see, because two
+        // `ALTER TABLE decks ADD COLUMN`s in two files conflict in neither. The one that landed
+        // first keeps the number. Folding this column into v12 after that would have been the
+        // real damage: every machine that had already run v12 would skip the step, and the
+        // column would exist on new installs and on nobody else's disk. **A version that has
+        // shipped is spent** — the ladder only ever grows.
+        //
         // `NOT NULL DEFAULT 0`, so every deck that predates this reads exactly as it did — X
-        // cards stay in whatever pile their type put them in until somebody asks otherwise.
-        // The default is where the whole "no upgrade changes what a user sees" claim lives;
-        // there is no backfill because there is nothing to compute.
+        // cards stay in whatever pile their mana value put them in until somebody asks
+        // otherwise. The default is where the whole "no upgrade changes what a user sees" claim
+        // lives; there is no backfill because there is nothing to compute.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
         // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid
@@ -1276,8 +1330,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch(
             "ALTER TABLE decks ADD COLUMN separate_x_group INTEGER NOT NULL DEFAULT 0;",
         )?;
-        // Literal `12`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA user_version = 12;")?;
+        // Literal `13`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 13;")?;
         tx.commit()?;
     }
     Ok(())
@@ -3778,6 +3832,37 @@ pub(crate) mod tests {
 
     // ---- v10: `legal_mask` and the widened collapse index ---------------------------
 
+    /// Undo schema v12 over a head database: the three `decks` columns, and nothing else.
+    ///
+    /// **Every rewound fixture below head owes this, not just the one testing v12.** `migrate`
+    /// reads `user_version` once and then walks *every* step above it, so a database that says
+    /// 9 runs v10, v11 **and** v12 — and v12's `ALTER TABLE decks ADD COLUMN` over a table that
+    /// already carries the column is a `duplicate column name` error no real upgrade could
+    /// ever produce. A fixture that claims a version has to look like that version all the way
+    /// up, which is the same rule [`v9_database`]'s own doc states for v10's two statements.
+    ///
+    /// Three `DROP COLUMN`s are the whole of it because three `ADD COLUMN`s were the whole of
+    /// the step: no index names them, no constraint references them, and SQLite refuses a drop
+    /// only where one does. That is what makes the rewind honest here, where a rewind through
+    /// v8's table rebuild would not be.
+    const UNDO_V12: &str = "ALTER TABLE decks DROP COLUMN last_variant;
+         ALTER TABLE decks DROP COLUMN last_group_by;
+         ALTER TABLE decks DROP COLUMN last_sort_by;";
+
+    /// The same, for v13's one column — and the reason it is a *second* constant rather than
+    /// three more lines in [`UNDO_V12`] is the reason v13 is a second rung: the two steps were
+    /// written the same day on two branches and only one of them may be undone by a fixture
+    /// claiming version 12. A single `UNDO` covering both would make [`v12_database`] drop
+    /// columns its own version created.
+    ///
+    /// **Every fixture below head owes this one too**, exactly as they owe [`UNDO_V12`]. The
+    /// rule is worth stating in the general form, because the next step to join the ladder will
+    /// owe a third: a step whose DDL is **not idempotent** — `ALTER TABLE … ADD COLUMN`, which
+    /// answers `duplicate column name`, unlike v11's `CREATE TABLE IF NOT EXISTS` — must come
+    /// back out of every rewound fixture beneath it, because `migrate` reads `user_version`
+    /// once and then replays *every* step above what it read.
+    const UNDO_V13: &str = "ALTER TABLE decks DROP COLUMN separate_x_group;";
+
     /// A database that stopped at version 9 — the last version below the step that replays
     /// [`CARDS_INDEXES`], which is the property this fixture exists for.
     ///
@@ -3807,23 +3892,21 @@ pub(crate) mod tests {
     /// names, and the widened `idx_cards_collapse` names this one. The narrow definition
     /// that goes back is a literal, not [`CARDS_INDEXES`]'s entry — this is a description of
     /// history, and history does not change when the list does.
+    ///
+    /// [`UNDO_V12`] rides along for its own reason: a v9 database runs every step above 9, and
+    /// the v12 one adds columns this head database already has.
     fn v9_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "DROP INDEX idx_cards_collapse;
              ALTER TABLE cards DROP COLUMN legal_mask;
              CREATE INDEX idx_cards_collapse
                  ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
-             -- v12's column, undone here as well, and the reason is the one rule a rewind
-             -- fixture lives under: **every step above the version it claims will be replayed
-             -- over it**, so every step's DDL that is not itself idempotent has to come back
-             -- out. `ADD COLUMN` is not idempotent — SQLite answers `duplicate column name` —
-             -- while v11's `CREATE TABLE IF NOT EXISTS` is, which is why that step needs no
-             -- line here and this one does. Same reasoning as `legal_mask` above it.
-             ALTER TABLE decks DROP COLUMN separate_x_group;
+             {UNDO_V12}
+             {UNDO_V13}
              PRAGMA user_version = 9;",
-        )
+        ))
         .unwrap();
         conn
     }
@@ -3985,40 +4068,69 @@ pub(crate) mod tests {
 
     // ---- v11: the marketplace price tables ------------------------------------------
 
-    /// A database one step below head: everything v10 left behind, and none of v11.
+    /// A database that stopped at version 10: everything v10 left behind, and none of v11 or
+    /// v12.
     ///
-    /// [`v9_database`]'s trick again — walk to head, undo exactly the newest step, renumber —
-    /// and for its reason: only version 1's DDL is frozen, so there is no way to *build* a v10
-    /// database forwards. Two `DROP TABLE`s are the whole of what v11 did, which is what makes
-    /// the rewind honest here where a rewind through v8's table rebuild would not be.
+    /// [`v9_database`]'s trick again — walk to head, undo every step above the one this claims,
+    /// renumber — and for its reason: only version 1's DDL is frozen, so there is no way to
+    /// *build* a v10 database forwards. Two `DROP TABLE`s undo v11 and [`UNDO_V12`] undoes v12,
+    /// which is the whole of what those two steps did; that is what makes the rewind honest
+    /// here where a rewind through v8's table rebuild would not be.
     fn v10_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
-             -- And v12's column, for the reason spelled out on [`v9_database`]: `migrate` will
-             -- replay every step above 10 over this database, and `ADD COLUMN` fails on a
-             -- column that is already there.
-             ALTER TABLE decks DROP COLUMN separate_x_group;
+             {UNDO_V12}
+             {UNDO_V13}
              PRAGMA user_version = 10;",
-        )
+        ))
         .unwrap();
         conn
     }
 
-    /// [`v10_database`] must really be **at** version 10, which is the claim
-    /// [`the_v11_step_creates_the_marketplace_price_tables`] rests on. It is no longer head
-    /// minus one — v12 pushed it down a rung, and [`v11_database`] carries that title now.
+    /// A database at version 11: everything v11 left behind, and none of v12 or v13.
+    ///
+    /// The same rewind as [`v10_database`], two rungs shorter — walk to head, undo every step
+    /// above the version claimed, renumber. **It briefly held the "one step below head" title
+    /// and no longer does**: v13 arrived the same day v12 did, from a branch that had numbered
+    /// its own step 12 against the same head of 11. [`v12_database`] carries that title now.
+    /// This fixture is kept, rather than renumbered away, because it is the only database the
+    /// **v12** step can genuinely be watched running over.
+    fn v11_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V12} {UNDO_V13} PRAGMA user_version = 11;"))
+            .unwrap();
+        conn
+    }
+
+    /// [`v11_database`] must really be **at** version 11, or the v12 step below is being tested
+    /// against a database that already carries its columns — which is a fresh install compared
+    /// against itself.
     #[test]
-    fn the_v10_fixture_really_sits_where_the_v11_step_can_run_over_it() {
-        let conn = v10_database();
+    fn the_v11_fixture_really_sits_where_the_v12_step_can_run_over_it() {
+        let conn = v11_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
 
+        for column in ["last_variant", "last_group_by", "last_sort_by"] {
+            assert!(
+                !deck_columns(&conn).contains(&column.to_owned()),
+                "the v12 column `{column}` must not be there yet"
+            );
+        }
+        assert!(
+            !deck_columns(&conn).contains(&"separate_x_group".to_owned()),
+            "and nor may v13's, which a rewind to 11 also has to undo"
+        );
+
+        // v11's own tables are standing, because this *is* a v11 database — the fixture undoes
+        // the steps above it and not the one it is named for.
         let tables: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table'
@@ -4027,39 +4139,39 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(tables, 0, "the v11 tables must not be there yet");
-
-        // v10's own column is standing, because this *is* a v10 database.
-        assert!(card_columns(&conn).contains(&"legal_mask".to_owned()));
+        assert_eq!(tables, 2, "and v11's tables are");
     }
 
-    // ---- v12: the deck's X group ------------------------------------------------------
+    // ---- v13: the deck's X group ------------------------------------------------------
 
-    /// A database one step below head: everything v11 left behind, and none of v12.
+    /// A database one step below head: everything v12 left behind, and none of v13.
     ///
-    /// [`v9_database`]'s and [`v10_database`]'s trick a third time — walk to head, undo
-    /// exactly the newest step, renumber — and for their reason: only version 1's DDL is
-    /// frozen, so there is no way to *build* a v11 database forwards. One `ADD COLUMN` is the
-    /// whole of what v12 did, and `ALTER TABLE … DROP COLUMN` undoes it exactly; no index names
-    /// `decks.separate_x_group`, so nothing has to come down before it (which is the trap
-    /// [`v9_database`] documents on `legal_mask`).
-    fn v11_database() -> Connection {
+    /// [`v9_database`]'s, [`v10_database`]'s and [`v11_database`]'s trick a fourth time — walk
+    /// to head, undo exactly the steps above the version claimed, renumber — and for their
+    /// reason: only version 1's DDL is frozen, so there is no way to *build* a v12 database
+    /// forwards. One `ADD COLUMN` is the whole of what v13 did, and `ALTER TABLE … DROP COLUMN`
+    /// undoes it exactly; no index names `decks.separate_x_group`, so nothing has to come down
+    /// before it (which is the trap [`v9_database`] documents on `legal_mask`).
+    ///
+    /// **This fixture was written as `v11_database` and is not any more.** It was built against
+    /// a ladder whose head was 11, on a branch whose step was numbered 12; main's own v12 landed
+    /// first, so this step became v13 and this fixture moved up a rung with it. The rename is
+    /// the whole of what that cost — which is the argument for keeping every rung's undo in its
+    /// own named constant rather than inline.
+    fn v12_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(
-            "ALTER TABLE decks DROP COLUMN separate_x_group;
-             PRAGMA user_version = 11;",
-        )
-        .unwrap();
+        conn.execute_batch(&format!("{UNDO_V13} PRAGMA user_version = 12;"))
+            .unwrap();
         conn
     }
 
-    /// [`v11_database`] must really sit one step below head, or the test below it is a fresh
+    /// [`v12_database`] must really sit one step below head, or the test below it is a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v11_database();
+        let conn = v12_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -4067,9 +4179,17 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
         assert!(
             !deck_columns(&conn).contains(&"separate_x_group".to_owned()),
-            "the v12 column must not be there yet"
+            "the v13 column must not be there yet"
         );
-        // v11's own tables are standing, because this *is* a v11 database.
+        // **v12's three columns _are_ standing**, which is the half that says this fixture
+        // undoes one rung rather than two — the failure a copy of `v11_database` would have.
+        for column in ["last_variant", "last_group_by", "last_sort_by"] {
+            assert!(
+                deck_columns(&conn).contains(&column.to_owned()),
+                "v12's `{column}` belongs to this version and must survive the rewind"
+            );
+        }
+        // v11's own tables are standing too, because this is a database above v11.
         let tables: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table'
@@ -4090,8 +4210,8 @@ pub(crate) mod tests {
     /// column would have meant three states for a two-state switch and a `coalesce` at every
     /// read site.
     #[test]
-    fn the_v12_step_adds_the_decks_x_group_flag_defaulted_off() {
-        let conn = v11_database();
+    fn the_v13_step_adds_the_decks_x_group_flag_defaulted_off() {
+        let conn = v12_database();
         conn.execute(
             "INSERT INTO decks (name, format_key, created_at, updated_at)
              VALUES ('Old Deck', 'modern', unixepoch(), unixepoch())",
@@ -4114,7 +4234,7 @@ pub(crate) mod tests {
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .expect("the v12 column");
+            .expect("the v13 column");
         assert_eq!(notnull, 1);
         assert_eq!(default.as_deref(), Some("0"));
 
@@ -4148,6 +4268,22 @@ pub(crate) mod tests {
     #[test]
     fn the_v11_step_creates_the_marketplace_price_tables() {
         let conn = v10_database();
+
+        // The premise, asserted rather than assumed: a fixture that had quietly stayed at head
+        // would make everything below it pass against a database the step never ran on.
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 10);
+        let before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'
+                   AND name IN ('marketplace_prices','marketplace_feed_meta')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, 0, "the v11 tables must not be there yet");
 
         migrate(&conn).unwrap();
         migrate(&conn).unwrap(); // idempotent
@@ -4252,18 +4388,73 @@ pub(crate) mod tests {
         assert_eq!(violations, 0, "and no foreign key is violated by it");
     }
 
+    // ---- v12: where the reader was last looking ---------------------------------------
+
+    /// The step itself, from the version below it: three columns arrive on `decks`, a deck that
+    /// predates them reads the editor's own opening choices rather than a NULL, and a rerun is
+    /// a no-op.
+    ///
+    /// **The deck row is inserted before `migrate` runs**, which is the only way to test what
+    /// this step is actually for: `DEFAULT` on an added column fills the rows that are already
+    /// there, and a row written afterwards would be answering the DDL rather than the
+    /// migration. A step that added the columns nullable, with the defaults living only in
+    /// `create_deck`'s INSERT, would pass every other test in this file and hand every
+    /// pre-existing deck a NULL variant.
+    #[test]
+    fn the_v12_step_remembers_where_the_reader_was_with_the_editors_own_defaults() {
+        let conn = v11_database();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, created_at, updated_at)
+             VALUES (1, 'Burn', unixepoch(), unixepoch());",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        let (variant, group_by, sort_by): (String, String, String) = conn
+            .query_row(
+                "SELECT last_variant, last_group_by, last_sort_by FROM decks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (variant.as_str(), group_by.as_str(), sort_by.as_str()),
+            ("live", "category", "alphabetical"),
+            "a deck that predates the step opens where the editor opens"
+        );
+
+        // **No CHECK on `last_variant`, and the step's own doc says why**: `ALTER TABLE ADD
+        // COLUMN` cannot add one. The fence is `deck::set_view_state`'s, in Rust — pinned
+        // there by `set_view_state_refuses_a_variant_the_schema_does_not_know`. This asserts
+        // the *absence*, so that a later step which rebuilds the table and adds the CHECK
+        // fails here and takes the Rust fence's doc with it rather than leaving two stories.
+        conn.execute(
+            "UPDATE decks SET last_variant = 'sideways', last_group_by = 'phase of the moon'
+              WHERE id = 1",
+            [],
+        )
+        .expect("SQL accepts anything here; Rust is the fence");
+    }
+
     /// The ladder ends where the constant says it does. Written as a literal so that
     /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
     /// step and forgetting the constant — fails here rather than in the field.
+    ///
+    /// **This literal is also what catches two branches numbering the same rung.** v12 and v13
+    /// were both written as "12" against a head of 11; whichever landed second found this
+    /// assertion already reading 12 and had to choose a number rather than discover the clash
+    /// in the field.
     #[test]
-    fn the_schema_version_is_twelve() {
+    fn the_schema_version_is_thirteen() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 12);
+        assert_eq!(SCHEMA_VERSION, 13);
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole
@@ -4281,24 +4472,35 @@ pub(crate) mod tests {
     /// the latter by stored SQL rather than by name, because a narrow `idx_cards_collapse`
     /// and a widened one share a name and differ in the only way that matters.
     ///
+    /// **`decks`' columns are compared too, since v12/v13**, because `cards` stopped being the only
+    /// table a step adds columns to at v8 and the claim was never about `cards` — it is about
+    /// every route arriving at one schema. The trap it closes is specific: `decks` is created
+    /// by the v5 step and later columns arrive as `ALTER TABLE`s, so "mirror the new columns
+    /// into the CREATE so a fresh install has them" is the plausible wrong fix, and it breaks
+    /// **only** fresh installs (the `ALTER` then hits a duplicate column) — the one population
+    /// no upgrade fixture can stand in for. Here that failure is a fresh install that cannot
+    /// migrate at all, which is as loud as it deserves to be.
+    ///
     /// The rewound fixtures are the honest ones available — [`v1_database`] is built from the
-    /// frozen v1 DDL, [`v6_deck_database`] is a hand-built v6, and [`v9_database`] undoes v10
-    /// over a head database. That last one is the case this merge added: a database sitting
-    /// at main's new v9, above every step that could hand it an index and below the one that
-    /// does. A rewind that skipped a step's own table rebuild would fail here for a reason no
-    /// upgrade could produce, which is why the fixtures are what they are and not a
-    /// `PRAGMA user_version` away from each other.
+    /// frozen v1 DDL, [`v6_deck_database`] is a hand-built v6, [`v9_database`] undoes the steps
+    /// above 9 over a head database, [`v11_database`] undoes v12 and v13, and [`v12_database`]
+    /// undoes v13 alone. The v9 one is the case an
+    /// earlier merge added: a database sitting at main's v9, above every step that could hand
+    /// it an index and below the one that does. A rewind that skipped a step's own table
+    /// rebuild would fail here for a reason no upgrade could produce, which is why the fixtures
+    /// are what they are and not a `PRAGMA user_version` away from each other.
     #[test]
     fn every_version_ends_with_the_same_schema_as_a_fresh_install() {
         let fresh = Connection::open_in_memory().unwrap();
         migrate(&fresh).unwrap();
         let want_cols = card_columns(&fresh);
         let want_indexes = indexes_on_cards(&fresh);
-        // `decks` has an `ALTER` ladder of its own now (v8's three columns, v12's one), and it
-        // is compared in **ordinal** order for the reason that matters at the Rust end: every
-        // read of a deck row is positional, so a route that arrives at head with the same
-        // column *set* in a different order is a `DeckRow` reading the wrong fields with no
-        // error anywhere.
+        // `decks` has an `ALTER` ladder of its own now (v8's three columns, v12's three, v13's
+        // one), and it is compared in **ordinal** order for the reason that matters at the Rust
+        // end: every read of a deck row is positional, so a route that arrives at head with the
+        // same column *set* in a different order is a `DeckRow` reading the wrong fields with no
+        // error anywhere. That is not hypothetical — v12 and v13 were written against the same
+        // head by two branches, and the merge had to decide which three columns come first.
         let want_deck_cols = deck_columns(&fresh);
 
         // Every index the list names, and no declared index it does not. `sqlite_master`
@@ -4327,6 +4529,11 @@ pub(crate) mod tests {
             ("v1", v1_database()),
             ("v6", v6_deck_database()),
             ("v9", v9_database()),
+            ("v11", v11_database()),
+            // Head minus one, and the rung the same-day v12/v13 collision created. A machine
+            // that ran v12 before v13 existed is the commonest database in the world the day
+            // after a release, and it is the one arrival this list would otherwise not cover.
+            ("v12", v12_database()),
         ] {
             migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
 
@@ -4338,6 +4545,11 @@ pub(crate) mod tests {
                 card_columns(&conn),
                 want_cols,
                 "{name} must end with a fresh install's `cards` columns"
+            );
+            assert_eq!(
+                deck_columns(&conn),
+                want_deck_cols,
+                "{name} must end with a fresh install's `decks` columns"
             );
             assert_eq!(
                 indexes_on_cards(&conn),

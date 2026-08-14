@@ -130,10 +130,10 @@ pub struct DeckPatch {
     pub notes: Option<String>,
     /// Whether this deck keeps a theory list beside its live one.
     ///
-    /// **Switching it on seeds the theory list from live when there is nothing in it**, in this
-    /// same transaction — an empty theory list beside a full live one reads as data loss, not
-    /// as a blank page. Switching it off **keeps every row**: it hides a switch, it does not
-    /// delete a list. Both halves live in [`crate::deck_theory`].
+    /// **Switching it on MOVES the live list into theory when there is nothing in it**, in this
+    /// same transaction: the deck the reader has built is the plan, and what is sleeved up
+    /// starts empty and fills as they acquire cards. Switching it off **keeps every row**: it
+    /// hides a switch, it does not delete a list. Both halves live in [`crate::deck_theory`].
     pub theory_enabled: Option<bool>,
     /// Whether this deck files its variable-cost cards under a heading of their own.
     ///
@@ -147,6 +147,26 @@ pub struct DeckPatch {
     /// Per deck rather than per user, like [`Self::theory_enabled`]: it is a statement about how
     /// *this* list is read, so two decks may disagree and a duplicate must not.
     pub separate_x_group: Option<bool>,
+}
+
+/// Where the reader was last looking at one deck — the editor's own tab, grouping and sort.
+///
+/// Every field optional and absent means "leave it", [`DeckPatch`]'s convention and written the
+/// same way (`coalesce(?n, column)`), so the editor can send the one control the reader touched.
+///
+/// Separate from [`DeckPatch`] rather than three more fields on it, because they are answers to
+/// different questions and [`set_view_state`] is not an edit: it moves no `updated_at`, records
+/// no history and reallocates nothing. Folding them in would put "which tab is open" one
+/// forgotten `if` away from filling the history drawer and reordering the gallery.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckViewState {
+    /// One of [`crate::schema::DECK_VARIANTS`], refused by name otherwise.
+    pub variant: Option<String>,
+    /// The editor's grouping mode, **stored verbatim** — see [`DeckRow::last_group_by`].
+    pub group_by: Option<String>,
+    /// The editor's sort, **stored verbatim** — see [`DeckRow::last_sort_by`].
+    pub sort_by: Option<String>,
 }
 
 /// One deck as the gallery shows it.
@@ -203,16 +223,47 @@ pub struct DeckRow {
     ///
     /// Read here as well as written through [`DeckPatch`] because a switch the app can set and
     /// never see is a switch nothing can draw: the editor's Live/Theory control is this
-    /// boolean, and without it on the row every reader would have to guess from whether the
-    /// theory list happens to be empty — which is exactly the state
-    /// [`crate::deck_theory::seed_from_live`] exists to make impossible to interpret.
+    /// boolean, and without it on the row every reader would have to guess from whether one of
+    /// the two lists happens to be empty — which, now that switching it on **moves** the live
+    /// list across, is a guess that would answer backwards on every deck that has just been
+    /// switched on.
     pub theory_enabled: bool,
-    /// Whether this deck files its variable-cost cards under a heading of their own.
+    /// Whether this deck files its variable-cost cards under a heading of their own — schema
+    /// v13.
     ///
     /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s
     /// reason: a switch the app can set and never see is a switch nothing can draw. The
     /// grouping it controls happens in TypeScript — this is the stored answer, not the rule.
+    ///
+    /// **Not a fourth `last_*` field, though it arrived beside them.** Those three are how the
+    /// reader was *looking* at the deck a moment ago and are rewritten by looking; this one is
+    /// an answer about the deck that a copy of it inherits. `duplicate_deck` carries this and
+    /// resets nothing, which is the difference stated as code.
     pub separate_x_group: bool,
+    /// Which of the two lists the reader last had open, one of
+    /// [`crate::schema::DECK_VARIANTS`] — schema v12.
+    ///
+    /// **Stored per deck rather than per session**, because that is the shape of the question:
+    /// a reader with a built deck and a deck they are designing wants Live on one and Theory on
+    /// the other, and one app-wide setting would make every visit to the second deck a
+    /// correction. [`crate::deck_theory::move_live_into_theory`] writes it too — after the move
+    /// the live tab is empty and the reader's deck is one tab across.
+    ///
+    /// The column carries **no CHECK** (`ALTER TABLE ADD COLUMN` cannot add one), so
+    /// [`set_view_state`] is the fence and refuses anything else by name.
+    pub last_variant: String,
+    /// How the editor was grouping the deck when the reader last left it — schema v12.
+    ///
+    /// **A TypeScript vocabulary Rust deliberately does not know** (`category | manaValue |
+    /// type`, `DeckEditor`'s own). Grouping a deck is domain logic and domain logic is
+    /// TypeScript's, so this is stored verbatim as a fact about what the reader chose and
+    /// narrowed on read, with a fallback, by the side that owns the words. A mode renamed there
+    /// costs one reader one remembered choice; the alternative costs a migration. Rust refuses
+    /// only a blank, which is not an answer.
+    pub last_group_by: String,
+    /// How the editor was sorting the deck when the reader last left it — schema v12, and
+    /// [`Self::last_group_by`]'s rule exactly (`alphabetical | manaCost | price | type`).
+    pub last_sort_by: String,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -392,7 +443,8 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND dc.variant = 'live'
                          AND cat.is_active = 1
                          AND cat.kind IN ('main','commander','maybe')), 0),
-            d.updated_at, d.folder_id, d.notes, d.theory_enabled, d.separate_x_group
+            d.updated_at, d.folder_id, d.notes, d.theory_enabled,
+            d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -414,10 +466,15 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         folder_id: r.get(12)?,
         notes: r.get(13)?,
         theory_enabled: r.get(14)?,
+        last_variant: r.get(15)?,
+        last_group_by: r.get(16)?,
+        last_sort_by: r.get(17)?,
         // Positional, like every read above it — a column added anywhere but the **end** of
         // `DECK_SELECT`'s list shifts every index after it, silently, into a field of the same
-        // SQLite type. New columns go last here for exactly that reason.
-        separate_x_group: r.get(15)?,
+        // SQLite type. New columns go last here for exactly that reason, and this one is the
+        // proof: it read 15 on the branch that wrote it, where v12's three did not exist yet,
+        // and reading 15 after the merge would have handed a `TEXT` variant to a `bool`.
+        separate_x_group: r.get(18)?,
     })
 }
 
@@ -602,24 +659,36 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     if changed == 0 {
         return Err(GONE.to_owned());
     }
-    // **Switching the theory list on fills it, in this transaction.** The flag and the list it
-    // reveals are one fact: a flag that committed while the copy rolled back is the empty
-    // theory list beside a full live one that this exists to prevent. Only on the *transition*,
-    // and only when there is nothing there — a plan the user has started is not something a
-    // re-press of the switch may pour the live deck over
-    // (`enabling_theory_again_leaves_a_started_plan_alone`).
-    if patch.theory_enabled == Some(true)
+    // **Switching the theory list on MOVES the live list into it, in this transaction.** The
+    // deck the reader has built is the plan — they typed it out of a list, not out of a box —
+    // and the live list is what they have since sleeved up, which on the day the switch is
+    // pressed is nothing. The flag and the move are one fact: a flag that committed while the
+    // move rolled back is the empty theory list beside a full live one that this exists to
+    // prevent, and the move is what makes the reallocation below owing, so all of it commits
+    // together or not at all.
+    //
+    // Only on the *transition*, and only when there is nothing there. A plan the user has
+    // started is not something a re-press of the switch may pour the live deck over
+    // (`enabling_theory_again_leaves_a_started_plan_alone`), and that emptiness is load-bearing
+    // for a second reason [`crate::deck_theory::move_live_into_theory`] states: `variant` is in
+    // `DECK_CARD_GRAIN`, so re-labelling a live row over a theory row of the same category and
+    // printing is a UNIQUE failure rather than a wrong answer.
+    let moved = patch.theory_enabled == Some(true)
         && !before.theory_enabled
         && crate::deck_theory::theory_is_empty(&tx, id)?
-    {
-        crate::deck_theory::seed_from_live(&tx, id)?;
-    }
+        && crate::deck_theory::move_live_into_theory(&tx, id)? > 0;
     record_deck_edit(&tx, id, patch, &name, &format_key, &before)?;
-    // Sleeving a deck up (or taking it apart) is the one edit here that changes what is
-    // available, so it is the one that reallocates. **This deck only:** every other deck's
-    // claims are recomputed the next time it is touched, because walking the whole gallery
-    // on a toggle would make one checkbox a write over every deck the user owns.
-    if patch.is_built.is_some() {
+    // Two edits here change what this deck reserves, so these are the two that reallocate —
+    // **once**, whichever of them happened and however many did. Sleeving a deck up (or taking
+    // it apart) is the obvious one. The move is the quiet one: `deck_allocations` reserves
+    // collection copies for `live` only and the live list is now empty, so every claim this deck
+    // holds is for cards it no longer lists. Releasing them belongs here, in the transaction
+    // that emptied the list, and not at whatever unrelated write happens to touch the deck next.
+    //
+    // **This deck only:** every other deck's claims are recomputed the next time it is touched,
+    // because walking the whole gallery on a toggle would make one checkbox a write over every
+    // deck the user owns.
+    if patch.is_built.is_some() || moved {
         allocate_deck(&tx, id)?;
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -835,6 +904,69 @@ fn folder_path(conn: &Connection, folder_id: i64) -> Result<String, String> {
     }
     names.reverse();
     Ok(names.join(" › "))
+}
+
+/// What [`set_view_state`] says when it is handed a blank where a mode should be.
+///
+/// The whole of what Rust checks about [`DeckViewState::group_by`] and
+/// [`DeckViewState::sort_by`]: the words themselves are TypeScript's vocabulary and this crate
+/// deliberately does not know them (see [`DeckRow::last_group_by`]), but an empty string is not
+/// one of them in any vocabulary — it is a bug in the caller, and storing it would hand the
+/// editor back a remembered choice of nothing.
+const NO_MODE: &str = "A remembered view mode cannot be blank.";
+
+/// Remember where the reader was looking at this deck: which list, and how the editor was
+/// grouping and sorting it.
+///
+/// Absent fields are left alone (`coalesce(?n, column)`), [`update_deck`]'s convention — the
+/// editor sends the one control that moved, not the three it has.
+///
+/// **It is not an edit, and the three things it does not do are the point.**
+///
+/// * **It does not touch `updated_at`.** Reading a deck is not editing it. The gallery sorts on
+///   that column, so touching it would move a deck to the top of "most recently touched" because
+///   somebody opened its Theory tab — a lie about what happened, told to the one view whose job
+///   is to say what the reader was last working on.
+/// * **It records no `deck_audit` row.** The history holds changes to the deck; which tab was
+///   open is not one, and a drawer that said "switched to Theory" between two real edits would
+///   be worse than one that said nothing. It is the seventh deliberate exception to
+///   [`crate::deck_audit`]'s one-row rule, listed there with the other six.
+/// * **It does not reallocate.** Nothing here changes what the deck lists, so nothing changes
+///   what it reserves — and the allocator runs on seven writes and nothing else, a list this
+///   must not quietly become the eighth member of.
+///
+/// A deck id that resolves to nothing is [`GONE`], like every other deck write: a stale editor
+/// deserves the sentence rather than a write that silently lands nowhere.
+pub fn set_view_state(conn: &Connection, id: i64, state: &DeckViewState) -> Result<(), String> {
+    // The variant fence every deck write opens with, over `DECK_VARIANTS` — and here it is the
+    // *only* fence there is, because `ALTER TABLE ADD COLUMN` cannot carry a CHECK (schema v12
+    // says so at the column). `deck_meta::valid_variant` rather than a second spelling of it:
+    // one definition of "is that a variant" is what keeps every refusal in the crate identical.
+    let variant = match state.variant.as_deref() {
+        Some(v) => Some(crate::deck_meta::valid_variant(v)?),
+        None => None,
+    };
+    // A named `fn` rather than a closure: a closure over `Option<&str>` in and out ties the
+    // borrow it is handed to the one it returns and will not compile.
+    fn mode(m: Option<&str>) -> Result<Option<&str>, String> {
+        match m {
+            Some(m) if m.trim().is_empty() => Err(NO_MODE.to_owned()),
+            other => Ok(other),
+        }
+    }
+    let group_by = mode(state.group_by.as_deref())?;
+    let sort_by = mode(state.sort_by.as_deref())?;
+    let changed = conn
+        .execute(
+            "UPDATE decks SET
+                last_variant = coalesce(?2, last_variant),
+                last_group_by = coalesce(?3, last_group_by),
+                last_sort_by = coalesce(?4, last_sort_by)
+              WHERE id = ?1",
+            params![id, variant, group_by, sort_by],
+        )
+        .map_err(|e| e.to_string())?;
+    (changed > 0).then_some(()).ok_or_else(|| GONE.to_owned())
 }
 
 /// Delete the deck outright.
@@ -2557,6 +2689,27 @@ pub async fn deck_set_folder(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| set_folder(c, deck_id, folder_id))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Remember where the reader was looking at this deck. See [`set_view_state`] — it moves no
+/// `updated_at`, records no history and reallocates nothing.
+///
+/// Answers `()` rather than a [`DeckRow`]: every other write here hands back the row the gallery
+/// would read, because every other write changes something a gallery draws. This changes one
+/// thing the *editor* will read on its next open, and a caller that re-rendered a deck tile over
+/// it would be redrawing for a scroll position.
+#[tauri::command]
+pub async fn deck_set_view_state(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    view_state: DeckViewState,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_view_state(c, deck_id, &view_state))
     })
     .await
     .map_err(unfinished)?
@@ -4346,6 +4499,9 @@ mod tests {
             folder_id: Some(7),
             notes: None,
             theory_enabled: true,
+            last_variant: "theory".to_owned(),
+            last_group_by: "manaValue".to_owned(),
+            last_sort_by: "price".to_owned(),
             separate_x_group: true,
         })
         .unwrap();
@@ -4358,6 +4514,13 @@ mod tests {
                 "coverArtist": "Christopher Rush", "isBuilt": true, "archived": false,
                 "cardCount": 60, "updatedAt": 1800000000,
                 "folderId": 7, "notes": null, "theoryEnabled": true,
+                // The two mode fields carry TypeScript's own vocabulary, so the fixture spells
+                // real editor words rather than placeholders: this crate never parses them, and
+                // a test written with `"x"` would hide that they are meant to round-trip.
+                "lastVariant": "theory", "lastGroupBy": "manaValue", "lastSortBy": "price",
+                // `manaValue` above is not an accident either: it is the one grouping the
+                // `Split X` chip is drawn under, so this fixture is a deck that would open with
+                // the switch on screen and on.
                 "separateXGroup": true
             })
         );
@@ -4380,6 +4543,229 @@ mod tests {
         assert_eq!(patch.is_built, Some(true));
         assert_eq!(patch.separate_x_group, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
+
+        // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
+        // control at a time — so the omitted two have to arrive as `None` rather than as a
+        // deserialization error.
+        let view: DeckViewState =
+            serde_json::from_str(r#"{"groupBy":"manaValue"}"#).expect("the view-state payload");
+        assert_eq!(view.group_by.as_deref(), Some("manaValue"));
+        assert!(view.variant.is_none() && view.sort_by.is_none());
+    }
+
+    /// Where the reader was looking, as `(variant, group by, sort by)`.
+    fn view_state(conn: &Connection, deck_id: i64) -> (String, String, String) {
+        conn.query_row(
+            "SELECT last_variant, last_group_by, last_sort_by FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    /// All three are remembered, and an absent field is left alone — [`update_deck`]'s
+    /// `coalesce(?n, column)` convention, so the editor can send the one control the reader
+    /// touched instead of the three it has.
+    ///
+    /// The opening values are asserted first because they are the schema's defaults doing the
+    /// job they exist for: a deck that has never been looked at still answers the editor with
+    /// the tab and modes it opens on, rather than with three NULLs to guess about.
+    #[test]
+    fn set_view_state_remembers_each_field_and_leaves_an_absent_one_alone() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert_eq!(
+            view_state(&conn, deck.id),
+            (
+                "live".to_owned(),
+                "category".to_owned(),
+                "alphabetical".to_owned()
+            )
+        );
+
+        set_view_state(
+            &conn,
+            deck.id,
+            &DeckViewState {
+                variant: Some(THEORY.to_owned()),
+                group_by: Some("manaValue".to_owned()),
+                sort_by: Some("price".to_owned()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            view_state(&conn, deck.id),
+            (
+                "theory".to_owned(),
+                "manaValue".to_owned(),
+                "price".to_owned()
+            )
+        );
+
+        // One control moved; the other two are not in the payload and must not move with it.
+        set_view_state(
+            &conn,
+            deck.id,
+            &DeckViewState {
+                sort_by: Some("type".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            view_state(&conn, deck.id),
+            (
+                "theory".to_owned(),
+                "manaValue".to_owned(),
+                "type".to_owned()
+            )
+        );
+
+        // And the deck row carries them, because the editor reads them off `deck_get`'s row
+        // rather than through a command of its own.
+        let row = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                row.last_variant.as_str(),
+                row.last_group_by.as_str(),
+                row.last_sort_by.as_str()
+            ),
+            ("theory", "manaValue", "type")
+        );
+    }
+
+    /// **Reading a deck is not editing it**, and this is the whole of that claim: the gallery's
+    /// sort key does not move, the history gains no line, and the allocator does not run.
+    ///
+    /// The allocation half is the one that needs staging rather than asserting. The allocator is
+    /// delete-and-rebuild, so a stray run leaves *identical* rows on an unchanged world and
+    /// proves nothing — the collection is therefore grown **after** the claim is made, which is
+    /// exactly the case the app's own rule covers (growing the binder does not re-run the
+    /// allocator). A run here would find the second printing and claim it.
+    #[test]
+    fn set_view_state_is_not_an_edit() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let lea = own(&conn, "bolt-lea", 1);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        own(&conn, "bolt-m10", 3);
+        assert_eq!(claims(&conn, deck.id), vec![(lea, 1)]);
+
+        conn.execute(
+            "UPDATE decks SET updated_at = 0 WHERE id = ?1",
+            params![deck.id],
+        )
+        .unwrap();
+        let history_before = count(&conn, "deck_audit");
+
+        set_view_state(
+            &conn,
+            deck.id,
+            &DeckViewState {
+                variant: Some(THEORY.to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let updated_at: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            updated_at, 0,
+            "the gallery sorts on this: opening a tab must not move a deck to the top of it"
+        );
+        assert_eq!(
+            count(&conn, "deck_audit"),
+            history_before,
+            "the history holds changes to the deck, and which tab was open is not one"
+        );
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![(lea, 1)],
+            "and nothing here changes what the deck lists, so nothing reallocates"
+        );
+    }
+
+    /// The variant fence, in words. `decks.last_variant` carries **no CHECK** — `ALTER TABLE ADD
+    /// COLUMN` cannot add one (schema v12 says so at the column) — so this refusal is the only
+    /// thing standing between a typo and a deck that opens on a tab the editor has never heard
+    /// of. It is `deck_meta::valid_variant`'s sentence, the same one every card write answers.
+    #[test]
+    fn set_view_state_refuses_a_variant_the_schema_does_not_know() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        let err = set_view_state(
+            &conn,
+            deck.id,
+            &DeckViewState {
+                variant: Some("sideboardish".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("sideboardish"), "{err}");
+        assert!(err.contains("live, theory"), "{err}");
+        assert_eq!(
+            view_state(&conn, deck.id).0,
+            "live",
+            "and the refusal wrote nothing"
+        );
+    }
+
+    /// The whole of what Rust checks about the two mode fields: they hold a **TypeScript**
+    /// vocabulary this crate deliberately does not know (grouping and sorting a deck is domain
+    /// logic), so the words are stored verbatim and narrowed on read — but a blank is not one of
+    /// them in any vocabulary, and remembering it would hand the editor a choice of nothing.
+    #[test]
+    fn set_view_state_refuses_a_blank_mode() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        for state in [
+            DeckViewState {
+                group_by: Some(String::new()),
+                ..Default::default()
+            },
+            DeckViewState {
+                sort_by: Some("   ".to_owned()),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(set_view_state(&conn, deck.id, &state).unwrap_err(), NO_MODE);
+        }
+
+        // A word this crate has never heard of is *not* refused, and that is the boundary: a
+        // mode the editor adds tomorrow needs no migration and no release here.
+        set_view_state(
+            &conn,
+            deck.id,
+            &DeckViewState {
+                group_by: Some("colourIdentity".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(view_state(&conn, deck.id).1, "colourIdentity");
+    }
+
+    /// A stale editor gets the sentence, like every other deck write — never a write that
+    /// silently lands nowhere, which is what `UPDATE … WHERE id = ?` is on its own.
+    #[test]
+    fn set_view_state_on_a_deck_that_is_gone_is_refused_by_name() {
+        let conn = seeded();
+
+        assert_eq!(
+            set_view_state(&conn, 404, &DeckViewState::default()).unwrap_err(),
+            GONE
+        );
     }
 
     /// The X-group switch, end to end: it is off on a new deck, it survives a patch, it leaves

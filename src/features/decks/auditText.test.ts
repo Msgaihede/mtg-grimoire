@@ -261,7 +261,7 @@ describe("auditSentence", () => {
   });
 
   /**
-   * `decks.separate_x_group` (schema v12), and **the only multi-word field name the backend
+   * `decks.separate_x_group` (schema v13), and **the only multi-word field name the backend
    * writes** — every other arm of the switch is a single lowercase word, so this is the first
    * place `deck.rs`'s spelling could drift from `auditText`'s without anything going red: the
    * default arm answers an unrecognised field with "Changed the deck", which is true of every

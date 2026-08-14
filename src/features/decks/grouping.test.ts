@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { card } from "./validation/fixtures";
-import { buildGroups, GROUP_BY_OPTIONS, X_GROUP_KEY, X_GROUP_NAME } from "./grouping";
+import {
+  asGroupBy,
+  buildGroups,
+  DEFAULT_GROUP_BY,
+  GROUP_BY_OPTIONS,
+  X_GROUP_KEY,
+  X_GROUP_NAME,
+} from "./grouping";
 
 /**
  * One `deck_categories` row. The ids match `validation/fixtures`' `CATEGORIES` table so a
@@ -560,6 +567,39 @@ describe("buildGroups with the X pile split out", () => {
 
       const derived = groups.filter((g) => g.categoryId === null);
       expect(derived.flatMap((g) => names(g.cards))).toEqual(["Fireball"]);
+    }
+  });
+});
+
+/**
+ * `DeckRow.lastGroupBy` is a `string` on the wire, so the editor cannot draw it until this has
+ * had a look at it — and what a word neither side recognises must become is the *default*
+ * rather than itself. A select holding a value that is in none of its own options is a mode the
+ * reader cannot leave.
+ */
+describe("asGroupBy", () => {
+  it("keeps every grouping the toolbar offers", () => {
+    for (const option of GROUP_BY_OPTIONS) {
+      expect(asGroupBy(option.value)).toBe(option.value);
+    }
+  });
+
+  /** A row written by a build that offered a fourth mode, a row this build has stopped
+   *  offering one for, and the two shapes of nothing a column can hold. */
+  it("falls back to the default for a word this build does not offer", () => {
+    expect(asGroupBy("colour")).toBe(DEFAULT_GROUP_BY);
+    expect(asGroupBy("")).toBe(DEFAULT_GROUP_BY);
+    // Case is not a spelling this module accepts: the stored word is the union's own.
+    expect(asGroupBy("Category")).toBe(DEFAULT_GROUP_BY);
+    expect(DEFAULT_GROUP_BY).toBe("category");
+  });
+
+  /** The membership test is derived from {@link GROUP_BY_OPTIONS}, so the two cannot disagree
+   *  — a fourth grouping appended there is accepted here without a second edit. */
+  it("accepts exactly what the toolbar offers and nothing else", () => {
+    const offered = GROUP_BY_OPTIONS.map((o) => o.value as string);
+    for (const word of [...offered, "manavalue", "maybe", "sortOrder"]) {
+      expect(asGroupBy(word) === word).toBe(offered.includes(word));
     }
   });
 });

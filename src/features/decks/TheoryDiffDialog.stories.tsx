@@ -129,10 +129,12 @@ export const SendAll: Story = {
 /**
  * The two lists agree — which is an answer, and an answer is a sentence.
  *
- * Deck 3's plan is a copy of deck 3, which is not a contrived fixture: it is the state switching
- * the theory list *on* produces, because an empty plan beside a full deck reads as data loss and
- * the backend seeds one rather than leaving it blank. A blank panel here would read as a dialog
- * that failed to load. The bulk button disables itself rather than offering to send nothing.
+ * Deck 3's plan is a copy of deck 3, which is not a contrived fixture: it is the state
+ * `deckTheoryCopyFromLive` produces, and the only command that produces it — switching the
+ * theory list *on* **moves** the deck into the plan and leaves the live list empty, so a full
+ * list beside an identical full list is what asking for the copy by name gets you. A blank panel
+ * here would read as a dialog that failed to load. The bulk button disables itself rather than
+ * offering to send nothing.
  */
 export const Agreed: Story = {
   args: { deckId: 3 },

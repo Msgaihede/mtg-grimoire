@@ -73,7 +73,7 @@ const meta = {
           "about together.\n\n" +
           "**The one argument that changes a number here is `separateXGroup`**, and it changes " +
           "exactly one: an `{X}` spell leaves its numeric bucket for a tenth, trailing X bar. It " +
-          "is the deck's own column (schema v12) and the same value `buildGroups` was handed, " +
+          "is the deck's own column (schema v13) and the same value `buildGroups` was handed, " +
           "because a curve counting `{X}{B}{B}{B}` as 3 beside a column headed “Mana value X” " +
           "would be two surfaces answering one question two ways. The average mana value is " +
           "deliberately **not** among the numbers it moves — see {@link ManaCurveSplitX}.\n\n" +
@@ -170,7 +170,7 @@ const xCurveDeck = (): DeckCard[] =>
   ]);
 
 /**
- * The default reading, and the one every curve in this app had before schema v12: an `{X}` spell
+ * The default reading, and the one every curve in this app had before schema v13: an `{X}` spell
  * is counted at the mana value it has with X at zero.
  *
  * That is the rules' own answer — CR 202.3b, X is zero everywhere but on the stack — so

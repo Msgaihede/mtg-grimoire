@@ -18,6 +18,7 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const deckCardSetTag = vi.hoisted(() => vi.fn());
+const deckSetViewState = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -28,6 +29,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMissingToWishlist,
     deckSwapPrinting,
     deckCardSetTag,
+    deckSetViewState,
   },
 }));
 
@@ -46,15 +48,21 @@ const DECK: DeckRow = {
   cardCount: 4,
   updatedAt: 1_800_000_000,
   // The four v8 deck columns. `theoryEnabled: false` is the ordinary deck — the switch is off
-  // until the reader turns it on, and turning it on seeds the theory list from live so that an
-  // empty second list is never a state anyone has to interpret.
+  // until the reader turns it on, and turning it on *moves* the live list into theory, so the
+  // deck they built becomes the plan rather than being duplicated into two lists that drift.
   coverKind: "card_art",
   folderId: null,
   notes: null,
   theoryEnabled: false,
-  // v12's, and off for the same reason: the plain curve until the reader asks for the split.
-  // This hook never reads it — it is a `DeckPatch` field like any other and rides through
-  // `update` untouched — so it is here to satisfy the row's shape, not to be asserted on.
+  // How the editor was last read, written by `deckSetViewState` alone — `rememberView` below is
+  // the only mutation here that touches them, and the only one that does not invalidate.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
+  // v13's, and off for the same reason `theoryEnabled` is: the plain curve until the reader
+  // asks for the split. This hook never reads it — it is a `DeckPatch` field like any other and
+  // rides through `update` untouched — so it is here to satisfy the row's shape, not to be
+  // asserted on.
   separateXGroup: false,
 };
 
@@ -161,6 +169,7 @@ beforeEach(() => {
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckCardSetTag.mockReset().mockResolvedValue(undefined);
+  deckSetViewState.mockReset().mockResolvedValue(undefined);
 });
 
 describe("useDeck", () => {
@@ -432,6 +441,43 @@ describe("useDeck", () => {
 
     expect(await swap).toEqual({ folded: true, quantity: 7 });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /**
+   * How the reader is *looking* at the deck, stored — and the one write here that
+   * **deliberately does not invalidate**.
+   *
+   * The editor is already showing what was pressed: this write only makes the choice survive
+   * the deck being closed, so there is nothing to re-read. Invalidating would refetch the deck
+   * row and hand the editor back the three fields it restores from a beat after the press —
+   * which is how a second press made inside that beat gets undone by the first one's echo. It
+   * is also what keeps the round trip from looping at all.
+   */
+  it("remembers how the deck is being read without re-reading the deck", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.rememberView.mutateAsync({ variant: "theory" });
+
+    expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "theory" });
+    expect(invalidate).not.toHaveBeenCalled();
+    // And nothing was re-read, which is the consequence the reader would actually feel: one
+    // `deck_get`, from opening the deck.
+    expect(deckGet).toHaveBeenCalledTimes(1);
+  });
+
+  /** One field at a time, because that is what the editor sends — the control that moved, and
+   *  `DeckViewState`'s absent-means-leave-it rule for the two that did not. */
+  it("sends only the field that moved", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.rememberView.mutateAsync({ groupBy: "manaValue" });
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "manaValue" });
+
+    await result.current.rememberView.mutateAsync({ sortBy: "price" });
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { sortBy: "price" });
   });
 
   /**

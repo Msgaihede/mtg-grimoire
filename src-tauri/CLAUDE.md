@@ -56,8 +56,14 @@ both plus the frontend.
   index definition must `DROP` it first or the widening is a silent no-op on exactly the
   machines that need it. **A step whose DDL is not idempotent (`ADD COLUMN`, unlike
   `CREATE TABLE IF NOT EXISTS`) also owes a line in every rewind fixture in `schema.rs`'s
-  tests** — those walk to head and undo one step, so every step above the version they claim is
-  replayed over them. Schema is at **v12** — see
+  tests** — those walk to head and undo the steps above the version they claim, so anything
+  above them is replayed over them; that is what `UNDO_V12` and `UNDO_V13` are for, one named
+  constant per rung. **And a version that has shipped is spent.** v12 and v13 were written the
+  same day on two branches, each numbered 12 against a head of 11 — a collision `git` cannot
+  see, because two `ALTER TABLE decks ADD COLUMN`s in two files conflict in neither. The one
+  that landed first kept the number; folding the second into it would have left the column
+  existing on fresh installs and on nobody else's disk, because a machine that already ran v12
+  never runs it again. Schema is at **v13** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
 - **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
   is dropped on every sync, so a price column would be destroyed by the next refresh —
@@ -151,6 +157,22 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **`deck_allocations` carries no variant column**, so a `theory` read would walk the _live_
   deck's claims — `attribute_owned` filters `variant == LIVE` explicitly. `allocate_deck` claims
   for `live` only.
+- **Switching the theory list on _moves_ the live deck into it and leaves `live` empty.** The
+  deck the reader has built is the plan; what is sleeved up starts at nothing and fills as they
+  acquire cards. Only on the false→true transition and only when the theory list is empty — a
+  plan already started is not something a re-press may pour the live deck over. The move sets
+  `last_variant = 'theory'` and **reallocates in the same transaction**, because claims are held
+  for `live` only and cards that just left it must release them.
+  `deck_theory_copy_from_live` still means "copy what is sleeved up into the plan" and is no
+  longer what the switch does.
+- **The editor's last view lives on the deck, and reading a deck is not editing it.** v12's
+  `decks.last_variant`/`last_group_by`/`last_sort_by`, written by `deck_set_view_state(deckId,
+viewState)` — absent field means "leave it". It moves **no `updated_at`**, records **no
+  `deck_audit` row**, reallocates nothing, and refuses an unknown deck by name (`GONE`).
+  `ALTER TABLE ADD COLUMN` cannot add a CHECK, so `last_variant` is fenced against
+  `DECK_VARIANTS` here (through the one `deck_meta::valid_variant`) while the other two hold a
+  **TypeScript** vocabulary the crate does not know: Rust stores the reader's answer verbatim and
+  refuses only a blank one (`NO_MODE`); TS narrows it on read with a fallback.
 - **`is_active = 0` is the whole of what `maybe` used to mean**, and **nothing anywhere may
   branch on the kind being `maybe`.** The user names, reorders, switches off and deletes their
   own categories; the fixed word survives only as `deck_categories.kind`
@@ -158,9 +180,10 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **`format_specs` is data, not code.** A rules change is a new migration step re-running the
   seed constant, never an engine branch; a new format is a row. Never derive one format from
   another.
-- **The allocator runs on six writes and nothing else** — a card write, the Built toggle,
-  `missing_to_wishlist`, `set_category_active`, `delete_category`, and `commit_import` (**once**
-  for a whole decklist, which is the reason that command exists). Growing the collection does
+- **The allocator runs on seven writes and nothing else** — a card write, the Built toggle,
+  `missing_to_wishlist`, `set_category_active`, `delete_category`, `commit_import` (**once**
+  for a whole decklist, which is the reason that command exists), and the theory list being
+  switched on (which empties `live`, so its claims have to go). Growing the collection does
   _not_ re-run it, so a deck reads new copies only after its next allocator run.
 - **Writing history is not a command.** `deck_audit::record(tx, …)` is called _inside the
   caller's already-open transaction_, which is what makes a rolled-back write leave no history.
