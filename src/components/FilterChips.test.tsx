@@ -61,6 +61,43 @@ describe("the shared filter row", () => {
       expect(control, control.textContent ?? "").toHaveClass(...outline);
     }
   });
+
+  /**
+   * **The mana-value row wraps, and the narrowest surface that draws it is what says so.**
+   *
+   * Ten `size-9` chips with `gap-1` between them is `10 × 36 + 9 × 4` = **396px**. The widest
+   * place this row appears is not a filter bar across the window — it is the deck editor's
+   * **docked search panel, 384px**, whose content box is about 371. Unwrapped, the group is a
+   * flex item that cannot shrink below its own min-content, so it hung **25px** out of the
+   * panel; the editor is `overflow-y-auto`, which computes `overflow-x` to `auto`, and those
+   * 25px were a horizontal scrollbar across the whole deck builder at *every* window width —
+   * measured in the shipped window 2026-08-14 as `scrollWidth` 1042 against `clientWidth` 1017
+   * at 1280×800 and 2322 against 2297 at 2560×1400, and 0 against both after `flex-wrap`.
+   *
+   * **The X chip is what tipped it**: nine numerals came to 356 and fitted, so this row was
+   * correct right up until it grew a tenth chip, and nothing went red.
+   *
+   * jsdom lays nothing out, so the arithmetic is asserted as arithmetic and the wrap as the
+   * class that permits it — which is the pair a test here can honestly hold. The width is read
+   * off the chips actually rendered rather than typed, so a chip added or resized moves it.
+   */
+  it("lets the mana-value row wrap, because ten chips are wider than the docked panel", () => {
+    render(
+      <ManaValueChips selected={[]} onToggle={vi.fn()} xSelected={false} onToggleX={vi.fn()} />,
+    );
+
+    const group = screen.getByRole("group", { name: "Mana value" });
+    expect(group).toHaveClass("flex-wrap");
+
+    // `size-9` is 36px and `gap-1` is 4px — both read off the classes the chips carry, so this
+    // fails if either changes rather than pinning numbers nothing else knows.
+    const chipCount = within(group).getAllByRole("button").length;
+    const CHIP = 36;
+    const GAP = 4;
+    const PANEL_CONTENT = 371; // `PANEL_WIDTH_PX` 384 less the panel's own padding.
+    expect(group.className).toContain("gap-1");
+    expect(chipCount * CHIP + (chipCount - 1) * GAP).toBeGreaterThan(PANEL_CONTENT);
+  });
 });
 
 /**

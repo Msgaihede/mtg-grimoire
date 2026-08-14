@@ -1,10 +1,17 @@
 /**
- * How the two column views arrange a deck's groups — which ones flow, and which share a column.
+ * How the deck's column views arrange a deck's groups — which ones flow, and which share a column.
  *
- * The stack and the text view both lay a deck out as columns read left to right, and both
- * face the same question: a deck has fifteen categories and a column fits two or three of
- * them. The answer is a **greedy pack in the reader's own order** — never a re-ordering, and
- * never a split.
+ * **`splitRail` is shared by both column views; `packColumns` has one caller left.** `TextView`
+ * still packs: a decklist line is 21px and a column of them holds thirty, so filling a column to
+ * the desk's height and opening the next is what makes that view readable. `StackView` stopped on
+ * 2026-08-14 — a card is 300px tall, so a column there held two or three piles, and packing to a
+ * *height* left the desk's **width** unspent whenever the window was tall. Its piles are flex
+ * items now and CSS decides how many fit on a line. The pack below is unchanged and still correct
+ * for the view that kept it.
+ *
+ * The text view lays a deck out as columns read left to right, and faces the question this file
+ * answers: a deck has fifteen categories and a column fits two or three of them. The answer is a
+ * **greedy pack in the reader's own order** — never a re-ordering, and never a split.
  *
  * Order is the whole constraint. A balanced packer (longest-first, or a bin-packing pass)
  * fits more into fewer columns and puts the Sideboard between Ramp and Removal, which is a
@@ -55,14 +62,14 @@ export function packColumns<T>(
 
 /**
  * How a test finds the rail the piles beside the deck are drawn in. An attribute rather than a
- * role, for the reason `STACK_COLUMN_ATTR` is one: which side of the desk a group was drawn on is
- * a *layout* and says nothing to a reader who cannot see it, so there is no role to give it and no
- * accessible name to search by.
+ * role, for the reason `StackView`'s `STACK_ATTR` is one: which side of the desk a group was drawn
+ * on is a *layout* and says nothing to a reader who cannot see it, so there is no role to give it
+ * and no accessible name to search by.
  *
- * **The rail carries this and nothing else.** It is not also a `STACK_COLUMN_ATTR` box: that
- * attribute means "a box `packColumns` produced", and the rail is by construction the one box it
- * did not — the split below runs *before* the pack. One element answering both would make every
- * sweep that counts columns count a box the packer never made. The name is unprefixed for the
+ * **The rail carries this and nothing else.** It is not also a `STACK_ATTR` box: that attribute
+ * means "a pile drawn in the flow", and the rail's piles are by construction the ones that never
+ * reach it — the split below runs *first*. One element answering both would make every sweep that
+ * counts the deck's own piles count the two played beside it. The name is unprefixed for the
  * same reason it lives here: `TextView` draws the same rail, and a `STACK_`-prefixed constant in
  * that file would be the wrong word in the right place. It is spelled for the *rail* rather than
  * for the Sideboard, because the Sideboard is no longer the only thing in it.
@@ -121,9 +128,10 @@ export const RAIL_ATTR = "data-deck-rail";
  * file here whose whole discipline is not knowing what a deck is. `isActive` is refused for the
  * same reason and one more: a switched-off pile is still that pile.
  *
- * Order is preserved inside both halves. `packColumns` is handed `flow` and its whole constraint
- * is the reader's own order, so a split that reordered would break the packer's contract from
- * outside it, where nothing would be looking.
+ * Order is preserved inside both halves, and both callers depend on it: `TextView` hands `flow`
+ * to `packColumns`, whose whole constraint is the reader's own order, and `StackView` maps it
+ * straight into a row of flex items. A split that reordered would break either from outside it,
+ * where nothing would be looking.
  */
 export function splitRail<T extends { kind: CategoryKind | null }>(
   groups: readonly T[],

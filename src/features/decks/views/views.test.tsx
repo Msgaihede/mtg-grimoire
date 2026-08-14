@@ -17,13 +17,13 @@ import { useAppStore } from "@/lib/store";
 import { dragOnto } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
-import { stackCardWidth, stackHeight } from "../CardStack";
+import { stackCardWidth } from "../CardStack";
 import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { RAIL_ATTR } from "./columns";
 import { GridView } from "./GridView";
-import { StackView, STACK_COLUMN_ATTR, stackColumnWidth } from "./StackView";
+import { StackView, STACK_ATTR, stackColumnWidth } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 
@@ -612,31 +612,40 @@ describe("the views that are not the table", () => {
   });
 });
 
-describe("StackView columns", () => {
-  const columns = () => [...document.querySelectorAll(`[${STACK_COLUMN_ATTR}]`)];
-  /** The rail is **not** one of the boxes above — `STACK_COLUMN_ATTR` marks what `packColumns`
-   *  produced, and the rail is the one box it never saw — so it is found by its own attribute. */
+describe("StackView flow", () => {
+  const stacks = () => [...document.querySelectorAll(`[${STACK_ATTR}]`)];
+  /** The rail is **not** one of the boxes above — `STACK_ATTR` marks one pile drawn in the flow,
+   *  and the rail's piles are lifted out before the flow is drawn — so it is found by its own
+   *  attribute. */
   const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
   /** By the id each section is `aria-labelledby`, which is the heading's own handle rather
    *  than a guess at the header's shape. */
-  const headingsIn = (column: Element) =>
-    [...column.querySelectorAll('[id^="group-"]')].map((n) => n.textContent);
+  const headingsIn = (box: Element) =>
+    [...box.querySelectorAll('[id^="group-"]')].map((n) => n.textContent);
 
   /** The desk's zoom is remembered for the session and this store outlives a test, so a case
    *  that leaves it at 2× would silently re-pack every suite that runs after it. */
   afterEach(resetZoom);
 
   /**
-   * Groups are packed into columns in the reader's own order and never split — so a category
-   * that outgrows a column keeps every one of its cards, and the pile after it starts a fresh
-   * one rather than being interleaved.
+   * **One box per flowing pile, in the reader's own order — no pile shares a box with another.**
    *
-   * The columns are read out of the DOM rather than inferred from the cards being present:
-   * the first draft of this asserted only that both piles were drawn and twelve cards were in
-   * Ramp, which is true of a layout that packed everything into a single column and did no
-   * work at all.
+   * This is the whole of what replaced `packColumns` here on 2026-08-14, and it is asserted as a
+   * count *and* as a list of one heading each, because the two failures it guards against are
+   * opposite shapes: a layout that went back to packing answers three piles in two boxes, and one
+   * that lost the split answers them in the wrong order.
+   *
+   * **The empty `Draw` pile is in the fixture deliberately.** Under the pack it was the group that
+   * did not fit and therefore opened the second column — the whole of what made that test a test.
+   * It has no such job now, and that is the point: an empty pile is one box like any other, and a
+   * layout that treated it as free would leave a hole in the line. See {@link DRAW}.
+   *
+   * The boxes are read out of the DOM rather than inferred from the cards being present: the first
+   * draft of the test this replaces asserted only that both piles were drawn and twelve cards were
+   * in Ramp, which is true of a layout that dropped everything into a single box and did no work
+   * at all.
    */
-  it("packs groups into columns without reordering or splitting them", () => {
+  it("draws each flowing pile in its own box, in the reader's own order", () => {
     const three = (kind: "main" | "commander") =>
       Array.from({ length: 3 }, (_, i) =>
         card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
@@ -649,29 +658,12 @@ describe("StackView columns", () => {
           "category",
           "alphabetical",
         )}
-        // Exactly two three-card groups tall, and **derived rather than typed**: a group is
-        // `46 + stackHeight(n) + 20` (header and padding, the stack, the gap), and a card's height
-        // is now a Magic card's aspect applied to the column width rather than a number somebody
-        // chose — so a hard-coded ceiling here silently stops testing a pack the day the card
-        // frame changes shape. It did: this read a hard-coded 950 against the 388px three-card
-        // stack of the day, and all three groups fitted in one column. Both of those are history;
-        // the live figure is `stackHeight(3)` = 34×2 + 319 + 8 = **395**, where the 319 is
-        // 293 of image + 2 hairlines + the 28px data line less its 4px rise.
-        //
-        // At exactly two groups the empty `Draw` pile's 66 does not fit, so it starts the second
-        // column — which is what makes this assert a *pack* rather than a single box. That third
-        // group used to be the Maybeboard, and it cannot be one any more: a railed group never
-        // reaches `packColumns` at all, so the pack would have been asserted against two groups
-        // and one column. See {@link DRAW}.
         marketplace={TCG}
-        columnHeight={2 * (66 + stackHeight(3))}
       />,
     );
 
-    expect(columns()).toHaveLength(2);
-    // In the sortOrder the reader set, never a shape the packer preferred.
-    expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
-    expect(headingsIn(columns()[1])).toEqual(["Draw"]);
+    expect(stacks()).toHaveLength(3);
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Commander"], ["Ramp"], ["Draw"]]);
     // And never split: all three of Ramp's cards are in the one Ramp stack.
     expect(
       within(screen.getByRole("list", { name: "Ramp" })).getAllByRole("listitem"),
@@ -695,7 +687,7 @@ describe("StackView columns", () => {
    * nothing with them. Reading the 2 as the border coming *off* and deleting it here would make
    * every stack 2px wider than the height its own aspect ratio was computed from.
    */
-  it("sizes a column from the card it holds, at every stop on the ladder", () => {
+  it("sizes a pile's box from the card it holds, at every stop on the ladder", () => {
     for (const zoom of ZOOM_STEPS) {
       expect(stackColumnWidth(zoom)).toBe(stackCardWidth(zoom) + 14);
     }
@@ -707,12 +699,12 @@ describe("StackView columns", () => {
    * …and it reaches the element as an **inline width**, in both halves of the `flex` shorthand.
    *
    * A computed Tailwind class emits no CSS rule at all — the scanner reads source text — so a
-   * column sized by an interpolated class would lay itself out at whatever its contents came to
+   * pile sized by an interpolated class would lay itself out at whatever its contents came to
    * and the whole view would drift wider as the reader zoomed. The `flex` basis is the half worth
-   * asserting separately: these columns are `flex` children, so a basis left at the old value
+   * asserting separately: these piles are `flex` children, so a basis left at the old value
    * would win over the width and nothing about the markup would look wrong.
    */
-  it("writes the zoomed column width onto the column, basis included", () => {
+  it("writes the zoomed width onto the pile, basis included", () => {
     setDeckZoom(2);
     render(
       <StackView
@@ -721,25 +713,25 @@ describe("StackView columns", () => {
       />,
     );
 
-    const column = columns()[0] as HTMLElement;
-    expect(column.style.width).toBe(`${stackColumnWidth(2)}px`);
-    expect(column.style.flex).toBe(`0 0 ${stackColumnWidth(2)}px`);
-    expect(column.style.width).toBe("434px");
+    const stack = stacks()[0] as HTMLElement;
+    expect(stack.style.width).toBe(`${stackColumnWidth(2)}px`);
+    expect(stack.style.flex).toBe(`0 0 ${stackColumnWidth(2)}px`);
+    expect(stack.style.width).toBe("434px");
   });
 
   /**
-   * **The pack has to see the zoom, and this is the failure if it does not.**
+   * **How many piles are drawn is a fact about the deck, not about the zoom.**
    *
-   * The same three groups and the same desk, twice: at 1× the Commander and Ramp piles share a
-   * column, and at 2× they cannot — a stack twice as wide is more than twice as tall, so the
-   * second group no longer fits under the first. A packer working from unzoomed heights would
-   * answer the top arrangement in both cases and run the last group in every column off the
-   * bottom of the desk, which is a layout bug with no error attached to it.
+   * This is the assertion the whole change is for. Under the pack, the number of boxes moved with
+   * two things a reader had not asked about — the zoom, because a taller stack meant fewer groups
+   * to a column, and the *desk's height*, because that was the pack's ceiling. So the same deck
+   * drew three boxes in a tall window and six in a short one, and at 100 % zoom on a 1080p screen
+   * it filled three tall columns and left half the desk blank beside them. There is nothing left
+   * for either to move: the count is `flow.length`, and CSS decides how many fit on a line.
    *
-   * Written as contents rather than as a column count on purpose: both arrangements here happen
-   * to come to two columns, and it is *which groups share one* that the zoom changes.
+   * Written across the two ends of the ladder because 1× is where a regression would still agree.
    */
-  it("packs fewer groups into a column when the cards are bigger", () => {
+  it("draws the same number of piles however big the cards are", () => {
     const three = (kind: "main" | "commander") =>
       Array.from({ length: 3 }, (_, i) =>
         card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
@@ -750,60 +742,39 @@ describe("StackView columns", () => {
       "category",
       "alphabetical",
     );
-    // The same desk in both halves — two 1× three-card groups tall, as the pack above uses.
-    const desk = 2 * (66 + stackHeight(3));
+    const order = [["Commander"], ["Ramp"], ["Draw"]];
 
-    render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
-    expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
-    expect(headingsIn(columns()[1])).toEqual(["Draw"]);
+    render(<StackView groups={groups} marketplace={TCG} />);
+    expect(stacks().map((s) => headingsIn(s))).toEqual(order);
     cleanup();
 
     setDeckZoom(2);
-    render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
-    expect(headingsIn(columns()[0])).toEqual(["Commander"]);
-    expect(headingsIn(columns()[1])).toEqual(["Ramp", "Draw"]);
-  });
-
-  /** One column when everything fits — the case the assertion above would have passed
-   *  against by accident, pinned deliberately instead. */
-  it("uses one column when the groups all fit in one", () => {
-    render(
-      <StackView
-        groups={buildGroups(
-          [card({ name: "Sol Ring" })],
-          [RAMP],
-          "category",
-          "alphabetical",
-        )}
-        marketplace={TCG}
-        columnHeight={4000}
-      />,
-    );
-
-    expect(columns()).toHaveLength(1);
+    render(<StackView groups={groups} marketplace={TCG} />);
+    expect(stacks().map((s) => headingsIn(s))).toEqual(order);
+    // …and the boxes grew instead, which is the half that says the zoom still reaches the view.
+    expect((stacks()[0] as HTMLElement).style.width).toBe(`${stackColumnWidth(2)}px`);
   });
 
   /**
-   * **Neither the Sideboard nor the Maybeboard is part of the pack**, and that is the whole of
-   * the change. Both are split off before `packColumns` sees anything and drawn in the rail beside
-   * the columns — so a reader running a fifteen-category deck down the page never loses the pile
-   * they are cutting to, nor the one they are cutting *from*.
+   * **Neither the Sideboard nor the Maybeboard is part of the flow**, and that is the whole of
+   * the change. Both are split off before the flow is drawn and put in the rail beside it — so a
+   * reader running a fifteen-category deck down the page never loses the pile they are cutting to,
+   * nor the one they are cutting *from*.
    *
-   * The desk is the same derived two-group height the pack above uses, and what the split moves
-   * is **which groups share a column**: left in the stream, these five pack as Commander and Ramp,
-   * then the Sideboard, the empty Draw pile and the Maybeboard filling the second — the same
-   * *count* as the split answer, with both railed piles buried in the middle of it. So the
-   * headings are what this reads, and a count alone would pass against the bug.
+   * The fixture puts the Sideboard *between* two flowing piles in the reader's own `sortOrder`
+   * (Ramp 1, Sideboard 2, Draw 3, Maybeboard 4), so a split that merely drew the railed kinds last
+   * would answer the same set of headings and fail this: what is asserted is that lifting two
+   * groups out **closes the gap up** rather than leaving a hole where they were.
    *
    * **The rail's order is the reader's own `sortOrder` and nothing `splitRail` did.** Sideboard
    * (2) above Maybeboard (4) is where the seed put them, which is why this asserts a list rather
    * than a set: a split that sorted by kind would answer the same two headings here and would
    * quietly overrule a reader who had dragged their Maybeboard above their Sideboard.
    *
-   * The rail is asserted as the other half rather than instead: "the Sideboard is not in a column"
+   * The rail is asserted as the other half rather than instead: "the Sideboard is not in the flow"
    * is equally true of a view that dropped the pile on the floor.
    */
-  it("pulls both piles played beside the deck out of the pack and into the rail", () => {
+  it("pulls both piles played beside the deck out of the flow and into the rail", () => {
     const three = (kind: "main" | "commander" | "side") =>
       Array.from({ length: 3 }, (_, i) =>
         card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
@@ -817,19 +788,11 @@ describe("StackView columns", () => {
           "alphabetical",
         )}
         marketplace={TCG}
-        columnHeight={2 * (66 + stackHeight(3))}
       />,
     );
 
-    expect(columns()).toHaveLength(2);
-    // The flowing groups, still in the reader's own order and still never split.
-    expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
-    expect(headingsIn(columns()[1])).toEqual(["Draw"]);
-    // Both railed piles are in no column — the two the pack would have dropped in the middle of
-    // the run, drawn past a category whose `sortOrder` puts it between them.
-    for (const name of ["Sideboard", "Maybeboard"]) {
-      expect(columns().some((c) => headingsIn(c).includes(name))).toBe(false);
-    }
+    // The flowing groups, still in the reader's own order and with the rail's two lifted out.
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Commander"], ["Ramp"], ["Draw"]]);
     expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
   });
 
@@ -837,8 +800,8 @@ describe("StackView columns", () => {
    * **The rail is a plain flex child, and there is deliberately nothing sticky about it.**
    *
    * It was `sticky right-0` over an opaque `bg-bg` at `LAYER.raised` with a leftward seam shadow,
-   * and every one of those four existed for one reason: to hold the rail in view *while the packed
-   * columns scrolled sideways underneath it*. The columns wrap downward now, so nothing passes
+   * and every one of those four existed for one reason: to hold the rail in view *while the deck's
+   * columns scrolled sideways underneath it*. The piles wrap downward now, so nothing passes
    * under the rail — an opaque backdrop would occlude nothing and the seam shadow would draw a
    * permanent divider across a layout in which nothing moves. `ml-auto` is the whole mechanism
    * that is left: a no-op while the flow is `flex-1`, and what keeps the rail on the right in the
@@ -864,17 +827,17 @@ describe("StackView columns", () => {
     // inside `border-transparent` is exactly the trap this file's group-chrome block names.
     const classes = rail()!.className.split(" ");
     expect(classes).toContain("ml-auto");
-    // A column of groups, the same as any packed one — the rail changes where the box sits and
-    // nothing about what is in it.
+    // A column of groups — the one box in this view that still stacks piles vertically, which is
+    // why the rail changes where a pile sits and nothing about what is in it.
     expect(classes).toContain("flex-col");
     expect(classes).toContain("gap-5");
     expect(classes).not.toContain("sticky");
     expect(classes).not.toContain("bg-bg");
     expect(classes).not.toContain(LAYER.raised);
     expect(rail()!.className).not.toContain("shadow");
-    // And it is not one of the packer's boxes, which is the other half of the same claim: a
-    // sweep that counts columns is counting what `packColumns` decided.
-    expect(rail()).not.toHaveAttribute(STACK_COLUMN_ATTR);
+    // And it is not one of the flow's boxes, which is the other half of the same claim: a sweep
+    // that counts the piles on the desk is counting the ones the reader is building with.
+    expect(rail()).not.toHaveAttribute(STACK_ATTR);
   });
 
   /**
@@ -969,10 +932,10 @@ describe("StackView columns", () => {
       );
 
       expect(headingsIn(rail()!)).toEqual([name]);
-      // And the derived bucket the *active* card went into is a packed column, not a second rail:
-      // the pile the reader switched off is the only thing on the right.
-      expect(columns()).toHaveLength(1);
-      expect(headingsIn(columns()[0])).toEqual(["Mana value 1"]);
+      // And the derived bucket the *active* card went into is in the flow, not a second rail: the
+      // pile the reader switched off is the only thing on the right.
+      expect(stacks()).toHaveLength(1);
+      expect(headingsIn(stacks()[0])).toEqual(["Mana value 1"]);
     },
   );
 });
@@ -1000,7 +963,7 @@ describe("StackView group chrome", () => {
    *  `toContain` on the string would answer yes to a box that had lost its width class. */
   const classesOf = (el: Element) => el.className.split(" ");
   const pile = (name: string) => screen.getByRole("region", { name });
-  const draw = () => render(<StackView groups={GROUPS} marketplace={TCG} columnHeight={4000} />);
+  const draw = () => render(<StackView groups={GROUPS} marketplace={TCG} />);
 
   /**
    * The resting pile, which is the one a reader sees fifteen of.
@@ -1055,21 +1018,25 @@ describe("StackView group chrome", () => {
 });
 
 /**
- * The two views that lay a deck out as columns, and the one number they disagree about.
+ * The two views that lay a deck out in fixed-width boxes, and the one number they disagree about.
  *
- * Everything in the block below is true of both — which box a group is drawn in, and how wide
- * that box is — so it is a sweep rather than two copies. The width is the fixture's own field
- * precisely because it is the difference: `StackView`'s column is the card plus its chrome and
- * therefore moves with the reader's zoom, `TextView`'s is a fixed 300px line of text and does
- * not. A view that took the other one's number would pass a sweep that only asked "is there a
- * width".
+ * Everything in the block below is true of both — which half of the scroller a group is drawn in,
+ * and how wide its box is — so it is a sweep rather than two copies. **What is no longer true of
+ * both is the packing**: `TextView` still fills a column to a measured height and opens the next
+ * one, while `StackView` draws one box per pile and lets them wrap. Nothing here asks about that,
+ * which is why the sweep survived the change whole.
+ *
+ * The width is the fixture's own field precisely because it is the difference: `StackView`'s box
+ * is the card plus its chrome and therefore moves with the reader's zoom, `TextView`'s is a fixed
+ * 300px line of text and does not. A view that took the other one's number would pass a sweep that
+ * only asked "is there a width".
  */
 const COLUMN_VIEWS = [
   {
     name: "StackView",
     render: (props: ViewProps) => <StackView {...props} />,
     /** The id `StackGroup` gives its heading, which is what the section is `aria-labelledby` —
-     *  the same handle `StackView columns` reads its packing off. */
+     *  the same handle `StackView flow` reads its layout off. */
     heading: "group-",
     width: `${stackColumnWidth(DEFAULT_ZOOM)}px`,
     zoomedWidth: `${stackColumnWidth(2)}px`,
@@ -1113,12 +1080,12 @@ describe.each(COLUMN_VIEWS)(
   "$name rail",
   ({ render: renderView, heading, width, zoomedWidth }) => {
     /** The desk's zoom is remembered for the session and this store outlives a test — the
-     *  reason `StackView columns` resets it, and the same reason here. */
+     *  reason `StackView flow` resets it, and the same reason here. */
     afterEach(resetZoom);
 
     /** `GROUPS`' deck with a Sideboard in the middle of the reader's own order, and the
      *  Maybeboard after it — the two piles the rail takes, arriving from opposite ends of the
-     *  pack the rail replaces. */
+     *  run the rail replaces. */
     const withRail = buildGroups(
       [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
       [COMMANDER, RAMP, SIDE, MAYBE],
@@ -1128,9 +1095,9 @@ describe.each(COLUMN_VIEWS)(
 
     const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
     /**
-     * The box the columns flow in — read as the rail's own **previous** sibling rather than by
-     * position in the tree, because the order of the two is load-bearing. `ml-auto` puts the
-     * rail at the right of the line it ends; a rail drawn first would be pinned to the left
+     * The box the deck's own piles flow in — read as the rail's own **previous** sibling rather
+     * than by position in the tree, because the order of the two is load-bearing. `ml-auto` puts
+     * the rail at the right of the line it ends; a rail drawn first would be pinned to the left
      * with the whole deck flowing after it, and every other assertion here would still pass.
      */
     const flow = () => rail()!.previousElementSibling as HTMLElement;
@@ -1141,11 +1108,11 @@ describe.each(COLUMN_VIEWS)(
       render(renderView({ groups, marketplace: TCG, ...over }));
 
     /**
-     * **A `side` group and a `maybe` group are never packed.** Read as two lists — what is in the
-     * flow, and what is in the rail — because either half alone is satisfied by a broken layout:
-     * "the Sideboard is in the rail" passes against a view that draws the pile twice, and "the
-     * Sideboard is on screen" passed against the packed layout this replaces, which is how the
-     * bug survived.
+     * **A `side` group and a `maybe` group are never in the flowing half.** Read as two lists —
+     * what is in the flow, and what is in the rail — because either half alone is satisfied by a
+     * broken layout: "the Sideboard is in the rail" passes against a view that draws the pile
+     * twice, and "the Sideboard is on screen" passed against the packed layout this replaces,
+     * which is how the bug survived.
      *
      * Both lists are asserted **in order**. For the flow that is `packColumns`' whole contract:
      * lifting two groups out must close the gaps up rather than reshuffle what is left. For the
@@ -1207,9 +1174,11 @@ describe.each(COLUMN_VIEWS)(
     /**
      * **The rail is exactly one column wide, inline, in both halves of the `flex` shorthand.**
      *
-     * Asserted first against the column beside it — one number read twice out of the DOM, which
-     * no later edit can let drift apart — and then against the view's own value, without which
-     * two empty strings would agree and pass.
+     * Asserted first against the first box beside it — one number read twice out of the DOM, which
+     * no later edit can let drift apart. That box is `TextView`'s packed column and `StackView`'s
+     * first pile, which is exactly the point: whatever the flowing half is made of, the rail is
+     * one of them wide. Then against the view's own value, without which two empty strings would
+     * agree and pass.
      *
      * Drawn at 2× because that is where the two views part company: `StackView`'s rail has to
      * follow the zoom the cards inside it took, and `TextView`'s has to ignore it. The failure
@@ -1417,10 +1386,9 @@ describe("the deck's two views and their one zoom section", () => {
   /** One card in one pile, which is all either view needs to state a width. */
   const ONE_CARD = buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical");
 
-  /** The width `StackView` gives a packed column — the card plus its chrome, so it moves with
+  /** The width `StackView` gives one pile's box — the card plus its chrome, so it moves with
    *  the zoom the view read. */
-  const columnWidth = () =>
-    (document.querySelector(`[${STACK_COLUMN_ATTR}]`) as HTMLElement).style.width;
+  const columnWidth = () => (document.querySelector(`[${STACK_ATTR}]`) as HTMLElement).style.width;
   /** The width `GridView` gives a tile, which is that view's whole geometry. */
   const tileWidth = () =>
     (within(screen.getByRole("list", { name: "Ramp" })).getAllByRole("listitem")[0] as HTMLElement)

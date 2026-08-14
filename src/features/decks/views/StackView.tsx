@@ -4,18 +4,17 @@
  */
 import { useRef } from "react";
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
-import { DEFAULT_ZOOM } from "@/lib/cardZoom";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { CardStack, STACK_CARD_BORDER, stackCardWidth, stackHeight } from "../CardStack";
+import { CardStack, STACK_CARD_BORDER, stackCardWidth } from "../CardStack";
 import { deckGroupProps, useCategoryDrop, type DeckCardActions } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns, RAIL_ATTR, splitRail } from "./columns";
+import { RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -37,7 +36,11 @@ import { GroupHeader } from "./GroupHeader";
 const SECTION_PADDING = 6;
 
 /**
- * How wide a column is at this zoom — **the card, plus the chrome the card sits in**.
+ * How wide one pile's box is at this zoom — **the card, plus the chrome the card sits in**.
+ *
+ * "Column" survives in the name because that is the shape of the box: a pile is one card wide and
+ * as tall as its stack. What it no longer means is *a box several groups share* — see
+ * {@link STACK_ATTR}, where the pack that used to fill one went.
  *
  * The direction of this derivation is the whole of what makes the view survive a zoom, and it is
  * the reverse of what it used to be. The column was a fixed `14rem` off the design canvas (224px,
@@ -63,48 +66,29 @@ export function stackColumnWidth(zoom: number): number {
 }
 
 /**
- * How a test finds a column. An attribute rather than a role, because a column is a *layout*
- * and carries no meaning for a reader — `packColumns` decides which groups share one, and the
- * only claim worth pinning is that it decided rather than dropped everything into one box.
- * `DropIndicator`'s `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for
- * the same reason.
+ * How a test finds one pile's box in the flow. An attribute rather than a role, because where a
+ * pile was drawn is a *layout* and carries no meaning for a reader. `DropIndicator`'s
+ * `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for the same reason.
  *
- * **The rail is deliberately not one of these.** This attribute means "a box `packColumns`
- * produced", and the rail is by construction the one box it did not: its groups are taken out of
- * the packer's input, so a sweep that counts columns is counting what the pack decided and must
- * not find it. It carries `RAIL_ATTR` (`columns.ts`) alone — one name, shared with `TextView`,
- * which has no columns of this kind to be confused with.
+ * **It marks one pile, not a box several piles share, and that is the change of 2026-08-14.**
+ * The flowing half of this view used to be `packColumns`' answer — groups packed into columns of
+ * a measured height, each column a box, opening a new one when the next group would not fit under
+ * the last. That pack is gone from this view: **every pile is now a flex item of one wrapping
+ * container**, left to right in the reader's own order, dropping to the next line when it runs
+ * out of width. The reason is a bug a reader could see and the pack could not: a column height is
+ * a fact about the *desk*, and the pack knew nothing about the desk's **width** — so a tall window
+ * filled three columns to the brim and left half the desk empty beside them, while the same deck
+ * in a shorter window spread across six. The width is what a reader is looking at, and CSS is
+ * already measuring it.
+ *
+ * **The rail is deliberately not one of these.** Its piles are taken out before the flow is drawn
+ * and stacked down a box of their own, so a sweep counting the flow must not find them. That box
+ * carries `RAIL_ATTR` (`columns.ts`) alone — one name, shared with `TextView`, which still packs.
+ *
+ * The value is `data-deck-stack`, which pairs with the rail's `data-deck-rail`: the two boxes a
+ * pile can be in, named the same way.
  */
-export const STACK_COLUMN_ATTR = "data-stack-column";
-
-/**
- * A group's height in the column, header and padding included, so the packer can fill a
- * column without measuring anything.
- *
- * The 46px is the two-line header plus the section's own padding, and the 20px is the gap to
- * the next group. Both are read off the classes below; if either changes here, the packing
- * gets slightly worse and nothing breaks — which is the right failure for a number that is
- * about how full a column looks. Neither zooms: the header is text at a fixed size and the gap
- * is chrome, so only the stack in the middle grows.
- *
- * **The zoom has to reach this or the pack is wrong**, which is the one failure here that is not
- * cosmetic: a 2× stack is more than twice as tall, so a packer working from unzoomed heights
- * would fill every column to roughly half of what it thought and the last group in each would
- * run off the bottom of the desk. It defaults for the callers that legitimately mean "the base
- * geometry" — the stories, and the tests that pin the 1× sums.
- */
-export function groupHeight(group: CardGroup, zoom: number = DEFAULT_ZOOM): number {
-  return 46 + stackHeight(group.cards.length, zoom) + 20;
-}
-
-/**
- * How tall a column is allowed to get before the next group starts a new one.
- *
- * A default rather than a measurement, because this view has no business observing its own
- * box: the editor knows the height of the scroller it puts this in and passes it. 640 is a
- * 1280×800 window's content area with the ribbon, the toolbar and a little air.
- */
-export const DEFAULT_COLUMN_HEIGHT = 640;
+export const STACK_ATTR = "data-deck-stack";
 
 export function StackView({
   groups,
@@ -112,7 +96,6 @@ export function StackView({
   violations,
   onSelect,
   actions,
-  columnHeight = DEFAULT_COLUMN_HEIGHT,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -124,8 +107,6 @@ export function StackView({
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
   actions?: DeckCardActions;
-  /** The height of the box this is being drawn into. See {@link DEFAULT_COLUMN_HEIGHT}. */
-  columnHeight?: number;
   className?: string;
 }) {
   // **`deck`, and `GridView` reads this same key on purpose.** The two are one deck drawn two
@@ -143,7 +124,7 @@ export function StackView({
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ctrl+wheel, on the element that scrolls: this view is the whole desk, and a wheel event
   // bubbles from whichever card the pointer is over up to here — including from the gaps between
-  // the columns, which belong to no card at all. A native non-passive listener is what the hook
+  // the piles, which belong to no card at all. A native non-passive listener is what the hook
   // is for; React's own wheel listeners are passive and could not `preventDefault`, so WebView2
   // would zoom the entire window underneath the cards.
   //
@@ -156,27 +137,21 @@ export function StackView({
   // chrome at every stop on the ladder. A px number in an inline style rather than the `14rem`
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
-  // **The split happens before the pack, and it has to.** `packColumns` fills a column in the
-  // reader's own order and never re-orders anything, so a sideboard or a maybeboard left in that
-  // stream lands in whichever column happened to have room for it. A rail held against the right
-  // edge is not a column the packer may put anything in, so those groups are taken out of the
-  // packer's *input* rather than pulled back out of its answer — which would mean lifting a group
-  // out of a column somebody else is already sharing and re-flowing the rest. Which kinds are
-  // railed, why the rail is not sorted here, and why there is no grouping-mode check beside the
-  // kind: {@link splitRail}.
+  // **The split happens before anything is drawn, and it has to.** The flow runs in the reader's
+  // own order and never re-orders anything, so a sideboard or a maybeboard left in that stream
+  // lands wherever the line it fell on happened to end. A rail held against the right edge is not
+  // part of the flow at all, so those groups are taken out of the *input* rather than pulled back
+  // out of the answer. Which kinds are railed, why the rail is not sorted here, and why there is
+  // no grouping-mode check beside the kind: {@link splitRail}.
   const { flow, rail } = splitRail(groups);
-  // The pack has to see the zoom too — a taller stack is fewer groups to a column. Wrapped
-  // rather than passed by name, because `packColumns` takes a measurement of one item and knows
-  // nothing about decks, let alone about how big the reader is drawing them.
-  const columns = packColumns(flow, (group) => groupHeight(group, cardZoom), columnHeight);
 
   return (
-    // Scrolls **down**, and that is the whole of this layout. A column that will not fit opens
+    // Scrolls **down**, and that is the whole of this layout. A pile that will not fit opens
     // *below* the line rather than off the right edge: a fifteen-category deck used to run
     // sideways and put an X scrollbar across the entire desk, which is the one thing the app's
     // 1024px floor forbids — reached by the route `DeckEditor`'s `DECK_FLOOR` never measured,
     // since 208 is the width this view is guaranteed and it does not hold even one column.
-    // Down is also where a lifted card at the foot of a column has always had to go, so there
+    // Down is also where a lifted card at the foot of a pile has always had to go, so there
     // is one direction to scroll rather than two.
     //
     // `overflow-auto` and not `overflow-y-auto`: one column at 2× really is wider than a narrow
@@ -185,15 +160,16 @@ export function StackView({
     //
     // The `flex-wrap` *here* is what decides the narrow desk. With the flowing box below
     // refusing to go under one column wide, a desk too narrow to hold a column beside the rail
-    // drops the rail onto its own line — CSS answering it, with nothing in this view measuring
-    // its own box, which its `DEFAULT_COLUMN_HEIGHT` is equally explicit about.
+    // drops the rail onto its own line — CSS answering it, with **nothing in this view measuring
+    // its own box in either axis**. That rule used to be stated on a `DEFAULT_COLUMN_HEIGHT` the
+    // editor passed a measured height into; the height is gone and the rule outlived it.
     //
     // `content-start` belongs on *this* box and only here, because this is the box with height
     // to spare: `DeckEditor` renders it as a `flex-1` item of a `min-h-0 flex-col` parent, so
     // its height is the scroller's rather than its content's. Once the rail has wrapped, that
     // makes two flex lines in a box taller than both — and `align-content`'s initial `normal`
     // behaves as **stretch**, dealing the slack out between them. A freshly created deck — four
-    // nearly empty piles, one short column — would draw that column at the top and the Sideboard
+    // nearly empty piles, one short line — would draw that line at the top and the Sideboard
     // floating a couple of hundred pixels under it with nothing in between. `items-start` cannot
     // prevent it: that aligns an item within its line, never the lines within the box.
     <div
@@ -203,43 +179,47 @@ export function StackView({
         className,
       )}
     >
-      {/* The flowing half. `minWidth` is one column, and that number is the whole mechanism
-          above: below it the rail wraps, rather than this box squeezing under a column's fixed
-          width and scrolling sideways. `min-w-0`/`flex-1` cannot say it — they describe how a
-          box shares slack, not the width at which it must stop sharing. `flex-wrap` is what
-          sends the column that will not fit onto the next line, and `items-start` keeps a column
-          its own height: stretched, a switched-off pile's `bg-surface/60` wash would grow to the
-          tallest thing on its line and read as an empty box nobody drew. (It was the dashed
-          outline that made this obvious, until 2026-08-14 took the outline away — the wash it
-          left behind stretches exactly as far.)
+      {/* The flowing half, and **every pile in it is a flex item of this one box** — no columns,
+          no packing, nothing measuring a height. They run left to right in the reader's own order
+          and the one that will not fit drops to the next line, which is what fills the desk's
+          width before it spends any of its height. See {@link STACK_ATTR} for what this replaced
+          and the bug that replaced it: a pack fills a *column*, and the desk's shortage is
+          *width*, so at a tall window it left half the desk blank.
+
+          `minWidth` is one pile, and that number is the whole mechanism above: below it the rail
+          wraps, rather than this box squeezing under a pile's fixed width and scrolling sideways.
+          `min-w-0`/`flex-1` cannot say it — they describe how a box shares slack, not the width at
+          which it must stop sharing. `items-start` keeps each pile its own height: stretched, a
+          switched-off pile's `bg-surface/60` wash would grow to the tallest thing on its line and
+          read as an empty box nobody drew. (It was the dashed outline that made this obvious,
+          until 2026-08-14 took the outline away — the wash it left behind stretches exactly as
+          far.) It is also what makes a line of piles ragged at the foot rather than a grid of
+          equal boxes, which is the honest drawing: a pile is as tall as the cards in it.
+
+          **The two gaps differ, and they are the two this view already had.** `gap-x-4` is the
+          16px that used to sit between columns; `gap-y-5` is the 20px that used to sit between
+          two groups sharing one — the same rhythm the rail keeps with its own `gap-5`. One `gap-4`
+          for both would quietly tighten the vertical spacing the day the columns went.
 
           **No `content-start` here, on purpose.** This box is a flex item of a line the outer
           `items-start` never stretches, so its height is exactly its content's, there is no free
           cross-space in it, and an `align-content` would have nothing to align. The one place
           that rule can act is the root above. */}
-      <div style={{ minWidth: columnWidth }} className="flex flex-1 flex-wrap items-start gap-4">
-        {columns.map((column, index) => (
-          <div
-            // By position, and that is safe here in the way a table row's key is not: a column
-            // is not a thing the reader can address, and its identity is exactly "the nth
-            // column of this layout".
-            key={index}
-            {...{ [STACK_COLUMN_ATTR]: "" }}
-            style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
-            className="flex flex-col gap-5"
-          >
-            {column.map((group) => (
-              <StackGroup
-                key={group.key}
-                group={group}
-                marketplace={marketplace}
-                violations={violations}
-                onSelect={onSelect}
-                actions={actions}
-                zoom={cardZoom}
-              />
-            ))}
-          </div>
+      <div
+        style={{ minWidth: columnWidth }}
+        className="flex flex-1 flex-wrap items-start gap-x-4 gap-y-5"
+      >
+        {flow.map((group) => (
+          <StackGroup
+            key={group.key}
+            group={group}
+            marketplace={marketplace}
+            violations={violations}
+            onSelect={onSelect}
+            actions={actions}
+            zoom={cardZoom}
+            flowWidth={columnWidth}
+          />
         ))}
       </div>
       {/* The rail: the piles played *beside* the deck — the Sideboard and the Maybeboard, in the
@@ -257,8 +237,13 @@ export function StackView({
 
           `ml-auto` is a no-op while the flowing half is `flex-1`, and does the work in the one
           case that matters: the rail on its own line, still right. The width is the same
-          `stackColumnWidth` the columns are, inline and in both halves of the shorthand, because a
-          Tailwind class built from a number emits no CSS rule at all. */}
+          `stackColumnWidth` the flowing piles are, inline and in both halves of the shorthand,
+          because a Tailwind class built from a number emits no CSS rule at all.
+
+          **The piles inside carry no `flowWidth`, and that is not tidiness.** This box is
+          `flex-col`, so a `flex: 0 0 224px` on a child would be read down the *main* axis and
+          become a height — every railed pile 224px tall, its cards clipped or floating. The rail
+          holds the width for both of them; a pile in it is a plain block filling that width. */}
       {rail.length > 0 && (
         <div
           {...{ [RAIL_ATTR]: "" }}
@@ -296,15 +281,24 @@ function StackGroup({
   onSelect,
   actions,
   zoom,
+  flowWidth,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
-  /** The zoom the column above was sized from, handed straight through to the stack so the two
+  /** The zoom this pile's box was sized from, handed straight through to the stack so the two
    *  are the same number rather than two reads of one store. */
   zoom: number;
+  /**
+   * The width to draw at as a flex item of the flow, and the mark that says it is one.
+   *
+   * **Absent in the rail, and that is load-bearing** — the rail is `flex-col`, so the `flex`
+   * shorthand below would be read down its main axis and set a *height*. The rail's own box
+   * carries the width for the piles in it.
+   */
+  flowWidth?: number;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
 
@@ -312,6 +306,12 @@ function StackGroup({
     <section
       ref={attach}
       aria-labelledby={`group-${group.key}`}
+      // The pile *is* the flex item now — there is no column box around it to carry these. Inline
+      // rather than a class, because Tailwind scans source text and a class built from a number
+      // emits no CSS rule at all; and in both halves of the shorthand, because a basis left at
+      // `auto` lets the content decide and the width above is then decoration.
+      style={flowWidth === undefined ? undefined : { width: flowWidth, flex: `0 0 ${flowWidth}px` }}
+      {...(flowWidth === undefined ? {} : { [STACK_ATTR]: "" })}
       // The caret lands here when a card leaves the pile under it — a stepper reaching zero, or
       // a move landing somewhere else — so the reader is left looking at the pile that changed
       // and hears its name. `tabIndex: -1`, so it is a place focus can be *put* and never a

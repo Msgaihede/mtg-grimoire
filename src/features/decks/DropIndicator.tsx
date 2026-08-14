@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * It has no role, no name and no text — it is decoration for a gesture only a pointer can
  * make, and narrating it to a screen reader would announce a line to a reader who cannot be
  * dragging anything. An attribute is therefore the only handle it has, in the same shape
- * `StackView`'s `STACK_COLUMN_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` use for the same
+ * `StackView`'s `STACK_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` use for the same
  * reason.
  */
 export const DROP_LINE_ATTR = "data-drop-line";
