@@ -240,6 +240,18 @@ price | type`). An **inactive category stays its own group in all three grouping
   the border box, so the highlight never read the border it appears to sit on. One thing to know if
   the lift ever regresses in switched-off piles only: **`opacity-60` makes that `<ul>` a stacking
   context**, and the `<ul>` is what takes `LAYER.raised` when a card opens.
+  **Measured in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  1280×800): every `<section>` computed `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)` —
+  the box survives, the line does not — the inactive pile computed a `0.6`-alpha wash with its
+  `<ul>` at `opacity: 0.6` against an active pile's transparent and `1`, and during a drag every
+  eligible pile computed its ring while only the pile under the pointer added `DROP_OVER`'s gold
+  and the drag source added neither. Full figures:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **`opacity-60` cannot be checked on an _empty_ pile — `CardStack` returns null for a group with
+  no cards**, so a switched-off empty pile has no `<ul>` in the DOM at all and a probe reports it
+  absent rather than 0.6. Move a card in before reading that signal (this cost the 2026-08-14 pass
+  a read on the Maybeboard). An empty pile carries the other two signals only: the wash and the
+  `INACTIVE` marker.
 - **The sideboard is pinned to the right of the desk, and it is a column rather than a panel.**
   `StackView` pulls every `kind === "side"` group out of what `packColumns` sees and draws them as
   one extra column after the packed ones — `sticky right-0`, `LAYER.raised`, an opaque `bg-bg` so
@@ -259,8 +271,20 @@ price | type`). An **inactive category stays its own group in all three grouping
   not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group
   draws whether or not anything is in it, and a predefined pile cannot be deleted — so under
   `category` the pinned column is there from the moment a deck is created, empty or not.
-  **It costs `stackColumnWidth(zoom)` permanently** — 224px at 1×, 434px at 2× — which on a 1280px
-  window at 2× is a third of the width parked on the sideboard before the deck has drawn a card.
+  **It costs `stackColumnWidth(zoom)` permanently** — 224px at 1× (**measured** 2026-08-14) and
+  434px at 2× (**derived** from the same function; the live pass ran at 1× only) — which on a
+  1280px window at 2× is a third of the width parked on the sideboard before the deck has drawn a
+  card. **Measured in the shipped window 2026-08-14** (debug build, 1280×800): the column computed
+  `position: sticky`, `right: 0px`, `z-index: 10`, an opaque `bg-bg`, a `-8px 0 16px -4px` shadow
+  and `width: 224px`; it held its `left` at 325px across a full scroll of a 1424px desk in a 632px
+  scrollport, and `elementFromPoint` over a scrolled-under card returned the Sideboard's own text
+  rather than the card. Figures: [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **A card scrolled under the pinned column is not hittable there, and that is correct** — it
+  cannot be clicked, opened or dragged until it is scrolled clear, because an opaque sticky overlay
+  is over it and a hidden card should not be grabbable. **Know the symptom, because it presents as
+  a broken drag**: the first `cdp.mjs drag` of the 2026-08-14 pass failed with "the browser never
+  started a drag" purely because the source card's centre sat under the pinned column. Scroll the
+  source clear before pressing; suspect this before suspecting the harness or pdnd.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays

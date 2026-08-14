@@ -226,9 +226,26 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   on; and the border is transparent rather than absent, for the arithmetic above. `opacity-60` also
   makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
-  **None of this has been seen in the shipped window yet.** The live CDP pass owes the one question
-  a suite cannot answer: whether a switched-off pile still reads as a separate pile with no edge
-  around it, against the app's felt, at 1× and at both ends of the zoom ladder.
+  **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
+  build at 1280×800**, driven over `scripts/cdp.mjs` against the deck "test (copy)" (Commander, 11
+  cards, 9 categories, 6 stack columns). Every `StackGroup` `<section>` computed
+  `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)`: the box survives and the line does
+  not, so `border-transparent` is measured rather than argued, and the 2px `stackColumnWidth`
+  spends on it is still being spent. The inactive Maybeboard computed
+  `background-color: oklab(0.21 1.43099e-10 -0.012 / 0.6)` with its `<ul>` at `opacity: 0.6`; an
+  active pile computed `rgba(0, 0, 0, 0)` and `opacity: 1`. The drag marks came through the same
+  pass and cost the borders nothing: during a drag **every** eligible pile computed a ring — the
+  pinned Sideboard included — the pile under the pointer additionally computed `DROP_OVER`'s gold
+  `oklab(0.75 0.0104587 0.119543 / 0.1)`, and the drag source's own pile computed neither. That is
+  now measured rather than reasoned from "a ring is a box shadow outside the border box". **The
+  harness caveat stands**: `cdp.mjs drag` intercepts, so a green pass proves nothing about a real
+  hand on a real mouse — [live-ui-verification.md](live-ui-verification.md) says why.
+  **The trap in checking any of this: `opacity-60` is unobservable on an _empty_ pile.**
+  `CardStack` returns null for a group with no cards, so a switched-off empty pile has no `<ul>` in
+  the DOM at all and a probe reports *absent* rather than 0.6. The Maybeboard read exactly that way
+  on the first pass and the figure above needed a card moved into it first. The wash and
+  `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
+  the argument for having three.
 - **The sideboard is a pinned column, not a packed one.** `StackView` splits `kind === "side"` out
   of `groups` before `packColumns` sees them and draws them as one extra column after the packed
   ones: `sticky right-0`, `LAYER.raised`, an opaque `bg-bg`, the same inline width and `flex` basis
@@ -249,12 +266,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   column winning is a fact about it being drawn last. That is the only reading an opaque pinned
   column can survive: a card lifted out of a column scrolling past has to pass under the sideboard,
   not over it. **The cost is permanent, unconditional and paid at every zoom** —
-  `stackColumnWidth(zoom)`, so 224px at 1× and 434px at 2×, which is a third of a 1280px window
-  reserved for a pile that on a new deck holds nothing at all.
-  **Nothing here has been measured in the shipped window yet either.** The live pass owes
-  two answers: that the packed columns really do scroll under the pinned one with nothing showing
-  through, and that an open card in the column beside it is occluded rather than occluding while
-  it is mid-lift.
+  `stackColumnWidth(zoom)`: **224px at 1×, measured** in the window on 2026-08-14, and 434px at 2×
+  **derived from the same function rather than measured** (the live pass ran at 1× only), which at
+  2× is a third of a 1280px window reserved for a pile that on a new deck holds nothing at all.
+  **Measured 2026-08-14** (debug build, 1280×800, the same deck as the bullet above): the pinned
+  column computed `position: sticky`, `right: 0px`, `z-index: 10`,
+  `background-color: oklch(0.16 0.01 270)` — opaque `--color-bg`, not a wash —
+  `box-shadow: rgba(0, 0, 0, 0.45) -8px 0px 16px -4px`, and `width: 224px`. It was the last of the
+  6 columns and held exactly one section, the Sideboard. **Sticky, proven rather than asserted**:
+  1424px of columns in a 632px scrollport (321px earlier, with the stats aside open), and the
+  column's viewport `left` stayed **325px** across `scrollLeft` 0 → 1103 → 0. **Occlusion, proven**:
+  with the desk scrolled, `document.elementFromPoint` at the centre of a card in the Instant column
+  returned the pinned Sideboard's own "Nothing here yet." paragraph rather than the card. The
+  packed columns really do pass _under_ it, with nothing showing through.
+- **A card scrolled under the pinned column is not hittable there — and that is the correct
+  behaviour, not a bug.** It cannot be clicked, opened or picked up until it is scrolled clear.
+  This is what the occlusion measured above _means_, and it is inherent to any opaque sticky
+  overlay: the card is hidden, so it should not be grabbable. It is also the thing that will read
+  as a bug to whoever meets it next, so **know the symptom** — it is what made the first
+  `cdp.mjs drag` of the 2026-08-14 pass fail with "the browser never started a drag": the source
+  card's centre was under the pinned column, so the press landed on the Sideboard instead. Scroll
+  the source clear of the pinned column before pressing, and suspect this before suspecting the
+  harness.
 - **The zoom badge is driven by a pulse counter, not by the zoom value** (`CardZoomIndicator`,
   `zoomPulse`). At either end of the ladder a gesture changes no number, and that is exactly when a
   reader needs an answer — they are still rolling the wheel and nothing is happening. Keyed off the
