@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasVariableCost,
   MANA_COST_GLYPHS,
   MANA_KEYS,
   MANA_LINE_GRADIENT,
@@ -98,6 +99,48 @@ describe("manaParts", () => {
       // `.ms-20`.
       expect(new RegExp(`\\.ms-${key}(?![\\w-])`).test(manaCss), `.ms-${key}`).toBe(true);
     }
+  });
+});
+
+describe("hasVariableCost", () => {
+  it("is true for a cost that names {X}, alone or among other symbols", () => {
+    expect(hasVariableCost("{X}{B}{B}{B}")).toBe(true);
+    expect(hasVariableCost("{X}")).toBe(true);
+  });
+
+  it("is false for a cost with no variable in it", () => {
+    expect(hasVariableCost("{2}{U}")).toBe(false);
+  });
+
+  /**
+   * `{Y}` and `{Z}` are worth the same as `{X}` — nothing until announced — and that is the
+   * question `engine.ts`'s `symbolValue` answers. This one names a pile, and a heading that
+   * says X over an Un-card printing `{Y}` is a heading telling the reader a lie.
+   */
+  it("is false for {Y} and {Z}, which are worth what {X} is but are not it", () => {
+    expect(hasVariableCost("{Y}{Z}")).toBe(false);
+    expect(hasVariableCost("{Y}")).toBe(false);
+  });
+
+  /** The glyph table in this file lowercases, so nothing guarantees the case a cost arrives
+   *  in — matching only the printed capital would file a card by how it was typed. */
+  it("reads a lowercase {x} as the same variable", () => {
+    expect(hasVariableCost("{x}{r}")).toBe(true);
+  });
+
+  /**
+   * A split or MDFC cost is one string, so the question is asked of the whole of it. Neither
+   * half of `{1}{R} // {1}{U}` names a variable, and the `//` is not a symbol.
+   */
+  it("is false for a split cost whose halves name no variable", () => {
+    expect(hasVariableCost("{1}{R} // {1}{U}")).toBe(false);
+  });
+
+  /** An empty cost is the land case — Scryfall sends `""` for a transform's back face and the
+   *  workbench seeds `""` for lands — so it is "no symbols", not "no answer". */
+  it("is false for an absent or empty cost", () => {
+    expect(hasVariableCost(null)).toBe(false);
+    expect(hasVariableCost("")).toBe(false);
   });
 });
 

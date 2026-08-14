@@ -122,6 +122,38 @@ export function manaParts(source: string | null): ManaPart[] {
   return parts;
 }
 
+/**
+ * Does this printed cost name the variable `{X}`?
+ *
+ * **`{X}` only — never `{Y}` or `{Z}`.** `validation/engine.ts`'s `symbolValue` scores all
+ * three as 0, and it is right to: it is answering *what is this cost worth*, and a variable
+ * contributes nothing to a mana value until it is announced. This function answers a
+ * different question — *what is this pile called* — and there the three are not
+ * interchangeable. `{Y}` and `{Z}` appear on a handful of Un-cards and nowhere else, so a
+ * heading that swept them up would be a heading saying "X" over cards that print no X: a
+ * label telling the reader a lie about the cardboard in front of them.
+ *
+ * Case-insensitive on the token, because the glyph table above lowercases (`MANA_COST_GLYPHS`
+ * holds `x y z`) and nothing guarantees the case a cost arrives in.
+ *
+ * `null` and `""` are both `false`. An empty cost is the **land** case — Scryfall gives a
+ * transform's back face `""` and `.storybook/fake/cards.ts` seeds `""` for lands — so it is a
+ * cost with no symbols rather than a cost nobody knows.
+ *
+ * A split or MDFC cost is one string (`"{X}{B}{B}{B}"`, `"{1}{R} // {1}{U}"`), so asking about
+ * the whole string is the right question: an X on either half is an X the reader pays. It goes
+ * through {@link SYMBOL} rather than `String.includes("{X}")` all the same, so the one
+ * tokeniser in this file stays the one tokeniser — a second, looser spelling of "what is a
+ * symbol" is exactly how the two drift.
+ */
+export function hasVariableCost(cost: string | null): boolean {
+  if (!cost) return false;
+  for (const match of cost.matchAll(SYMBOL)) {
+    if (match[1].toLowerCase() === "x") return true;
+  }
+  return false;
+}
+
 /** The classes that draw one brace-less token, or `null` if the font has no glyph for it. */
 function manaGlyphClass(token: string): string | null {
   const bare = token.toLowerCase().replace(/\//g, "");

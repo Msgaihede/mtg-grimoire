@@ -54,6 +54,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     facetCards: vi.fn().mockResolvedValue({
       colors: {},
       manaValues: {},
+      manaX: 0,
       formats: {},
       sets: {},
       owned: { owned: 0, missing: 0 },
@@ -137,11 +138,18 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 0,
   updatedAt: 1_800_000_000,
-  // The four v8 deck columns. Every real row carries all four, so the fixture does too.
+  // The four v8 deck columns, the three v12 view-state ones and `separateXGroup` from v13.
+  // Every real row carries all eight, so the fixture does too.
   coverKind: "card_art",
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // How the editor was last read. These three are the defaults — a deck nobody has pressed a
+  // tab, a `Group by` or a `Sort` on.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
+  separateXGroup: false,
 };
 
 const BOLT: CardSummary = {

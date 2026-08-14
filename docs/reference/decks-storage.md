@@ -50,6 +50,57 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the _live_ deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
   Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
   perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
+- **Switching the theory list on _moves_ the live deck into it. It does not copy it.** The deck
+  the reader has built **is the plan**, so it becomes the theory list — and `live`, what is
+  actually sleeved up, **starts empty** and fills as they acquire the cards. The guard is the one
+  it always was: only on the false→true _transition_, and only when the theory list is empty,
+  because a plan the reader has already started is not something a re-press of the switch may
+  pour the live deck over. Two things ride along in the same transaction. The deck's
+  `last_variant` becomes `theory`, so the reader lands where their deck now is rather than on a
+  blank page they did not empty. And the move **reallocates**: `deck_allocations` claims
+  collection copies for `live` only, so cards that have just left the live list must release the
+  copies they were holding — otherwise a deck with nothing sleeved up goes on reserving a binder
+  it no longer plays from, and every other deck reads the shortage. **The rule this inverts was a
+  seeding copy** — live was left alone and theory filled from it, on the reasoning that an empty
+  theory list beside a full live one is not a blank page but reads as data loss. That got the
+  right danger and the wrong half: nothing is ever deleted here, both lists being the same table,
+  and what the copy actually produced was two identical lists with no way to tell which one was
+  being edited. A reader who switches the theory list on is saying _what I have is the plan_.
+  **`deck_theory_copy_from_live` is unchanged** and still means "copy what is sleeved up into the
+  plan" — it is simply no longer what the switch does.
+- **The empty-theory guard is now load-bearing twice, and the second reason is the one to know.**
+  `variant` is _in_ `DECK_CARD_GRAIN`, and the move is a bare `UPDATE … SET variant` with no
+  `ON CONFLICT` clause — so re-labelling a live row over a theory row of the same deck, category
+  and printing is a `UNIQUE constraint failed` that fails the caller's whole write. Adding an
+  `ON CONFLICT` here would be the wrong repair twice over: it would hide the guard's removal, and
+  either arm of it, skip or fold, silently rewrites a plan the reader started. The copy that used
+  to sit here could carry `DO NOTHING` precisely because it was a copy; a move cannot.
+- **The editor's last view is stored on the deck, because reading a deck is not editing it.**
+  Schema v12 adds `decks.last_variant`, `last_group_by` and `last_sort_by` — three `TEXT NOT NULL`
+  columns defaulting to `live`, `category` and `alphabetical` — carried on `DeckRow` as
+  `lastVariant`/`lastGroupBy`/`lastSortBy` and written by one command,
+  `deck_set_view_state(deckId, viewState)`, whose `{ variant?, groupBy?, sortBy? }` reads an
+  absent field as "leave it" — `DeckPatch`'s own `coalesce(?n, column)` convention. Three things
+  it deliberately does **not** do, each of which the obvious implementation would have done: it
+  does not move `updated_at`, because pushing a deck to the top of a gallery sorted by "most
+  recently touched" for the crime of somebody looking at its Theory tab is a lie about what
+  happened; it writes **no `deck_audit` row**, because the history holds changes to the deck and
+  which tab was open is not one; and it **reallocates nothing**. An unknown deck id is refused by
+  name (`GONE`) rather than passed over silently — the editor is exactly where a deck deleted in
+  another window is discovered.
+- **`last_variant` is validated in Rust and the other two are not, which is the boundary rather
+  than an omission.** `ALTER TABLE … ADD COLUMN` cannot add a CHECK, so none of the three carries
+  one in SQL and the fence has to sit somewhere. `last_variant` is checked against
+  `schema::DECK_VARIANTS`, because that is a word the crate owns — the same word
+  `deck_cards.variant` holds. `last_group_by` and `last_sort_by` hold a **TypeScript**
+  vocabulary (`category|manaValue|type` and `alphabetical|manaCost|price|type`) the crate
+  deliberately does not know: Rust stores the reader's answer verbatim as a fact, and TypeScript
+  narrows it on read with a fallback to the default. Teaching `schema.rs` those seven words would
+  put the deck editor's grouping and sorting modes in two places, and the copy that could not be
+  changed without a migration is the wrong one to have. **The one thing Rust does check about
+  those two is that neither is blank** (`NO_MODE`): an empty string is not a word in anybody's
+  vocabulary, it is a bug in the caller, and storing it hands the editor back a remembered choice
+  of nothing.
 - **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
   else.** All categories and all tags come back whatever the variant — an empty category still
   draws its column, an inactive one always draws — but a category's _and a tag's_ `card_count`
@@ -86,9 +137,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
   decides what is allocated for) then row id, and within a card, exact printing, then real
   copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
-  `set_category_active`, `delete_category` or `commit_import`** — those six and nothing else,
+  `set_category_active`, `delete_category`, `commit_import` or the theory list being switched
+  on** — those seven and nothing else,
   which is worth knowing while debugging, because pressing "Send missing to wishlist" or
-  switching a pile off rebuilds a deck's allocations as a side effect. The import is the one
+  switching a pile off rebuilds a deck's allocations as a side effect. The theory move is the
+  seventh and the least obvious of them: it empties `live`, and a claim held for a card that is
+  no longer sleeved up is a copy no other deck can see. The import is the one
   that runs it for **many** cards at once and still only once, which is the whole reason
   `deck_import_commit` is a command rather than a loop over `deck_add_card`. A **built** deck's claims are subtracted from
   what other decks can see. The
@@ -124,13 +178,45 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
   It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
-  **Six writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
+  **Seven writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
   deck, so a row would be orphaned by its own event); **both** `missing_to_wishlist` commands,
-  `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); and **three of the four
+  `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); `deck_set_view_state`
+  (which tab the reader had open is not a change to the deck, and a history that filled up with
+  them would bury the ones that are); and **three of the four
   folder writes** — create, rename and move — because a folder belongs to no deck and
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
   per deck it un-filed.
+- **`decks.separate_x_group` is a stored _reading_ preference, and `deck_update` is the whole of
+  how it is written.** `INTEGER NOT NULL DEFAULT 0`, **schema v13** — whether this deck gathers
+  the cards printing `{X}` under a heading of their own. Per deck rather than per user for
+  `theory_enabled`'s reason: it is a statement about how _this_ list is read, so two decks may
+  disagree and a copy must not. It rides `DeckPatch`, `DeckRow`, `DeckBefore` and `DECK_SELECT`,
+  and **`duplicate_deck` carries it across** while `is_built` and `archived` still reset — what
+  describes the deck comes over, what state the deck is _in_ does not, and a copy that read
+  differently from its original would be a surprise nobody asked for. Rust stores it and does
+  nothing else with it: which cards fall in the group, what it is called and where it sorts are
+  `grouping.ts`'s, which is the crate's facts/conclusions boundary rather than an accident of
+  where it was easier to write. **Two positional traps, both silent when got wrong.** The column
+  goes **last** in `DECK_SELECT` and `deck_row` reads it at the **last** index, because a column
+  added anywhere else shifts every later index into a field of the same SQLite type and nothing
+  errors. **That index is not a constant and this document will not name it**: it was 15 when the
+  column was written, and merging the view-state step's three columns underneath moved it — which
+  is the trap itself, not a footnote to it. Read it off `deck_row`.
+  And `update_deck` binds it as **`?12`, not `?11`** — that hole is `COVER_CARD_ART`, bound rather
+  than spelled in the `SET` list, so a new column takes the next number at the **end** of the list
+  and never the next one that merely _reads_ free.
+- **The audit word is `"xGroup"`, and it is the only multi-word field name `record_deck_edit`
+  writes.** Every other arm of that switch — and of `auditText.ts`'s, which is the only thing that
+  reads the payload — is a single lowercase word, so this is the first place the two spellings can
+  drift with nothing going red: `auditText`'s `default` arm answers a field it does not recognise
+  with "Changed the deck", a sentence true of every deck edit, so a typo here reads as a bland
+  history line rather than as a failure. **Deriving the word from the column gives `separateX`,
+  which is wrong** — and is exactly what the Storybook fake guessed before it was corrected
+  against `deck.rs`. `auditText.test.ts` pins the right word _and_ that wrong-but-plausible one,
+  which is the only fence either side has. Neither sentence claims a card moved ("Split the X
+  spells into their own group" / "Folded the X spells back into their mana values"), because
+  nothing was added, removed or refiled: it changes how the deck is read and not what is in it.
 - **The six single-card commands, and what each takes** (the seventh, `deck_import_commit`, is
   the bulk one and has its own bullet below).\
   `deck_get(id, variant)`;
@@ -333,8 +419,12 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
   promise the answer before the press.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
-  `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
-  add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
+  `newestWrite([...])` counts six of the hook's eight** — update (the rename, the cover, the
+  Built toggle and the `Split X` chip, all four of which are the same deck-row write and
+  therefore not four mutations), add-card, set-quantity, move, missing-to-wishlist,
+  swap-printing. The other two are `setTag` and `rememberView`, and neither is a write to what
+  is _in_ the deck.
+  **There is no remove
   mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
   removes a deck row. The deck _row_ is a different hook — the gallery's `useDecks` owns create,
   update, remove and duplicate, and `useDeck.update` is that same `deck_update` narrowed to the
@@ -364,7 +454,71 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   fetch a picture, and it is the **whole card** — `cardImageUrl(…, DECK_CARD_VARIANT)`, which is
   `grid`; `Table` and `Text` are text and draw nothing —
   which is why the old single-row view's thumbnail, its `17rem` container query and
-  `STACK_MAX_WIDTH` are gone rather than moved.
+  `STACK_MAX_WIDTH` are gone rather than moved. **That pass predates the `Split X` toggle**
+  (schema v13, 2026-08-14): the twelve stand as measured — the toggle is a modifier of one of the
+  three modes and not a fourth mode.
+- **The split arm was then driven live 2026-08-14** (`npm run tauri dev`, a **debug** build,
+  1280×800, against the real 116,703-card corpus), and every claim above about it held:
+  - **Exclusive, measured rather than argued.** A deck holding one `{X}{R}` (Fireball, mana
+    value 1) read `Mana value 1 :: 2 rows` with the switch off, and `Mana value 1 :: 1 row` plus
+    `Mana value X :: 1 row` with it on — **six rows either way**. The card has one home in both
+    modes, which is the whole of the exclusive rule.
+  - **The heading sorts where it says.** `Mana value 1 … 5`, then `Mana value X`, then the
+    inactive `Maybeboard` — so the derived pile really does land ahead of the switched-off
+    categories rather than among them.
+  - **An empty X pile does not exist.** Removing the one `{X}` card took the heading with it
+    while the switch stayed on, which is the derived-group rule and not a special case.
+  - **It survives a reload, which is the whole point of the column.** `location.reload()`, back
+    to the gallery, reopen: the chip read `aria-pressed="true"` and `Mana value X` was drawn
+    again. `groupBy` itself came back at its default in that pass, which was the state of the
+    tree it was measured on — **v12's `last_group_by` landed the same day** and a reopened deck
+    now returns to the grouping it was left in, so the pair comes back together. The reason the
+    chip is a *deck* answer is unchanged and is now the reason both are: each says how _this_
+    list is read.
+  - **The audit sentence is right end to end**, which is the check that could only fail
+    silently: the history drew *"Split the X spells into their own group"* and *"Folded the X
+    spells back into their mana values"*. A `"xGroup"` that disagreed with `deck.rs` would have
+    rendered `auditText`'s default arm — a plain "Changed the deck" — and gone unnoticed.
+  - **The curve is the arithmetic, not an estimate.** Ten `<li>`s, the tenth reading *"1 card
+    with X in their cost"*, the list **216px** wide at **18px** cells, and `scrollWidth ===
+    clientWidth` — so the tenth bar fitted the 250px content box with no overflow, as derived.
+    **Those two numbers are history rather than the current build**: the pass was driven against
+    the 280px stats aside, and `main` moved the stats to a full-width band below the deck hours
+    later. The cells are 20px again — see the bullet on the curve's width below. What the pass
+    actually proved outlives the geometry: the derivation and the paint agreed to the pixel, and
+    `scrollWidth === clientWidth` is the assertion that says a bar *fits* rather than merely
+    computes.
+  - **`Avg. mana value 2.67` with the switch on and off.** The one number the split does not
+    reach, confirmed against a live deck rather than a fixture.
+- **`Split X` is a modifier of the mana-value grouping, and in a deck the rule for X is the
+  _exclusive_ one.** A card printing `{X}` lands in `X_GROUP_KEY` — `"mv-x"`, headed
+  `Mana value X` — **and in no other group**, because every surface drawing these headings counts
+  copies and sums prices: a card in two piles makes the columns add up to more than the deck, and nothing on
+  screen says which heading lied. **The search chips are the same idea shaped the opposite way,
+  deliberately** — there X is an overlay ORed with the numerals, because a search cannot find one
+  row twice ([search-faceting.md](search-faceting.md)). Neither is a bug in the other. The pile
+  sorts at 9, after `8 or more` and ahead of `unknown`, which moved to 10; the reasons, the
+  `{Y}`/`{Z}` exclusion and the `useState`-versus-`deck.update` rule are the frontend's, in
+  [src/features/decks/CLAUDE.md](../../src/features/decks/CLAUDE.md).
+- **The curve's cells are 20px in both arms, and for one afternoon they were not.** The tenth bar
+  arrived while the stats block was a **280px** aside beside the deck (`STATS_WIDTH_PX`, `w-70`)
+  that drew its own scrollbar. 280 less `p-3.5` on both sides and a 1px border is **250px** of
+  content; nine 20px cells at `gap-1` are **212**, ten would be **236**, and 14px is not enough
+  for a scrollbar the platform draws at roughly **15**. Widening the panel was the wrong half to
+  give: that constant is what the `DECK_FLOOR` table measures the deck column against, so 24px of
+  panel is 24px off the deck at every window size in that table — and a bar is cheaper than a
+  deck. So the ten-bar arm narrowed to **18px** (`10 × 18 + 9 × 4 = 216`) and was measured in the
+  window at exactly that.
+  **Then `main` moved the stats into a full-width band below the deck and the constraint stopped
+  existing** — there is no 250px budget, and the block no longer scrolls (`DeckEditor`'s section
+  does), so there is no scrollbar to leave room for either. A tenth bar now costs nothing anybody
+  was spending, and the chart is back to one cell width in both arms. **The compromise was
+  correct and is gone**, which is worth having in writing: a number carried forward after its
+  reason has been deleted is indistinguishable from a number nobody understood.
+  **The 4px gap is what stayed put throughout** — it is the whole of what makes two `bg-surface`
+  tracks read as two bars, and closing it to buy width turns the chart into one block. The width
+  is written out whole (`w-5`) because Tailwind scans source text and one assembled from a number
+  emits no rule at all.
 - **A deck card is the whole card, and the app's marks are overlays on it.** Both picture views
   drew the 626×457 `art` crop inside three app-built bands until 2026-08-12, which showed the one
   part of a card that does not say what it is: no printed frame, no type line, no rules text, no

@@ -428,19 +428,36 @@ const DAY = 86_400;
  */
 const FILED_DECK_FOLDER = 2;
 
+/** The columns {@link starterDecks}' `deck` helper fills in for a deck that says nothing about
+ *  them — the four schema v8 added and the three that remember where the reader was. */
+type DefaultedDeckColumn =
+  | "coverKind"
+  | "folderId"
+  | "notes"
+  | "theoryEnabled"
+  | "lastVariant"
+  | "lastGroupBy"
+  | "lastSortBy";
+
 function starterDecks(): FakeDeck[] {
-  /** The v8 columns default to their DDL values, so a deck below says only what is unusual
-   *  about it. Deck 4 spells all four out and is written without this. */
+  /** The v8 columns and the three view-state ones default to their DDL values, so a deck below
+   *  says only what is unusual about it. Deck 4 spells them all out and is written without
+   *  this. */
   const deck = (
-    over: Omit<FakeDeck, "coverKind" | "folderId" | "notes" | "theoryEnabled"> &
-      Partial<Pick<FakeDeck, "coverKind" | "folderId" | "notes" | "theoryEnabled">>,
+    over: Omit<FakeDeck, DefaultedDeckColumn> & Partial<Pick<FakeDeck, DefaultedDeckColumn>>,
   ): FakeDeck => ({
     coverKind: "card_art",
     folderId: null,
     notes: null,
-    // Off on the first three: the Live/Theory control **is** this boolean, and a deck that
+    // Off on the first three: the Theory/Live control **is** this boolean, and a deck that
     // draws one is a deck every story about it has to say which list it is looking at.
     theoryEnabled: false,
+    // The three defaults, which is what a deck nobody has touched the toolbar on holds — and
+    // what keeps every story written before the editor remembered anything saying exactly what
+    // it said. Deck 4 is the one that was left somewhere.
+    lastVariant: "live",
+    lastGroupBy: "category",
+    lastSortBy: "alphabetical",
     ...over,
   });
   return [
@@ -480,10 +497,13 @@ function starterDecks(): FakeDeck[] {
       isBuilt: false,
       archived: true,
       // **A plan that is an exact copy of the deck**, which is not a degenerate fixture: it is
-      // the state `theoryEnabled: true` *produces*, because switching the list on seeds it from
-      // live. So this is the deck whose two lists genuinely agree — the answer
-      // `deck_theory_diff` gives when there is nothing to buy, which is a sentence rather than a
-      // blank panel. An archived deck is the cheapest place to keep it: nothing else opens it.
+      // the state `deck_theory_copy_from_live` *produces*, and the only command that produces
+      // it — switching the list on **moves** the deck into the plan and leaves live empty, so a
+      // full list beside a full list is now reachable by that command alone. This is the deck
+      // whose two lists genuinely agree: the answer `deck_theory_diff` gives when there is
+      // nothing to buy, which is a sentence rather than a blank panel. An archived deck is the
+      // cheapest place to keep it — nothing else opens it. Both lists are seeded outright
+      // rather than left to a toggle, which is what keeps that true whatever the switch does.
       theoryEnabled: true,
       updatedAt: CLOCK_BASE - 30 * DAY,
     }),
@@ -513,9 +533,17 @@ function starterDecks(): FakeDeck[] {
         "Bracket 3, so two game changers is the budget. The Cut list is switched off rather " +
         "than emptied — the cards are still there when I change my mind.",
       // **The one deck with a plan.** Everything the theory list is for is only reachable from
-      // a deck that has one: the editor's Live/Theory control, `deck_theory_diff`, and the two
+      // a deck that has one: the editor's Theory/Live control, `deck_theory_diff`, and the two
       // theory commands.
       theoryEnabled: true,
+      // **The one deck that was left somewhere**, and all three columns say so at once: it
+      // reopens on Theory, grouped by type and sorted by mana cost. Three defaults would seed
+      // a memory nothing could tell from having none, which is the state the other three decks
+      // already hold — and the plan is the honest thing for *this* deck to have been left on,
+      // since it is the deck whose whole reason to exist is the plan beside it.
+      lastVariant: "theory",
+      lastGroupBy: "type",
+      lastSortBy: "manaCost",
       updatedAt: CLOCK_BASE - 2 * HOUR,
     },
   ];

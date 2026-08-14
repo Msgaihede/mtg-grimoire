@@ -40,6 +40,16 @@ pub struct FacetResponse {
     pub colors: BTreeMap<String, i64>,
     /// Keyed `"0"`–`"8"`, where `8` is eight-or-more. Plain counts.
     pub mana_values: BTreeMap<String, i64>,
+    /// Printings whose printed cost carries an `{X}`. A plain count and a **sibling** of
+    /// [`Self::mana_values`] rather than an `"x"` key inside it, because the two are different
+    /// shapes: that map is a partition, so its values sum to the result set, and a key that
+    /// double-counted every card already in `"3"` would make the sum a lie the moment anything
+    /// read it as one.
+    ///
+    /// Counted over the same `Skip::Mana` base the buckets are, so the X chip greys out on the
+    /// same rule and at the same moment they do — and, being in that base's own dimension, its
+    /// count ignores whether X is currently pressed.
+    pub mana_x: i64,
     /// Keyed by `legalities` key. Plain counts.
     pub formats: BTreeMap<String, i64>,
     /// Keyed by set code. Plain counts, and **every code in the corpus is sent, zeros
@@ -203,20 +213,30 @@ fn and_not(a: &BitSet, b: &BitSet) -> BitSet {
     out
 }
 
-/// The mana chips as one bitset, or `None` when no chip is pressed.
+/// The whole mana dimension as one bitset, or `None` when the request presses nothing in it.
 ///
 /// Chips are ORed with each other, and a value past the last chip is that chip: the SQL
 /// spells `>= 8` open-ended, so the index's bucket 8 already holds everything above it.
 /// Bucket [`CardIndex::MANA_UNKNOWN`] is unreachable from here on purpose — no chip asks for
 /// "no mana value at all", and `NULL IN (…)` is NULL.
-fn union_mana(ix: &CardIndex, values: &[u8]) -> Option<BitSet> {
-    if values.is_empty() {
+///
+/// **`manaX` is one more alternative in that same union, because it is one more alternative in
+/// the same `OR` group of the SQL.** It is a dimension of the mana filter and not a dimension
+/// of its own, so it shares [`Skip::Mana`]: pressing X must not grey out the value chips, and
+/// pressing a value chip must not grey out X. ANDing it in instead would count "mana value 2
+/// *and* variable" — an intersection the search does not return.
+fn union_mana(ix: &CardIndex, values: Option<&[u8]>, mana_x: bool) -> Option<BitSet> {
+    let values = values.unwrap_or(&[]);
+    if values.is_empty() && !mana_x {
         return None;
     }
     let mut u = BitSet::new(ix.capacity);
     for v in values {
         let bucket = usize::from(*v).min(usize::from(crate::filters::MANA_VALUE_OPEN_ENDED));
         ix.mana[bucket].for_each(|d| u.set(d));
+    }
+    if mana_x {
+        ix.mana_x.for_each(|d| u.set(d));
     }
     Some(u)
 }
@@ -316,7 +336,7 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, text: Option<&BitSet>) -> Fa
 
     let prep = Prepared {
         sets: union_sets(ix, req),
-        mana: req.mana_values.as_deref().and_then(|v| union_mana(ix, v)),
+        mana: union_mana(ix, req.mana_values.as_deref(), req.mana_x.unwrap_or(false)),
     };
     let base = |skip| base(ix, req, text, &prep, skip);
 
@@ -346,6 +366,10 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, text: Option<&BitSet>) -> Fa
             i64::from(mana_base.and_count(&ix.mana[bucket])),
         );
     }
+    // The same base, so the X chip greys on the same rule as the nine beside it. It is *not*
+    // a tenth entry in the map above: those partition the result set and this one overlaps
+    // them, so a reader summing the map would count every variable-cost card twice.
+    out.mana_x = i64::from(mana_base.and_count(&ix.mana_x));
 
     let formats_base = base(Skip::Formats);
     for (k, key) in crate::legalities::LEGALITY_KEYS.iter().enumerate() {
@@ -611,6 +635,62 @@ mod tests {
         assert_eq!(f.mana_values.get("1").copied(), Some(2));
     }
 
+    /// The X chip lives **inside** the mana dimension, and this is the pair of claims that
+    /// makes it one chip rather than two filters:
+    ///
+    /// * it ORs with the value chips — pressing "1" and "X" returns cards that are either, not
+    ///   cards that are both, which is the intersection the `AND` shape would have produced and
+    ///   which is empty here;
+    /// * it shares [`Skip::Mana`], so pressing X leaves every value chip counted as though it
+    ///   were not pressed, and pressing a value chip leaves the X count alone.
+    ///
+    /// The variable-cost row is mana value 3 as well, because Scryfall scores X as 0 — so its
+    /// presence in `mana_values["3"]` under an X filter is the overlay working, not a leak.
+    #[test]
+    fn the_x_chip_ors_with_the_value_chips_and_shares_their_dimension() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,mana_cost,
+                is_paper,raw)
+             VALUES ('9','Crux of Fate','ktk','1','en','normal',3.0,'{X}{B}{B}{B}',1,'{}')",
+            [],
+        )
+        .unwrap();
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let x = compute(&ix, &req(|r| r.mana_x = Some(true)), None);
+        assert_eq!(x.total, 1, "the one variable cost in the fixture");
+        assert_eq!(x.mana_x, 1, "its own dimension, counted as if X were off");
+        assert_eq!(
+            x.mana_values.get("1").copied(),
+            Some(2),
+            "so are the value chips — Bolt and Sol Ring, still offered"
+        );
+
+        let both = compute(
+            &ix,
+            &req(|r| {
+                r.mana_values = Some(vec![1]);
+                r.mana_x = Some(true);
+            }),
+            None,
+        );
+        assert_eq!(
+            both.total, 3,
+            "either, not both: Bolt, Sol Ring and the X card"
+        );
+
+        // Every OTHER dimension does narrow by it, which is what makes it a filter at all.
+        let sets = compute(&ix, &req(|r| r.mana_x = Some(true)), None);
+        assert_eq!(sets.sets.get("ktk").copied(), Some(1));
+        assert_eq!(sets.sets.get("lea").copied(), Some(0), "offered, and empty");
+
+        // And with nothing pressed the count is the whole corpus's, not zero.
+        let none = compute(&ix, &req(|_| {}), None);
+        assert_eq!(none.total, 4);
+        assert_eq!(none.mana_x, 1);
+    }
+
     /// …and the format select's. Sol Ring is legal only in Legacy here, so a Legacy search
     /// narrows to it — while Modern must still report the two cards picking it would give.
     #[test]
@@ -802,6 +882,7 @@ mod tests {
         };
         f.colors.insert("W".into(), 1);
         f.mana_values.insert("0".into(), 2);
+        f.mana_x = 5;
         f.formats.insert("modern".into(), 3);
         f.sets.insert("lea".into(), 4);
         f.owned = OwnedFacets {
@@ -813,6 +894,8 @@ mod tests {
             serde_json::json!({
                 "colors": {"W": 1},
                 "manaValues": {"0": 2},
+                // A sibling of `manaValues`, deliberately — never an `"x"` key inside it.
+                "manaX": 5,
                 "formats": {"modern": 3},
                 "sets": {"lea": 4},
                 "owned": {"owned": 1, "missing": 2},
@@ -945,6 +1028,7 @@ mod tests {
             paper: BitSet::new(cap),
             colors: std::array::from_fn(|_| BitSet::new(cap)),
             mana: std::array::from_fn(|_| BitSet::new(cap)),
+            mana_x: BitSet::new(cap),
             formats: (0..crate::legalities::LEGALITY_KEYS.len())
                 .map(|_| BitSet::new(cap))
                 .collect(),
@@ -971,6 +1055,11 @@ mod tests {
                 }
             }
             ix.mana[(d % 9) as usize].set(d);
+            // Roughly one printing in eleven prints an `{X}`, spread across every bucket —
+            // an overlay, so these docs are in `mana` as well.
+            if d % 11 == 0 {
+                ix.mana_x.set(d);
+            }
             for k in 0..ix.formats.len() {
                 if !(d as usize + k).is_multiple_of(3) {
                     ix.formats[k].set(d);

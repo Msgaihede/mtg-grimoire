@@ -26,6 +26,8 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+// Not a card write: the tab, the `Group by` and the `Sort` the reader leaves the deck on.
+const deckSetViewState = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 // The docked search panel is the editor's own filter bar, set picker and result wall — and the
 // toolbar's quick add resolves a typed name through the same command.
@@ -61,6 +63,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckAddCard,
     deckMissingToWishlist,
     deckSwapPrinting,
+    deckSetViewState,
     formatSpecs,
     searchCards,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
@@ -109,6 +112,15 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // How the editor was last read. The defaults, so a test that says nothing about them opens on
+  // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
+  // one field it is about through `detail()`.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
+  // Schema v13, and `0` is the column's own default: a deck counts an `{X}` spell at the mana
+  // value Scryfall gives it until the reader says otherwise.
+  separateXGroup: false,
 };
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */
@@ -269,6 +281,13 @@ const group = (name: string) => screen.getByRole("region", { name });
  *  would be two controls a screen reader cannot tell apart. */
 const COPIES = "Copies of Lightning Bolt in Main deck";
 
+/** The X toggle's whole accessible name, which `ToggleChip` also spends as its tooltip. Written
+ *  out once because three tests address the control, and a regex over its two-word label alone
+ *  would keep passing on the day the sentence went missing — which is the half of the name that
+ *  has to stand up read out of context, with no Group by select beside it. */
+const SPLIT_X =
+  "Split X — give cards with X in their cost a group of their own, instead of counting X as zero";
+
 /**
  * jsdom lays nothing out, so the docked panel's virtualised wall measures a scroll container of
  * zero height and renders no tiles at all. One number is the whole of what it is missing;
@@ -317,13 +336,6 @@ function desk(px: number) {
   };
 }
 
-/** The stats block is open by default and is counted against the panel's floor, so the three
- *  width tests below close it first — they are about the panel and the deck, not about three
- *  columns at once. */
-async function hideStats() {
-  await userEvent.click(screen.getByRole("button", { name: "Stats" }));
-}
-
 beforeEach(() => {
   resetRowIds();
   useAppStore.setState({ openDeckId: 4, selectedCardId: null, paneDeckContext: null });
@@ -338,6 +350,7 @@ beforeEach(() => {
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  deckSetViewState.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   // Nothing found by default: a result named after a card already in the deck would be a
   // second button by that name, and every test here addresses cards by name.
@@ -783,6 +796,61 @@ describe("DeckEditor", () => {
     ]);
   });
 
+  /**
+   * The X toggle is a modifier of the Group by select, so it exists exactly where it has
+   * something to say.
+   *
+   * Under Categories and Type there is no curve for it to change: a control that persists
+   * across a grouping it has no effect on is one whose scope the reader has to remember. The
+   * claim is mostly about the two absences, which nothing else in this file can settle.
+   */
+  it("offers the X split only while the deck is grouped by mana value", async () => {
+    await open();
+    expect(screen.queryByRole("button", { name: SPLIT_X })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    expect(screen.getByRole("button", { name: SPLIT_X })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "type");
+    expect(screen.queryByRole("button", { name: SPLIT_X })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The switch is the deck's, not the editor's** — `decks.separate_x_group`, written through
+   * the same `update` the Built toggle writes.
+   *
+   * A `useState` here would look identical for one session and lose the reader's answer the
+   * moment they closed the deck, which is the one thing a per-deck reading preference exists to
+   * avoid. So the assertion is on the *write*: nothing about this control is local.
+   */
+  it("writes the X split onto the deck rather than holding it in the editor", async () => {
+    await open();
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+
+    await userEvent.click(screen.getByRole("button", { name: SPLIT_X }));
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { separateXGroup: true }));
+  });
+
+  /** And it is drawn from the deck the read answered with — a chip whose pressed state came from
+   *  anywhere else would disagree with the columns beside it after any other window changed the
+   *  deck. */
+  it("draws the X split pressed for a deck that carries it", async () => {
+    deckGet.mockResolvedValue(detail({ separateXGroup: true }, [bolt()]));
+
+    await open();
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+
+    const chip = screen.getByRole("button", { name: SPLIT_X });
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    // Never the `disabled` attribute, which would take it out of the tab order: the caret can
+    // land on it whichever way it is set, and a keyboard reader hears the state from
+    // `aria-pressed`.
+    expect(chip).toBeEnabled();
+    await userEvent.click(chip);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { separateXGroup: false }));
+  });
+
   /** The order *inside* a heading, which the grouping does not decide. Alphabetical by default,
    *  because a decklist is read by name. */
   it("sorts inside each group from the toolbar", async () => {
@@ -867,10 +935,11 @@ describe("DeckEditor", () => {
 
   /**
    * What the deck adds up to, over the same rows the view is drawn from — one query, so a curve
-   * and a legality panel can never disagree. It is an aside beside the deck rather than a band
-   * over it, and it is the reader's to put away.
+   * and a legality panel can never disagree. A band at the foot of the page rather than an aside
+   * beside the deck, and **nothing puts it away**: there is no toggle, because a block that
+   * takes no width off the desk row is a block nobody has to trade anything for.
    */
-  it("adds the deck up in an aside the reader can put away", async () => {
+  it("adds the deck up in a band under the deck", async () => {
     await open();
 
     const stats = screen.getByRole("region", { name: "Deck stats" });
@@ -882,9 +951,25 @@ describe("DeckEditor", () => {
       ),
     ).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Stats" }));
+    expect(screen.queryByRole("button", { name: "Stats" })).not.toBeInTheDocument();
+  });
 
-    expect(screen.queryByRole("region", { name: "Deck stats" })).not.toBeInTheDocument();
+  /**
+   * Under the deck means **under the price strip too**, which is where the remove tray is drawn
+   * for the length of a drag. A band between the two would put four charts between a card and
+   * the one drop that takes it out of the deck, so the order of these three is a fact about the
+   * drag rather than about the charts.
+   */
+  it("draws the stats band below the deck and the price strip", async () => {
+    await open();
+
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+    const asOf = screen.getByText(/prices as of the last/i);
+    // `DOCUMENT_POSITION_FOLLOWING` — the band comes after the as-of line in document order,
+    // which in this one flex column is after it on screen.
+    expect(
+      asOf.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   /**
@@ -1143,15 +1228,16 @@ describe("DeckEditor", () => {
    * narrowest thing gives way first.
    *
    * 376 is what a 1024px window leaves this row with the card pane docked beside the view
-   * (measured at 361 once the page's own scrollbar is out); 608 is `DECK_FLOOR` plus the panel
+   * (measured at 361 once the page's own scrollbar is out); 592 is `DECK_FLOOR` plus the panel
    * and the `gap-4` between them — the exact width at which both fit again, so the pair of
-   * tests pins the floor to the pixel. (604 in the previous editor, whose desk row was `gap-3`.)
+   * tests pins the floor to the pixel. (608 while the floor was 208, and 604 in the previous
+   * editor, whose desk row was `gap-3`. The floor dropped to 192 when the stats band made the
+   * editor a scroller and the row started paying for a second scrollbar.)
    */
   it("falls back to the rail when the deck and the panel cannot both fit", async () => {
     const restore = desk(376);
     try {
       await open();
-      await hideStats();
 
       const rail = await screen.findByRole("button", { name: "Search cards" });
       expect(rail).toHaveAttribute("aria-expanded", "false");
@@ -1166,10 +1252,9 @@ describe("DeckEditor", () => {
   });
 
   it("draws the panel at the width where the deck still clears its floor", async () => {
-    const restore = desk(608);
+    const restore = desk(592);
     try {
       await open();
-      await hideStats();
 
       expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Search cards" })).not.toHaveAttribute(
@@ -1182,10 +1267,9 @@ describe("DeckEditor", () => {
 
   /** And one pixel under it is the rail — the floor is a number, not a feeling. */
   it("gives way one pixel below that", async () => {
-    const restore = desk(607);
+    const restore = desk(591);
     try {
       await open();
-      await hideStats();
 
       expect(await screen.findByRole("button", { name: "Search cards" })).toHaveAttribute(
         "aria-disabled",
@@ -1198,24 +1282,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The stats aside is counted against that floor, which is the one thing the rebuild changed
-   * about it: the desk row holds three things where it held two. A reader who opens Stats in a
-   * window that was exactly wide enough for the deck and the panel gets the rail — and closing
-   * either gives the panel back, because nothing here records an intention it cannot honour.
+   * **Two things share the desk row, and the stats band is not one of them.** It was: the
+   * rebuild put a 280px aside between the view and the panel and subtracted it from this floor,
+   * so a reader who opened Stats at a width where the deck and the panel both fit lost the
+   * panel to its rail. The band is under the deck now and takes no width from either, so the
+   * pair of tests above is the whole of the arithmetic — this one holds the band to that.
    */
-  it("gives the panel up to the stats block when only one of them fits", async () => {
-    const restore = desk(608);
+  it("keeps the panel open beside a deck at the floor, stats and all", async () => {
+    const restore = desk(592);
     try {
       await open();
-      // Stats is open by default, so the panel is already a rail at this width.
-      expect(await screen.findByRole("button", { name: "Search cards" })).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
-
-      await hideStats();
 
       expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Deck stats" })).toBeInTheDocument();
     } finally {
       restore();
     }
@@ -1650,6 +1729,162 @@ describe("DeckEditor", () => {
 
     expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument();
     expect(screen.queryByText(/cards differ/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * One of the two tabs, looked up **fresh every time**: switching variant puts the editor
+   * through a beat with no row, which takes the whole header down and back — so a node held
+   * from before a press is a node the assertion after it would be reading out of a detached
+   * tree.
+   */
+  const tab = (name: "Live" | "Theory") =>
+    within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", { name });
+
+  /** Both lists on screen at once, so the pair can be read in the order they are drawn. */
+  function withPlan(deck: Partial<DeckRow> = {}) {
+    const over = { theoryEnabled: true, ...deck };
+    const live = detail(over, [bolt({ quantity: 4 })]);
+    const theory = detail(over, [
+      bolt({ quantity: 2, variant: "theory" }),
+      card({ name: "Bear", variant: "theory" }),
+    ]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+  }
+
+  /** The two tabs, and which of them the reader's eye lands on first. **Theory before Live**:
+   *  the plan is the list a deck is built in, and it is where turning the switch on now puts
+   *  the cards. Asserted as a sequence, because both being present says nothing about that. */
+  it("draws the plan's tab before the deck's", async () => {
+    withPlan();
+    await open();
+
+    const tabs = within(await screen.findByRole("group", { name: "Deck list" })).getAllByRole(
+      "button",
+    );
+    expect(tabs.map((b) => b.textContent)).toEqual(["Theory", "Live"]);
+  });
+
+  /**
+   * A deck opens on the tab it was left on, which is the whole point of the three columns.
+   *
+   * Restoring writes **nothing** back: it is a read of what is already stored, and a restore
+   * that wrote would put a `deck_set_view_state` behind every deck anyone merely looked at.
+   */
+  it("opens on the list the deck remembers", async () => {
+    withPlan({ lastVariant: "theory" });
+    await open();
+
+    await screen.findByRole("group", { name: "Deck list" });
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+    // The plan's own cards are what is drawn — the tab is not just painted.
+    expect(await screen.findByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+    expect(deckSetViewState).not.toHaveBeenCalled();
+  });
+
+  /** The other half of the same rule, so neither word is being read as "not the other one". */
+  it("opens on the deck when that is what it remembers", async () => {
+    withPlan({ lastVariant: "live" });
+    await open();
+
+    await screen.findByRole("group", { name: "Deck list" });
+    expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Theory")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /**
+   * **A deck that no longer keeps a plan opens on Live, whatever it remembers.**
+   *
+   * Switching the theory list off does not rewrite `lastVariant`, so `"theory"` on a deck with
+   * no switch is an ordinary state rather than a corrupt one — and honouring it would leave the
+   * reader reading a list with no control to get back from. Two things hold it: the restore
+   * asks for Live on a deck that keeps no plan, and the clamp that has always run after the
+   * restore still catches the switch being turned off under an open editor.
+   */
+  it("opens on the deck when it keeps no plan, whatever tab it remembers", async () => {
+    deckGet.mockResolvedValue(
+      detail({ theoryEnabled: false, lastVariant: "theory" }, [bolt({ quantity: 4 })]),
+    );
+    await open();
+
+    expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument();
+    // Never even read: the editor asked for one list, and it was the live one.
+    expect(deckGet).not.toHaveBeenCalledWith(4, "theory", "tcgplayer");
+    expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
+  });
+
+  /** The other two remembered controls, restored the same way and from the same row. */
+  it("opens with the grouping and the sort the deck remembers", async () => {
+    deckGet.mockResolvedValue(
+      detail({ lastGroupBy: "manaValue", lastSortBy: "price" }, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+      ]),
+    );
+    await open();
+
+    expect(screen.getByLabelText("Group by")).toHaveValue("manaValue");
+    expect(screen.getByLabelText("Sort")).toHaveValue("price");
+    // And it is the list that was regrouped, not just the select.
+    expect(await screen.findByRole("list", { name: "Mana value 1" })).toBeInTheDocument();
+  });
+
+  /**
+   * A stored word this build does not offer lands on the default rather than sticking.
+   *
+   * The columns are `string` on the wire on purpose — a database outlives the app, and a mode
+   * a future build stops offering must not put the editor somewhere its own select cannot draw
+   * and the reader cannot press their way out of.
+   */
+  it("falls back to the defaults for a grouping or a sort it no longer offers", async () => {
+    deckGet.mockResolvedValue(
+      detail({ lastGroupBy: "colour", lastSortBy: "rarity" }, [bolt()]),
+    );
+    await open();
+
+    expect(screen.getByLabelText("Group by")).toHaveValue("category");
+    expect(screen.getByLabelText("Sort")).toHaveValue("alphabetical");
+    expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
+  });
+
+  /**
+   * Every press is stored, and **only the control that moved travels**: absent means "leave it",
+   * so a press on Sort cannot write back a grouping read out of a stale render.
+   */
+  it("remembers each control the reader presses, one field at a time", async () => {
+    withPlan({ lastVariant: "live" });
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Theory" }));
+    await waitFor(() => expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "theory" }));
+
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await waitFor(() =>
+      expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "manaValue" }),
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
+    await waitFor(() => expect(deckSetViewState).toHaveBeenLastCalledWith(4, { sortBy: "price" }));
+
+    expect(deckSetViewState).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * **The row does not fight the reader.** The restore is honoured once per stored *triple*, so
+   * a row still saying `"theory"` — `rememberView` does not invalidate, so it is not re-read
+   * after the press — cannot pull the reader back off the tab they just chose.
+   */
+  it("keeps the tab the reader pressed while the row still says the old one", async () => {
+    withPlan({ lastVariant: "theory" });
+    await open();
+    await screen.findByRole("group", { name: "Deck list" });
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+
+    await userEvent.click(tab("Live"));
+
+    await waitFor(() => expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "live" }));
+    expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
   });
 
   /** The one write on the stats aside, end to end: what the deck is short of becomes wishes,

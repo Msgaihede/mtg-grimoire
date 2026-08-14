@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "rea
 import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
-import { MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
+import { hasVariableCost, MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -10,8 +10,10 @@ import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
 
-/** The nine curve buckets — 0 through 7 exactly, and 8 open-ended, which is the bucketing the
- *  mana-value filter chips and `grouping.ts`'s mana-value grouping already use. */
+/** The nine **numeric** curve buckets — 0 through 7 exactly, and 8 open-ended, which is the
+ *  bucketing the mana-value filter chips and `grouping.ts`'s mana-value grouping already use.
+ *  The X bar that can ride behind them is not one of these: see
+ *  {@link DeckStatsSummary.variableCost}. */
 const CURVE_BUCKETS = 9;
 
 /**
@@ -156,6 +158,27 @@ export interface DeckStatsSummary {
   unknownManaValue: number;
   /** Nine buckets over nonlands: index 0–7 exactly, index 8 is "8 or more". */
   curve: number[];
+  /**
+   * Nonland copies whose printed cost names `{X}`, kept out of {@link curve} and drawn as a
+   * tenth, trailing bar — or `null` when the deck is not splitting them out, which is where
+   * they sit in whichever numeric bucket their mana value names.
+   *
+   * `null` rather than `0` because the two say different things: `0` is "the reader asked for
+   * the X bar and this deck has no X spells", which is a fact worth drawing an empty bar for,
+   * and `null` is "there is no X bar". The same distinction {@link averageManaValue} draws
+   * between an average of nothing and an average of zero.
+   *
+   * **One home, never two**, so the bars still sum: `sum(curve) + (variableCost ?? 0) +
+   * unknownManaValue` is {@link nonlands} in both modes. Membership is
+   * `hasVariableCost(card.manaCost)` — the same predicate `grouping.ts` files the `Mana value
+   * X` heading by — so the curve and the groups beside it cannot disagree about which cards
+   * are X.
+   *
+   * **It changes no other number here, and {@link averageManaValue} least of all.** See that
+   * field's own note: an X spell costs what it costs with X at zero (CR 202.3b) whichever pile
+   * it is drawn in.
+   */
+  variableCost: number | null;
   /** Copies of each colour, counted **once per colour on the card** — a WU card feeds both W
    *  and U. Overlapping on purpose: this is "what can this deck cast", which is a different
    *  question from the colour pie's "what is this deck made of". */
@@ -168,8 +191,17 @@ export interface DeckStatsSummary {
   /** The deck list's own type buckets, in its own order — see `typeBucket` 130 lines above,
    *  which is where this grouping lives now. */
   typeDist: TypeCount[];
-  /** Over nonlands with a mana value, weighted by copies. `null` for a deck of nothing but
-   *  lands — an average of no numbers is not 0. */
+  /**
+   * Over nonlands with a mana value, weighted by copies. `null` for a deck of nothing but
+   * lands — an average of no numbers is not 0.
+   *
+   * **The same number whether or not {@link variableCost} is split out**, and that is the one
+   * place where "X gets a pile of its own" must not propagate. An `{X}` spell's mana value is
+   * what it costs with X at zero (CR 202.3b) — `{X}{B}{B}{B}` is 3 — and the toggle is a
+   * *display* choice about which bar a card is drawn in, not a claim that the card has stopped
+   * costing three. So an X card keeps contributing its `cmc` here in both modes; only which
+   * bar it lands in moves.
+   */
   averageManaValue: number | null;
   /**
    * Summed from each row's own {@link DeckCard.unitPrice}, never `cards.price_usd` — which is
@@ -308,8 +340,13 @@ function drawable(slices: Slice[]): Slice[] {
  * {@link DeckStatsSummary.price} and {@link DeckStatsSummary.unpriced} — and both are now read
  * off a single `unitPrice` per row, priced by the backend at the marketplace the deck was read
  * at. Nothing here chooses between two figures, so nothing here has to be told which to pick.
+ *
+ * @param separateXGroup the deck's own `separateXGroup`, which moves an `{X}` spell out of its
+ * numeric bucket and into {@link DeckStatsSummary.variableCost}. It is the **only** argument
+ * that changes a number here, and it changes exactly one — see that field, and
+ * {@link DeckStatsSummary.averageManaValue} for the number it deliberately does not touch.
  */
-export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
+export function deckStats(cards: readonly DeckCard[], separateXGroup = false): DeckStatsSummary {
   // One flag rather than the old `zone !== "maybe"`, and it is the same line `validateDeck`
   // opens with: a pile switched off counts toward nothing whatever it is called and whatever
   // kind it is.
@@ -353,15 +390,28 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
   let manaValued = 0;
   let manaValueTotal = 0;
   let unknownManaValue = 0;
+  let variableCost = 0;
   for (const card of nonlands) {
     const mv = manaValue(card);
     if (mv === null) {
       unknownManaValue += card.quantity;
       continue;
     }
-    curve[Math.min(CURVE_BUCKETS - 1, Math.max(0, Math.floor(mv)))] += card.quantity;
+    // **Before the bucketing and never instead of it**: an X spell costs what it costs with X
+    // at zero (CR 202.3b), and the toggle above moves which bar it is drawn in rather than what
+    // it costs. `{X}{B}{B}{B}` feeds 3 into the average whichever pile it is standing in, which
+    // is why these two lines sit outside the branch below.
     manaValued += card.quantity;
     manaValueTotal += mv * card.quantity;
+
+    // One home, never two, so the bars still sum to the nonland count. An unknown mana value
+    // cannot reach here: `manaValue` answers `null` only when the row has neither a `cmc` nor a
+    // printed cost, and a cost that is not there cannot name `{X}`.
+    if (separateXGroup && hasVariableCost(card.manaCost)) {
+      variableCost += card.quantity;
+      continue;
+    }
+    curve[Math.min(CURVE_BUCKETS - 1, Math.max(0, Math.floor(mv)))] += card.quantity;
   }
 
   const pips: Record<PipKey, number> = { W: 0, U: 0, B: 0, R: 0, G: 0 };
@@ -436,6 +486,7 @@ export function deckStats(cards: readonly DeckCard[]): DeckStatsSummary {
     nonlands: copiesOf(nonlands),
     unknownManaValue,
     curve,
+    variableCost: separateXGroup ? variableCost : null,
     pips,
     colorDist,
     landDist,
@@ -482,6 +533,7 @@ export function DeckStats({
   cards,
   marketplace,
   send,
+  separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
   /** Which marketplace the Price figure quotes — its currency for the formatter and its label
@@ -489,8 +541,23 @@ export function DeckStats({
    *  arrived priced. */
   marketplace: Marketplace;
   send: MissingWrite;
+  /**
+   * The deck's own `separateXGroup`, and it has to be **the same value the grouping beside this
+   * strip was built with**.
+   *
+   * That is the whole justification for the prop existing rather than this surface deciding for
+   * itself. A curve that counts `{X}{B}{B}{B}` as mana value 3 while the column next to it is
+   * headed "Mana value X" is two surfaces answering one question about one deck two ways — the
+   * failure this folder's rules keep naming, and the reason `grouping.ts` is the only thing that
+   * says what a group is. `DeckEditor` reads the flag off the loaded deck once and hands the
+   * same value to both, so the bar and the heading move together or not at all.
+   *
+   * Defaulted rather than required, because the editor renders before `deck_get` answers and a
+   * curve is not the thing to hold up on a boolean.
+   */
+  separateXGroup?: boolean;
 }) {
-  const stats = useMemo(() => deckStats(cards), [cards]);
+  const stats = useMemo(() => deckStats(cards, separateXGroup), [cards, separateXGroup]);
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**
@@ -610,7 +677,11 @@ export function DeckStats({
         // the editor this row is a few hundred pixels wide, and a chart whose numbers are cut
         // off is a chart that has stopped being one.
         <div className="flex flex-wrap items-start gap-x-6 gap-y-4">
-          <Curve curve={stats.curve} unknown={stats.unknownManaValue} />
+          <Curve
+            curve={stats.curve}
+            unknown={stats.unknownManaValue}
+            variable={stats.variableCost}
+          />
           <Pie caption="Colors" slices={stats.colorDist} />
           <Pie caption="Lands" slices={stats.landDist} />
           <TypeBars types={stats.typeDist} />
@@ -770,15 +841,48 @@ function Missing({
 }
 
 /**
- * The curve: nine buckets over the deck's nonlands.
+ * The curve: nine numeric buckets over the deck's nonlands, and a tenth `X` bar behind them
+ * when the deck is splitting its `{X}` spells out.
  *
  * Data-quiet by the direction's own instruction — a surface track with an accent fill, no
  * five-colour anything, no motion. The whole axis is drawn even where a bucket is empty,
- * because a gap in a curve is a fact about the deck.
+ * because a gap in a curve is a fact about the deck — and that holds for the X bar too: with
+ * the toggle on and no X spells in the deck it draws at zero, which is the honest answer to
+ * "where did my X spells go".
+ *
+ * **Every cell is 20px, including in the ten-bar arm, and it briefly was not.** While the stats
+ * block was a 280px aside beside the deck it had **250px** of content (280 less `p-3.5` both
+ * sides and a 1px border) and drew its own scrollbar: nine 20px cells at a 4px gap are 212, ten
+ * would be 236, and 14px is not enough for a scrollbar the platform draws at roughly 15 — so the
+ * ten-bar arm narrowed to 18px (`10 × 18 + 9 × 4 = 216`) rather than take 24px of width off the
+ * deck column, which `DECK_FLOOR`'s table measured against that 280.
+ *
+ * **That constraint is gone and so is the compromise.** The block is a full-width band below the
+ * deck now, and it no longer scrolls — `DeckEditor`'s section does. There is no 250px budget and
+ * no scrollbar to leave room for, so a tenth bar costs nothing anybody was spending and the
+ * chart goes back to one cell width in both arms. Kept here as history because the narrowing was
+ * deliberate and correct for one afternoon, and a reader finding `w-5` in a doc that once
+ * explained an 18px cell deserves to know which way it went.
+ *
+ * The **gap** is what has stayed put throughout: 4px is the whole of what makes two `bg-surface`
+ * tracks read as two bars, and closing it to buy width would turn the chart into one block.
  */
-function Curve({ curve, unknown }: { curve: number[]; unknown: number }) {
+function Curve({
+  curve,
+  unknown,
+  variable,
+}: {
+  curve: number[];
+  unknown: number;
+  /** Copies with `{X}` in their cost, or `null` for a deck that is not splitting them out —
+   *  {@link DeckStatsSummary.variableCost}, drawn as this chart's last bar. */
+  variable: number | null;
+}) {
   const id = useId();
-  const max = Math.max(...curve, 1);
+  const max = Math.max(...curve, variable ?? 0, 1);
+  // Written out whole rather than built from a number: Tailwind scans source text for class
+  // names, so a width assembled at runtime emits no rule at all.
+  const cell = "w-5";
   return (
     <div className="min-w-0">
       <p id={id} className="text-xs text-dim">
@@ -787,43 +891,85 @@ function Curve({ curve, unknown }: { curve: number[]; unknown: number }) {
       <ul aria-labelledby={id} className="mt-1.5 flex items-end gap-1">
         {curve.map((count, mv) => {
           const last = mv === curve.length - 1;
-          const label = last ? `${mv}+` : `${mv}`;
           return (
-            <li key={mv} className="flex w-5 flex-col items-center gap-1">
-              {/* The one place the pair is spoken, so a screen reader hears "8 cards at mana
-                  value 1" rather than the two loose numbers the eye reads as a column. */}
-              <span className="sr-only">
-                {count} {count === 1 ? "card" : "cards"} at mana value {last ? `${mv} or more` : mv}
-              </span>
-              <span
-                aria-hidden="true"
-                className="font-mono text-[0.7rem] leading-none tabular-nums text-dim"
-              >
-                {count}
-              </span>
-              <span
-                aria-hidden="true"
-                className="flex h-10 w-full items-end overflow-hidden rounded-sm bg-surface"
-              >
-                <span
-                  className="w-full rounded-sm bg-accent"
-                  style={{ height: `${(count / max) * 100}%` }}
-                />
-              </span>
-              <span
-                aria-hidden="true"
-                className="font-mono text-[0.7rem] leading-none tabular-nums text-dim"
-              >
-                {label}
-              </span>
-            </li>
+            <Bar
+              key={mv}
+              cell={cell}
+              count={count}
+              max={max}
+              label={last ? `${mv}+` : `${mv}`}
+              // The one place the pair is spoken, so a screen reader hears "8 cards at mana
+              // value 1" rather than the two loose numbers the eye reads as a column.
+              said={`at mana value ${last ? `${mv} or more` : mv}`}
+            />
           );
         })}
+        {variable !== null && (
+          // Last, and behind the open-ended bucket: X is not a number, so it cannot sit on the
+          // axis anywhere the eye would read as a quantity. The word the sentence uses is the
+          // reader's own — "with X in their cost" — rather than the `{X}` the card prints,
+          // because braces are not something a screen reader says.
+          <Bar cell={cell} count={variable} max={max} label="X" said="with X in their cost" />
+        )}
       </ul>
       {unknown > 0 && (
         <p className="mt-1 text-[0.7rem] text-dim">{unknown} with no mana value, not counted</p>
       )}
     </div>
+  );
+}
+
+/**
+ * One column of the curve: a count, a track with a fill, and a label — all three `aria-hidden`,
+ * with a single `sr-only` sentence carrying the pair.
+ *
+ * Its own component because the X bar has to be *the same bar* as the nine numbered ones rather
+ * than a lookalike beside them: two spellings of a column is how one of them quietly loses its
+ * sentence, and the sentence is the whole of what this chart says to a screen reader.
+ */
+function Bar({
+  cell,
+  count,
+  max,
+  label,
+  said,
+}: {
+  /** The column width, as a whole Tailwind class — see {@link Curve} for the arithmetic. */
+  cell: string;
+  count: number;
+  max: number;
+  /** What the eye reads under the bar: `0`…`7`, `8+`, `X`. */
+  label: string;
+  /** The tail of the spoken sentence, after "3 cards". */
+  said: string;
+}) {
+  return (
+    <li className={cn("flex flex-col items-center gap-1", cell)}>
+      <span className="sr-only">
+        {count} {count === 1 ? "card" : "cards"} {said}
+      </span>
+      <span
+        aria-hidden="true"
+        className="font-mono text-[0.7rem] leading-none tabular-nums text-dim"
+      >
+        {count}
+      </span>
+      <span
+        aria-hidden="true"
+        className="flex h-10 w-full items-end overflow-hidden rounded-sm bg-surface"
+      >
+        <span
+          className="w-full rounded-sm bg-accent"
+          style={{ height: `${(count / max) * 100}%` }}
+        />
+      </span>
+      <span
+        aria-hidden="true"
+        className="font-mono text-[0.7rem] leading-none tabular-nums text-dim"
+      >
+        {label}
+      </span>
+    </li>
   );
 }
 

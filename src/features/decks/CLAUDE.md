@@ -73,12 +73,20 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   bug** — a deck's seeded categories are in `PREDEFINED_CATEGORIES` order, so a clamp to
   `categories[0]` put every quick add on a fresh deck into **Commander**. Zero now _means_ auto,
   nothing overwrites it, and an explicit pick **stays** picked.
+- **The X pile is a _heading_, not a category, and its key says so.** `X_GROUP_KEY` is `"mv-x"`
+  and shares the `mv-…` namespace deliberately: it is one more mana-value heading, so no
+  `deck_cards.category_id` points at it, nothing can be dropped into it, and it is gone the moment
+  the reader groups by something else. Exported beside `X_GROUP_NAME` (`"Mana value X"`) so that
+  no chart, story or test re-spells either one.
 
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s
-  `newest([...])` counts **six** of them: update (rename, cover, Built toggle), add-card,
-  set-quantity, move, missing-to-wishlist, swap-printing.
+  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle,
+  the `Split X` chip), add-card, set-quantity, move, missing-to-wishlist, swap-printing. The X
+  chip is a **deck-row** write riding the same `update` as the other three, so it is not a seventh
+  mutation and it touches not one `deck_cards` row. The two outside the six are `setTag` and
+  `rememberView`, each for its own reason stated on its definition.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
@@ -86,9 +94,26 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   (`useSwapFromPane`, `useSidebarDrops`) borrow a mutation whole and own only their own reporting.
 - The deck _row_ is a different hook: the gallery's `useDecks` owns create, update, remove and
   duplicate.
+- **Switching the theory list on _moves_ the live deck into it — it does not copy it.** What the
+  reader has built is the plan, so it becomes the theory list and `live` starts empty and fills as
+  they acquire cards; the same write sets `last_variant = 'theory'`, so the editor lands where
+  the deck now is instead of on a blank page nobody emptied. Only on the false→true transition,
+  and only when the theory list is empty. **The rule it replaces copied**, on the reasoning that
+  an empty theory list beside a full live one reads as data loss. Right danger, wrong half:
+  nothing is deleted either way — the two lists are the same table — and what the copy actually
+  handed the reader was two identical lists with no way to tell which one they were editing.
+  `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
+  plan".
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
+- **The audit field for the X split is `"xGroup"`, the one multi-word field name in that switch,
+  and the drift is silent.** Every other arm is a single lowercase word, so this is the first place
+  `deck.rs`'s spelling and `auditText.ts`'s can part company with nothing going red: the `default`
+  arm answers an unrecognised field with "Changed the deck", which is true of every deck edit and
+  therefore never fails. **Deriving it from the column gives `separateX`, which is wrong** — the
+  Storybook fake guessed exactly that before it was corrected — so `auditText.test.ts` pins the
+  right word _and_ the wrong-but-plausible one. Copy the word from `deck.rs`; never re-derive it.
 - **A deck card's unit price is that printing's nonfoil price at the selected marketplace** — a
   deck names a printing, not a finish. `cards.price_usd` is a fallback chain across finishes and
   is never summed. **One `unitPrice` per row, not a pair**: the marketplace is in `useDeck`'s
@@ -190,7 +215,115 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long
-  as it holds cards.
+  as it holds cards — and it stays that group _whole_: `buildGroups` appends it carrying its own
+  `kind`, so a switched-off
+  Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
+  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, `StackView`'s
+  pinned column — still sees a sideboard in the two modes that otherwise have no categories in
+  them, which is the right answer in both cases and is a special case in neither.
+- **The deck stats are a band at the foot of the editor, and there is no control that hides
+  them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
+  the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
+  panel was asked whether it fit — so opening Stats at 1280 with a card pane docked cost the
+  reader their search, and the toggle existed to give that width back. Full width under the deck
+  the four charts sit on one line and nothing on the desk is traded for them. Three consequences,
+  each measured in the shipped window and none of them visible to a test:
+  **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
+  drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
+  would put four charts between a card and the one drop that takes it out;
+  **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
+  to **847px** in the **710px** a 1280×800 window leaves, so the deck holds a `min-h-96` floor
+  (**384px** = one whole stack card and its group heading) and the band's last ~137px is one
+  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**612px**);
+  **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the
+  row's arithmetic did not count — the same 16px correction, for the same reason, as the drop from
+  224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
+  `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
+  pixel short.
+- **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
+  switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
+  one holding cards and `live` is the column that fills as the reader acquires them. Reading
+  left to right is then plan → reality, which is the direction the difference readout beside it
+  already counts in.
+- **The editor reopens on the view the reader left, and the deck row is where that is kept.**
+  `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
+  `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
+  history and reallocates nothing — looking at a deck is not editing it. It is deliberately
+  **not** `useAppStore`: `cardZoom`, `searchView` and `collectionView` are one session-wide
+  answer, and which list of a _particular_ deck the reader was reading is a fact about that deck.
+- **The narrowing is TypeScript's, and that is the boundary rather than a missing constraint.**
+  `ALTER TABLE ADD COLUMN` cannot add a CHECK, so Rust validates only `last_variant`, whose
+  vocabulary the crate owns, and stores the other two verbatim as facts. `GroupBy` and `SortBy`
+  are this layer's words, so `asGroupBy` (`grouping.ts`) and `asSortBy` (`sorting.ts`) narrow
+  them on read and fall back to the default — a stored word nothing offers reopens the editor on
+  `category`/`alphabetical` rather than in a state no control can draw.
+- **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
+  interesting part.** The editor is already showing what the reader picked; this write only makes
+  it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
+  back the three fields it *restores from* a beat after the press, which is how a second press
+  made inside that beat gets undone by the first one's echo. It is also outside `DeckEditor`'s
+  refused-write family on purpose — **that family is writes to what is _in_ the deck**, and this
+  one changes no card — so its failure is silent, the cost being a deck that reopens on its old
+  tab.
+- **`Split X` is a _modifier_ of the mana-value grouping and not a fourth mode.** The chip is
+  drawn only under `groupBy === "manaValue"`, and it lives inside that select's own `gap-1.5`
+  cluster rather than out in the toolbar's `gap-x-4`, because a control that persists across a
+  grouping it has no effect on is a control the reader has to remember the scope of. The
+  inertness is **structural, not a branch to keep in step**: `separateX` is passed to
+  `manaValueBucket`, which only the one `manaValue` arm of `buildGroups` calls.
+- **In a deck the X rule is _exclusive_; in search the same idea is _additive_, and the opposition
+  is deliberate on both sides.** Here a card printing `{X}` is in the X group **and nowhere
+  else** — a heading counts copies and sums prices, so a card in two groups makes the headings add
+  up to more than the deck and nothing on screen says which one lied. In search the chips are an
+  OR over rows, where finding a card twice is not a thing that can happen, so `{X}{B}{B}{B}`
+  answers the mana-value-3 chip **and** the X chip. **Do not "fix" either one into agreeing with
+  the other**; they are answering different questions about the same card.
+- **X sorts at 9, and `mv-unknown` moved 9 → 10 to let it.** Like `8 or more`, X is open-ended
+  rather than a number, so it belongs at the tail and not at the head where a reader counts their
+  cheapest spells; `unknown` stays behind it because it is the absence of an answer rather than an
+  answer. **The X test runs _before_ the `cmc === null` check**, which is the second half of the
+  same rule: an `{X}` in the printed cost is knowledge, so a row with a null `cmc` and an X in its
+  cost is X, never unknown.
+- **`{X}` only, never `{Y}` or `{Z}`** — `hasVariableCost` in `src/lib/mana.ts`, going through
+  that file's one `SYMBOL` regex rather than a second, looser spelling of what a symbol is.
+  `validation/engine.ts`'s `symbolValue` scores all three as 0 and is right to: it answers _what
+  is this cost worth_. A heading answers _what is this pile called_, and a `{Y}` un-card filed
+  under X is a heading telling the reader a lie about the cardboard in front of them.
+- **The switch is the _deck's_, not the editor's**: `decks.separate_x_group` (schema v13), read off
+  the loaded row as `separateXGroup` and written through `useDeck.update` — **never `useState`**,
+  and never `rememberView` either. Both halves of that matter. `groupBy` and `sortBy` are also
+  remembered per deck now (`lastGroupBy`/`lastSortBy`), but they are remembered as _where the
+  reader had got to_, which is why the command that stores them moves no `updated_at` and writes
+  no history. Splitting the X spells out is a **change to the deck**, rides the same `deck_update`
+  as the rename and the cover, and is audited as one. This one is an answer about a particular
+  curve: a storm list where half the spells are `{X}` reads quite differently from an aggro deck
+  with one Fireball in it. It reaches no rule — not size, not copies, not legality, not the
+  allocator — and nothing in `validation/` has heard of it or should.
+- **`DeckStats` honours the flag under _every_ grouping while the chip that sets it is drawn under
+  one, and that is a decision with a known cost rather than an oversight.** `DeckEditor` reads the
+  flag once and hands the same value to `buildGroups` and to `DeckStats`, because a curve counting
+  `{X}{B}{B}{B}` as 3 beside a column headed `Mana value X` is two surfaces answering one question
+  about one deck two ways — the failure this folder's rules keep naming. The deck's answer does
+  not stop being true because the reader went back to their categories. So a reader grouped by
+  `category` or `type` can see a split curve with **no control on screen to unsplit it**; the
+  pairing is what must hold, and this is what it costs.
+  **`lastGroupBy` narrows that cost to a session, and knowing which kind of gap it is decides
+  whether it is worth repairing.** The grouping is stored on the deck too, so a deck left under
+  `manaValue` reopens under `manaValue` and the chip comes back beside it — nobody _returns_ to a
+  split curve with no control for it, which was the version of this worth worrying about. What is
+  left takes a deliberate press in the same sitting: group by something else and the chip goes
+  with the mode it belongs to, while the curve keeps answering for the deck. One press back
+  brings it, and that press is now remembered.
+- **The average mana value does not move when the flag flips**, and it is the one number the
+  split deliberately does not reach. An `{X}` spell costs what it costs with X at zero
+  (CR 202.3b) — `{X}{B}{B}{B}` is 3 — and the toggle is a display choice about which bar a card is
+  drawn in, not a claim that the card stopped costing three. `DeckStatsSummary.variableCost` is
+  `null` rather than `0` when the deck is not splitting, for the reason `averageManaValue` is
+  `null` rather than `0` for a deck of nothing but lands: "there is no X bar" and "the X bar is
+  empty" are different sentences, and the second is worth drawing. The bars still sum —
+  `sum(curve) + (variableCost ?? 0) + unknownManaValue` is `nonlands` in both modes. The tenth
+  bar's width arithmetic, and why the 280px panel did not grow to hold it, are in
+  [decks-storage.md](../../../docs/reference/decks-storage.md).
 - **An empty category draws no heading**, and the exception is the four seeded
   `PREDEFINED_CATEGORIES` (Commander, Sideboard, Companion, Maybeboard), which draw empty because
   they are the fixed zones and an empty command zone is itself a fact about the deck. The rule is
@@ -235,12 +368,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
-- **`CardStack` is arithmetic, not taste.** The card's height is _derived_ — a Magic card's aspect
-  applied to the fixed column width, plus the data line less its rise, **319px** — and the
+- **`CardStack` is arithmetic, not taste.** The card's height is _derived_: a Magic card's aspect
+  applied to the card's own width gives **293** of image, its two hairlines make that **295**, and
+  the data line less its rise makes **319px**. The
   collapsed **−285px** margin leaves a **34px** reveal, a legibility floor for the overlaid tag
   rather than a fraction. The list gets a fixed `stackHeight(n) = 34(n−1) + 319 + 8`, and the open
   card's margin turns −285 into +8: a **293px** push-down of every later card, out of a box whose
-  height does not change.
+  height does not change. **Those two hairlines are the card's own and they still paint**:
+  `STACK_CARD_BORDER` is a length with two owners, and the pair that stopped painting on
+  2026-08-14 is the group `<section>`'s, one level up in `stackColumnWidth`.
 - **The stack's controls are revealed by the card being _open_, never by `group-hover:`**
   (`revealedWhenOpen`). A collapsed card's only hittable part is its 34px strip, so hovering it
   used to reveal a control bar hundreds of pixels below, behind three other cards. They are a
@@ -265,7 +401,69 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
-  of a card. Scaling the two independently agrees at 1× and drifts at every other stop.
+  of a card. Scaling the two independently agrees at 1× and drifts at every other stop. 210 + 12 +
+  2 = **224** at 1×, which is the `14rem` this replaced, exactly. **The `border` term is the
+  `<section>`'s own hairline and it is `border-transparent`** (see the next bullet): a border box
+  that paints nothing still occupies its 1px either side, so clearing the colour cost this sum
+  nothing — while **deleting the class** would draw every card 2px wider than `stackCardWidth()`
+  says it is, which is the one number the whole of `CardStack` is derived from.
+- **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
+  2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
+  a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
+  `border-dashed border-border bg-surface/40` inactive. A column of card faces is already a
+  rectangle with a hard edge, so an outline around it framed a frame, and fifteen of them read as a
+  form rather than as a deck. **The cost is the one signal that told the two states apart**, so an
+  inactive pile now says so three ways and an active pile says nothing at all: the wash, the dimmed
+  name beside `GroupHeader`'s `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`.
+  The drag marks needed no rework — `DROP_RING` is `ring-2`, and a ring is a box shadow **outside**
+  the border box, so the highlight never read the border it appears to sit on. One thing to know if
+  the lift ever regresses in switched-off piles only: **`opacity-60` makes that `<ul>` a stacking
+  context**, and the `<ul>` is what takes `LAYER.raised` when a card opens.
+  **Measured in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  1280×800): every `<section>` computed `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)` —
+  the box survives, the line does not — the inactive pile computed a `0.6`-alpha wash with its
+  `<ul>` at `opacity: 0.6` against an active pile's transparent and `1`, and during a drag every
+  eligible pile computed its ring while only the pile under the pointer added `DROP_OVER`'s gold
+  and the drag source added neither. Full figures:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **`opacity-60` cannot be checked on an _empty_ pile — `CardStack` returns null for a group with
+  no cards**, so a switched-off empty pile has no `<ul>` in the DOM at all and a probe reports it
+  absent rather than 0.6. Move a card in before reading that signal (this cost the 2026-08-14 pass
+  a read on the Maybeboard). An empty pile carries the other two signals only: the wash and the
+  `INACTIVE` marker.
+- **The sideboard is pinned to the right of the desk, and it is a column rather than a panel.**
+  `StackView` pulls every `kind === "side"` group out of what `packColumns` sees and draws them as
+  one extra column after the packed ones — `sticky right-0`, `LAYER.raised`, an opaque `bg-bg` so
+  the scrolling columns pass _under_ it, the same inline width and `flex` basis as every other
+  column, and a soft left shadow for the seam (a shadow, not a border: the borders had just gone,
+  and a hairline reinstated here would have been the only one left in the view). It carries
+  `STACK_COLUMN_ATTR` **and** `STACK_PINNED_ATTR`, because "is a column" and "is the pinned one"
+  are two claims and a sweep that counts columns has to go on counting this one. The failure it
+  prevents is a drag with no destination on screen: the Sideboard sorts last, so on a deck wide
+  enough to scroll it packs off the right edge, and a card dragged out of the main deck has nowhere
+  to be let go of. **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a
+  commander is one card and a companion is one card, and pinning either would spend a column on a
+  pile that is read at a glance. Two things then need no special case: a derived group is
+  `kind: null`, so `manaValue` and `type` pin nothing _unless_ the reader has switched the Sideboard
+  off (which appends the category itself, kind and all — the first bullet in this section); and the
+  column is rendered only when a `side` group exists. **That last condition is real for a story and
+  not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group
+  draws whether or not anything is in it, and a predefined pile cannot be deleted — so under
+  `category` the pinned column is there from the moment a deck is created, empty or not.
+  **It costs `stackColumnWidth(zoom)` permanently** — 224px at 1× (**measured** 2026-08-14) and
+  434px at 2× (**derived** from the same function; the live pass ran at 1× only) — which on a
+  1280px window at 2× is a third of the width parked on the sideboard before the deck has drawn a
+  card. **Measured in the shipped window 2026-08-14** (debug build, 1280×800): the column computed
+  `position: sticky`, `right: 0px`, `z-index: 10`, an opaque `bg-bg`, a `-8px 0 16px -4px` shadow
+  and `width: 224px`; it held its `left` at 325px across a full scroll of a 1424px desk in a 632px
+  scrollport, and `elementFromPoint` over a scrolled-under card returned the Sideboard's own text
+  rather than the card. Figures: [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **A card scrolled under the pinned column is not hittable there, and that is correct** — it
+  cannot be clicked, opened or dragged until it is scrolled clear, because an opaque sticky overlay
+  is over it and a hidden card should not be grabbable. **Know the symptom, because it presents as
+  a broken drag**: the first `cdp.mjs drag` of the 2026-08-14 pass failed with "the browser never
+  started a drag" purely because the source card's centre sat under the pinned column. Scroll the
+  source clear before pressing; suspect this before suspecting the harness or pdnd.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -288,6 +486,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   293px from where they are going: it reads as the card jumping in front and the stack catching
   up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
   this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+  **`LAYER.raised` has a second occupant in this view now, and the two are ordered by the JSX
+  rather than by a number**: the pinned sideboard column sits on the same rung as an open card's
+  list, and equal z-indexes resolve by document order, so the pinned column winning is a fact
+  about it being drawn last. That is the only reading an opaque pinned column can survive — a card
+  lifted out of a column scrolling past has to go _under_ the sideboard, not over it — and moving
+  the pinned column above the packed ones would invert it silently, with the suite still green.
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
   lift was observable from neither.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach

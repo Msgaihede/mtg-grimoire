@@ -104,6 +104,8 @@ import {
   PRINTING_GROUP_BY_OPTIONS,
   isPrintingGroupBy,
 } from "@/features/card/printings";
+import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
+import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -128,6 +130,7 @@ import type {
   DeckRow,
   DeckTag,
   DeckVariant,
+  DeckViewState,
   EntryChange,
   EntryInput,
   EntryPatch,
@@ -160,6 +163,10 @@ import type {
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
+// The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
+// answers, and a second reading of "does this cost name X" would let the workbench and the
+// window disagree about which cards are X while both looked right.
+import { hasVariableCost } from "@/lib/mana";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -266,9 +273,46 @@ export interface FakeDeck {
    *  gallery tile shows. Two columns because they are two things. */
   notes: string | null;
   /** Whether this deck keeps a `theory` list beside its `live` one. Read on the row as well as
-   *  written, because the editor's Live/Theory control *is* this boolean — a switch the app
+   *  written, because the editor's Theory/Live control *is* this boolean — a switch the app
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
+  /**
+   * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
+   * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
+   * opening a deck again puts them back where they left it.
+   *
+   * **Two of the three are `string` and not a narrowed union, deliberately, and the split is
+   * about whose vocabulary each one is.** `lastVariant` is `DeckVariant` because `live`/`theory`
+   * is the crate's own word list: none of the three columns carries a CHECK — `ALTER TABLE ADD
+   * COLUMN` cannot add one — so Rust fences that one in words instead. The other two name
+   * vocabularies that belong to TypeScript (`GroupBy` in `features/decks/grouping.ts`, `SortBy`
+   * in `features/decks/sorting.ts`), and the column carries whatever it was handed: a database
+   * outlives the build that wrote it, so a word a newer version chose has to survive the trip
+   * rather than be refused. `asGroupBy`/`asSortBy` degrade an unknown one to the default at the
+   * *reader*, which is the only place that can know what this build can draw — the opposite of
+   * `printing_group_by`, whose write refuses a mode it does not know, and for the same reason
+   * read the other way: that setting's vocabulary is the backend's.
+   */
+  lastVariant: DeckVariant;
+  lastGroupBy: string;
+  lastSortBy: string;
+  /**
+   * `decks.separate_x_group` (schema v13): whether this deck's curve gathers the `{X}` spells
+   * under a heading of their own instead of counting each at the mana value Scryfall gives it.
+   *
+   * A **reading** preference and nothing more — `grouping.ts`'s `separateX` argument, which is
+   * inert outside the `manaValue` grouping and reaches no rule. Nothing in `validation/` has
+   * heard of it. Not one of the three fields above either: those are how the deck was last
+   * *looked at* and are written by `deck_set_view_state`, while this one is an answer about the
+   * deck's own curve and rides the ordinary `deck_update`.
+   *
+   * **Optional here alone**, where every other column of this row is required, and the reason is
+   * the column's `NOT NULL DEFAULT 0`: a seed written before this existed is a deck the DDL
+   * default answers for, not a deck missing an answer. {@link toDeckRow} is where that stops —
+   * it resolves the absence to `false`, so no DTO this file hands out can carry an `undefined`
+   * the app would have to think about.
+   */
+  separateXGroup?: boolean;
   updatedAt: number;
 }
 
@@ -437,8 +481,10 @@ export interface FakeUpdate {
  * **`indexCold`** is a third kind again: not a failure and not a row, but the search index
  * mid-build. `facets::run_facets` answers a cold index with `ready: false` and **empty maps**
  * rather than with an error or with zeros, and the UI leaves every control live on it —
- * not-greyed has to mean "we do not know". The fake has no warm-up of its own, so this fault
- * is the only way a story can stand in that state.
+ * not-greyed has to mean "we do not know". (`manaX` is the one count that is not a map and so
+ * has no empty to answer with; it reads 0, and `ready` is what stops that being read as a
+ * verdict.) The fake has no warm-up of its own, so this fault is the only way a story can stand
+ * in that state.
  *
  * **`deckMeta`** is the one read failure among them, and it is a read failure on purpose.
  * `busy` is a *write* lock and no read here honours it; `gone` is a row that is not there.
@@ -1384,15 +1430,27 @@ function matchesCardFilters(
     if (picked.length > 0 && (setCode === null || !picked.includes(setCode))) return false;
   }
 
-  if (f.manaValues && f.manaValues.length > 0) {
+  // **One question, asked of two columns.** The numeric chips and the X chip are a single OR
+  // group — `push_card_filters` puts `mana_cost LIKE '%{X}%'` inside the same parenthesis as
+  // `cmc IN (…)` — so a row passes if it answers *either*, and the group is only asked at all
+  // when something in it is on. ANDing them would make picking `1` and `X` together return the
+  // cards that are both, which is the opposite of what a chip row means.
+  const manaValues = f.manaValues ?? [];
+  if (manaValues.length > 0 || f.manaX) {
     const cmc = card?.cmc ?? null;
-    const exact = new Set(f.manaValues.filter((v) => v < MANA_VALUE_OPEN_ENDED));
-    const openEnded = f.manaValues.some((v) => v >= MANA_VALUE_OPEN_ENDED);
+    const exact = new Set(manaValues.filter((v) => v < MANA_VALUE_OPEN_ENDED));
+    const openEnded = manaValues.some((v) => v >= MANA_VALUE_OPEN_ENDED);
     // `cmc` is REAL and nullable: a card with no cost matches no chip, and a fractional
     // un-card cost matches none *below* 8 (exact equality) but is returned by the open-ended
     // chip, which is `>= 8` — the same split `push_card_filters` emits.
-    const hit = cmc !== null && (exact.has(cmc) || (openEnded && cmc >= MANA_VALUE_OPEN_ENDED));
-    if (!hit) return false;
+    const numeric = cmc !== null && (exact.has(cmc) || (openEnded && cmc >= MANA_VALUE_OPEN_ENDED));
+    // **The asymmetry with the line above is the point, and it is the SQL's own**: the LIKE
+    // consults `mana_cost` and never `cmc`, so a row whose mana value is unknown still matches
+    // the X chip when its printed cost names `{X}`. An X in the cost is knowledge; a missing
+    // `cmc` is the absence of a different fact. An **orphan** is a third case and still fails —
+    // it has no `mana_cost` either, and `NULL LIKE '%{X}%'` is NULL, which is not true.
+    const variable = (f.manaX ?? false) && hasVariableCost(card?.manaCost ?? null);
+    if (!numeric && !variable) return false;
   }
 
   const rarity = nonblank(f.rarity);
@@ -1988,6 +2046,16 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
+    // The three v12 ones that remember where the reader was. They ride the *gallery's* row
+    // rather than a read of their own because the editor already has this row when it mounts —
+    // a second command to ask "which tab was I on" would be a round trip between opening a deck
+    // and drawing it, which is exactly the flicker the memory exists to remove.
+    lastVariant: d.lastVariant,
+    lastGroupBy: d.lastGroupBy,
+    lastSortBy: d.lastSortBy,
+    // v13's, and the one column whose absence on the row is an answer rather than a gap —
+    // `NOT NULL DEFAULT 0`, so a deck that has never been asked is a deck that says no.
+    separateXGroup: d.separateXGroup ?? false,
   };
 }
 
@@ -3004,6 +3072,12 @@ export function readHandlers(db: FakeDb) {
       if (db.fault === "indexCold" || db.cards.length === 0) {
         return {
           colors: {},
+          // `0` rather than an absence, because {@link FacetResponse.manaX} is a **number** and
+          // not a map: there is no empty value for a scalar to take, and Rust's own struct
+          // answers a `u32`. It says the same thing the empty maps beside it do only because
+          // `ready: false` is what the UI reads — a zero here is "we did not count", exactly as
+          // a missing key is, and neither may grey the chip.
+          manaX: 0,
           manaValues: {},
           formats: {},
           sets: {},
@@ -3019,7 +3093,13 @@ export function readHandlers(db: FakeDb) {
       const base = (skip: FacetSkip | null): FakeCard[] => {
         const f: CardFilters = { ...req, text: undefined, rarity: undefined };
         if (skip === "colors") f.colors = undefined;
-        if (skip === "mana") f.manaValues = undefined;
+        // Both halves of the chip row leave together, because they are one OR group and
+        // therefore one dimension: a base that dropped the numbers and kept the X would count
+        // every numeric chip against a search still narrowed to the X cards.
+        if (skip === "mana") {
+          f.manaValues = undefined;
+          f.manaX = undefined;
+        }
         if (skip === "sets") {
           f.sets = undefined;
           f.setCode = undefined;
@@ -3067,6 +3147,13 @@ export function readHandlers(db: FakeDb) {
       for (let v = 0; v <= MANA_VALUE_OPEN_ENDED; v++) {
         manaValues[String(v)] = countWith(manaBase, { manaValues: [v] });
       }
+      // The tenth chip of the same row, counted over the **same base** as the nine above it, so
+      // it greys on the same rule and at the same moment. It is deliberately *not* a key of the
+      // map: the map is keyed by mana value and `"x"` is not one, and the two **overlap** — an
+      // X card is counted here and again under its own `cmc`, which is what makes pressing both
+      // chips return that card once rather than twice. Adding this to the map's numbers would
+      // therefore double-count, which is the arithmetic a shared key invites.
+      const manaX = countWith(manaBase, { manaX: true });
 
       const formatBase = base("formats");
       const formats: Record<string, number> = {};
@@ -3089,6 +3176,7 @@ export function readHandlers(db: FakeDb) {
       return {
         colors,
         manaValues,
+        manaX,
         formats,
         sets,
         owned: { owned, missing: ownedBase.length - owned },
@@ -3923,6 +4011,18 @@ function validVariant(variant: string): DeckVariant {
   throw refuse(`\`${variant}\` is not a deck variant. Use one of: ${VARIANTS.join(", ")}.`);
 }
 
+/**
+ * `deck::NO_MODE` — the whole of what the backend checks about a remembered grouping or sort.
+ *
+ * The words themselves are TypeScript's vocabulary and the crate deliberately does not know
+ * them ({@link FakeDeck.lastGroupBy}), but a blank is not one of them in any vocabulary: it is a
+ * bug in the caller, and storing it would hand the editor back a remembered choice of nothing.
+ */
+function validMode(mode: string): string {
+  if (mode.trim() !== "") return mode;
+  throw refuse("A remembered view mode cannot be blank.");
+}
+
 function validName(name: string): string {
   const trimmed = name.trim();
   if (trimmed !== "") return trimmed;
@@ -4225,6 +4325,32 @@ function seedFromLive(db: FakeDb, deckId: number): number {
     rows += 1;
   }
   return rows;
+}
+
+/**
+ * `deck_theory::move_live_to_theory` — what switching the plan **on** does, and it is a move
+ * rather than a copy.
+ *
+ * The deck the reader built *becomes* the plan: every `live` row changes variant, and the live
+ * list is left **empty**. That is the whole difference from {@link seedFromLive}, which copies
+ * and leaves both lists holding the same cards — and it is a difference about what the two
+ * lists mean rather than about rows. Enabling the switch is the moment a reader says "this is
+ * what I am working toward, not what is sleeved up"; a copy would leave a live list nobody had
+ * decided was real, and every count on the gallery tile would go on claiming copies for it.
+ *
+ * **It releases this deck's claims, and gets that for free here.** `deck_allocations` is
+ * `live`-only, so in the app the move is followed by a reallocation that drops the rows this
+ * deck held. There is no allocations table in this fake (simplification 2) — `allocate` reads
+ * the live rows at read time, and after the move there are none, so the next read hands the
+ * copies back to every other deck without anything having to be rewritten.
+ *
+ * Row ids, tags and `needsReview` travel with the row because it *is* the same row. Answers the
+ * number of rows moved.
+ */
+function moveLiveToTheory(db: FakeDb, deckId: number): number {
+  const live = db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE);
+  for (const row of live) row.variant = "theory";
+  return live.length;
 }
 
 /** `deck_theory::theory_copies` — copies, not rows. Two printings at 2 and 3 is 5 cards. */
@@ -4676,6 +4802,16 @@ export function writeHandlers(db: FakeDb) {
         folderId: null,
         notes: null,
         theoryEnabled: false,
+        // The DDL's three defaults. `lastGroupBy`/`lastSortBy` are imported rather than spelled
+        // out because the column's default and the editor's opening mode have to be the same
+        // word — a deck that opened on a grouping the toolbar does not start in would look like
+        // a memory that had already been written to.
+        lastVariant: LIVE,
+        lastGroupBy: DEFAULT_GROUP_BY,
+        lastSortBy: DEFAULT_SORT_BY,
+        // Spelled out rather than left absent, because `create_deck` names every column it
+        // writes: a new deck's curve is the plain one until the reader says otherwise.
+        separateXGroup: false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -4684,8 +4820,8 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck::update_deck` — rename, re-format, cover, notes, build, archive and the theory
-     * switch all arrive here.
+     * `deck::update_deck` — rename, re-format, cover, notes, build, archive, the theory switch
+     * and the X-group switch all arrive here.
      *
      * `coalesce(?n, column)`, so absent means "leave it" and there is no field that *clears*
      * one: `description: ""` writes an empty string rather than a NULL, `coverCardId` cannot be
@@ -4695,9 +4831,17 @@ export function writeHandlers(db: FakeDb) {
      *
      * **Two things happen beside the columns.** Sending `coverCardId` sets `coverKind` back to
      * `card_art`, which is how a deck showing an uploaded picture returns to card art without
-     * the file being deleted. And switching `theoryEnabled` **on** seeds the theory list from
-     * live when there is nothing in it, in the same write: an empty theory list beside a full
-     * live one reads as data loss rather than as a blank page. Switching it off keeps every row.
+     * the file being deleted. And switching `theoryEnabled` **on moves the live list into
+     * theory** — see {@link moveLiveToTheory}: the deck the reader built becomes the plan, the
+     * live list is left empty, {@link FakeDeck.lastVariant} is left at `theory` so the editor
+     * opens on what they now have, and this deck's claims are released with the rows. Switching
+     * it off keeps every row.
+     *
+     * **Two guards on that move, and both are about not destroying an edit.** It happens only on
+     * the false→true *transition*, and only when the theory list is **empty** — a plan the reader
+     * has already started is not something a re-press of the switch may pour the live deck over.
+     * A reader who wants the deck copied into a plan they have already begun asks for it by name:
+     * {@link deck_theory_copy_from_live} still copies, and still skips rather than folding.
      *
      * The history is written **per changed field**, and only for fields that actually changed:
      * a dialog that saves an untouched form must not fill the drawer with edits nobody made.
@@ -4736,11 +4880,26 @@ export function writeHandlers(db: FakeDb) {
       if (patch.notes !== undefined && patch.notes !== before.notes) {
         field("notes", before.notes, patch.notes);
       }
-      // One row, whether or not the theory list was seeded below: the seeding is part of
-      // switching the list on rather than a second edit, and N `add` rows for one press would
-      // read as a deck somebody typed out.
+      // One row, whether or not the live list moved below: the move is part of switching the
+      // list on rather than a second edit, and N `add` rows for one press would read as a deck
+      // somebody typed out.
       if (patch.theoryEnabled !== undefined && patch.theoryEnabled !== before.theoryEnabled) {
         field("theory", before.theoryEnabled, patch.theoryEnabled);
+      }
+      // Read through `?? false` on the `from` side for {@link FakeDeck.separateXGroup}'s reason:
+      // an absent column is the DDL's `0`, so a deck that has never been asked and a deck
+      // switched off are one state, and switching *on* is one change from either.
+      //
+      // **The word is `deck.rs`'s and is not derived from the column name** — the two above it
+      // are (`theory_enabled` → `theory`, `is_built` → `built`), and reading that pattern
+      // forward gives `separateX`, which is wrong. `deck.rs` writes `"xGroup"`, and it is the
+      // one multi-word field name in the switch `auditText.ts` reads. Nothing enforces the
+      // agreement: an unrecognised field falls through `auditText`'s default arm to a bland
+      // "Changed the deck", so a disagreement here is a history line quietly saying less than
+      // it knows rather than anything that goes red.
+      const separateXWas = before.separateXGroup ?? false;
+      if (patch.separateXGroup !== undefined && patch.separateXGroup !== separateXWas) {
+        field("xGroup", separateXWas, patch.separateXGroup);
       }
       if (patch.folderId !== undefined && patch.folderId !== before.folderId) {
         recordFiled(db, deck.id, patch.folderId);
@@ -4758,9 +4917,21 @@ export function writeHandlers(db: FakeDb) {
       deck.folderId = patch.folderId ?? deck.folderId;
       deck.notes = patch.notes ?? deck.notes;
       if (patch.theoryEnabled !== undefined) {
+        const turnedOn = patch.theoryEnabled && !before.theoryEnabled;
         deck.theoryEnabled = patch.theoryEnabled;
-        if (patch.theoryEnabled && theoryCopies(db, deck.id) === 0) seedFromLive(db, deck.id);
+        if (turnedOn && theoryCopies(db, deck.id) === 0) {
+          moveLiveToTheory(db, deck.id);
+          // The tab the reader is put on, because it is now the tab their deck is in. Written
+          // here rather than left to `deck_set_view_state` for the reason the move itself is
+          // not two commands: a reader who pressed one switch made one decision.
+          deck.lastVariant = "theory";
+        }
       }
+      // `coalesce(?n, separate_x_group)`, and **nothing else happens**: this switch writes one
+      // column and touches not one `deck_cards` row. Where the theory switch above seeds a list,
+      // this one only changes how the same cards are read — the curve is regrouped in TS, by
+      // `buildGroups`, on the rows the next read hands back.
+      deck.separateXGroup = patch.separateXGroup ?? deck.separateXGroup;
       deck.updatedAt = stamp(db);
       return toDeckRow(db, deck);
     },
@@ -4819,6 +4990,47 @@ export function writeHandlers(db: FakeDb) {
       return toDeckRow(db, deck);
     },
 
+    /**
+     * `deck::set_view_state` — remember which tab, grouping and sort the reader is looking at.
+     *
+     * **Three columns, and nothing else in the row moves.** No `updated_at` bump, no history
+     * row, no reallocation: *looking* at a tab is not editing a deck. Each of those would be a
+     * lie of a different size — a bump would resort the gallery every time somebody glanced at
+     * their plan, a history row would bury the edits the drawer exists to show under a hundred
+     * "changed the sort", and there is nothing to reallocate because no card moved. It is the
+     * one write in this table that answers `void` for exactly that reason: there is no new
+     * {@link DeckRow} worth reading back, and a caller that redrew from one would repaint the
+     * editor on every toolbar press.
+     *
+     * **Absent means "leave it"**, per field, like a {@link DeckPatch} — so the toolbar sends
+     * only what the reader touched and three controls need no shared state to be written from.
+     *
+     * **The three fields are checked by three different amounts, and each amount is a statement
+     * about whose vocabulary the field holds.** `variant` goes through the same
+     * {@link validVariant} every other deck write opens with — `live`/`theory` is the backend's
+     * word list, and the column carries no CHECK to enforce it, so the fence is in words.
+     * `groupBy`/`sortBy` are only checked for being **blank** ({@link validMode}): the words are
+     * TypeScript's ({@link FakeDeck.lastGroupBy}) and a build that refused one it did not know
+     * would refuse the future, while a blank is a caller bug in any vocabulary. That is the
+     * deliberate opposite of `set_printing_group_by`, which refuses any mode outside its own
+     * list — because that list is the backend's.
+     *
+     * An unknown deck is refused by name, like every other deck write.
+     */
+    deck_set_view_state: (args: { deckId: number; viewState: DeckViewState }): void => {
+      refuseIfBusy(db);
+      // Validated before the deck is looked up, as the Rust validates before its UPDATE: a
+      // refusal about the arguments does not depend on which deck they were aimed at.
+      const state = args.viewState;
+      const variant = state.variant === undefined ? undefined : validVariant(state.variant);
+      const groupBy = state.groupBy === undefined ? undefined : validMode(state.groupBy);
+      const sortBy = state.sortBy === undefined ? undefined : validMode(state.sortBy);
+      const deck = requireDeck(db, args.deckId);
+      if (variant !== undefined) deck.lastVariant = variant;
+      if (groupBy !== undefined) deck.lastGroupBy = groupBy;
+      if (sortBy !== undefined) deck.lastSortBy = sortBy;
+    },
+
     /** `deck::delete_deck`. **This one really deletes** — the deck, its cards, its categories,
      *  its tags and its history, by cascade. Archiving is the soft path, and it is what a
      *  gallery's "remove" should reach for. Its **folder** is not touched: a folder files decks
@@ -4838,6 +5050,11 @@ export function writeHandlers(db: FakeDb) {
      * on a table, and it is not something the user filed away. The theory list comes too,
      * because a copy made to try something out is exactly the copy that wants the plan.
      *
+     * `separateXGroup` comes across in the spread below with the rest of the row, and belongs
+     * with the theory list rather than with the two exceptions: it is how the reader reads a
+     * curve, and a copy opened onto a differently grouped curve than the deck it was made from
+     * would be a copy that lost something nobody chose to change.
+     *
      * **Categories and tags are new rows with new ids, and the cards are remapped onto them.**
      * This is the part a "copy the cards" implementation gets wrong invisibly: a card row
      * stores a `category_id`, so copying it verbatim would file the copy's cards under the
@@ -4846,6 +5063,13 @@ export function writeHandlers(db: FakeDb) {
      *
      * It is not handed {@link ensurePredefinedCategories}: it inherits the source's four,
      * because every deck has them.
+     *
+     * **The three view-state columns are reset rather than inherited**, and that is Rust's
+     * answer rather than a taste: `duplicate_deck` names the columns it copies, and those three
+     * are not among them, so a copy starts at `live`/`category`/`alphabetical`. It is the right
+     * one for what they mean — a remembered view is where *this reader* left *this deck*, and a
+     * copy is a draft nobody has opened yet. The spread would have inherited them silently,
+     * which is the whole reason this is written out.
      */
     deck_duplicate: (args: { id: number }): DeckRow => {
       refuseIfBusy(db);
@@ -4856,6 +5080,9 @@ export function writeHandlers(db: FakeDb) {
         name: `${source.name} (copy)`,
         isBuilt: false,
         archived: false,
+        lastVariant: "live",
+        lastGroupBy: DEFAULT_GROUP_BY,
+        lastSortBy: DEFAULT_SORT_BY,
         updatedAt: stamp(db),
       };
       db.decks.push(copy);
@@ -5653,10 +5880,14 @@ export function writeHandlers(db: FakeDb) {
      * `deck_theory::copy_from_live` — seed the theory list from the live one, answering how many
      * **rows** were written.
      *
-     * Normally implicit (a `theoryEnabled: true` patch does this in the same write when the
-     * theory list is empty) and offered separately for the reader who wants to start again from
-     * what is sleeved up. It folds nothing and overwrites nothing: a theory row the reader
-     * already made is their plan for that card.
+     * **The one command that still copies**, and the reason it is worth having beside
+     * {@link moveLiveToTheory}: switching the plan on *moves* the deck into it, while this
+     * duplicates a live list that stays exactly where it is. It is what a reader reaches for to
+     * start a plan again from what is sleeved up, and it is the only way to fill a plan that
+     * already has something in it — the switch refuses to touch one of those on purpose.
+     *
+     * It folds nothing and overwrites nothing: a theory row the reader already made is their
+     * plan for that card.
      *
      * **Records exactly one history row**, kind `deck`, field `theory`, carrying the *copies* it
      * added in both the payload and `delta` — which makes it the one `deck`-kind row that can

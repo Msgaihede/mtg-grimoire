@@ -7,6 +7,7 @@ import {
   type DeckPatch,
   type DeckTag,
   type DeckVariant,
+  type DeckViewState,
 } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -208,6 +209,30 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   const update = useMutation({
     mutationFn: (patch: DeckPatch) => ipc.deckUpdate(opened(id), patch),
     onSuccess: invalidate,
+  });
+
+  /**
+   * Remember how the reader is looking at this deck — the tab, the `Group by`, the `Sort` —
+   * so that closing it and opening it again puts them back where they were.
+   *
+   * **The one write here that does not invalidate, and that is the interesting part.** The
+   * editor is already showing what the reader picked: this write does not produce the state on
+   * screen, it only makes it survive the deck being closed, so there is nothing to re-read and
+   * nothing waiting on the answer. Invalidating would refetch the deck row and hand the editor
+   * back a `lastVariant`/`lastGroupBy`/`lastSortBy` — the three fields the editor *restores
+   * from* — a beat after the press, which is how a second press made in that beat gets undone
+   * by the first one's echo. Not invalidating is also what stops the round trip from looping at
+   * all: the row's triple changes only when the deck is genuinely re-read, and re-applying the
+   * reader's own stored choice is a no-op.
+   *
+   * **Its failure is silent by design.** Nothing the reader asked for has failed — the tab they
+   * pressed is the tab they are on — and the cost of a lost write is a deck that reopens on its
+   * old tab. A banner for that would be an app apologising for its own bookkeeping, so this
+   * mutation is deliberately not in `DeckEditor`'s refused-write family either: that list is
+   * **writes to what is in the deck**, and this one changes no card.
+   */
+  const rememberView = useMutation({
+    mutationFn: (viewState: DeckViewState) => ipc.deckSetViewState(opened(id), viewState),
   });
 
   /**
@@ -464,6 +489,9 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  took the default does not have to know what it was. */
     variant,
     update,
+    /** How the deck is being *looked at*, stored. Not a write to what is in the deck — see the
+     *  mutation's own doc, and `DeckEditor`'s `newest([...])`, which this is not in. */
+    rememberView,
     addCard,
     setQuantity,
     moveCard,

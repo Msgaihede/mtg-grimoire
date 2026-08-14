@@ -28,13 +28,54 @@ using it.
   case from a _JS harness_ over a structure that did not exist yet, and its own header calls
   that "a conservative bound on Rust". It was not one: the shipped `facets::compute` measures
   **1.8 ms** unfiltered (release, synthetic corpus, best of five), 5.8× the projection and
-  still two orders inside the 100 ms budget. Quote `facets::compute` for what this costs;
+  still two orders inside the 100 ms budget. **That figure was taken before the `mana_x`
+  overlay**, which adds one `and_count` over the whole corpus to every pass; nobody has re-timed
+  it, so read it as a floor. Quote `facets::compute` for what this costs;
   quote §3.2 only for what the design was decided on. **Low cardinality gets a bitset, high cardinality an
   ordinal array**: giving each of the 986 **paper** set codes its own bitset was the first
   design and was wrong by 18× on memory and 35× on speed (14.3 MB / 11 ms against
   0.78 MB / 0.12 ms). **986 and 1 047 are both right and mean different things** — 986 paper
   sets against 1 047 codes over every printing, because `set_ord` covers the whole corpus and
   a digital-only set still needs an ordinal (`index/mod.rs`). The picker's counts use 1 047.
+- **The mana row's tenth chip, `X`, is an _overlay_ and not a tenth value — and that one word
+  decides its SQL, its bitset and its base.** Scryfall counts `{X}` as zero when it computes
+  `cmc` (CR 202.3b), so `{X}{B}{B}{B}` is mana value **3** _and_ an X card. The chip therefore
+  joins the **same OR group** as the numerals rather than standing beside it:
+  `push_card_filters` pushes `{alias}.mana_cost LIKE ?` — bound to `filters::VARIABLE_COST_LIKE`,
+  `"%{X}%"` — inside the one parenthesis that already holds `cmc IN (…)`. Picking `3` finds that
+  card, picking `X` finds it, picking both finds it **once**, from one row and one alternative.
+  Pushed as a second `AND` term it would have meant "3 _and_ variable", which is an intersection
+  nobody asked for and which is empty over most of the corpus. Three things follow, and none of
+  them is a matter of taste:
+  - **`CardIndex.mana_x` is a field beside the buckets, never an eleventh bucket.**
+    `CardIndex::mana` is a **partition** — every printing in exactly one slot — which is what
+    lets a bucket be a single `and_count` and what makes `MANA_BUCKETS` a closed list. X is an
+    overlay: `{X}{B}{B}{B}` is `mana[3]` **and** `mana_x`. Widening the array to make room would
+    put one card in two slots of a partition and quietly double every total counted over it.
+  - **It shares `Skip::Mana`, so its count is taken over the same base the nine numerals are.**
+    One OR group is one dimension, so the base that drops "the mana question" drops the whole of
+    it — numerals and X together. Pressing X therefore does not grey the value chips and pressing
+    a value chip does not grey X: the same rule the format and set lists get at the top of this
+    page, that a control never moves under the press that is using it. A base that dropped the
+    numerals and kept the X would count every numeral against a search still narrowed to the X
+    cards.
+  - **`FacetResponse.mana_x` is a scalar beside `manaValues`, not an `"x"` key inside it.** That
+    map is a partition too — its values sum to the result set — and every other key parses as a
+    number. A key that only looks like the others is what some later `Number(key)` turns into
+    `NaN`; and one that double-counted every card already in `"3"` would make the sum a lie the
+    moment anything read it as one. **The two numbers must never be added.**
+  The facet request carries `manaX` and has it in its key (`useCardSearch`), like every other
+  filter that decides which printings exist — so the counts describe the search the results list
+  is showing, and a search for "3, and also X" cannot be answered out of the cached pages of a
+  plain "3".
+- **`{X}` only, never `{Y}` or `{Z}`.** Both exist; a handful of un-cards print them, and
+  `validation/engine.ts`'s `symbolValue` scores all three as 0 — correctly, because it is
+  answering _what is this cost worth_. A chip and a deck heading answer _what is this pile
+  called_, and there the three are not interchangeable: a `{Y}` card filed under a heading that
+  says X is a wrong label rather than a loose one. The rule is spelled once per side of the
+  boundary and both spellings say so — `filters::VARIABLE_COST_LIKE` for the SQL and the bitset
+  it must agree with, `lib/mana.ts`'s `hasVariableCost` for TS and the Storybook fake, which
+  imports it rather than re-spelling the test.
 - **Two dimensions are in every base and are not facets: `paper` and `playable`.** Neither is
   offered as a control on the row, so neither excludes its own filter — they narrow the base a
   count is taken over, including its own dimension's. **Their defaults are opposites**, which is
@@ -60,6 +101,11 @@ using it.
   the same corpus the page does. Same numbers in the deck editor's docked panel, whose row is
   **371px** and gains no line from the chip (6 lines, 212px, with it and with it hidden); the
   search row at the 1024px floor is 4 lines and 124px either way.
+  **All four geometry figures there are the nine-chip row's and have not been re-driven.** The X
+  chip adds a 36px square and the group's 4px gap — 40px inside a wrapping flex row, which is
+  exactly the kind of change that moves a line count without moving anything else. The
+  printing counts and the greying claim above are facts about the corpus and are untouched by
+  it; the pixels are not.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it
@@ -72,6 +118,37 @@ using it.
   zeroed, and `facetsOrUndefined` collapses that to `undefined` so all five controls stay
   live. Nothing here is fatal either — if the index cannot be built the app runs exactly as it
   did before the feature existed.
+- **The X chip is the one count that cannot fail open on a raw cold response, and
+  `facetsOrUndefined` is the entire guard.** Every other count on the row is read out of a map,
+  and a cold response's maps are **empty**: the lookup misses, the miss is `undefined`,
+  `undefined` means "we don't know", and the control stays live even if the response reaches it
+  ungated. `manaX` is a scalar and has no empty to send — Rust answers `0`, and the fake's
+  `indexCold` handler answers `0` beside its empty maps for the same reason — and **`0` is
+  precisely what the greying rule reads as "nothing in this search"**. Nothing downstream can
+  tell that zero from a counted one. So the `ready` check, which is belt-and-braces for the four
+  maps, is load-bearing here: a caller reading `facets.manaX` rather than
+  `facetsOrUndefined(facets)?.manaX` would grey the X chip through the whole of a cold index and
+  the whole of a first-run sync, and nothing would say so. `owned` and `total` are scalars too
+  and neither is a counter-example: `total` is only ever a denominator, and `colorDisabled`'s
+  "an absent `after` fails open" arm fires before it is read; `owned` feeds a tooltip on the one
+  chip that is **never** greyed. X is the only scalar on the response that decides paint, which
+  is exactly why the guard has to hold for it.
+- **The greying rule itself is `countDisabled(count, selected)`, and `optionDisabled` is a lookup
+  in front of it.** Two arms over the one count a control was handed — a _selected_ option is
+  never greyed, an _absent_ count fails open — and the lookup adds the third, that a key missing
+  from a present answer is an absent count (`counts?.[key]` collapses both into one `undefined`).
+  Split out **for the X chip**, whose count is a field rather than a key, and split out rather
+  than copied for the reason a rule with two homes always is: a second pair of those lines
+  written beside the map lookup is how one row ends up greying by two rules that agree until they
+  don't.
+- **The collection's filter bar remains deliberately not facet-aware, X included.** It wires no
+  counts on any axis — no chip there greys, none carries a sentence — so its X chip is the
+  search's chip minus the count. `ManaValueChips`' `onToggleX` **gates the render**: a caller
+  that omits it gets exactly the nine chips the group drew before X existed, so there is no state
+  in which the chip is drawn and dead. The count, where there is one, joins the **accessible
+  name** and not only the `title` — `facetTitle` composes it onto the chip's own label, so X
+  reads as `Cards with X in their mana cost — N printings` exactly as its neighbours read as
+  `White — N printings`, and the visible `X` stays inside the spoken name (WCAG 2.5.3).
 - **A failed build is recorded in `error_log`, because failing open is otherwise completely
   silent.** The UI's answer to a cold index is to leave every control live, which looks
   exactly like a warm index that greyed nothing — so nothing on screen distinguishes "the
@@ -84,7 +161,10 @@ using it.
   `eprintln!` and is deliberately **not** recorded — it is an expected interleaving, not a
   failure, and whatever superseded it owes a rebuild of its own.
 - **The warm-up is ~767 ms** (median of five, 762–783, release build, warm page cache), so a
-  launch answers not-ready for about that long. On this machine the webview does not reach
+  launch answers not-ready for about that long. **Measured when the build's scan read six
+  columns**; the X overlay added `mana_cost` to it, making seven, and nobody has re-timed the
+  build since — so that is a floor rather than this build's cost, and `index/mod.rs` says the
+  same at the query. On this machine the webview does not reach
   first paint until ~2.6 s, so **the cold path is not reachable through the UI on a warm
   start** — which is why the Storybook fake carries an `indexCold` fault at all.
 - **A not-ready answer corrects itself, and nothing else in the app would ever correct it.**
@@ -113,10 +193,32 @@ using it.
   the greying rule dims the entire row, and with no filter on there is no `Reset all` drawn to
   escape by. Verified in the shipped window 2026-08-11 against a cleared `data/`: **0 of 19
   chips greyed, 0 of 8 format options disabled, and no chip carrying a count in its name**,
-  held for the whole sync.
+  held for the whole sync. **Left at 19 rather than restated**: the row has carried a twentieth
+  chip since X joined it and nobody has re-driven a first run against the wider row. What the
+  measurement claims is _none greyed_, which a wider row does not change — but the X chip is the
+  one to check first if it is ever re-driven, for the scalar reason above. The same note is on
+  `SearchPage.stories.tsx`'s `Empty`, which is the story that pins this state.
+- **The X chip, driven live 2026-08-14** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against a corpus of **116,703** cards synced 2026-08-13). The row drew **ten** chips, the
+  tenth named `Cards with X in their mana cost — 2,009 printings` — so the count reaches the
+  accessible name on the same rule as `Mana value 0 — 12,162 printings` beside it.
+  - **The additive rule, shown on one card rather than argued from a total.** Text `fireball`
+    alone answered **3 cards**; adding the X chip narrowed it to **1**; clearing X and pressing
+    **Mana value 1** instead answered **1** as well. Fireball is `{X}{R}` — mana value 1,
+    because X counts zero (CR 202.3b) — and it is found by *both* chips. That is the whole of
+    what "additive" means here, and it is the half a total cannot show: pressing X **and** 3
+    together read `5,000+ cards`, which is the result cap and proves nothing either way.
+  - **The chip reaches the deck editor's search panel too**, unasked — `DeckSearchPanel` mounts
+    the same `FilterBar`, so the tenth chip arrived there by construction rather than by a
+    second wiring.
+  - **Unmeasured, and named so it is not mistaken for measured**: nobody has re-driven a
+    first-run sync against the ten-chip row, so the cold-response guard above is still argued
+    from the code and from `facets.test.ts` rather than from the window.
 - **Greying on the real corpus, measured in the shipped window 2026-08-11.** A `Lightning
 Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing in this
-  search", opacity 0.45); a `standard` format filter greys **26 of the 50 set rows on screen**
+  search", opacity 0.45) — **read that as four of the nine chips that existed that day**; the X
+  chip is not in the count, was not on the row, and has not been driven on this search. A
+  `standard` format filter greys **26 of the 50 set rows on screen**
   out of 384–592 of the 1 047 codes the picker knows. (1 047 against the 986 quoted in
   `index/mod.rs`: that one is the **paper** corpus the index is built over, this one is every
   code `list_sets` returns.) **The "50 set rows on screen" is the cap as it stood that day and

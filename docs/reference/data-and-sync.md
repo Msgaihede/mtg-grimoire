@@ -254,27 +254,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v12.** v12 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
-  description), `oracle_tag_parents` (`child_slug, parent_slug` — **many parents per child**,
-  684 of 4 521 tags have several), `oracle_taggings` (`oracle_id, slug, weight, annotation`)
-  and `oracle_tag_cards` (`oracle_id, slug`), all four `WITHOUT ROWID` with no index but their
-  own primary key, plus a one-row `oracle_tag_meta` watermark (`etag`, `updated_at`,
-  `ingested_at`, `checked_at`, `tag_count`, `tagging_count`). **`checked_at` is separate from
-  `ingested_at` for `sync_meta.last_check_at`'s reason**: a 304 leaves the rows alone, so only
-  the "when did we last ask" stamp may move — without it a taxonomy that is simply up to date
-  reads as due on every launch and spends one API call per start to learn nothing. `oracle_tag_cards` is the **closure** — every
-  tag a card holds *and* every ancestor of those tags, flattened once at ingest — and it is
-  the only one the app reads at query time, as a prefix scan per card. Measured live
-  2026-08-14 over that day's file: 4 521 tags · 926 roots · **684 with more than one parent** ·
-  max depth 5 · no cycles and no dangling parent ids (neither of which the ingest assumes) ·
-  229 633 taggings over 35 969 distinct oracle ids · `weight` is `median` on 99.74 % of them
-  and nothing branches on it. `oracle_id` is a **soft** reference like every other reference to
-  `cards` in this schema, and the step touches `cards` not at all — so, like v8, v9 and v11, it
-  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
-  rebuild. The four tables are filled through `oracle_tag_*_staging` and promoted by one rename
-  transaction that carries the watermark with it: a half-populated closure is the one state a
-  reader must never see, because a card whose ancestors landed and whose siblings did not
-  simply reads as not being in that category.
+- **v13 adds one column — `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`,
+  whether a deck gathers its `{X}` spells under a heading of their own. Per **deck** and not a
+  preference, for `theory_enabled`'s reason: it says how _this_ list is read, so a copy must read
+  the same way and a second deck must be free to disagree; a global setting would have made
+  opening one deck change the shape of every other. **The `DEFAULT` is the whole of the upgrade's
+  promise** — `ALTER TABLE … ADD COLUMN` fills every existing row, so a user who has never heard
+  of the switch opens their decks and finds them grouped exactly as they left them, and there is
+  no backfill because there is nothing to compute. Nullable would have been three states for a
+  two-state switch and a `coalesce` at every read site. It touches `cards` not at all, so it takes
+  the same free pass v8, v9, v11 and v12 take below: **v10 keeps the title of newest creator**, and
+  no `cards_fts` rebuild is owed. **It was written as v12 and renumbered to v13 on the merge** —
+  main's view-state step claimed the same number the same day — which is the ordinary weather of
+  this ladder rather than an accident; v10's paragraph below is the standing warning. What the
+  column _means_ is [decks-storage.md](decks-storage.md); nothing about the grouping it controls
+  is in Rust.
+  v12 adds three columns to `decks` — `last_variant`, `last_group_by` and
+  `last_sort_by`, all `TEXT NOT NULL` with defaults `live`, `category` and `alphabetical` — so
+  the deck editor reopens on whatever the reader was last looking at, per deck. Like v8, v9 and
+  v11 it touches `cards` not at all, so it neither needs the `CARDS_INDEXES` replay nor takes it
+  from v11, and it owes no `cards_fts` rebuild. **`ALTER TABLE … ADD COLUMN` cannot add a CHECK**,
+  so none of the three is constrained in SQL and the fence sits where the vocabulary is owned:
+  `last_variant` against `schema::DECK_VARIANTS` in Rust, the other two narrowed in TypeScript on
+  read — [decks-storage.md](decks-storage.md) has the reasoning.
   v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
   `PRIMARY KEY (marketplace, card_id, finish)`, `WITHOUT ROWID`) and `marketplace_feed_meta`
   (`marketplace, fetched_at, feed_built_at, row_count`) for the Card Kingdom and Mana Pool
@@ -305,6 +307,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
+- **Schema is v14.** v14 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
+  description), `oracle_tag_parents` (`child_slug, parent_slug` — **many parents per child**,
+  684 of 4 521 tags have several), `oracle_taggings` (`oracle_id, slug, weight, annotation`)
+  and `oracle_tag_cards` (`oracle_id, slug`), all four `WITHOUT ROWID` with no index but their
+  own primary key, plus a one-row `oracle_tag_meta` watermark (`etag`, `updated_at`,
+  `ingested_at`, `checked_at`, `tag_count`, `tagging_count`). **`checked_at` is separate from
+  `ingested_at` for `sync_meta.last_check_at`'s reason**: a 304 leaves the rows alone, so only
+  the "when did we last ask" stamp may move — without it a taxonomy that is simply up to date
+  reads as due on every launch and spends one API call per start to learn nothing. `oracle_tag_cards` is the **closure** — every
+  tag a card holds *and* every ancestor of those tags, flattened once at ingest — and it is
+  the only one the app reads at query time, as a prefix scan per card. Measured live
+  2026-08-14 over that day's file: 4 521 tags · 926 roots · **684 with more than one parent** ·
+  max depth 5 · no cycles and no dangling parent ids (neither of which the ingest assumes) ·
+  229 633 taggings over 35 969 distinct oracle ids · `weight` is `median` on 99.74 % of them
+  and nothing branches on it. `oracle_id` is a **soft** reference like every other reference to
+  `cards` in this schema, and the step touches `cards` not at all — so, like v8, v9 and v11, it
+  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
+  rebuild. The four tables are filled through `oracle_tag_*_staging` and promoted by one rename
+  transaction that carries the watermark with it: a half-populated closure is the one state a
+  reader must never see, because a card whose ancestors landed and whose siblings did not
+  simply reads as not being in that category.
 - **`legal_mask` is Scryfall's `legalities` object as one integer, and its key order is
   frozen.** `legalities::LEGALITY_KEYS` is 23 keys and bit _k_ is `LEGALITY_KEYS[k]` — **bit
   positions are stored data**, held in every `cards` row, so reordering the list silently
@@ -335,20 +358,39 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
   what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
   `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
-  `idx_cards_collapse` share a name. **The head-minus-one fixture is `v11_database`, and a new
-  one is added on every renumber** — the *name* means "the version below the newest step",
-  never a fixed number, and
+  `idx_cards_collapse` share a name. **Since v12 it compares `decks`' columns too, in _ordinal_
+  order** (`deck_columns`, `card_columns`' counterpart): `decks` has an `ALTER` ladder of its own
+  now — v8's three columns, v12's three and v13's one — and every read of a deck row is
+  **positional**, so a route that reaches head with the same column _set_ in a different order is
+  a `DeckRow` reading the wrong fields with no error anywhere.
+  **"Head minus one" is a title that moves between fixtures, not a fixture that is renamed.**
   `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
-  `SCHEMA_VERSION - 1` so the two cannot drift apart. Its predecessors stay where they are
-  rather than following the ladder, each pinned by a test to the literal version it claims:
-  `v10_database` (`the_pre_price_table_fixture_really_sits_at_version_ten`) is what proves the
-  v11 step, and `v9_database` (`the_pre_index_replay_fixture_really_sits_at_version_nine`) is a
-  *different* claim again — it is the last version **below the `CARDS_INDEXES` replay**,
+  `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
+  the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
+  to a new **`v12_database`**. The fixtures it passes stay exactly where they are, each pinned to
+  a literal because each proves something only a database genuinely _at_ that version can —
+  `v11_database` to 11, so the step that adds the view-state columns has a database it can
+  actually run over, and `v10_database` to 10 before it, for
+  `the_v11_step_creates_the_marketplace_price_tables`. `v9_database` is a *different* claim again
+  and is pinned to the literal 9: it is the last version **below the `CARDS_INDEXES` replay**,
   which is the only thing that can prove a machine entering the ladder under v10 still ends up
-  with every index a fresh install has. It is also why a rewind fixture may only undo the steps
-  _above_ where it claims to sit: `migrate` reads `user_version` once and walks every step
-  above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
-  tables and dies on a duplicate column — a failure no real upgrade can produce.
+  with every index a fresh install has.
+  **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
+  for every one of them whose DDL is not idempotent.** All four rewind fixtures —
+  `v9_database`, `v10_database`, `v11_database`, `v12_database` — are built the same way, because
+  only version 1's DDL is frozen and there is no way to _build_ a later database forwards:
+  migrate to head, undo by hand, renumber. `migrate` then reads `user_version` once and walks
+  every step above it, so each of those steps is **replayed** over the fixture.
+  `CREATE TABLE IF NOT EXISTS` survives that; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
+  answers `duplicate column name`. That is why v13's `separate_x_group` has to come back out in
+  **all four**, and v12's three view-state columns in the three below it, `v9_database` and
+  `v10_database` included — the three travel together as one `UNDO_V12` constant, so they cannot
+  drift apart fixture by fixture — while v11's `CREATE TABLE IF NOT EXISTS` tables need no line in
+  `v9_database` at all. (`v10_database` drops them for a different reason: a fixture claiming to
+  be a v10 must not already hold what the v11 step is being tested for creating.) Rewinding
+  _too far_ fails the same way from the other direction: a head database rewound two versions
+  re-runs v8's deck rebuild over v8-shaped tables and dies on a duplicate column — a failure no
+  real upgrade can produce.
 - v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
   and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
   (2026) makes a commander out of a Vehicle or Spacecraft _with a P/T box_, and that is

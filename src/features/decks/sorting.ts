@@ -27,6 +27,26 @@ export const SORT_OPTIONS: readonly { value: SortBy; label: string }[] = [
   { value: "type", label: "Type" },
 ];
 
+/** What a group's cards are ordered by until somebody says otherwise — the editor's initial
+ *  state, and what a stored order this build cannot draw falls back to. */
+export const DEFAULT_SORT_BY: SortBy = "alphabetical";
+
+/** Derived from {@link SORT_OPTIONS} rather than written out a second time: a fifth order
+ *  added to that array is offered *and* accepted from storage in one edit. */
+const SORT_VALUES: ReadonlySet<string> = new Set(SORT_OPTIONS.map((o) => o.value));
+
+/**
+ * A stored `Sort` as an order this build actually has, or {@link DEFAULT_SORT_BY}.
+ *
+ * `DeckRow.lastSortBy` arrives as a `string` for the reason `asGroupBy`'s twin in
+ * `grouping.ts` spells out: the vocabulary is this module's, a database outlives the app, and a
+ * word neither side recognises has to become a mode the reader can leave rather than one the
+ * toolbar cannot draw.
+ */
+export function asSortBy(value: string): SortBy {
+  return SORT_VALUES.has(value) ? (value as SortBy) : DEFAULT_SORT_BY;
+}
+
 /**
  * Names, compared the way a person reads a decklist.
  *

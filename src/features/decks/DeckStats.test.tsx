@@ -5,7 +5,13 @@ import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { card, islands } from "./validation/fixtures";
-import { DeckStats, deckStats, typeCounts, type MissingWrite } from "./DeckStats";
+import {
+  DeckStats,
+  deckStats,
+  typeCounts,
+  type DeckStatsSummary,
+  type MissingWrite,
+} from "./DeckStats";
 
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
@@ -23,6 +29,19 @@ function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
 /** A nonland at a given cost, so a curve test reads as a curve. */
 function spell(name: string, cmc: number, overrides: Partial<DeckCard> = {}): DeckCard {
   return card({ name, cmc, typeLine: "Sorcery", manaCost: `{${cmc}}`, ...overrides });
+}
+
+/**
+ * A nonland whose printed cost names `{X}` — Agadeem's Awakening's shape, which is the one real
+ * `{X}` printing the Storybook corpus carries and a cost this app has to get right twice.
+ *
+ * **Its mana value is 3, not 4 and not unknown**: X is zero everywhere but on the stack
+ * (CR 202.3b), so `{X}{B}{B}{B}` is three black pips. That is what makes it the interesting
+ * fixture — the card has a perfectly good numeric bucket, and the toggle is a decision to draw
+ * it somewhere else anyway.
+ */
+function xSpell(name: string, overrides: Partial<DeckCard> = {}): DeckCard {
+  return card({ name, cmc: 3, typeLine: "Sorcery", manaCost: "{X}{B}{B}{B}", ...overrides });
 }
 
 /**
@@ -142,6 +161,100 @@ describe("deckStats", () => {
     expect(stats.curve[0]).toBe(0);
     expect(stats.unknownManaValue).toBe(1);
     expect(stats.averageManaValue).toBe(1);
+  });
+
+  /**
+   * The deck the four `{X}` cases below are all measured over: 4 X spells at mana value 3, 4
+   * one-drops, an orphan with no mana value at all, and lands that reach none of it.
+   *
+   * One fixture rather than four, because the whole claim about this toggle is that it moves a
+   * card between two bars and changes nothing else — which is only checkable if the two modes
+   * are read off the same rows.
+   */
+  const withX = (): DeckCard[] => [
+    xSpell("Awakening", { quantity: 4 }),
+    spell("Bolt", 1, { quantity: 4 }),
+    card({ name: "Ghost", cmc: null, manaCost: null, typeLine: null }),
+    islands(20),
+  ];
+
+  /** Off is the column's default and the reading every curve in this app had before: an X spell
+   *  sits in the bucket its mana value names, and there is no tenth bar at all. */
+  it("counts an {X} spell in its numeric bucket until the deck asks for the split", () => {
+    const stats = usdStats(withX());
+
+    expect(stats.curve[3]).toBe(4);
+    // `null`, never `0` — the difference between "no X bar" and "an X bar with nothing in it".
+    expect(stats.variableCost).toBeNull();
+  });
+
+  /** On, it leaves that bucket — **one home, never two**, which is the whole of what keeps the
+   *  bars addable. */
+  it("moves an {X} spell out of its numeric bucket and into the X bar", () => {
+    const stats = deckStats(withX(), true);
+
+    expect(stats.curve[3]).toBe(0);
+    expect(stats.variableCost).toBe(4);
+  });
+
+  /**
+   * The property the two tests above are two halves of: every nonland is in exactly one of the
+   * ten bars or in the "no mana value" line, so the chart still adds up to the number printed
+   * beside it.
+   *
+   * Asserted as a sum rather than bucket by bucket, because a card counted twice and a card
+   * dropped are both invisible to an assertion that names one bucket.
+   */
+  it("keeps the bars summing to the nonland count in both modes", () => {
+    const drawn = (stats: DeckStatsSummary) =>
+      stats.curve.reduce((n, count) => n + count, 0) +
+      (stats.variableCost ?? 0) +
+      stats.unknownManaValue;
+
+    expect(drawn(usdStats(withX()))).toBe(9);
+    expect(drawn(deckStats(withX(), true))).toBe(9);
+    expect(usdStats(withX()).nonlands).toBe(9);
+  });
+
+  /**
+   * **The one number the toggle must not move.**
+   *
+   * An `{X}` spell costs what it costs with X at zero (CR 202.3b), and this switch is a display
+   * choice about which pile a card is drawn in — not a claim that Agadeem's Awakening has
+   * stopped costing three. A reader who split their X spells out to see the rest of the curve
+   * more clearly has not changed their deck, and an average that moved under them would be this
+   * strip inventing a fact about it. 8 nonlands with a mana value, `(3 × 4 + 1 × 4) / 8`.
+   */
+  it("counts an {X} spell at its printed mana value in the average, in both modes", () => {
+    expect(usdStats(withX()).averageManaValue).toBe(2);
+    expect(deckStats(withX(), true).averageManaValue).toBe(2);
+  });
+
+  /**
+   * The X bar is decided by the **printed cost** and the numeric bucket by `cmc`, so a row that
+   * has one and not the other still lands in the right place.
+   *
+   * `cards.cmc` is nullable and `manaValue` falls back to `manaValueOf` — which reads
+   * `{X}{B}{B}{B}` as 3, X being zero — so this row is not an unknown mana value and must not be
+   * counted as one. It is the case where reading the split off `cmc` instead of the cost would
+   * have quietly filed a real X spell under "no mana value, not counted".
+   */
+  it("reaches the X bar off the printed cost when the row has no cmc", () => {
+    const stats = deckStats([xSpell("Awakening", { cmc: null })], true);
+
+    expect(stats.variableCost).toBe(1);
+    expect(stats.unknownManaValue).toBe(0);
+    expect(stats.averageManaValue).toBe(3);
+  });
+
+  /** `{Y}` and `{Z}` are not X, which is `hasVariableCost`'s own ruling rather than this file's:
+   *  they appear on a handful of Un-cards, and a heading reading X over a card printing no X
+   *  would be a label telling the reader a lie about the cardboard in front of them. */
+  it("leaves a {Y} cost in its numeric bucket even with the split on", () => {
+    const stats = deckStats([card({ name: "Ashnod's Coupon", cmc: 0, manaCost: "{Y}" })], true);
+
+    expect(stats.curve[0]).toBe(1);
+    expect(stats.variableCost).toBe(0);
   });
 
   /** Pips, not cards: a WU card is white *and* blue, which is what makes this the "what can
@@ -484,6 +597,68 @@ describe("DeckStats", () => {
     expect(within(curve).getByText("4 cards at mana value 2")).toBeInTheDocument();
     // The axis is drawn whole: an empty bucket is a fact about the curve.
     expect(within(curve).getByText("0 cards at mana value 4")).toBeInTheDocument();
+    // Nine bars, because this deck is not splitting its X spells out. The tenth is the next
+    // test's, and its absence here is what makes that one a claim about the toggle.
+    expect(within(curve).getAllByRole("listitem")).toHaveLength(9);
+  });
+
+  /**
+   * The tenth bar, and it is drawn **only** when the deck asks for it.
+   *
+   * The chart is `aria-hidden` but for one `sr-only` sentence per bar, so that sentence is both
+   * the whole accessible story and the only thing a test can address — which is why the X bar
+   * gets exactly the treatment the numbered nine get rather than a `title` of its own. The
+   * sentence says "with X in their cost" rather than `{X}`: braces are not something a screen
+   * reader says.
+   */
+  it("draws the X bar only for a deck that is splitting its {X} spells out", () => {
+    const deck = [xSpell("Awakening", { quantity: 4 }), spell("Bolt", 1, { quantity: 4 })];
+    const { rerender } = strip(deck);
+
+    const curve = () => screen.getByRole("list", { name: "Mana curve" });
+    expect(within(curve()).queryByText(/with X in their cost/)).not.toBeInTheDocument();
+    expect(within(curve()).getByText("4 cards at mana value 3")).toBeInTheDocument();
+
+    rerender(
+      <DeckStats
+        cards={deck}
+        marketplace={MARKETPLACES.tcgplayer}
+        send={sender()}
+        separateXGroup
+      />,
+    );
+
+    expect(within(curve()).getAllByRole("listitem")).toHaveLength(10);
+    expect(within(curve()).getByText("4 cards with X in their cost")).toBeInTheDocument();
+    // And they left the bucket they were in, so the two bars are not the same four cards
+    // counted twice.
+    expect(within(curve()).getByText("0 cards at mana value 3")).toBeInTheDocument();
+  });
+
+  /**
+   * The figure the toggle must leave alone, read off the rendered strip rather than off
+   * `deckStats` — because it is the number on screen that a reader would see move.
+   *
+   * `(3 × 4 + 1 × 4) / 8 = 2.00` with X at zero (CR 202.3b), whichever bar the X spells are
+   * drawn in.
+   */
+  it("prints the same average mana value with the X split on and off", () => {
+    const deck = [xSpell("Awakening", { quantity: 4 }), spell("Bolt", 1, { quantity: 4 })];
+    const average = () => screen.getByText("Avg. mana value", { selector: "dt" }).closest("div");
+
+    const { rerender } = strip(deck);
+    expect(average()).toHaveTextContent("2.00");
+
+    rerender(
+      <DeckStats
+        cards={deck}
+        marketplace={MARKETPLACES.tcgplayer}
+        send={sender()}
+        separateXGroup
+      />,
+    );
+
+    expect(average()).toHaveTextContent("2.00");
   });
 
   it("draws the colour pie with a legend that counts each segment", () => {

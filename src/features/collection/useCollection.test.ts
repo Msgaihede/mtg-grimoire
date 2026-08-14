@@ -19,6 +19,7 @@ const NONE = {
   colors: [],
   sets: [],
   manaValues: [],
+  manaX: false,
   finishes: [],
   conditions: [],
   needsReview: undefined,
@@ -61,11 +62,20 @@ describe("activeFilterCount", () => {
         colors: ["R"],
         sets: ["lea"],
         manaValues: [1],
+        manaX: true,
         finishes: ["foil"],
         conditions: ["NM"],
         needsReview: true,
       }),
     ).toBe(8);
+  });
+
+  /** X is the last chip of the mana-value group and is OR'd with the numerals, so it is that
+   *  same kind — but an X-only filter still has to be seen, or Reset all would hide over a
+   *  list that is filtered. */
+  it("counts the X chip with the mana values it sits among", () => {
+    expect(activeFilterCount({ ...NONE, manaX: true })).toBe(1);
+    expect(activeFilterCount({ ...NONE, manaValues: [1], manaX: true })).toBe(1);
   });
 });
 
@@ -124,6 +134,9 @@ describe("useCollection", () => {
       result.current.toggleColor("R");
       result.current.toggleSet("lea");
       result.current.toggleManaValue(1);
+      // The tenth chip of the mana-value group, cleared by the same press — and not a ninth
+      // kind: it is counted with the numerals it sits among, so the badge still reads 8.
+      result.current.toggleManaX();
       result.current.toggleFinish("foil");
       result.current.toggleCondition("NM");
       result.current.toggleNeedsReview();
@@ -136,14 +149,52 @@ describe("useCollection", () => {
     expect(result.current.activeCount).toBe(0);
     expect(result.current.finishes).toEqual([]);
     expect(result.current.conditions).toEqual([]);
+    expect(result.current.manaX).toBe(false);
     expect(result.current.needsReview).toBeUndefined();
     await waitFor(() => {
       const q = lastQuery();
       expect(q.text).toBeUndefined();
       expect(q.finishes).toBeUndefined();
       expect(q.conditions).toBeUndefined();
+      expect(q.manaX).toBeUndefined();
       expect(q.needsReview).toBeUndefined();
     });
+  });
+
+  /**
+   * The X chip, end to end and without a facet in sight — this view wires no counts at all,
+   * so the chip's whole job here is to reach the query and the key.
+   *
+   * The key is the half that can fail silently: "costs 1" and "costs 1, or has an X in its
+   * cost" are two different sets of rows over the same local SQLite, so a key that could not
+   * tell them apart would answer the second out of the first's cached pages instantly, with
+   * nothing on screen to notice. A new request having gone out at all is therefore the
+   * assertion, and the payload is read from that request rather than from a re-render.
+   */
+  it("sends the X chip and keys the query on it", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.toggleManaValue(1));
+    await waitFor(() => expect(lastQuery().manaValues).toEqual([1]));
+    const asked = collectionList.mock.calls.length;
+    const key = result.current.queryKeyString;
+
+    act(() => result.current.toggleManaX());
+
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.queryKeyString).not.toBe(key);
+    expect(lastQuery().manaX).toBe(true);
+    // Additive: the numeral it was pressed beside is still on the wire, because `cmc` counts
+    // `{X}` as zero and a `{X}` card answers both chips.
+    expect(lastQuery().manaValues).toEqual([1]);
+
+    // …and turning it back off is the same search again, by the same key. The key is a
+    // function of the filters and of nothing else, so this is also what says the segment is
+    // the chip's own rather than something that grows on every press.
+    act(() => result.current.toggleManaX());
+
+    expect(result.current.queryKeyString).toBe(key);
   });
 
   /**

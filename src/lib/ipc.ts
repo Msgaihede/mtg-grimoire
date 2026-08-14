@@ -17,7 +17,7 @@
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
- * `DeckInput`/`DeckPatch`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
+ * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
@@ -94,6 +94,19 @@ export interface SearchRequest {
   sets?: string[];
   /** Mana-value chips: 0–7 match exactly, 8 means "8 or more". */
   manaValues?: number[];
+  /**
+   * Also match printings whose printed cost names `{X}`. Rust: `mana_x: Option<bool>`.
+   *
+   * **One more chip in the mana-value group, ORed with the numbers beside it** — pressing X
+   * alone asks for the X spells, pressing X and `3` asks for both piles at once. And it is
+   * **additive rather than a re-filing**: an X card still matches its own mana value (Fireball
+   * is `{X}{R}`, mana value 1, and answers the `1` chip), so a reader who names both chips gets
+   * that card once, in one row, rather than a duplicate. The deck editor's
+   * `separateXGroup` is the *other* shape of this idea and deliberately not this one — there a
+   * card is in the X pile **instead of** its bucket, because a heading that counted it twice
+   * would make the columns add up to more than the deck.
+   */
+  manaX?: boolean;
   rarity?: string;
   /** Omitted means true: digital-only printings are hidden unless asked for. */
   paperOnly?: boolean;
@@ -287,6 +300,19 @@ export interface FacetResponse {
   colors: Record<string, number>;
   /** Keyed `"0"`–`"8"`, `8` meaning eight-or-more. Plain counts. */
   manaValues: Record<string, number>;
+  /**
+   * How many printings name `{X}` in their printed cost — the X chip's count. Rust:
+   * `mana_x: i64`.
+   *
+   * **A field beside the map and not an `"x"` key inside it**, because that map is keyed *by
+   * mana value* and X is not one: every other key parses as a number and the chips above read
+   * it as one. A string key that only looks like the others is the kind of thing a
+   * `Number(key)` somewhere turns into `NaN` and files at the head of the curve. And it
+   * **overlaps** the map rather than carving a slice out of it: an X card is counted here *and*
+   * under its own mana value, matching {@link SearchRequest.manaX}'s additive semantics, so
+   * this number must never be added to the map's.
+   */
+  manaX: number;
   /** Keyed by `legalities` key. Plain counts. */
   formats: Record<string, number>;
   /**
@@ -462,6 +488,10 @@ export interface CardFilters {
   sets?: string[];
   /** 0–7 match exactly, 8 means "8 or more". */
   manaValues?: number[];
+  /** Also match printings whose printed cost names `{X}` — see
+   *  {@link SearchRequest.manaX}, which is the same field on the same chip group: ORed with
+   *  the numbers above and additive, never a re-filing. Rust: `mana_x: Option<bool>`. */
+  manaX?: boolean;
   rarity?: string;
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
@@ -1139,13 +1169,27 @@ export interface DeckPatch {
   /**
    * Whether this deck keeps a theory list beside its live one.
    *
-   * **Switching it on seeds the theory list from live when there is nothing in it**, in the
-   * same transaction: an empty theory list beside a full live one reads as data loss rather
-   * than as a blank page. Switching it off **keeps every row** — it hides a switch, it does
-   * not delete a list, and nothing in the backend ever deletes a `theory` row except the
-   * ordinary card writes the reader makes against it.
+   * **Switching it on _moves_ the live list into theory**, in the same transaction: the deck
+   * the reader has built becomes the plan, and the live list starts **empty**. A plan is what a
+   * deck is being built toward, and the honest starting point for one is the deck as it stands
+   * — so the cards go there rather than being duplicated into two lists that then drift apart.
+   * The deck's {@link DeckRow.lastVariant} is left at `"theory"` with them, so the editor opens
+   * on the list the cards are now in.
+   *
+   * It used to *copy*, which is what {@link ipc.deckTheoryCopyFromLive} still does and is now
+   * the only thing that does.
+   *
+   * Switching it off **keeps every row** — it hides a switch, it does not delete a list, and
+   * nothing in the backend ever deletes a `theory` row except the ordinary card writes the
+   * reader makes against it.
    */
   theoryEnabled?: boolean;
+  /**
+   * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
+   * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
+   * preference, so switching it writes one column and touches not one `deck_cards` row.
+   */
+  separateXGroup?: boolean;
 }
 
 /**
@@ -1218,11 +1262,84 @@ export interface DeckRow {
    *
    * Read on the row as well as written through {@link DeckPatch}, because a switch the app can
    * set and never see is a switch nothing can draw: the editor's Live/Theory control **is**
-   * this boolean. Without it every reader would have to guess from whether the theory list
-   * happens to be empty — which is precisely the state the seed-on-enable exists to make
-   * impossible to interpret.
+   * this boolean. Without it every reader would have to guess from whether one of the two
+   * lists happens to be empty — and an empty list says nothing at all here, since enabling the
+   * switch *moves* the live list into theory and quite deliberately leaves live empty.
    */
   theoryEnabled: boolean;
+  /**
+   * Which of the deck's two lists the editor was last reading — the tab the reader left this
+   * deck on, restored when they open it again.
+   *
+   * Written by {@link ipc.deckSetViewState} and by nothing else, which is what keeps it honest:
+   * **looking at a tab is not editing a deck**, so that command moves no `updatedAt`, writes no
+   * history row and reallocates nothing. `deckUpdate(id, { theoryEnabled: true })` leaves it at
+   * `"theory"`, because that write moves the deck's cards there.
+   *
+   * A deck whose {@link DeckRow.theoryEnabled} is `false` can still carry `"theory"` here — the
+   * switch being turned off does not rewrite it — so a reader is put back on **Live** whatever
+   * this says when the deck keeps no plan. There is no list to get back from otherwise.
+   */
+  lastVariant: DeckVariant;
+  /**
+   * The editor's `Group by` as the reader left it: `GroupBy`'s vocabulary
+   * (`category | manaValue | type`), and `"category"` on a deck nobody has changed it on.
+   *
+   * **Typed `string` and deliberately not narrowed on the wire**, unlike
+   * {@link DeckRow.lastVariant} beside it. The vocabulary is TypeScript's — `GroupBy` lives in
+   * `features/decks/grouping.ts`, and this file may not import from `features/` — and, more to
+   * the point, a database outlives the app: a word a *future* build stops offering has to
+   * degrade to the default rather than putting the editor in a mode nothing can leave. The
+   * narrowing is `asGroupBy`, which answers `"category"` for anything it has not heard of. The
+   * same arrangement `getMarketplace` and `printingGroupBy` are in — see this file's header.
+   */
+  lastGroupBy: string;
+  /**
+   * The editor's `Sort` as the reader left it: `SortBy`'s vocabulary
+   * (`alphabetical | manaCost | price | type`), and `"alphabetical"` by default.
+   *
+   * `string` for {@link DeckRow.lastGroupBy}'s reason, and narrowed the same way — `asSortBy` in
+   * `features/decks/sorting.ts`, which answers `"alphabetical"` for a word this build does not
+   * offer.
+   */
+  lastSortBy: string;
+  /**
+   * Whether this deck's curve gathers the `{X}` spells under a heading of their own.
+   *
+   * `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`, schema v13 — per **deck**, because it
+   * is an answer about a particular curve: a storm list where half the spells are `{X}` reads
+   * quite differently from an aggro deck with one Fireball in it, and a single app-wide setting
+   * would make the reader re-decide every time they opened a different deck.
+   *
+   * **It is a reading preference and changes nothing about what is in the deck.** It moves a
+   * card between two headings — `buildGroups`' `separateX` and the curve the stats strip counts
+   * — and reaches no rule: not size, not copies, not legality, not the allocator. Nothing in
+   * `validation/` has heard of it and nothing there should.
+   *
+   * It is not one of the three `last*` fields above, and the split is the point: those are how
+   * the reader was *looking* at this deck a moment ago, written by a command that moves no
+   * `updatedAt`, while this is an answer about the deck's own curve and rides the ordinary
+   * {@link ipc.deckUpdate} with the rename and the Built toggle.
+   */
+  separateXGroup: boolean;
+}
+
+/**
+ * How a deck is being read, as the editor asks for it to be remembered: the tab, the grouping
+ * and the sort.
+ *
+ * **Every field is optional and absent means "leave it"** ({@link DeckPatch}'s rule, one command
+ * over). The editor writes the single control that moved, so pressing Sort can never write back
+ * a stale grouping — and the three controls do not have to be read together at the call site.
+ *
+ * `groupBy` and `sortBy` are `string` rather than the unions that produce them, for the reason
+ * {@link DeckRow.lastGroupBy} gives: the vocabularies belong to `features/decks`, and the round
+ * trip has to survive a build that no longer offers one of their words.
+ */
+export interface DeckViewState {
+  variant?: DeckVariant;
+  groupBy?: string;
+  sortBy?: string;
 }
 
 /**
@@ -2138,6 +2255,24 @@ export const ipc = {
   deckSetFolder: (deckId: number, folderId: number | null) =>
     invoke<DeckRow>("deck_set_folder", { deckId, folderId }),
   /**
+   * Remember how this deck is being read: which of its two lists, which `Group by`, which
+   * `Sort`. Absent fields are left alone — see {@link DeckViewState}.
+   *
+   * **A third deck write that is not a {@link DeckPatch}, and for a reason of its own: looking
+   * at a tab is not editing a deck.** It writes the three columns it was given and nothing
+   * else — no `updatedAt`, so a deck the reader only *read* does not climb to the top of a
+   * gallery sorted by when it was touched; **no history row**, because a `deck_audit` full of
+   * "changed the sort to Price" is a history nobody can read the edits out of; and no
+   * reallocation, because no card moved. A deck id that resolves to nothing is refused by name,
+   * like every other deck write.
+   *
+   * Answers nothing. What it stored is on the next {@link DeckRow} — `lastVariant`,
+   * `lastGroupBy`, `lastSortBy` — and the editor is already showing it, which is why nothing
+   * here invalidates (`useDeck`'s `rememberView` says why at length).
+   */
+  deckSetViewState: (deckId: number, viewState: DeckViewState) =>
+    invoke<void>("deck_set_view_state", { deckId, viewState }),
+  /**
    * A deck's categories on their own — the same list `deckGet` already carries, for a panel
    * that wants it without the cards.
    *
@@ -2274,11 +2409,13 @@ export const ipc = {
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
-   * Seed the theory list from the live one. Answers how many **rows** were written.
+   * Copy the live list into the theory one. Answers how many **rows** were written.
    *
-   * Normally implicit — `deckUpdate(id, { theoryEnabled: true })` does this in the same
-   * transaction when the theory list is empty — and offered separately for the reader who
-   * wants to start again from what is sleeved up.
+   * **This is no longer what enabling the switch does, and it used to be.**
+   * `deckUpdate(id, { theoryEnabled: true })` now *moves* the live list into theory — the deck
+   * becomes the plan and live starts empty — so nothing calls this implicitly any more. It
+   * stays as the explicit gesture it always also was: *copy what is sleeved up into the plan*,
+   * for the reader who wants to start the plan again from the deck as it stands.
    *
    * **It skips rather than folding, and the difference is the whole point of the command.**
    * `deck_theory::seed_from_live` is `ON CONFLICT(deck, variant, category, card) DO NOTHING`:
