@@ -657,6 +657,40 @@ describe("ContextMenu", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
+  /**
+   * The pointer half of the same problem, and the one that costs the reader their words.
+   *
+   * Hover-to-open is the panel assuming its contents are rows: a sweep onto a row that opens
+   * nothing collapses whatever was open — which, once a panel holds a field, is a half-typed tag
+   * name deleted by a nudge of the mouse while the reader is looking at the keyboard. A field is a
+   * mode for the pointer exactly as it is for the arrows.
+   */
+  it("does not let a pointer sweep collapse a panel the reader is typing in", async () => {
+    const user = userEvent.setup();
+    function Content() {
+      return <input aria-label="New tag" defaultValue="" />;
+    }
+    open([
+      { kind: "lazy", id: "tag", label: "Tag card", Content },
+      { kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() },
+    ]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    const field = screen.getByLabelText("New tag");
+    await user.click(field);
+    await user.keyboard("burn");
+    expect(field).toHaveValue("burn");
+
+    // Fake timers only from here: user-event's own waits deadlock against them, so the typing
+    // above has to happen on the real clock.
+    vi.useFakeTimers();
+    fireEvent.pointerOver(screen.getByRole("menuitem", { name: "Copy card name" }));
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
+
+    expect(screen.getByLabelText("New tag")).toHaveValue("burn");
+  });
+
   it("runs a foreign row's action and closes the whole menu", async () => {
     const user = userEvent.setup();
     const pick = vi.fn();

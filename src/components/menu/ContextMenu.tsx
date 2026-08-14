@@ -533,6 +533,15 @@ export function ContextMenu({
    * therefore changes nothing: crossing the gap on the way to a submenu must not close it.
    */
   const onPointerOver = (e: ReactPointerEvent) => {
+    // **A field is a mode for the pointer too, and this half costs the reader their words.**
+    // Hover-to-open is the panel assuming its contents are rows: a sweep onto a row that opens
+    // nothing collapses whatever was open, which — once a panel holds a field — is a half-typed
+    // tag name deleted by a nudge of the mouse while the reader is looking at the keyboard. So
+    // while the caret is in a field anywhere in this cascade, the pointer rearranges nothing.
+    // The caret leaving the field is what turns hover back on, and that is a deliberate act.
+    const caret = document.activeElement;
+    if (isTextField(caret) && panelRef.current?.contains(caret)) return;
+
     const row = (e.target as Element).closest<HTMLElement>(ROW_SELECTOR);
     const panel = row && panelOf(row);
     const id = row?.dataset.menuRow;
