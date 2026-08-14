@@ -27,7 +27,7 @@ Plan 2 range: `a94f890..e9db12f` (25 commits). Live smoke (dev) 7/7 PASS + packa
 Set-picker/table polish already ledgered there; image-cache budget/eviction + "Clear cache" + "Compact database" buttons (Settings); `Printing`'s four unrendered fields; role=grid + roving tabindex for tables; overlay focus containment; Cinzel dead `.woff`.
 
 ## Accepted as-is (rulings recorded in the final review output, workspace deleted)
-Motion-budget deviations (hover scale, flip fade, first-run pulse — all reduced-motion-safe; spec amended); first-run overlay covering the mana line (Plan 6 polish candidate); dev-only quirks; historical-migration coverage gaps verified against real data.
+Motion-budget deviations (hover scale, flip fade, first-run pulse — all reduced-motion-safe; spec amended); first-run overlay covering the mana line (Plan 6 polish candidate); dev-only quirks; historical-migration coverage gaps verified against real data. **Two of these are gone as of 2026-08-14**: the overlay now draws the mana line itself rather than a bar of its own, which takes the first-run pulse with it.
 
 ## Perf/scale baselines (live, this machine)
 - Packaged debug build boots clean, 0 CSP violations; injected `<style>` refused under prod CSP.
