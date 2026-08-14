@@ -16,6 +16,8 @@ const deckTagUpdate = vi.hoisted(() => vi.fn());
 const deckTagDelete = vi.hoisted(() => vi.fn());
 const deckTagSuggestions = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
+/** The one read `autoCategorise` makes that is not a deck command: what these cards *do*. */
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -31,6 +33,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagDelete,
     deckTagSuggestions,
     deckMoveCard,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -123,6 +126,9 @@ beforeEach(() => {
   deckTagDelete.mockReset().mockResolvedValue(undefined);
   deckTagSuggestions.mockReset().mockResolvedValue([{ name: "Cut candidate", color: "ember" }]);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
+  // The shape of a database that has never ingested the taxonomy, which is the app's supported
+  // floor: every card answers no slugs and the type line decides. A test about tags says so.
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
 describe("useDeckMeta", () => {
@@ -176,7 +182,11 @@ describe("useDeckMeta", () => {
     await waitFor(() => expect(result.current.categories).toEqual(theory));
     expect(deckCategoryList).toHaveBeenCalledWith(4, "theory", "tcgplayer");
     // Both answers are still there: flipping back is a cache hit, not a re-read.
-    expect(client.getQueryData(["decks", "categories", 4, "live", "tcgplayer"])).toEqual([MAIN, REMOVAL, MAYBE]);
+    expect(client.getQueryData(["decks", "categories", 4, "live", "tcgplayer"])).toEqual([
+      MAIN,
+      REMOVAL,
+      MAYBE,
+    ]);
     expect(client.getQueryData(["decks", "categories", 4, "theory", "tcgplayer"])).toEqual(theory);
   });
 
@@ -252,16 +262,145 @@ describe("useDeckMeta", () => {
 });
 
 /**
- * "Auto-categorise from card types" — the one rule in `autoCategory.ts`, pressed once.
+ * "File cards by what they do" — the one rule in `autoCategory.ts`, pressed once.
  *
  * The rule itself is tested where it lives; what these pin is the **orchestration**, which is
  * where this feature can destroy a reader's work: which piles it is allowed to empty, which
- * cards it leaves alone, and that pressing it twice does not move anything twice.
+ * cards it leaves alone, that the fact the rule reads is fetched **once** for the whole press,
+ * and that a press which cannot read that fact moves nothing at all.
  */
 describe("useDeckMeta.autoCategorise", () => {
   const CREATURE = card({ cardId: "p1", name: "Grizzly Bears", typeLine: "Creature — Bear" });
   const LAND = card({ cardId: "p2", name: "Forest", typeLine: "Basic Land — Forest" });
+  /** An Instant by type and Removal by function — the card the whole change is about. */
+  const SWORDS = card({ cardId: "p5", name: "Swords to Plowshares", typeLine: "Instant" });
 
+  /**
+   * What a card **does** beats what it **is**, and a card nobody has tagged still lands
+   * somewhere.
+   *
+   * Both halves in one test on purpose: they are the two arms of a single rule, and the second
+   * is what makes the first safe to ship before the taxonomy has ever been downloaded. The
+   * answer names only `p5`, so `p1` is filed by its type line — which is also the shape of an
+   * answer shorter than the request, the reason nothing here reads it by position.
+   */
+  it("files a card by what it does, and a card with no tags by its type line", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p5", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    const moved = await result.current.autoCategorise.mutateAsync([SWORDS, CREATURE]);
+
+    expect(moved).toBe(2);
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p5", "p1"]);
+    // The deck already has a Removal column, so the tagged card joins it rather than making a
+    // second one; the untagged one gets the type pile it has always got.
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p5", MAIN.id, REMOVAL.id, "live");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Creature");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, "live");
+  });
+
+  /**
+   * **Land is pinned by type, before a tag is consulted.** Half of Scryfall's lands carry a
+   * functional tag — Prismatic Vista searches, so it is tagged `tutor` — and a mana base
+   * scattered across a dozen columns is the one pile every decklist draws whole.
+   */
+  it("files a land as Land whatever its tags say", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p6", slugs: ["tutor"] }]);
+    deckCategoryCreate.mockResolvedValue(category({ id: 43, name: "Land" }));
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    const moved = await result.current.autoCategorise.mutateAsync([
+      card({ cardId: "p6", name: "Prismatic Vista", typeLine: "Land" }),
+    ]);
+
+    expect(moved).toBe(1);
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Land");
+    expect(deckCategoryCreate).not.toHaveBeenCalledWith(4, "Tutor");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p6", MAIN.id, 43, "live");
+  });
+
+  /**
+   * **One tag read for the press, whatever the deck's size.** One read per card would be a
+   * hundred `invoke`s behind a single button, and the command batches 500 ids to a statement
+   * precisely so that nobody has to.
+   */
+  it("asks what a whole deck does once, not once a card", async () => {
+    const deck = Array.from({ length: 100 }, (_, i) =>
+      card({ cardId: `c${i}`, typeLine: "Creature — Bear" }),
+    );
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    const moved = await result.current.autoCategorise.mutateAsync(deck);
+
+    expect(moved).toBe(100);
+    expect(oracleTagsForPrintings).toHaveBeenCalledTimes(1);
+    expect(oracleTagsForPrintings.mock.calls[0][0]).toHaveLength(100);
+    // And one pile made for the hundred of them, not one each.
+    expect(deckCategoryCreate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The answers are matched back by `cardId`, never by position**, and this is the deck shape
+   * that proves it: one printing sitting in two loose piles asks about one id and files two
+   * rows. A reader who imported a list and then dragged a copy into the maybe-pile-that-was has
+   * exactly this deck.
+   */
+  it("files both rows when one printing sits in two loose piles", async () => {
+    const LOOSE = category({ id: 9, name: "Uncategorised", sortOrder: 3 });
+    const RAMP = category({ id: 10, name: "Ramp", sortOrder: 4 });
+    deckCategoryList.mockResolvedValue([MAIN, LOOSE, RAMP]);
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p7", slugs: ["ramp"] }]);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    const moved = await result.current.autoCategorise.mutateAsync([
+      card({ cardId: "p7", name: "Sol Ring", typeLine: "Artifact" }),
+      card({
+        id: 2,
+        cardId: "p7",
+        name: "Sol Ring",
+        typeLine: "Artifact",
+        categoryId: LOOSE.id,
+        categoryName: LOOSE.name,
+      }),
+    ]);
+
+    expect(moved).toBe(2);
+    // Asked once, about one id — the second row costs no read and is filed by the same slugs.
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p7"]);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p7", MAIN.id, RAMP.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p7", LOOSE.id, RAMP.id, "live");
+  });
+
+  /**
+   * **A refused tag read refuses the press.** The alternative — file the whole deck by type
+   * line instead — is not the cautious answer it looks like: it is a different filing of every
+   * pile at once, under a button that promised to file by function, and the way back is one
+   * card at a time. An *empty* answer is a different fact and does fall through to the type
+   * line; that is the arm two tests above.
+   *
+   * The sentence keeps the backend's own words after its own, because "nothing moved" and "the
+   * database is busy" are both news and only one of them is guessable.
+   */
+  it("refuses the whole press when the tag read is refused, and moves nothing", async () => {
+    oracleTagsForPrintings.mockRejectedValue("The database is busy.");
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    await expect(
+      result.current.autoCategorise.mutateAsync([SWORDS, CREATURE, LAND]),
+    ).rejects.toThrow(/^Nothing was filed\..*The database is busy\.$/);
+
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+  });
+
+  /** With nothing tagged — the default here, and the shape of a database that has never
+   *  ingested the taxonomy — the type line is the whole of the answer, exactly as it was
+   *  before the tags existed. */
   it("files the loose pile into type piles, creating the ones the deck has not got", async () => {
     deckCategoryCreate
       .mockResolvedValueOnce(category({ id: 40, name: "Creature" }))
@@ -311,6 +450,36 @@ describe("useDeckMeta.autoCategorise", () => {
 
     expect(moved).toBe(0);
     expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A zone is not a pile, and the tags made that worth its own test.**
+   *
+   * Only `main` rows are candidates, which is why a commander has always been safe here — but a
+   * commander is a Legendary Creature and Legendary Creatures are tagged like every other card,
+   * so under the functional rule the card this deck is *named after* is exactly the sort of row
+   * a loosened filter would move into "Ramp". Two fences hold it (the kind, and the pile's name
+   * not being a loose one) and this pins the outcome rather than which of them did the work.
+   */
+  it("never moves a card out of the command zone", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p8", slugs: ["ramp", "card-advantage"] }]);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    const moved = await result.current.autoCategorise.mutateAsync([
+      card({
+        cardId: "p8",
+        name: "Kenrith, the Returned King",
+        typeLine: "Legendary Creature — Human Noble",
+        categoryId: 20,
+        categoryName: "Commander",
+        categoryKind: "commander",
+      }),
+    ]);
+
+    expect(moved).toBe(0);
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
   });
 
   /**

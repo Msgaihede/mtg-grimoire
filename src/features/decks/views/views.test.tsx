@@ -51,6 +51,9 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
 
 const RAMP = category();
 const COMMANDER = category({ id: 3, name: "Commander", kind: "commander", sortOrder: 0 });
+/** A seeded zone, and the only kind of category that reaches a view with nothing in it —
+ *  `grouping.ts` draws no empty pile of the reader's own. */
+const SIDEBOARD = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
 const MAYBE = category({
   id: 5,
   name: "Maybeboard",
@@ -515,36 +518,23 @@ describe.each([
 });
 
 describe("the views that are not the table", () => {
+  const empty = buildGroups([], [SIDEBOARD], "category", "alphabetical");
+
   /**
    * A `VirtualTable` has one scroller and one band per group, so an empty group is a band and
    * nothing else — there is no column for it to be a place *in*. The other three draw a
    * sentence, because an empty Sideboard is where the next sideboard card goes.
+   *
+   * **The empty group is the Sideboard and no longer `Ramp`**, and the swap is the point rather
+   * than a fixture tidy: `grouping.ts` stopped drawing a category of the reader's own once its
+   * last card leaves, so an empty `Ramp` reaches no view at all now and this case asserted
+   * nothing. The fixed zones are what still arrives empty, and they are exactly the piles that
+   * need the sentence.
    */
   it.each([
-    [
-      "StackView",
-      <StackView
-        key="s"
-        groups={buildGroups([], [RAMP], "category", "alphabetical")}
-        marketplace={TCG}
-      />,
-    ],
-    [
-      "TextView",
-      <TextView
-        key="t"
-        groups={buildGroups([], [RAMP], "category", "alphabetical")}
-        marketplace={TCG}
-      />,
-    ],
-    [
-      "GridView",
-      <GridView
-        key="g"
-        groups={buildGroups([], [RAMP], "category", "alphabetical")}
-        marketplace={TCG}
-      />,
-    ],
+    ["StackView", <StackView key="s" groups={empty} marketplace={TCG} />],
+    ["TextView", <TextView key="t" groups={empty} marketplace={TCG} />],
+    ["GridView", <GridView key="g" groups={empty} marketplace={TCG} />],
   ])("%s says where the next card goes", (_name, element) => {
     render(element);
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();

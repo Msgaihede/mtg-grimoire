@@ -63,8 +63,27 @@ both plus the frontend.
   see, because two `ALTER TABLE decks ADD COLUMN`s in two files conflict in neither. The one
   that landed first kept the number; folding the second into it would have left the column
   existing on fresh installs and on nobody else's disk, because a machine that already ran v12
-  never runs it again. Schema is at **v13** — see
+  never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
+  branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
+  one rung in one day is the ladder's own argument — take the next free number when you land, and
+  never reuse one. Schema is at **v14** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
+- **Scryfall's Oracle Tags live in four tables plus a watermark** (schema v14), keyed on the
+  tag **slug** and on `cards.oracle_id` — both soft, no foreign key anywhere.
+  `src/oracle_tags.rs` is the only writer: it streams the `oracle_tags` bulk file, flattens
+  the hierarchy **once** into `oracle_tag_cards` (every tag a card holds *and* every ancestor
+  of those tags), and swaps four staging tables into place with the watermark in the same
+  transaction. **Rust stores slugs and nothing else** — no category names, no priority order,
+  no whitelist; that is TS's half. Two read commands answer a whole decklist in one round
+  trip: `oracle_tags_for_cards` keyed on `oracle_id`, and **`oracle_tags_for_printings` keyed
+  on `cards.id`**, which is the one most call sites want — a quick add, every drag source and
+  a resolved import line all hold a printing id, and `CardSummary` carries no oracle id at
+  all. Both answer one entry **per requested id, in request order**, with an empty slug list
+  for an unknown id, a NULL `oracle_id` and an untagged card alike: all three mean "fall back
+  to the type line", and **nothing about categorising a card may fail a deck add**.
+  **684 of 4 521 tags have more than one parent**, so
+  `oracle_tags::ancestor_closures` follows *every* `parent_ids` entry and is the one place
+  that decision is written down.
 - **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
   is dropped on every sync, so a price column would be destroyed by the next refresh —
   and `card_id` there is a **soft** reference with no foreign key, because a feed and the
@@ -224,6 +243,13 @@ The rules, and where each is enforced, are in
   5xx/timeouts only — **never a 429** (the docs forbid exactly that) and never a 404.
 - **Bulk data is the only card source**, gzipped **JSONL** (one object/line; old JSON-array
   endpoints 404). There is no per-card API lookup anywhere.
+- **Two bulk datasets, one client.** `default_cards` (the corpus) and `oracle_tags` (~5.85 MB,
+  4 521 tags) both go through `Client::check_bulk_dataset` and so share the one pacing gate
+  and the one 429 lockout — a second `reqwest::Client` would be a second application as far
+  as the rate limiter can tell. The price feeds are the deliberate exception: they are not
+  Scryfall and must not spend its budget. The tag file is checked **weekly**, not daily; the
+  taxonomy is hand-curated and a deck's categories should not regroup between two sessions on
+  the same afternoon.
 - Scryfall's shapes: `cards.oracle_id`/`cmc`/`type_line` are NULLABLE, `collector_number` is
   TEXT, prices are decimal strings, `legalities` is JSON (23 keys, grows), finishes are an enum
   and never a boolean.

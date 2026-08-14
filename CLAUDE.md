@@ -9,6 +9,11 @@ construction: nothing downloads until a reader selects that marketplace, and a f
 answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
 needs a per-user JWT and publishes no bulk download.
 
+**Scryfall's Oracle Tags are a second bulk download from the same source, and optional the same
+way.** They say what a card _does_ (`removal`, `ramp`, `recursion`), which is what a deck add is
+filed by; a database that has never fetched them files by card type instead, and that fallback is
+the floor rather than an error. Weekly, ~5.85 MB — [the research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md).
+
 ## Commands
 
 - `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
@@ -116,8 +121,11 @@ number to compare against.
   only** — `cards` and `sync_meta` belong to the sync, and a hand-written row in either makes
   every later measurement a fiction. Delete every seeded row afterwards.
 - **A prose-only edit routes to neither CI job, so nothing goes red when a document rots.** Counts
-  and lists in these files (story totals, fault lists, test-case counts) have each drifted at
-  least once — re-count in the same commit that changes one.
+  and lists in these files (fault lists, test-case counts) have each drifted at least once —
+  re-count in the same commit that changes one. **Better still, do not write down a number a build
+  already answers**: the Storybook story and plays totals were deleted on 2026-08-14 after
+  conflicting on five consecutive merges of `main`, because a count is a fact about a *tree* and
+  every open branch has a different one.
 
 ## Working style (user preferences)
 

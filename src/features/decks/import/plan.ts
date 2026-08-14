@@ -3,18 +3,31 @@
  * not going anywhere.
  *
  * Pure, and deliberately so: this is the domain logic the spec keeps on this side of the IPC
- * boundary. Rust answered "which printing" — the one question this side cannot answer, because
- * it is a question about 116 k rows — and answers nothing about *which pile*. Which pile a Sol
- * Ring belongs in, and which card is the commander, are decisions about a deck, and every one
- * of them is made here.
+ * boundary. Rust answered two questions no amount of TypeScript could — "which printing", which
+ * is a question about 116 k rows, and "what does this card *do*", which is Scryfall Tagger's
+ * hand-curated vocabulary in a table — and neither answer says a word about *which pile*. Which
+ * pile a Sol Ring belongs in, and which card is the commander, are decisions about a deck, and
+ * every one of them is made here.
+ *
+ * **The tag slugs arrive as an argument, and that is what keeps this file pure.** Fetching them
+ * is IO, IO belongs in `useDeckImport`, and a planning function that reached for the network
+ * could no longer be called synchronously by a test or a preview. So the caller makes **one**
+ * read for the whole list and hands the answers in; see {@link buildImportPlan}.
  *
  * **This is not an add path, and it must never become one.** `useDeck.addCard` files a single
  * add by the same rule ({@link autoCategoryFor}, applied on its one definition), and routing an
  * import through it would send one write per line — 105 transactions and 105 allocator runs for
  * the reference list. `deck_import_commit` exists to be one of each; {@link toImportItems} is
- * what feeds it.
+ * what feeds it. The tag read obeys the same arithmetic: **one call for the list**, never one
+ * per line.
  */
-import type { FormatSpec, ImportItem, ImportMatch, ImportResolveRow } from "@/lib/ipc";
+import type {
+  FormatSpec,
+  ImportItem,
+  ImportMatch,
+  ImportResolveRow,
+  PrintingTags,
+} from "@/lib/ipc";
 import {
   AUTO_CATEGORY_DISPLAY_ORDER,
   PREDEFINED_CATEGORY_NAMES,
@@ -35,8 +48,9 @@ import type { ParseIssue, ParsedLine, ParsedList, Section } from "./parse";
  * {@link PREDEFINED_CATEGORY_NAMES} is the list to check a change against, and `plan.test.ts`
  * sweeps these values against it for that reason.
  *
- * `deck` is not a key: a line in the deck section is filed by its type line, which is the next
- * function down. `satisfies` rather than a type annotation so the strings stay literal *and* a
+ * `deck` is not a key: a line in the deck section is filed by the app's auto rule — Land, then
+ * what the card does, then what it is — which is the next function down. `satisfies` rather
+ * than a type annotation so the strings stay literal *and* a
  * new {@link Section} arm fails to compile here rather than filing itself under `undefined`.
  */
 export const SECTION_CATEGORY = {
@@ -59,10 +73,13 @@ const SEEDED_INACTIVE: string = SECTION_CATEGORY.maybeboard;
 
 /**
  * The order the preview lists piles in: the four sections first, in the order a deck seeds
- * them, then the type buckets in reading order with Land last, then the fallback.
+ * them, then every bucket the auto rule can answer with in reading order — the functional
+ * piles, then the type ones, with Land last — then the fallback.
  *
  * Derived from the two published orders rather than typed out, so a bucket added to
- * `autoCategory.ts` appears here without a second edit.
+ * `autoCategory.ts` appears here without a second edit. That is not hypothetical: the thirteen
+ * functional names arrived in {@link AUTO_CATEGORY_DISPLAY_ORDER} and this list needed no edit
+ * at all, which is the whole of why it is derived.
  */
 const TALLY_ORDER: readonly string[] = [
   ...PREDEFINED_CATEGORY_NAMES,
@@ -201,16 +218,44 @@ function identityOf(m: ImportMatch): CardIdentity {
  * A section heading is the reader saying so, and is taken as said. Everything else is
  * {@link autoCategoryFor}, which is the app's **one** rule for this and must never be copied:
  * a plain add, a drag with no column under it and an imported line all have to agree about
- * where a Sol Ring goes, or the same deck files the same card two ways.
+ * where a Sol Ring goes, or the same deck files the same card two ways. That rule reads a
+ * **land's type line first, then the card's Oracle tags, then its type line** — so this hands
+ * it both facts and decides nothing itself.
+ *
+ * **The slugs are looked up by `cardId`, never taken by position** — see {@link buildImportPlan}
+ * for why a decklist is exactly the shape that breaks positional matching. A card the tag read
+ * had no answer for gets `undefined`, which is the rule's documented fallback and not a miss:
+ * it files by type line, as this whole path did before the tag dataset existed.
  *
  * An import is never in the "caller said nothing" case that `DEFAULT_CATEGORY_NAME` answers —
  * a resolved line always has its printing's `typeLine` in hand, so a `null` there means the
  * card really has none (an odd layout) and `Uncategorised` is the honest pile for it.
  */
-function categoryFor(line: ParsedLine, match: ImportMatch): string {
+function categoryFor(
+  line: ParsedLine,
+  match: ImportMatch,
+  slugs: ReadonlyMap<string, readonly string[]>,
+): string {
   return line.section === "deck"
-    ? autoCategoryFor({ typeLine: match.typeLine })
+    ? autoCategoryFor({ typeLine: match.typeLine, oracleTags: slugs.get(match.cardId) })
     : SECTION_CATEGORY[line.section];
+}
+
+/**
+ * The tag answers as the one thing {@link categoryFor} asks of them: a lookup from printing id
+ * to slugs.
+ *
+ * **Built here rather than by the caller so the match-by-id rule is stated once, in the pure
+ * function tests can reach.** `oracle_tags_for_printings` drops blank and duplicate ids, so its
+ * answer is one entry per *distinct* id and can be shorter than the request — and a decklist
+ * naming two printings of one card, or one card on two lines, is the ordinary case that makes
+ * `answers[i]` against `ids[i]` file the wrong cards. A later entry for the same id simply wins;
+ * the command answers each id once, so there is no second one to lose.
+ */
+function slugsById(tags: readonly PrintingTags[]): ReadonlyMap<string, readonly string[]> {
+  const byId = new Map<string, readonly string[]>();
+  for (const answer of tags) byId.set(answer.cardId, answer.slugs);
+  return byId;
 }
 
 /** The printing a line was answered with, as a card prints it. */
@@ -237,15 +282,32 @@ function tallyOrder(name: string): number {
  *
  * `spec` is `null` for a deck whose format this build has no row for, which is the same answer
  * as a format with no command zone: no commander question is asked.
+ *
+ * `tags` is what one `oracle_tags_for_printings` over every resolved card id answered — the
+ * whole list in a single read, made by {@link useDeckImport} before this is called. Three
+ * things about it are load-bearing:
+ *
+ * * **It is matched by `cardId` and never by position.** The command drops blank and duplicate
+ *   ids, so it answers one entry per *distinct* id; a list naming a card twice — which the
+ *   commander step already has a rule for — is exactly the case `tags[i]` mis-files.
+ * * **Empty is a complete answer.** An untagged card, an id `cards` has never heard of and a
+ *   printing with a NULL `oracle_id` all come back with no slugs, and the rule's response to
+ *   all three is the same: file by type line.
+ * * **Which is why the whole argument defaults to nothing.** A tag read that was refused, or a
+ *   build whose taxonomy has never been downloaded, plans the identical import filed entirely
+ *   by type line. That is the floor this feature stands on, not an error path — an import is a
+ *   large deliberate action and must not be lost to a taxonomy fetch.
  */
 export function buildImportPlan(
   parsed: ParsedList,
   rows: ImportResolveRow[],
   spec: FormatSpec | null,
+  tags: readonly PrintingTags[] = [],
 ): ImportPlan {
   const cards: PlannedCard[] = [];
   const unmatched: UnmatchedLine[] = [];
   const hintMisses: HintMiss[] = [];
+  const slugs = slugsById(tags);
 
   for (const row of rows) {
     // Annotated rather than inferred: `noUncheckedIndexedAccess` is off, so an out-of-range
@@ -267,7 +329,7 @@ export function buildImportPlan(
       lineNumber: line.lineNumber,
       match: row.matched,
       quantity: line.quantity,
-      categoryName: categoryFor(line, row.matched),
+      categoryName: categoryFor(line, row.matched, slugs),
     });
   }
 
@@ -356,9 +418,11 @@ function commanderChoice(cards: readonly PlannedCard[], spec: FormatSpec | null)
  * items that land on the same grain.
  *
  * `commanderIds` is whatever the reader confirmed (a `CommanderChoice`'s `cardIds`, or their
- * pick out of `candidates`), and it moves those cards into the Commander pile wherever the
- * type-line rule had filed them. It is applied here and not in the plan because the plan is
- * what the preview draws *while* they are still choosing.
+ * pick out of `candidates`), and it moves those cards into the Commander pile wherever
+ * {@link autoCategoryFor} had filed them — under `Creature` by type line, or under `Ramp` or
+ * `Draw` by what their tags say they do, all of which the command zone outranks. It is applied
+ * here and not in the plan because the plan is what the preview draws *while* they are still
+ * choosing.
  *
  * **Which is exactly why the tally is {@link tallyOf} over this function's answer** rather than
  * a field on the plan: this is the one place the commander choice is applied, so it is the only

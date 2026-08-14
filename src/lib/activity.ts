@@ -9,11 +9,13 @@
 import { createStore } from "zustand/vanilla";
 import type {
   FeedProgressEvent,
+  OracleTagProgressEvent,
   SyncPhase,
   SyncProgressEvent,
   UpdateProgressEvent,
 } from "@/lib/ipc";
 import type { ManaLineSync } from "@/lib/mana";
+import { ORACLE_TAG_PHASE_LABEL } from "@/lib/useOracleTagProgress";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 
 /** One long-running job, as the ribbon needs to describe it. */
@@ -54,6 +56,18 @@ export const RANK = {
    */
   marketplaceFeed: 5,
   update: 10,
+  /**
+   * The Oracle tag taxonomy being refreshed, and **the quietest job there is** — which is why
+   * it sits below the update download rather than between two of the others.
+   *
+   * It is the only long job whose failure costs the reader nothing at all: `autoCategoryFor`
+   * falls back to the type line, so an app with no taxonomy files every card and simply files
+   * it less well. A sync rewrites the corpus under every view, a feed rewrites the numbers on
+   * the screen being looked at, and an update download ends in a build worth restarting for.
+   * This one changes where the *next* card lands. So it yields the row to all three, and the
+   * ladder keeps its ten-apart spacing past `update` for whatever comes next.
+   */
+  oracleTags: 15,
 } as const;
 
 /** How long a job must run before the ribbon puts a sentence on screen. See `Ribbon`. */
@@ -193,9 +207,7 @@ export function marketplaceFeedActivity(
     key: "marketplace-feed",
     rank: RANK.marketplaceFeed,
     label:
-      phase?.phase === "ingesting"
-        ? `Importing ${label} prices`
-        : `Downloading ${label} prices`,
+      phase?.phase === "ingesting" ? `Importing ${label} prices` : `Downloading ${label} prices`,
     detail: feedDetail(phase),
     value: phase && phase.total > 0 ? Math.min(1, phase.done / phase.total) : null,
   };
@@ -211,6 +223,47 @@ function feedDetail(progress: FeedProgressEvent | null): string | null {
   }
   if (progress.phase === "ingesting") return `${progress.done.toLocaleString("en-US")} prices`;
   return null;
+}
+
+/**
+ * Fold an Oracle tag refresh into the job the ribbon describes.
+ *
+ * `refreshing` decides whether anything is running and the event never does — `syncActivity`'s
+ * rule, and the case for it here is the strongest of the three. `oracle_tags::refresh_if_due`
+ * is spawned at launch, so the ordinary refresh **begins before this window has a listener**
+ * and Tauri drops every event it emitted first; a job built from the event alone would start
+ * late, and would linger afterwards because a terminal `done`/`error` outlives its run.
+ * `OracleTagStatus.refreshing` is the reliable half, and `useOracleTagProgress` is what folds
+ * the two together.
+ *
+ * **Only the download counts anything**, which is a fact about `oracle_tags.rs` rather than a
+ * choice made here: `checking` emits `(0, 0)`, and the ingest hands its inner callback to
+ * `&mut |_| {}` and emits `("ingesting", 0, 0)` once. So the ~5.8 MiB has a bar and a figure,
+ * and the seconds of ingest after it have a sentence and an indeterminate bar. Better than
+ * inventing a denominator: `syncActivity` refuses to print the card ingest's estimated total
+ * for the same reason.
+ */
+export function oracleTagActivity(
+  refreshing: boolean,
+  progress: OracleTagProgressEvent | null,
+): Activity | null {
+  if (!refreshing) return null;
+  const phase =
+    progress && progress.phase !== "done" && progress.phase !== "error" ? progress : null;
+  return {
+    key: "oracle-tags",
+    rank: RANK.oracleTags,
+    // The generic sentence for a run this window has only heard *about* — a status that says
+    // `refreshing` with no event yet, and the two terminal phases whose event can outlive the
+    // run by a status read. None of the three is a phase, and none may read as finished.
+    label: phase ? ORACLE_TAG_PHASE_LABEL[phase.phase] : "Updating card tags",
+    detail:
+      phase?.phase === "downloading" && phase.total > 0 ? megabytes(phase.done, phase.total) : null,
+    value:
+      phase?.phase === "downloading" && phase.total > 0
+        ? Math.min(1, phase.done / phase.total)
+        : null,
+  };
 }
 
 /**

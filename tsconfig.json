@@ -2,7 +2,18 @@
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    /* `ES2022.Error` is added to an otherwise ES2020 program, and only that one sliver of
+       ES2022: it declares `ErrorOptions` and the `cause` property, which is what makes
+       `throw new Error(msg, { cause })` compile. ESLint's `preserve-caught-error` *requires*
+       that form when a catch block rethrows with a new message, so without this line the lint
+       rule and the type checker contradict each other and a catch block cannot be written at
+       all — which is exactly what happened in `useDeckMeta`'s tag-read refusal.
+
+       Safe at runtime rather than merely allowed: `Error.cause` is Chromium 93+, and this app
+       is a WebView2 webview while the suite runs on Node. Raising `target` or the whole `lib`
+       to ES2022 would also be safe, and is deliberately not done here — this is the smallest
+       change that resolves the contradiction, and it keeps the emit target where it was. */
+    "lib": ["ES2020", "ES2022.Error", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
 

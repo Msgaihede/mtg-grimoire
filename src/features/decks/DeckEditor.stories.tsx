@@ -83,11 +83,15 @@ const meta = {
           "them and which of five layers is open — and it draws no card and no heading itself. " +
           "`grouping.ts` says what the groups are and `views/` draw them, which is what stops " +
           "four surfaces answering “how many cards are in the Ramp column” four ways.\n\n" +
-          "**The groups are the deck's own categories** (schema v8), in `sortOrder`, empty and " +
+          "**The groups are the deck's own categories** (schema v8), in `sortOrder`, " +
           "switched-off ones included — never a fixed set of zones, and never filtered by the " +
-          "format. A category is a row the user names, orders and switches on or off, so hiding " +
-          "one would hide a pile they built; the format still *judges* the deck through the " +
-          "check chip and no longer decides what is drawn.\n\n" +
+          "format. A category is a row the user names, orders and switches on or off; the format " +
+          "still *judges* the deck through the check chip and no longer decides what is drawn.\n\n" +
+          "**An empty category does not draw**, with the four seeded zones (Commander, " +
+          "Sideboard, Companion, Maybeboard) as the exception — `grouping.ts`' `drawsWhenEmpty`. " +
+          "Switched-off is not empty: an inactive category holding cards still draws, because " +
+          "the two flags answer different questions. Note this applies to the *filtered* deck, " +
+          "so typing in the toolbar's filter changes which headings exist.\n\n" +
           "**Five layers, one piece of state.** The format check, the categories drawer, the " +
           "history drawer, the theory difference dialog and the deck settings dialog each " +
           'register the `"inner"` Escape rung, and `useDismissOnEscape` orders exactly two ' +

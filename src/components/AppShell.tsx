@@ -22,6 +22,7 @@ import { readDragData } from "@/features/decks/dnd";
 import {
   ACTIVITY_DELAY_MS,
   marketplaceFeedActivity,
+  oracleTagActivity,
   syncActivity,
   updateActivity,
 } from "@/lib/activity";
@@ -29,6 +30,7 @@ import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
+import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
@@ -111,12 +113,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
   // observer — including the one two lines below — reads it back from there.
   useMarketplaceProgress();
+  // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
+  // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
+  // its own to read the event out of a cache entry, and the ribbon is its only consumer today.
+  const oracleTags = useOracleTagProgress();
 
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.
   const busy = refreshing || status?.syncing === true;
 
-  // The three long jobs this window can be running. All are registered from here — the sync by
+  // The four long jobs this window can be running. All are registered from here — the sync by
   // this component, the update by `App`, which hands it down — and the registry is what lets
   // the ribbon describe any of them without knowing which.
   //
@@ -130,6 +136,10 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
     .label;
   useRegisterActivity(syncActivity(progress, busy));
   useRegisterActivity(marketplaceFeedActivity(refreshingLabel ?? null, feedProgress));
+  // **Started somewhere else again, and usually by nobody**: `oracle_tags::refresh_if_due`
+  // runs at launch when the taxonomy is a week old, so the commonest way this line appears is
+  // a job no surface in the window asked for. The status read is what makes that visible.
+  useRegisterActivity(oracleTagActivity(oracleTags.refreshing, oracleTags.progress));
   useRegisterActivity(updateActivity(update.progress, update.status?.available?.version ?? null));
   const activity = useTopActivity();
   // The line moves the moment a job starts; the sentence waits, so a sub-second `checking`

@@ -37,12 +37,38 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   `side` and `companion` are beside it (CR 100.4a; EDH's companion is "effectively a 101st
   card"). It is written in **three places that must stay one rule**: `engine.ts`'s constant,
   `deck.rs`'s `DECK_SELECT` subquery behind `DeckRow.card_count`, and the Storybook fake's copy.
-- **An add that names no category is filed by the card's type line; an add that names one is
+- **An add that names no category is filed by what the card _does_; an add that names one is
   untouched** — so every _drag_ overrides the rule by construction. The rule is `autoCategoryFor`,
-  applied on **`useDeck.addCard`'s single definition**, which takes an optional `typeLine`; the
-  fact travels from the call site, so no add pays a round trip to discover what it is adding.
-  `null` (an orphan, or a layout with no bucket word) is `Uncategorised`; **absent** is
-  `DEFAULT_CATEGORY_NAME`.
+  applied on **`useDeck.addCard`'s single definition**. Three steps, in this order: a front-face
+  type line saying `Land` is **pinned to `Land` before tags are consulted**; else the first of
+  **thirteen** Oracle-tag buckets whose anchor slugs the card's tags reach (Removal, Ramp,
+  Recursion, Draw, Tutor, Protection, Anthem, Stax, Tokens, Sacrifice, Lifegain, Mill, Burn — the
+  order _is_ the rule); else the old card-type answer. `null` (an orphan, or a layout with no
+  bucket word) is `Uncategorised`; **absent** is `DEFAULT_CATEGORY_NAME`.
+- **The empty slug list is the floor, not an error**, and every path preserves it: a database that
+  has never downloaded the taxonomy, a card Tagger has never tagged, an unknown printing and a
+  refused tag read all file by type line. **Nothing about categorising a card may fail an add** —
+  `useDeck`'s `oracleTagsFor` catches and answers `[]`, and its doc comment says not to turn that
+  into a rethrow. The one place that refuses instead is the Categories panel's bulk action, whose
+  blast radius is every loose card in the deck rather than one.
+- **The tags are read at the rule, and that is a deliberate reversal.** This used to say the fact
+  travels from the call site so no add pays a round trip — true while the fact was a type line the
+  drag payload already carried. **No list DTO carries a slug list**: `CardSummary`, `CollectionRow`
+  and `WishRow` say what a card _is_, and `CardSummary` has no `oracleId` either, so the four drag
+  sources have nothing to carry. `ipc.oracleTagsForPrintings` is called in the one arm that needs
+  it — a named `categoryId` and an absent `typeLine` both make **no** call — and it costs one
+  local-SQLite round trip on a deliberate user act. **Match its answers by `cardId`, never by
+  position**: blank and duplicate ids are dropped, so the array can be shorter than the request,
+  and a deck holding one card in two categories sends that id twice.
+- **The Land pin exists because there is no `land` tag.** Lands are a card type, not a function, and
+  **618 of 1 196 land cards (51.7%) carry a functional tag** — Prismatic Vista is `tutor`, Savai
+  Triome `card-advantage` — so without the pin a deck's mana base scatters across a dozen piles.
+  The pin lives **inside `autoCategoryFor`** and no call site may short-circuit it; a caller that
+  checked the type line first would be a second copy of the rule.
+- **Recursion outranks Draw on purpose**, and it looks wrong: `regrowth` has _two_ parents,
+  `recursion` and `card-advantage`, so Eternal Witness and Regrowth match both. **Burn is last and
+  tiny for the same kind of reason** — `burn-creature`'s parents are `removal-burn` and
+  `removal-creature`, so Removal claims Lightning Bolt first. Neither is a defect to tidy.
 - **The "Add to" select's default is `AUTO_CATEGORY`, which is `0`, and that zero fixed a real
   bug** — a deck's seeded categories are in `PREDEFINED_CATEGORIES` order, so a clamp to
   `categories[0]` put every quick add on a fresh deck into **Commander**. Zero now _means_ auto,
@@ -146,9 +172,18 @@ just made; it now asks all of them.
 
 ## Import
 
-`import/` is `parse.ts` (text → lines), `plan.ts` (lines + the printings Rust resolved → piles, a
-commander, tallies), `useDeckImport.ts` (the writes) and `ImportDeckDialog.tsx` (two steps, one
-panel, nothing written until Import). The Rust half and every measurement:
+`import/` is `parse.ts` (text → lines), `plan.ts` (lines + the printings Rust resolved + **their
+Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the writes) and
+`ImportDeckDialog.tsx` (two steps, one panel, nothing written until Import).
+
+- **`plan.ts` stays pure and takes the slugs as an argument.** The tag read is chained inside
+  `useDeckImport`'s `resolve` mutation, after `deck_import_resolve` and in the **same**
+  `mutationFn` — **one** `oracleTagsForPrintings` over the deduped matched ids for the whole list,
+  never one per line. Putting it there rather than in the planner is what closes the tally-flicker
+  hole *by construction*: the dialog crosses to step two in that mutation's `onSuccess`, so the
+  preview is never reached holding only the printings and there is no window in which a type-line
+  tally is on screen waiting to be redrawn. A refused tag read files the whole list by type line
+  and never costs the reader their paste. The Rust half and every measurement:
 [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
 
 - **One parser for every export, and every rule in it is a _per-line_ rule.** A format detector
@@ -228,8 +263,9 @@ panel, nothing written until Import). The Rust half and every measurement:
 
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
-price | type`). An **inactive category stays its own group in all three grouping modes**, and it
-  stays that group _whole_: `buildGroups` appends it carrying its own `kind`, so a switched-off
+price | type`). An **inactive category stays its own group in all three grouping modes** — as long
+  as it holds cards — and it stays that group _whole_: `buildGroups` appends it carrying its own
+  `kind`, so a switched-off
   Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
   views' Sideboard rail — still sees a sideboard in the two modes that otherwise have no categories
@@ -337,6 +373,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   `sum(curve) + (variableCost ?? 0) + unknownManaValue` is `nonlands` in both modes. The tenth
   bar's width arithmetic, and why the 280px panel did not grow to hold it, are in
   [decks-storage.md](../../../docs/reference/decks-storage.md).
+- **An empty category draws no heading**, and the exception is the four seeded
+  `PREDEFINED_CATEGORIES` (Commander, Sideboard, Companion, Maybeboard), which draw empty because
+  they are the fixed zones and an empty command zone is itself a fact about the deck. The rule is
+  `grouping.ts`'s **`drawsWhenEmpty`**, in one place so it can be narrowed to Commander alone
+  later, and it takes a `Pick<CardGroup, "isPredefined">` so it **structurally cannot read the
+  name** — a pile a user called "Sideboard" is theirs and hides like any other. Derived groups
+  (`manaValue`, `type`) are built _from_ cards, so an empty one never existed to hide.
+- **Empty and inactive are independent, and conflating them is the mistake to avoid**: an inactive
+  category _holding cards_ still draws, and the empty seeded Maybeboard draws too.
+- **Filtering therefore also decides which headings exist.** The filter runs before the grouping,
+  so a category the filter empties is an empty category and stops drawing. That is deliberate — a
+  filter matching three cards should not answer with twenty headings — but the shape of the deck
+  changes as the reader types, and **a hidden category is not a drop target**. The per-card
+  "Move…" select and the panel's "Add to" select both build from the category list rather than
+  from the drawn groups, so every empty category stays reachable by name.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
@@ -632,7 +683,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **The field is named for where the add lands, and a row is named by its own content.** The
   label is `Quick add a card to <pile>`, or bare `Quick add a card` under `AUTO_CATEGORY`, where
   there is no one answer because the pile is per card, so the name says only what it can promise
-  — "Quick add a card to Auto (by card type)" would name a *setting* rather than what pressing it
+  — "Quick add a card to Auto (by what it does)" would name a *setting* rather than what pressing it
   does. `DeckEditor.test.tsx` addresses the field by both names, so a reworded label is a suite
   failure. A row carries **no `aria-label`**: its name is the card's name, the cost's `sr-only`
   tokens and the set code, and a label carrying only the card's name would make the row

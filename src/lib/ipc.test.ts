@@ -5,7 +5,13 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
-import { ipc, ipcError, type FeedProgressEvent, type SyncProgressEvent } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type FeedProgressEvent,
+  type OracleTagProgressEvent,
+  type SyncProgressEvent,
+} from "@/lib/ipc";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -558,7 +564,10 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     invoke.mockResolvedValue({ id: 2 });
     await ipc.deckFolderCreate(null, "Commander");
-    expect(invoke).toHaveBeenCalledWith("deck_folder_create", { parentId: null, name: "Commander" });
+    expect(invoke).toHaveBeenCalledWith("deck_folder_create", {
+      parentId: null,
+      name: "Commander",
+    });
 
     await ipc.deckFolderCreate(2, "Legends");
     expect(invoke).toHaveBeenCalledWith("deck_folder_create", { parentId: 2, name: "Legends" });
@@ -703,6 +712,81 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The four Oracle-tag commands, and **three different spellings of "the ids I am asking
+   * about"** between the two reads — `cardIds` for the printing-keyed one, `oracleIds` for the
+   * oracle-keyed one, and neither for the status. They are the pair a copy-paste gets wrong,
+   * Tauri matches by name, and the two take ids from *different columns*: sending an array of
+   * `cards.id` under `oracleIds` deserializes perfectly and answers an empty slug list for every
+   * one of them, which is indistinguishable from a card the taxonomy has nothing to say about.
+   * That is the failure this test exists for — it is silent, and it degrades to the type-line
+   * fallback rather than to an error anyone would see.
+   */
+  it("sends the tag reads under the id names their commands declare", async () => {
+    invoke.mockResolvedValue([{ cardId: "p1", slugs: ["removal", "removal-creature"] }]);
+    const printings = await ipc.oracleTagsForPrintings(["p1", "p2"]);
+    expect(invoke).toHaveBeenCalledWith("oracle_tags_for_printings", { cardIds: ["p1", "p2"] });
+    // `cardId`, echoed back — the field a mirror typed as `oracleId` would make into a lie the
+    // caller has no way to notice, since both are opaque UUID strings.
+    expect(printings).toEqual([{ cardId: "p1", slugs: ["removal", "removal-creature"] }]);
+
+    invoke.mockResolvedValue([{ oracleId: "o1", slugs: [] }]);
+    const cards = await ipc.oracleTagsForCards(["o1"]);
+    expect(invoke).toHaveBeenCalledWith("oracle_tags_for_cards", { oracleIds: ["o1"] });
+    // An empty `slugs` is an **answer**, not a miss: an untagged card, an id `cards` does not
+    // have and a printing whose `oracle_id` is NULL all come back like this on purpose.
+    expect(cards).toEqual([{ oracleId: "o1", slugs: [] }]);
+
+    // An empty request is a real call and not something the wrapper may short-circuit — Rust
+    // prepares no statement for it and answers `[]`, which is the whole of what it costs.
+    invoke.mockResolvedValue([]);
+    await ipc.oracleTagsForPrintings([]);
+    expect(invoke).toHaveBeenCalledWith("oracle_tags_for_printings", { cardIds: [] });
+  });
+
+  /**
+   * The status read and the refresh, and the two traps between them.
+   *
+   * `oracle_tags_status` takes **no arguments** — `prewarm_collection`'s trap, where an argument
+   * object is a deserialization error rather than a type error the compiler could have caught —
+   * while `oracle_tags_refresh` spells its one argument `force`, exactly as `sync_run` does one
+   * dataset over. And the fields are the second half: `ingestedAt` and `checkedAt` are separate
+   * columns because a 304 moves only the latter, so a mirror that folded them into one would
+   * make an up-to-date taxonomy read as due on every launch and cost an API call per start.
+   */
+  it("asks for the tag status with no arguments and sends the throttle override under `force`", async () => {
+    const status = {
+      updatedAt: "2026-08-11T09:04:16.113+00:00",
+      ingestedAt: 1_800_000_000,
+      checkedAt: 1_800_003_600,
+      tagCount: 4_521,
+      taggingCount: 229_633,
+      stale: false,
+      refreshing: false,
+    };
+    invoke.mockResolvedValue(status);
+
+    const read = await ipc.oracleTagsStatus();
+
+    expect(invoke).toHaveBeenCalledWith("oracle_tags_status");
+    // Read back rather than assumed: every one of these is camelCase on the wire
+    // (`#[serde(rename_all = "camelCase")]` on `OracleTagStatus`), and a field this side spells
+    // `tag_count` is `undefined` with no type error anywhere.
+    expect(read).toEqual(status);
+    // The two stamps are apart by design — the ordinary state of a taxonomy whose last check
+    // was a 304 — and nothing here may collapse them.
+    expect(read.checkedAt).not.toBe(read.ingestedAt);
+
+    invoke.mockResolvedValue({ ...status, stale: false });
+    await ipc.oracleTagsRefresh(true);
+    expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: true });
+
+    // `false` must travel as a key: Tauri fills parameters by name and an absent one is a
+    // refusal, not a default.
+    await ipc.oracleTagsRefresh(false);
+    expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: false });
+  });
+
+  /**
    * The printings list's grouping — the **other** setting that carries no struct at all, and
    * the pair a copy of the marketplace one gets wrong.
    *
@@ -787,6 +871,35 @@ it("unwraps the marketplace:progress payload and returns the unlisten handle", a
   expect(seen).toEqual([
     { marketplace: "cardkingdom", phase: "downloading", done: 5, total: 66_787_283 },
   ]);
+  expect(stop).toBe(unlisten);
+});
+
+/**
+ * `oracle-tags:progress` — a **hyphen** where both of its neighbours have none.
+ *
+ * `sync:progress`, `update:progress` and `marketplace:progress` are one word each, and this one
+ * is not; `oracle_tags.rs` spells it `oracle-tags:progress` and that string is the whole
+ * contract. A subscriber that guessed `oracle_tags:progress` — or `oracletags:progress` —
+ * hears nothing at all, forever, with no error anywhere and nothing in the type system holding
+ * it. The failure is invisible twice over here: the ribbon simply never draws a line for a
+ * refresh that is running perfectly, and the categories it produces are right either way.
+ */
+it("unwraps the oracle-tags:progress payload and returns the unlisten handle", async () => {
+  const unlisten = vi.fn();
+  let emit: ((evt: { payload: OracleTagProgressEvent }) => void) | undefined;
+  listen.mockImplementation(
+    (_name: string, handler: (evt: { payload: OracleTagProgressEvent }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    },
+  );
+  const seen: OracleTagProgressEvent[] = [];
+
+  const stop = await ipc.onOracleTagProgress((e) => seen.push(e));
+  emit?.({ payload: { phase: "downloading", done: 512_000, total: 5_850_000 } });
+
+  expect(listen).toHaveBeenCalledWith("oracle-tags:progress", expect.any(Function));
+  expect(seen).toEqual([{ phase: "downloading", done: 512_000, total: 5_850_000 }]);
   expect(stop).toBe(unlisten);
 });
 

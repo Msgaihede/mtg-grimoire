@@ -112,6 +112,7 @@ import type {
   CardFace,
   CardFilters,
   CardSummary,
+  CardTags,
   CategoryKind,
   CollectionQuery,
   CollectionRow,
@@ -143,7 +144,9 @@ import type {
   ImportResolveRow,
   InstallKind,
   MarketplaceFeedStatus,
+  OracleTagStatus,
   Printing,
+  PrintingTags,
   ReleaseInfo,
   SearchRequest,
   SearchSortKey,
@@ -497,6 +500,20 @@ export interface FakeUpdate {
  * failed fetch leaves the previous prices in place and writes the reason to `error_log`. It is
  * the only way a story can stand in the feed state that has prices *and* a failure, which is the
  * state the panel's wording is hardest to get right in.
+ *
+ * **`oracleTagsMissing` is not a failure either**, and it is the pair's important half: it is
+ * the taxonomy having never been ingested, which is what every install is on its first launch
+ * and what the app is permanently in if Scryfall Tagger is unreachable. `oracle_tags_status`
+ * **resolves** — every field `null`, `stale: true` — and both tag reads answer an empty slug
+ * list for every id, so a deck screen files by card type. It empties the *rows* rather than
+ * changing how a handler answers ({@link errorLogSeed}'s shape, inverted), which is what lets a
+ * story press Refresh in the first-launch state and watch the piles regroup.
+ *
+ * **`oracleTagsFetchError`** is the other end of that wire, and `feedFetchError` one dataset
+ * over: `oracle_tags_refresh` refuses, **the taxonomy already ingested stays exactly where it
+ * was**, and the reason goes to `error_log`. Nothing about categorising a card may fail a deck
+ * add, so this is a refusal a story has to be able to show *without* the screen behind it
+ * changing at all.
  */
 export type Fault =
   | "busy"
@@ -508,7 +525,9 @@ export type Fault =
   | "updateAvailable"
   | "updateError"
   | "errorLog"
-  | "feedFetchError";
+  | "feedFetchError"
+  | "oracleTagsMissing"
+  | "oracleTagsFetchError";
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -563,6 +582,16 @@ export interface FakeDb {
   /** `marketplace_feed_meta` — one row per feed that has ever been fetched, and **no row at
    *  all** for one that has not, which is the state a first selection acts on. */
   marketplaceFeeds: FakeFeedMeta[];
+  /**
+   * `oracle_tag_cards` — Scryfall Tagger's answer to "what does this card *do*", already
+   * flattened. Empty is the honest state of an install that has never fetched the taxonomy, and
+   * the one that puts every deck add on the type-line fallback.
+   */
+  oracleTags: FakeOracleTagCard[];
+  /** `oracle_tag_meta`, or `null` for never ingested — **the two are set together**. A
+   *  watermark with no closure behind it is the one state the backend goes out of its way to
+   *  never write (it is what makes the next check 304 past an empty taxonomy). */
+  oracleTagMeta: FakeOracleTagMeta | null;
   fault: Fault | null;
 }
 
@@ -586,6 +615,43 @@ export interface FakeFeedMeta {
   /** The feed's own stamp — Card Kingdom publishes one, Mana Pool publishes none. */
   feedBuiltAt: string | null;
   rowCount: number;
+}
+
+/**
+ * One row of `oracle_tag_cards` — **the flattened closure**, not a card's own tags.
+ *
+ * `oracle_tags::ancestor_closures` expands the hierarchy once at ingest, so a card tagged
+ * `removal-creature` gets a row for `removal` as well and every read is a plain lookup. Storing
+ * the closure rather than the raw taggings is what makes this a row store of the *shipped*
+ * table: a fixture that stored the leaf tags and expanded on read would be answering with an
+ * expansion nobody had checked.
+ *
+ * Keyed on `oracle_id` and **not** on a printing: a tag is a fact about the oracle text, so all
+ * four Lightning Bolts carry the same slugs. `oracle_tags_for_printings` reaches this table
+ * through `cards`, which is the whole reason that second command exists.
+ */
+export interface FakeOracleTagCard {
+  oracleId: string;
+  slug: string;
+}
+
+/**
+ * `oracle_tag_meta`, the taxonomy's watermark. **`null` on the store means never ingested**,
+ * which is a real state and not an error — the app files by card type until the first refresh
+ * lands, and every field of `OracleTagStatus` is nullable for exactly that.
+ */
+export interface FakeOracleTagMeta {
+  /** Scryfall's own stamp for the file these rows came from. */
+  updatedAt: string | null;
+  /** Unix seconds. */
+  ingestedAt: number;
+  /** Unix seconds, and **separate**: a 304 moves this one and leaves `ingestedAt` alone.
+   *  Collapsing them would make an up-to-date taxonomy read as due on every launch. */
+  checkedAt: number;
+  /** How many tags the *file* held, and how many taggings — the real figures, not this
+   *  fixture's. See {@link oracleTagMeta}. */
+  tagCount: number;
+  taggingCount: number;
 }
 
 /**
@@ -681,6 +747,14 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
     marketplacePrices: [],
     marketplaceFeeds: [],
+    // **The honest "no taxonomy" state, and the default on purpose.** A database that has never
+    // ingested answers every field of `OracleTagStatus` null with `stale: true`, which is the
+    // shape a first launch is in and the one that exercises the type-line fallback. `starter`
+    // fills both from {@link oracleTagCards}, exactly as it fills the price feeds — so the seed
+    // a deck story gets shows real piles, and every other seed shows what the app does without
+    // one.
+    oracleTags: [],
+    oracleTagMeta: null,
     fault: null,
     ...init,
   };
@@ -939,6 +1013,192 @@ export function marketplaceFeedMeta(
     },
     { marketplace: "manapool", fetchedAt, feedBuiltAt: null, rowCount: count("manapool") },
   ];
+}
+
+/**
+ * `oracle_tags::REFRESH_INTERVAL_SECS` — **a week**, not the card sync's day and not the price
+ * feeds' either. The taxonomy is hand-curated, and a deck's categories should not regroup
+ * between two sessions on the same afternoon.
+ */
+const ORACLE_TAG_REFRESH_INTERVAL_SECS = 7 * 86_400;
+
+/** `oracle_tags::is_stale`, over **`checked_at`**: a 304 means the rows are current, so asking
+ *  again because they were *built* a week ago would spend an API call to learn nothing. Never
+ *  checked is stale by definition, and a stamp in the future counts as stale rather than
+ *  underflowing. */
+function isTaxonomyStale(checkedAt: number | null, now: number): boolean {
+  if (checkedAt === null) return true;
+  return checkedAt > now || now - checkedAt >= ORACLE_TAG_REFRESH_INTERVAL_SECS;
+}
+
+/**
+ * What the Oracle Tags file weighs — ~5.85 MB compressed, the figure `scryfall.md` records.
+ *
+ * Here so a `downloading` event carries a real denominator: the ribbon prints whole megabytes,
+ * so a story stands in `0 / 6 MB` and that is the figure the app will actually show.
+ */
+const ORACLE_TAG_BYTES = 5_850_000;
+
+/**
+ * The tags each card in the fixture holds, **by name**, already closed over their ancestors.
+ *
+ * By name and not by oracle id because a table of 37 UUIDs is a table nobody can check, and
+ * checking it is the entire value: these are the slugs a deck story's piles are built out of,
+ * so one that is wrong teaches a reader a rule the app does not have. `cards.ts` is generated
+ * wholesale, so the names are resolved against it at build time and a name it no longer carries
+ * contributes nothing — `db.test.ts` fails on one rather than letting the taxonomy quietly
+ * shrink.
+ *
+ * **Every list carries the ancestors as well as the leaf**, because that is what
+ * `oracle_tags::ancestor_closures` writes: `removal-creature` never appears without `removal`,
+ * and `mass-recursion` never without `recursion`. A rule reading only the leaf would work here
+ * and fail on the shipped table.
+ *
+ * **Five cards are deliberately untagged** — both basic lands, Delver of Secrets, Tarmogoyf and
+ * Little Girl — so every `starter` deck holds cards on both sides of the fallback at once. An
+ * empty slug list is an answer and not a miss, and it is the answer the type line has to cover.
+ *
+ * The one anchor slug the corpus cannot reach is `sacrifice-outlet`: no card in these 43
+ * printings is one, and tagging one that is not would be worse than the hole.
+ */
+const ORACLE_TAGGINGS: readonly (readonly [string, readonly string[]])[] = [
+  ["Lightning Bolt", ["burn", "damage", "removal", "removal-creature", "spot-removal"]],
+  ["Black Lotus", ["fast-mana", "mana-producer", "ramp", "ritual"]],
+  ["Ancestral Recall", ["card-advantage", "draw", "draw-multiple"]],
+  ["Urza's Saga", ["mana-producer", "repeatable-token-generator", "token-generator", "tutor"]],
+  ["Ancient Tomb", ["mana-producer", "ramp"]],
+  ["Fire // Ice", ["burn", "card-advantage", "damage", "draw", "removal", "removal-creature"]],
+  ["Bonecrusher Giant // Stomp", ["burn", "damage", "removal", "removal-creature"]],
+  ["Agadeem's Awakening // Agadeem, the Undercrypt", ["mass-recursion", "recursion"]],
+  ["Bruna, the Fading Light", ["recursion"]],
+  ["Prismatic Ending // Prismatic Ending", ["exile", "removal", "removal-permanent"]],
+  ["Smuggler's Copter", ["card-advantage", "card-selection"]],
+  // Five modes, five piles: the card a categoriser's priority order is decided by.
+  ["Kenrith, the Returned King", ["card-advantage", "draw", "lifegain", "ramp", "recursion"]],
+  ["Tymna the Weaver", ["card-advantage", "draw"]],
+  ["Thrasios, Triton Hero", ["card-advantage", "mana-producer", "ramp"]],
+  ["Lurrus of the Dream-Den", ["recursion"]],
+  ["Rhystic Study", ["card-advantage", "draw", "hate", "tax"]],
+  ["Dismember", ["removal", "removal-creature", "spot-removal"]],
+  ["Boros Reckoner", ["damage"]],
+  ["Boros Charm", ["burn", "damage", "protection", "removal"]],
+  ["Kozilek, Compleated", ["card-advantage", "draw"]],
+  ["Emrakul, the Aeons Torn", ["protection"]],
+  ["Avacyn, Angel of Hope", ["anthem", "protection"]],
+  ["Elesh Norn, Grand Cenobite", ["anthem", "hate", "mass-removal", "removal"]],
+  ["Consecrated Sphinx", ["card-advantage", "draw"]],
+  ["Sol Ring", ["mana-producer", "ramp"]],
+  ["Counterspell", ["counterspell"]],
+  ["Restart Sequence", ["recursion"]],
+  ["Swords to Plowshares", ["exile", "lifegain", "removal", "removal-creature", "spot-removal"]],
+  ["Llanowar Elves", ["mana-producer", "ramp"]],
+  ["Jace, the Mind Sculptor", ["card-advantage", "card-selection", "mill", "removal"]],
+  ["Ragavan, Nimble Pilferer", ["repeatable-token-generator", "treasure"]],
+  ["A-Vivi Ornitier", ["burn", "damage", "mana-producer"]],
+];
+
+/** The names above, for a test that wants to prove every one of them still resolves. */
+export const ORACLE_TAGGED_NAMES: readonly string[] = ORACLE_TAGGINGS.map(([name]) => name);
+
+/**
+ * `oracle_tag_cards` for a corpus: one row per (oracle id, slug), sorted as the table's own
+ * `ORDER BY oracle_id, slug` answers.
+ *
+ * **Keyed by oracle card, so all four Lightning Bolts get one set of rows between them** —
+ * which is what makes `oracle_tags_for_printings` a join rather than a lookup, and what a
+ * fixture keyed by printing would have hidden. Derived from the corpus for
+ * {@link marketplaceFeedPrices}' reason: `cards.ts` is generated, so a hand-written oracle id
+ * here would be a UUID nothing regenerates.
+ */
+export function oracleTagCards(cards: readonly FakeCard[]): FakeOracleTagCard[] {
+  const bySlug = new Map(ORACLE_TAGGINGS.map(([name, slugs]) => [name, slugs]));
+  const rows: FakeOracleTagCard[] = [];
+  const seen = new Set<string>();
+  for (const card of cards) {
+    const slugs = bySlug.get(card.name);
+    if (!slugs || seen.has(card.oracleId)) continue;
+    seen.add(card.oracleId);
+    for (const slug of slugs) rows.push({ oracleId: card.oracleId, slug });
+  }
+  return rows.sort((a, b) => cmp(a.oracleId, b.oracleId) || cmp(a.slug, b.slug));
+}
+
+/**
+ * `oracle_tag_meta` for an ingest that has just landed.
+ *
+ * **`tagCount` and `taggingCount` are the real file's figures and not this fixture's**, which
+ * is the one place here a number is not derived — and it is the honest one. They describe the
+ * taxonomy Scryfall published (4 521 tags over 229 633 taggings, measured by `oracle_tags.rs`),
+ * and these 37 rows are a slice of the corpus it applies to, not a smaller taxonomy. A settings
+ * line reading "32 tags" would be describing the fixture while looking like it described the
+ * app.
+ */
+export function oracleTagMeta(at: number): FakeOracleTagMeta {
+  return {
+    // Scryfall's own stamp for the bulk file, in its own format — the string `OracleTagStatus`
+    // carries verbatim and nothing parses.
+    updatedAt: "2026-08-11T09:04:16.113+00:00",
+    ingestedAt: at,
+    checkedAt: at,
+    tagCount: 4_521,
+    taggingCount: 229_633,
+  };
+}
+
+/**
+ * `oracle_tags::read_tags_keyed`'s first half: the ids actually asked about, **deduped, blanks
+ * dropped, in the order asked**.
+ *
+ * The order is the contract and it is the half a fake gets wrong for free. Both commands answer
+ * one entry per *distinct* id, so `result.length` can be shorter than the request — which is
+ * why `ipc.ts` tells every caller to match by id and never by position, and why a fixture that
+ * quietly reordered would look right in Storybook and break a decklist import that named the
+ * same card twice.
+ *
+ * An empty request touches nothing at all: Rust prepares no statement for one, and the two
+ * handlers below return before reading a row.
+ */
+function requestedIds(keys: readonly string[] | undefined): string[] {
+  const wanted: string[] = [];
+  const seen = new Set<string>();
+  for (const key of keys ?? []) {
+    const trimmed = key.trim();
+    if (trimmed === "" || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    wanted.push(trimmed);
+  }
+  return wanted;
+}
+
+/** `oracle_tag_cards` grouped by its own key, slugs in the table's `ORDER BY … slug` order.
+ *  Built per call over a table of tens of rows, which is the shape every read in this file
+ *  takes — the real one is a prefix scan of a `WITHOUT ROWID` table and just as cheap. */
+function slugsByOracleId(db: FakeDb): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const row of db.oracleTags) {
+    const slugs = grouped.get(row.oracleId);
+    if (slugs) slugs.push(row.slug);
+    else grouped.set(row.oracleId, [row.slug]);
+  }
+  return grouped;
+}
+
+/** `oracle_tags::read_status`. **Total and unfailing**: a store with no watermark answers every
+ *  field null with `stale: true` rather than refusing, which is what lets every caller read it
+ *  with no guard. `refreshing` is always false here — the fake's refresh is synchronous, so
+ *  nothing is ever in flight *between* two commands; a story that wants that state emits
+ *  `oracle-tags:progress` itself. */
+function toOracleTagStatus(db: FakeDb): OracleTagStatus {
+  const meta = db.oracleTagMeta;
+  return {
+    updatedAt: meta?.updatedAt ?? null,
+    ingestedAt: meta?.ingestedAt ?? null,
+    checkedAt: meta?.checkedAt ?? null,
+    tagCount: meta?.tagCount ?? null,
+    taggingCount: meta?.taggingCount ?? null,
+    stale: isTaxonomyStale(meta?.checkedAt ?? null, CLOCK_BASE),
+    refreshing: false,
+  };
 }
 
 /** A filter the user actually set — `filters::nonblank`. A picker's "Any set" sends `""`,
@@ -2280,10 +2540,7 @@ function wishlistOrder(
 ): Compare<FakeWish> {
   const ownedBy = new Map(rows.map((w) => [w.id, ownedAgainstWish(db, w)]));
   const priceBy = new Map(
-    rows.map((w) => [
-      w.id,
-      finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp),
-    ]),
+    rows.map((w) => [w.id, finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp)]),
   );
   const owned = (w: FakeWish) => ownedBy.get(w.id) ?? 0;
   /** The cheapest way to satisfy the wish, per copy: the preferred finish's price if it names
@@ -2545,17 +2802,42 @@ const NO_FILE_PICKER = "No file picker in Storybook.";
  * on every character in the table: `Á`.toLowerCase() is `á`, and `Æ` is `æ`.
  */
 const FOLD_LETTERS: Readonly<Record<string, string>> = {
-  á: "a", à: "a", â: "a", ä: "a", ã: "a", å: "a",
-  é: "e", è: "e", ê: "e", ë: "e",
-  í: "i", ì: "i", î: "i", ï: "i",
-  ó: "o", ò: "o", ô: "o", ö: "o", õ: "o", ø: "o",
-  ú: "u", ù: "u", û: "u", ü: "u",
+  á: "a",
+  à: "a",
+  â: "a",
+  ä: "a",
+  ã: "a",
+  å: "a",
+  é: "e",
+  è: "e",
+  ê: "e",
+  ë: "e",
+  í: "i",
+  ì: "i",
+  î: "i",
+  ï: "i",
+  ó: "o",
+  ò: "o",
+  ô: "o",
+  ö: "o",
+  õ: "o",
+  ø: "o",
+  ú: "u",
+  ù: "u",
+  û: "u",
+  ü: "u",
   ñ: "n",
   ç: "c",
-  ý: "y", ÿ: "y",
-  æ: "ae", œ: "oe", ß: "ss",
-  "’": "'", "ʼ": "'", "`": "'",
-  "–": "-", "—": "-",
+  ý: "y",
+  ÿ: "y",
+  æ: "ae",
+  œ: "oe",
+  ß: "ss",
+  "’": "'",
+  ʼ: "'",
+  "`": "'",
+  "–": "-",
+  "—": "-",
 };
 
 /**
@@ -2568,7 +2850,10 @@ const FOLD_LETTERS: Readonly<Record<string, string>> = {
 export function foldName(raw: string): string {
   let out = "";
   for (const ch of raw.toLowerCase()) out += FOLD_LETTERS[ch] ?? ch;
-  return out.split(/\s+/u).filter((word) => word !== "").join(" ");
+  return out
+    .split(/\s+/u)
+    .filter((word) => word !== "")
+    .join(" ");
 }
 
 /**
@@ -3251,8 +3536,14 @@ export function readHandlers(db: FakeDb) {
           hintMissed = matched === null;
           if (matched === null && name !== "") {
             matched =
-              bestOf(db, inSet.filter((c) => c.name === name)) ??
-              bestOf(db, inSet.filter((c) => c.name.startsWith(`${name} // `)));
+              bestOf(
+                db,
+                inSet.filter((c) => c.name === name),
+              ) ??
+              bestOf(
+                db,
+                inSet.filter((c) => c.name.startsWith(`${name} // `)),
+              );
             if (number === null) hintMissed = matched === null;
           }
         } else if (number !== null) {
@@ -3261,7 +3552,10 @@ export function readHandlers(db: FakeDb) {
 
         if (matched === null && name !== "") {
           matched =
-            bestOf(db, paper.filter((c) => c.name === name)) ??
+            bestOf(
+              db,
+              paper.filter((c) => c.name === name),
+            ) ??
             bestOf(db, fronts(name)) ??
             foldMatch(db, name);
         }
@@ -3382,6 +3676,48 @@ export function readHandlers(db: FakeDb) {
           refreshing: false,
         };
       }),
+
+    /**
+     * `oracle_tags::status` — whether there is a taxonomy and how old it is.
+     *
+     * **It cannot fail, and that is the contract rather than this fake being lenient.** The
+     * command reads one small table, makes no network call and is safe before the first refresh
+     * has ever run: a database with no meta row answers every field `null` with `stale: true`.
+     * So it honours no fault — not `busy` (it is a read), and not the two of its own: those
+     * change the *rows*, which is what a status is supposed to report.
+     */
+    oracle_tags_status: (): OracleTagStatus => toOracleTagStatus(db),
+
+    /**
+     * `oracle_tags::read_printing_tags` — the read every categorising call site makes, because
+     * every one of them is holding a printing id (`CardSummary` has no `oracleId` at all).
+     *
+     * **One entry per requested id, in request order, and `slugs: []` for anything unknown.**
+     * All four ways of being unknown answer the same empty list — a card the taxonomy says
+     * nothing about, an id this corpus does not have, a printing with no oracle card, and a
+     * world with no taxonomy at all — because the caller's response to every one of them is the
+     * same: fall back to the type line. Nothing about categorising a card may fail a deck add.
+     */
+    oracle_tags_for_printings: (args: { cardIds: string[] }): PrintingTags[] => {
+      const wanted = requestedIds(args.cardIds);
+      if (wanted.length === 0) return [];
+      const byOracle = slugsByOracleId(db);
+      return wanted.map((cardId) => ({
+        cardId,
+        slugs: byOracle.get(cardById(db, cardId)?.oracleId ?? "") ?? [],
+      }));
+    },
+
+    /** `oracle_tags::read_card_tags` — the same answer reached from the other end, for a caller
+     *  holding an oracle id (`DeckCard.oracleId`, a wishlist row). Same contract, same rules,
+     *  and **`oracleId` rather than `cardId` on the way out**: echoing a printing id back in a
+     *  field with that name would be a lie no caller could notice. */
+    oracle_tags_for_cards: (args: { oracleIds: string[] }): CardTags[] => {
+      const wanted = requestedIds(args.oracleIds);
+      if (wanted.length === 0) return [];
+      const byOracle = slugsByOracleId(db);
+      return wanted.map((oracleId) => ({ oracleId, slugs: byOracle.get(oracleId) ?? [] }));
+    },
 
     /**
      * `error_log_list` — newest first, clamped exactly as the Rust does.
@@ -3607,7 +3943,15 @@ function recordTag(db: FakeDb, deckId: number, payload: Record<string, unknown>)
  * true, and `null` is the root.
  */
 function recordFiled(db: FakeDb, deckId: number, folderId: number | null): void {
-  record(db, deckId, DECK_LEVEL, "folder", null, { action: "move", folder: folderPath(db, folderId) }, 0);
+  record(
+    db,
+    deckId,
+    DECK_LEVEL,
+    "folder",
+    null,
+    { action: "move", folder: folderPath(db, folderId) },
+    0,
+  );
 }
 
 /** `deck::folder_path` — `Ideas › Modern`, root-first. Depth-capped for the reason the Rust's
@@ -5550,7 +5894,7 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       const doomed = new Set<number>([args.id]);
       // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
-      for (let grew = true; grew; ) {
+      for (let grew = true; grew;) {
         grew = false;
         for (const f of db.deckFolders) {
           if (f.parentId !== null && doomed.has(f.parentId) && !doomed.has(f.id)) {
@@ -5560,9 +5904,10 @@ export function writeHandlers(db: FakeDb) {
         }
       }
       db.deckFolders = db.deckFolders.filter((f) => !doomed.has(f.id));
-      for (const deck of db.decks) if (deck.folderId !== null && doomed.has(deck.folderId)) {
-        deck.folderId = null;
-      }
+      for (const deck of db.decks)
+        if (deck.folderId !== null && doomed.has(deck.folderId)) {
+          deck.folderId = null;
+        }
     },
 
     /**
@@ -5781,10 +6126,7 @@ export function writeHandlers(db: FakeDb) {
         ...fresh,
       ];
       const meta = marketplaceFeedMeta(fresh, CLOCK_BASE).find((m) => m.marketplace === feed.id)!;
-      db.marketplaceFeeds = [
-        ...db.marketplaceFeeds.filter((f) => f.marketplace !== feed.id),
-        meta,
-      ];
+      db.marketplaceFeeds = [...db.marketplaceFeeds.filter((f) => f.marketplace !== feed.id), meta];
       emitFake("marketplace:progress", {
         marketplace: feed.id,
         phase: "done",
@@ -5801,6 +6143,73 @@ export function writeHandlers(db: FakeDb) {
         stale: isFeedStale(meta.fetchedAt, CLOCK_BASE),
         refreshing: false,
       };
+    },
+
+    /**
+     * `oracle_tags::refresh` — fetch the taxonomy if it is due and rebuild it from the file.
+     *
+     * **It does not honour `busy`**, and it is the sixth command here that does not: `refresh`
+     * opens with a read and a network call, and only its ingest takes `db::lock_for` — so a
+     * running sync delays it rather than refusing it at the door. `db.test.ts`'s busy sweep
+     * lists it beside `sync_run` and the four update commands for that reason.
+     *
+     * **`force` skips the weekly throttle and nothing else.** A run that is not due answers the
+     * status it already had and emits no event at all, which is why a story that wants to watch
+     * the phases has to send `force: true` — `update_check`'s shape, for `update_check`'s
+     * reason.
+     *
+     * The five phases are emitted around work that takes no time, exactly as
+     * {@link marketplace_feed_refresh}'s two are: what they prove is that the **wiring** is real
+     * — that a listener registered by `useOracleTagProgress` hears `oracle-tags:progress` with
+     * the right payload — not that a bar can be watched moving. A story that wants to watch one
+     * emits the event itself, which is also how it stands in for the refresh
+     * `refresh_if_due` starts at launch with nobody having pressed anything.
+     */
+    oracle_tags_refresh: (args: { force: boolean }): OracleTagStatus => {
+      if (!args.force && !isTaxonomyStale(db.oracleTagMeta?.checkedAt ?? null, CLOCK_BASE)) {
+        return toOracleTagStatus(db);
+      }
+      emitFake("oracle-tags:progress", { phase: "checking", done: 0, total: 0 });
+      if (db.fault === "oracleTagsFetchError") {
+        // **The rows stay.** A failed fetch leaves the previous taxonomy exactly where it was —
+        // stale categories beat none, and the type-line fallback is always available — so this
+        // writes to `error_log` and to nothing else. `operation` names the dataset, which is
+        // what lets a reader tell a tag failure from a card one in the same log.
+        db.errorLog = [
+          ...db.errorLog,
+          {
+            id: db.errorLog.length + 1,
+            firstAt: CLOCK_BASE,
+            lastAt: CLOCK_BASE,
+            source: "scryfall_api",
+            operation: "oracle_tags",
+            kind: "timeout",
+            message: "timed out after 30s",
+            detail: null,
+            count: 1,
+          },
+        ];
+        emitFake("oracle-tags:progress", { phase: "error", done: 0, total: 0 });
+        throw refuse(
+          "The card tags could not be downloaded. Cards will be filed by type until the next " +
+            "refresh.",
+        );
+      }
+      emitFake("oracle-tags:progress", { phase: "downloading", done: 0, total: ORACLE_TAG_BYTES });
+      emitFake("oracle-tags:progress", {
+        phase: "downloading",
+        done: ORACLE_TAG_BYTES,
+        total: ORACLE_TAG_BYTES,
+      });
+      // Zeroes, and not a count of what was written: `refresh` hands `ingest_gz` a `&mut |_| {}`
+      // and emits `("ingesting", 0, 0)` **once**. The ribbon draws an indeterminate bar for the
+      // whole ingest because there is genuinely no number, and a fixture that invented one here
+      // would be storying a bar the app cannot draw.
+      emitFake("oracle-tags:progress", { phase: "ingesting", done: 0, total: 0 });
+      db.oracleTags = oracleTagCards(db.cards);
+      db.oracleTagMeta = oracleTagMeta(CLOCK_BASE);
+      emitFake("oracle-tags:progress", { phase: "done", done: 0, total: 0 });
+      return toOracleTagStatus(db);
     },
 
     /**

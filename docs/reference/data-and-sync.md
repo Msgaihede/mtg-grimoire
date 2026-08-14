@@ -254,7 +254,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v13.** v13 adds one column — `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`,
+- **v13 adds one column — `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`,
   whether a deck gathers its `{X}` spells under a heading of their own. Per **deck** and not a
   preference, for `theory_enabled`'s reason: it says how _this_ list is read, so a copy must read
   the same way and a second deck must be free to disagree; a global setting would have made
@@ -307,6 +307,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
+- **Schema is v14.** v14 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
+  description), `oracle_tag_parents` (`child_slug, parent_slug` — **many parents per child**,
+  684 of 4 521 tags have several), `oracle_taggings` (`oracle_id, slug, weight, annotation`)
+  and `oracle_tag_cards` (`oracle_id, slug`), all four `WITHOUT ROWID` with no index but their
+  own primary key, plus a one-row `oracle_tag_meta` watermark (`etag`, `updated_at`,
+  `ingested_at`, `checked_at`, `tag_count`, `tagging_count`). **`checked_at` is separate from
+  `ingested_at` for `sync_meta.last_check_at`'s reason**: a 304 leaves the rows alone, so only
+  the "when did we last ask" stamp may move — without it a taxonomy that is simply up to date
+  reads as due on every launch and spends one API call per start to learn nothing. `oracle_tag_cards` is the **closure** — every
+  tag a card holds *and* every ancestor of those tags, flattened once at ingest — and it is
+  the only one the app reads at query time, as a prefix scan per card. Measured live
+  2026-08-14 over that day's file: 4 521 tags · 926 roots · **684 with more than one parent** ·
+  max depth 5 · no cycles and no dangling parent ids (neither of which the ingest assumes) ·
+  229 633 taggings over 35 969 distinct oracle ids · `weight` is `median` on 99.74 % of them
+  and nothing branches on it. `oracle_id` is a **soft** reference like every other reference to
+  `cards` in this schema, and the step touches `cards` not at all — so, like v8, v9 and v11, it
+  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
+  rebuild. The four tables are filled through `oracle_tag_*_staging` and promoted by one rename
+  transaction that carries the watermark with it: a half-populated closure is the one state a
+  reader must never see, because a card whose ancestors landed and whose siblings did not
+  simply reads as not being in that category.
 - **`legal_mask` is Scryfall's `legalities` object as one integer, and its key order is
   frozen.** `legalities::LEGALITY_KEYS` is 23 keys and bit _k_ is `LEGALITY_KEYS[k]` — **bit
   positions are stored data**, held in every `cards` row, so reordering the list silently

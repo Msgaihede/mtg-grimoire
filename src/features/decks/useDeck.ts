@@ -85,6 +85,34 @@ export function opened(id: number | null): number {
 }
 
 /**
+ * What one printing *does*, for the rule that files it — or nothing at all.
+ *
+ * `oracle_tags_for_printings` over a single id, which is the shape every add here has: the
+ * reader pressed Add or dropped one card. The list command exists for the importer, which asks
+ * about a hundred lines at once.
+ *
+ * **Matched back by `cardId`, never by position.** The command drops blank and duplicate ids,
+ * so its answer can be shorter than the request — `answers[0]` is right for one id and wrong
+ * the first time anything here asks about two.
+ *
+ * **A tag read that fails is not an add that fails, and this `catch` is load-bearing rather
+ * than defensive.** An empty slug list is `autoCategoryFor`'s supported floor — it is what the
+ * whole app does before the taxonomy has ever been downloaded — so a database that is busy, a
+ * command that is missing or a rejection nobody predicted costs the reader a *worse pile* and
+ * never the card. **Do not turn this into a rethrow.** Filing Swords to Plowshares under
+ * Instant is a category the reader can drag; a refused add is a card they have to notice is
+ * absent.
+ */
+async function oracleTagsFor(cardId: string): Promise<readonly string[]> {
+  try {
+    const answers = await ipc.oracleTagsForPrintings([cardId]);
+    return answers.find((entry) => entry.cardId === cardId)?.slugs ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * One deck, everything in it, and every write that changes what is in it.
  *
  * **One query, not three.** The editor, the mana curve and the legality panel all read
@@ -214,21 +242,38 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * denormalize the printing onto the row it inserts, so it refuses a card the database does
    * not have.
    *
-   * **`categoryId` is what a drop onto a column sends; a caller with none is filed by the
-   * card's type line.** Pointing at a column *is* naming a category, so every drag overrides
-   * the rule by construction and nothing here has to know a gesture from a press. A caller with
-   * no column — the panel's Add button under `Auto`, the toolbar quick add, the sidebar's Decks
-   * entry — passes `typeLine` instead, and `autoCategoryFor` names the pile for
-   * `deck_add_card` to find or create.
+   * **`categoryId` is what a drop onto a column sends; a caller with none is filed by what the
+   * card does, and by what it is where that is unknown.** Pointing at a column *is* naming a
+   * category, so every drag overrides the rule by construction and nothing here has to know a
+   * gesture from a press. A caller with no column — the panel's Add button under `Auto`, the
+   * toolbar quick add, the sidebar's Decks entry — passes `typeLine` instead, and
+   * `autoCategoryFor` names the pile for `deck_add_card` to find or create.
    *
-   * **The rule is applied here and the fact it reads travels from the call site**, which is the
-   * one arrangement that keeps both halves true: `autoCategoryFor` stays a single rule in
-   * TypeScript (CLAUDE.md's boundary — Rust supplies facts, TS draws conclusions), and no add
-   * pays for a round trip to discover what it is adding. A hook that looked the card up in
-   * order to file it would put a query in front of every quick add; a call site that computed
-   * the *name* would be a second place to keep the rule. So: the type line comes in, the name
-   * goes out, and `null` — an orphan, or a layout with no bucket word — answers
-   * `Uncategorised`.
+   * **The rule is applied here, on this one definition, and the card's Oracle tags are read
+   * here too.** `autoCategoryFor` stays a single rule in TypeScript (CLAUDE.md's boundary —
+   * Rust supplies facts, TS draws conclusions) and a call site that computed the *name* would
+   * be a second place to keep it. What changed when the tags arrived is where the facts come
+   * from: the type line still travels in the payload, and the slugs cannot.
+   *
+   * **Why they cannot travel.** The four drag sources build their payload out of the list row
+   * under the cursor — `{ kind: "card", cardId, name, typeLine }` — and no list DTO in this app
+   * carries a slug list: `CardSummary`, `CollectionRow` and `WishRow` say what a card *is*,
+   * never what it does. Putting the tags on them would mean expanding the taxonomy for every
+   * row of a wall of search results to serve the one row somebody eventually drags.
+   *
+   * So this pays **one extra round trip to local SQLite**, on a deliberate act by the reader —
+   * a press or a drop, one card, {@link oracleTagsFor} over a single id — and only in the arm
+   * that has no category *and* has a type line. The comment that stood here promised no add
+   * would pay one; that promise is spent, knowingly, and what it buys is a decklist filed by
+   * function rather than by card type. Neither of the other two arms asks anything: a drop onto
+   * a column has already been told where the card goes, and a caller that named neither is not
+   * asking to have it filed at all.
+   *
+   * **A tag read that fails never fails the add** — see {@link oracleTagsFor}. The card lands in
+   * its type-line pile, which is where every card landed before the taxonomy existed.
+   *
+   * So: the card id and the type line come in, the name goes out, and `null` — an orphan, or a
+   * layout with no bucket word — answers `Uncategorised` whatever the tags said.
    *
    * With neither, {@link DEFAULT_CATEGORY_NAME}. No surface in the app sends neither today.
    *
@@ -247,7 +292,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * left painted is not a cost that trades against it.
    */
   const addCard = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       cardId,
       categoryId = null,
       typeLine,
@@ -255,24 +300,29 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     }: {
       cardId: string;
       categoryId?: number | null;
-      /** The card's own `type_line`, for the caller that named no category. `null` is a card
-       *  whose printing has left `cards`; **absent** is a caller with nothing to say, which is
-       *  not the same thing — see {@link DEFAULT_CATEGORY_NAME}. */
+      /** The card's own `type_line`, for the caller that named no category — the **fallback**
+       *  half of the rule now that the tags are read here rather than passed in. `null` is a
+       *  card whose printing has left `cards`; **absent** is a caller with nothing to say, which
+       *  is not the same thing and is the one arm that consults nothing — see
+       *  {@link DEFAULT_CATEGORY_NAME}. */
       typeLine?: string | null;
       quantity: number;
-    }) =>
-      ipc.deckAddCard(
-        opened(id),
-        cardId,
-        categoryId,
+    }) => {
+      // Before anything is asked about the card: a write with no deck open is refused here and
+      // not one round trip later.
+      const deckId = opened(id);
+      // The `await` sits inside the one arm that needs it, so the other two cost exactly what
+      // they always did — a named category and a caller with nothing to say each make one IPC
+      // call in total. A land still pays the read: the Land pin lives inside `autoCategoryFor`,
+      // and short-circuiting it here would be a second copy of that rule.
+      const categoryName =
         categoryId !== null
           ? null
           : typeLine === undefined
             ? DEFAULT_CATEGORY_NAME
-            : autoCategoryFor({ typeLine }),
-        variant,
-        quantity,
-      ),
+            : autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
+      return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, quantity);
+    },
     onSuccess: invalidate,
     onError: invalidate,
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FormatSpec, ImportMatch, ImportResolveRow } from "@/lib/ipc";
+import type { FormatSpec, ImportMatch, ImportResolveRow, PrintingTags } from "@/lib/ipc";
 import { PREDEFINED_CATEGORY_NAMES } from "../autoCategory";
 import { spec } from "../validation/fixtures";
 import { parseDecklist } from "./parse";
@@ -46,12 +46,20 @@ function match(over: Partial<ImportMatch> & { name: string }): ImportMatch {
   };
 }
 
-/** A pasted list, resolved by a lookup on the name each line wrote. A name this record has
- *  never heard of resolves to nothing, which is how an unmatched line is staged. */
+/**
+ * A pasted list, resolved by a lookup on the name each line wrote. A name this record has
+ * never heard of resolves to nothing, which is how an unmatched line is staged.
+ *
+ * `tags` is what one `oracle_tags_for_printings` over the resolved ids answered, and it
+ * **defaults to nothing** — which is the state of every test written before the taxonomy
+ * existed and of every app that has never downloaded it. Passing none files the whole list by
+ * type line, which is the floor this feature stands on rather than a special case.
+ */
 function planFor(
   text: string,
   cards: Record<string, ImportMatch>,
   format: FormatSpec | null = null,
+  tags: readonly PrintingTags[] = [],
 ): ImportPlan {
   const parsed = parseDecklist(text);
   const rows: ImportResolveRow[] = parsed.lines.map((line, index) => ({
@@ -59,7 +67,7 @@ function planFor(
     matched: cards[line.name] ?? null,
     hintMissed: false,
   }));
-  return buildImportPlan(parsed, rows, format);
+  return buildImportPlan(parsed, rows, format, tags);
 }
 
 /** The piles a preview would draw for this plan and this commander choice — the two calls the
@@ -86,6 +94,26 @@ const SISAY = match({
   toughness: "2",
   colorIdentity: "GW",
 });
+/** A legendary creature whose *function* is ramp — Scryfall tags her `ramp` and
+ *  `mana-producer` — so the auto rule files her under Ramp and the command zone has to outrank
+ *  that. Solemn Simulacrum, the card everyone reaches for here, is not legendary. */
+const SELVALA = match({
+  name: "Selvala, Heart of the Wilds",
+  typeLine: "Legendary Creature — Elf Scout",
+  power: "2",
+  toughness: "3",
+  colorIdentity: "G",
+});
+/** The measured reason Land is pinned by type line before a tag is read: 52% of lands carry a
+ *  functional tag, and this one searches, so a rule that asked the tags first would file a
+ *  fetchland under Tutor and scatter the mana base across a dozen columns. */
+const VISTA = match({ name: "Prismatic Vista", typeLine: "Land" });
+
+/** What `oracle_tags_for_printings` answered, in the shape it answers it: one entry per
+ *  **distinct** card id, in whatever order the statement came back in. */
+function tags(...entries: [ImportMatch, string[]][]): PrintingTags[] {
+  return entries.map(([card, slugs]) => ({ cardId: card.cardId, slugs }));
+}
 
 describe("buildImportPlan", () => {
   it("files a card by its type line when the file said nothing", () => {
@@ -318,6 +346,162 @@ Maybeboard
 });
 
 /**
+ * The piles a decklist is really written in.
+ *
+ * `autoCategoryFor` reads a land's type line, then what the card **does**, then what it is —
+ * and an imported line has to get the same answer a plain add and a column-less drag get, or
+ * one deck files one card two ways. What is asserted here is the *wiring*: that the slugs
+ * reach the rule, matched to the right card. Which slug means which pile is
+ * `autoCategory.test.ts`'s job and is deliberately not re-asserted here.
+ */
+describe("filing an imported line by what the card does", () => {
+  it("files a card by its tags rather than its type line", () => {
+    const plan = planFor(
+      "1 Lightning Bolt\n1 Sol Ring",
+      { "Lightning Bolt": BOLT, "Sol Ring": SOL_RING },
+      null,
+      tags([BOLT, ["removal"]], [SOL_RING, ["ramp", "mana-producer"]]),
+    );
+
+    expect(plan.cards.map((c) => [c.match.name, c.categoryName])).toEqual([
+      ["Lightning Bolt", "Removal"],
+      ["Sol Ring", "Ramp"],
+    ]);
+  });
+
+  /** **The floor, not an error case.** An untagged card, an id `cards` has never heard of and a
+   *  printing with a NULL oracle id all answer with no slugs, and the rule's response to all
+   *  three is the one it had before the taxonomy existed. */
+  it("files a card the tag read said nothing about by its type line", () => {
+    const plan = planFor(
+      "1 Lightning Bolt\n1 Llanowar Elves",
+      { "Lightning Bolt": BOLT, "Llanowar Elves": ELVES },
+      null,
+      // Elves is simply absent from the answer, which is how an untagged card comes back.
+      tags([BOLT, ["removal"]]),
+    );
+
+    expect(plan.cards.map((c) => [c.match.name, c.categoryName])).toEqual([
+      ["Lightning Bolt", "Removal"],
+      ["Llanowar Elves", "Creature"],
+    ]);
+  });
+
+  /** An empty slug list is an *answer*, and it means the same as no entry at all. */
+  it("files a card answered with no slugs by its type line", () => {
+    const plan = planFor("1 Lightning Bolt", { "Lightning Bolt": BOLT }, null, tags([BOLT, []]));
+
+    expect(plan.cards[0].categoryName).toBe("Instant");
+  });
+
+  /**
+   * **Land is pinned by type line before a single tag is consulted**, and Prismatic Vista is the
+   * measured case: it searches, so it is tagged `tutor`, and a mana base scattered across a
+   * Tutor column and a Draw column is the one pile every decklist draws whole.
+   */
+  it("keeps a land in Land however its tags read", () => {
+    const plan = planFor(
+      "1 Prismatic Vista",
+      { "Prismatic Vista": VISTA },
+      null,
+      tags([VISTA, ["tutor", "fetchland"]]),
+    );
+
+    expect(plan.cards[0].categoryName).toBe("Land");
+  });
+
+  /**
+   * **The match-by-id case, and it is the ordinary one rather than a corner.**
+   * `oracle_tags_for_printings` drops duplicate ids, so a list naming a card on two lines gets
+   * back **fewer** entries than it asked about — two answers here against three lines. Reading
+   * `tags[i]` against the lines would file the third line by whatever the second card does, and
+   * the last line by nothing at all.
+   */
+  it("files both lines when the same card is named twice", () => {
+    const plan = planFor(
+      "1 Lightning Bolt\n1 Llanowar Elves\n2 Lightning Bolt",
+      { "Lightning Bolt": BOLT, "Llanowar Elves": ELVES },
+      null,
+      tags([BOLT, ["removal"]], [ELVES, ["ramp", "mana-producer"]]),
+    );
+
+    expect(plan.cards.map((c) => [c.match.name, c.categoryName])).toEqual([
+      ["Lightning Bolt", "Removal"],
+      ["Llanowar Elves", "Ramp"],
+      ["Lightning Bolt", "Removal"],
+    ]);
+    // One pile, both lines, copies summed — the deck's grain folds them into one row.
+    expect(tallyFor(plan)).toEqual([
+      { name: "Removal", cards: 3, inactive: false },
+      { name: "Ramp", cards: 1, inactive: false },
+    ]);
+  });
+
+  /** The other half of the same rule: nothing may depend on the order the answers came back
+   *  in. One statement per 500 ids answers in whatever order SQLite hands them over. */
+  it("matches the answers by id and not by the order they arrived in", () => {
+    const plan = planFor(
+      "1 Lightning Bolt\n1 Llanowar Elves\n1 Sol Ring",
+      { "Lightning Bolt": BOLT, "Llanowar Elves": ELVES, "Sol Ring": SOL_RING },
+      null,
+      tags([SOL_RING, ["ramp"]], [BOLT, ["removal"]]),
+    );
+
+    expect(plan.cards.map((c) => [c.match.name, c.categoryName])).toEqual([
+      ["Lightning Bolt", "Removal"],
+      ["Llanowar Elves", "Creature"],
+      ["Sol Ring", "Ramp"],
+    ]);
+  });
+
+  /**
+   * **A refused tag read is not a refused import.** `useDeckImport` answers `tags: []` when the
+   * command rejects, and what that plans is the whole list, complete, filed exactly as this
+   * app filed it before Oracle tags existed. An import is a large deliberate action and must
+   * never be lost to a taxonomy fetch.
+   */
+  it("plans the whole list by type line when no tags arrived at all", () => {
+    const list = "1 Lightning Bolt\n1 Sol Ring\n6 Forest\n4 Llanowar Elves";
+    const cards = {
+      "Lightning Bolt": BOLT,
+      "Sol Ring": SOL_RING,
+      Forest: FOREST,
+      "Llanowar Elves": ELVES,
+    };
+    const byTypeLine = [
+      ["Lightning Bolt", "Instant"],
+      ["Sol Ring", "Artifact"],
+      ["Forest", "Land"],
+      ["Llanowar Elves", "Creature"],
+    ];
+
+    // The refusal's answer, and the same list with the argument simply absent — every caller
+    // that has no tags to give passes one of these two, and they must not differ.
+    expect(planFor(list, cards, null, []).cards.map((c) => [c.match.name, c.categoryName])).toEqual(
+      byTypeLine,
+    );
+    expect(planFor(list, cards).cards.map((c) => [c.match.name, c.categoryName])).toEqual(
+      byTypeLine,
+    );
+    expect(planFor(list, cards, null, []).totalCards).toBe(12);
+  });
+
+  /** The functional piles sort above the type ones, and Land stays last — `TALLY_ORDER` is
+   *  derived from `AUTO_CATEGORY_DISPLAY_ORDER`, so the preview reads in the order the editor
+   *  draws its columns in. */
+  it("lists a functional pile above the type buckets and Land below them", () => {
+    const plan = planFor(
+      "6 Forest\n1 Llanowar Elves\n1 Lightning Bolt",
+      { Forest: FOREST, "Llanowar Elves": ELVES, "Lightning Bolt": BOLT },
+      null,
+      tags([BOLT, ["removal"]]),
+    );
+
+    expect(tallyFor(plan).map((c) => c.name)).toEqual(["Removal", "Creature", "Land"]);
+  });
+});
+
+/**
  * The bug the live pass found: the preview counted the piles **before** the commander was
  * chosen and never again, so its two headline numbers described an import nobody asked for.
  * Measured against the reference list (**debug** build, 2026-08-12): the step read
@@ -428,6 +612,37 @@ Deck
     );
 
     expect(plan.commander).toEqual({ kind: "automatic", cardIds: [SISAY.cardId] });
+  });
+
+  /**
+   * **The command zone outranks every functional pile, and eligibility never reads a tag.**
+   * Selvala, Heart of the Wilds is tagged `ramp`, so the auto rule files her under Ramp — which
+   * is the right answer for a card in the 99 and the wrong one for the card the deck is built
+   * around. Eligibility is `commanderIneligibility` and nothing else, exactly as it was; the
+   * choice is applied in `toImportItems`, which knows nothing about slugs.
+   */
+  it("offers a tagged legendary creature and files her in the command zone when chosen", () => {
+    const plan = planFor(
+      "1 Selvala, Heart of the Wilds\n1 Sol Ring\n6 Forest",
+      { "Selvala, Heart of the Wilds": SELVALA, "Sol Ring": SOL_RING, Forest: FOREST },
+      spec("commander"),
+      tags([SELVALA, ["ramp", "mana-producer"]], [SOL_RING, ["ramp"]]),
+    );
+
+    // Filed by what she does, like any other card, until the command zone claims her.
+    expect(plan.cards[0].categoryName).toBe("Ramp");
+    expect(plan.commander).toEqual({ kind: "automatic", cardIds: [SELVALA.cardId] });
+    expect(toImportItems(plan, [SELVALA.cardId])[0]).toEqual({
+      cardId: SELVALA.cardId,
+      quantity: 1,
+      categoryName: "Commander",
+    });
+    expect(tallyFor(plan, [SELVALA.cardId])).toEqual([
+      { name: "Commander", cards: 1, inactive: false },
+      // Sol Ring is still ramp; only the one card the reader confirmed moves.
+      { name: "Ramp", cards: 1, inactive: false },
+      { name: "Land", cards: 6, inactive: false },
+    ]);
   });
 
   /** Never from position: "the first line is the commander" and "the last line is" are both

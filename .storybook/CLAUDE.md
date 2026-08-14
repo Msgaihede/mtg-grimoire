@@ -20,14 +20,26 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **ten** faults
+  Four seeds (`empty`/`starter`/`needsReview`/`large`), **twelve** faults
   (`busy`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
-  `updateError`/`errorLog`/`feedFetchError`); saying nothing gets `starter` with no fault. A
+  `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`); saying
+  nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
-  what one mocked call returns.
+  what one mocked call returns. **Two of the twelve are not failures at all** — `indexCold` is
+  the search index mid-build, and `oracleTagsMissing` is the Oracle tag taxonomy having never
+  been ingested, which is every install's first launch and the state the type-line fallback
+  exists for.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
+- **`starter` seeds the Oracle tag taxonomy too**, derived from the corpus the same way — **32
+  oracle cards, covering 38 of the 43 printings** (measured by `db.test.ts`, which fails rather
+  than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so
+  a deck story shows real piles rather than everything falling back to card type. `empty` and
+  `large` deliberately go without, and `oracleTagsMissing` is how a story stands in the
+  never-ingested state on a *full* corpus. The two reads answer **one entry per requested id, in
+  request order, deduped, `slugs: []` for anything unknown** — a fake that answered only the
+  matches would look right in Storybook and break every caller that matches by id.
 - **`indexCold`'s response answers every map with an *empty* one and every scalar with `0`, and
   only the first of those is self-describing.** An empty map makes every lookup miss, and a miss
   is the `undefined` the filter row fails open on. `FacetResponse.manaX` — the X chip's count —
@@ -67,18 +79,19 @@ deliberately**: no screenshots are stored.
 
 - **`tags: ["autodocs"]` is declared per file in the meta** — a new story file gets no docs page
   unless it says so.
-- **Re-count the story totals in the same commit that adds a story**, and **count the files too,
-  not just the stories.** `storybook-static/index.json` is the only place the numbers agree.
-  This has rotted twice: it read 326 stories for three stories' worth of drift, and by
-  2026-08-12 it named 43 story files when 44 were on disk — a whole file can go missing from the
-  prose while the story total still looks plausible.
-- **Re-count after a merge, not just after your own commit.** 2026-08-14 two branches each
-  measured 359 correctly against their own base and the merged tree was 365: a count is a
-  measurement of a *tree*, so taking either side of that conflict would have shipped a figure
-  true of no checkout. The same trap eats derived counts — "38 docs pages render inline" was
-  `45 − 7` and then `46 − 7 − 1`, unchanged in value and stale in every term; it reads **39**
-  and `47 − 7 − 1` on the tree of 2026-08-14. Re-derive from the built index and from source,
-  never from the last number plus your own diff.
+- **Do not write a story, story-file, docs-page or plays total into any document** (removed
+  2026-08-14). The reference page used to carry them and the figure conflicted on **five
+  consecutive merges of `main`**, each resolution correct and each obsolete within the hour: a
+  count is a fact about a *tree*, so every open branch has its own and none is the one being
+  shipped. The archaeology defending it had grown longer than the rules it sat above. If a number
+  is genuinely needed, measure it at the moment of need — `npm run build-storybook` then
+  `storybook-static/index.json` for everything except plays, and a grep for those, since **the
+  index knows nothing about plays** and a branch that re-derived every other figure off a fresh
+  build left that one stale exactly that way.
+- **The lesson that outlived the numbers: rebuild and read the index on the merge commit you are
+  shipping, and never add one branch's delta to another's total.** No side of a merge has ever
+  predicted the merge here — two branches once measured 283 and 285 plays, each accounting for
+  its own honestly, and the merge answered 291.
 - **Every drag is held in `try { … } finally { await held.cancel(); }`, and every assertion about
   a drag's result goes through `waitFor`.** A throw mid-drag leaks pdnd's one global drag flag into
   the _next_ story, which is why one broken assertion reported two failures.

@@ -4,12 +4,13 @@ import {
   RANK,
   createActivityStore,
   megabytes,
+  oracleTagActivity,
   syncActivity,
   topActivity,
   updateActivity,
   type Activity,
 } from "@/lib/activity";
-import type { SyncProgressEvent } from "@/lib/ipc";
+import type { OracleTagProgressEvent, SyncProgressEvent } from "@/lib/ipc";
 
 const job = (over: Partial<Activity> = {}): Activity => ({
   key: "sync",
@@ -201,6 +202,88 @@ describe("syncActivity", () => {
     expect(
       syncActivity(event({ phase: "ingesting", done: 130_000, total: 117_000 }), true)?.value,
     ).toBe(1);
+  });
+});
+
+describe("oracleTagActivity", () => {
+  const tags = (over: Partial<OracleTagProgressEvent> = {}): OracleTagProgressEvent => ({
+    phase: "downloading",
+    done: 0,
+    total: 0,
+    ...over,
+  });
+
+  /**
+   * `refreshing` decides, not the event — `syncActivity`'s rule, and the case for it is
+   * strongest here. `refresh_if_due` is spawned at launch, so the ordinary refresh starts
+   * before this window has a listener and Tauri drops what it emitted first; and a run that is
+   * not due answers without emitting anything at all.
+   */
+  it("is null when nothing is running, whatever event is still in hand", () => {
+    expect(oracleTagActivity(false, null)).toBeNull();
+    expect(oracleTagActivity(false, tags({ done: 5, total: 10 }))).toBeNull();
+  });
+
+  /** The state a window that mounted mid-refresh is in: the status says so and no event has
+   *  arrived, because the ones that would have said which phase were dropped. */
+  it("is the generic sentence, indeterminate, before any event arrives", () => {
+    expect(oracleTagActivity(true, null)).toMatchObject({
+      key: "oracle-tags",
+      rank: RANK.oracleTags,
+      label: "Updating card tags",
+      detail: null,
+      value: null,
+    });
+  });
+
+  it("counts the download in whole megabytes", () => {
+    const activity = oracleTagActivity(true, tags({ done: 2_900_000, total: 5_850_000 }));
+
+    expect(activity?.label).toBe("Downloading card tags");
+    expect(activity?.detail).toBe("3 / 6 MB");
+    expect(activity?.value).toBeCloseTo(0.496, 2);
+  });
+
+  /**
+   * **The ingest counts nothing, and that is the backend's doing rather than a choice here**:
+   * `refresh` hands `ingest_gz` a `&mut |_| {}` and emits `("ingesting", 0, 0)` exactly once.
+   * So the phase has a sentence and an indeterminate bar, and inventing a figure for it would
+   * be storying a number the app cannot produce.
+   */
+  it("names the ingest and the check without a number for either", () => {
+    for (const phase of ["checking", "ingesting"] as const) {
+      const activity = oracleTagActivity(true, tags({ phase }));
+      expect(activity?.label).toBe(
+        phase === "checking" ? "Checking for card tag updates" : "Importing card tags",
+      );
+      expect(activity?.detail).toBeNull();
+      expect(activity?.value).toBeNull();
+    }
+  });
+
+  /** Their event can outlive the run by a status read, so neither may read as finished — and
+   *  the ribbon is not where a failed refresh is reported. */
+  it("treats a finished or failed refresh as running with nothing to say", () => {
+    for (const phase of ["done", "error"] as const) {
+      const activity = oracleTagActivity(true, tags({ phase, done: 9, total: 9 }));
+      expect(activity?.label).toBe("Updating card tags");
+      expect(activity?.detail).toBeNull();
+      expect(activity?.value).toBeNull();
+    }
+  });
+
+  /**
+   * The quietest job there is: it is the only one whose failure costs the reader nothing, since
+   * every add still files by card type. So it yields the row to all three of the others.
+   */
+  it("is outranked by every other job", () => {
+    const oracleTags = oracleTagActivity(true, null)!;
+    const sync = syncActivity(null, true)!;
+    const update = updateActivity({ done: 1, total: 2 }, "0.3.0")!;
+
+    expect(topActivity([oracleTags, sync])).toBe(sync);
+    expect(topActivity([oracleTags, update])).toBe(update);
+    expect(RANK.oracleTags).toBeGreaterThan(RANK.marketplaceFeed);
   });
 });
 

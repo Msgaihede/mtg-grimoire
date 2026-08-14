@@ -56,9 +56,18 @@ const PANEL_WIDTH = "w-96";
  */
 export const AUTO_CATEGORY = 0;
 
-/** What the select calls {@link AUTO_CATEGORY}. Named for what it reads rather than for what it
- *  does — "Auto" alone would not say *how*, and the how is the whole predictability of it. */
-const AUTO_LABEL = "Auto (by card type)";
+/**
+ * What the select calls {@link AUTO_CATEGORY}. Named for what it reads rather than for what it
+ * does — "Auto" alone would not say *how*, and the how is the whole predictability of it.
+ *
+ * It read `Auto (by card type)` while the type line was the whole of the rule, and that was
+ * still on screen after the rule changed — **found by driving the shipped window on 2026-08-14,
+ * not by the suite**, which pinned the string in four places and so agreed with itself. The
+ * wording matches the Categories panel's button ("File cards by what they do") on purpose: they
+ * are the same rule, and a reader who meets it twice under two names has to work out that it is
+ * one rule.
+ */
+const AUTO_LABEL = "Auto (by what it does)";
 
 /**
  * The wall's tile floor in here, and the number that decides whether this column shows one

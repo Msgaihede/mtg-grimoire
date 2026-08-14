@@ -16,6 +16,10 @@ const onCollectionReconciled = vi.hoisted(() => vi.fn());
  *  describes a price-feed fetch the same way it describes a sync, and the fetch can be started
  *  by the backend at app start rather than by anything on screen. */
 const onMarketplaceProgress = vi.hoisted(() => vi.fn());
+/** The fourth, and the one whose *status* read matters more than its event: the taxonomy
+ *  refresh is spawned at launch, so the ribbon learns about it from `oracle_tags_status`
+ *  rather than from an event this window was too late to hear. */
+const onOracleTagProgress = vi.hoisted(() => vi.fn());
 /** The two writes a card dropped on the sidebar means, and the read that names the open
  *  deck — the sidebar borrows `useDeck`, so the shell asks for a deck like the editor does. */
 const deckAddCard = vi.hoisted(() => vi.fn());
@@ -29,6 +33,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onSyncProgress,
     onCollectionReconciled,
     onMarketplaceProgress,
+    onOracleTagProgress,
+    // A database that has never ingested the taxonomy: every field null, stale, and nothing
+    // running. The honest resting state, and the one that puts no fourth job in the ribbon.
+    oracleTagsStatus: vi.fn().mockResolvedValue({
+      updatedAt: null,
+      ingestedAt: null,
+      checkedAt: null,
+      tagCount: null,
+      taggingCount: null,
+      stale: true,
+      refreshing: false,
+    }),
     // The shell reads the feeds' state to describe a running fetch. Empty is "nothing known
     // yet", which is what every test in this file is standing in.
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
@@ -132,6 +148,7 @@ beforeEach(() => {
   onSyncProgress.mockReset().mockResolvedValue(() => {});
   onCollectionReconciled.mockReset().mockResolvedValue(() => {});
   onMarketplaceProgress.mockReset().mockResolvedValue(() => {});
+  onOracleTagProgress.mockReset().mockResolvedValue(() => {});
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   deckGet.mockReset().mockResolvedValue(null);

@@ -26,6 +26,14 @@ collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — 
   exponential backoff with jitter. **Never a 429** (the docs forbid exactly that) and never a 404.
 - **Bulk data is already the only card source, and that is the compliance story.**
   `default_cards` JSONL.gz feeds the 116 k corpus; there is no per-card API lookup anywhere.
+  **A second bulk dataset joined it**: `oracle_tags`, ~5.85 MB gzipped JSONL, 4 521 tag objects
+  carrying 229 633 taggings keyed on `oracle_id` (measured live 2026-08-14). Its manifest entry
+  has the same shape as `default_cards`' — `jsonl_download_uri` and `compressed_size`, neither
+  of the pre-2026-07-20 `download_uri`/`size` fields — which is why one `BulkInfo` describes
+  both and `Client::check_bulk_dataset` is the one call that fetches either. It goes through
+  `api_send` like everything else, so it spends the same pacing budget and honours the same 429
+  lockout, and it is checked **weekly** rather than daily: the taxonomy is hand-curated and a
+  card's categories should not regroup between two sessions on the same afternoon.
   `/sets` and `/migrations` stay API calls because neither has a bulk equivalent, and both are
   polled at most once per 24 h. **`/cards/manifest` is deliberately not adopted**: it would add
   traffic rather than remove it, and the research doc measured `created_at`/`data_updated_at`

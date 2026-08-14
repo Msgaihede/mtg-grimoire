@@ -131,7 +131,7 @@ export const Docked: Story = {
     // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
     // reader cannot tell apart.
     //
-    // **The first option is not a category**, it is `Auto (by card type)`, and it is the
+    // **The first option is not a category**, it is `Auto (by what it does)`, and it is the
     // default — so the name on the button is the pile *this card's type line* earns rather than
     // the option's own text. Ancient Tomb is a Land, and it is written out here because that is
     // the claim: the button promises the pile before the press, and it can only do that because
@@ -140,7 +140,7 @@ export const Docked: Story = {
     const options = within(select).getAllByRole("option") as HTMLOptionElement[];
     await expect(options.length).toBeGreaterThan(1);
     await expect(select).toHaveValue(options[0].value);
-    await expect(options[0].textContent).toBe("Auto (by card type)");
+    await expect(options[0].textContent).toBe("Auto (by what it does)");
     await expect(
       await within(panel).findByRole("button", { name: "Add Ancient Tomb to Land" }),
     ).toBeInTheDocument();

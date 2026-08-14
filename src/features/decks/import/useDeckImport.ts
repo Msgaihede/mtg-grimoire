@@ -14,6 +14,8 @@ import {
   type ImportMode,
   type ImportOutcome,
   type ImportResolveLine,
+  type ImportResolveRow,
+  type PrintingTags,
 } from "@/lib/ipc";
 import { DEFAULT_VARIANT } from "../useDeck";
 
@@ -31,6 +33,51 @@ export interface ImportAsNewDeck {
   name: string;
   formatKey: string;
   items: ImportItem[];
+}
+
+/**
+ * Everything the planner needs about a pasted list, from the one press that asked for it.
+ *
+ * **Two reads and one answer, deliberately.** `buildImportPlan` files every line by
+ * `autoCategoryFor`, which reads a card's Oracle tags before its type line — so a preview drawn
+ * from `rows` alone would show the piles the app filed *last* month and the commit would send
+ * different ones. Handing both back together means the preview step is reached once, with
+ * everything it needs, and there is no window in which a type-line tally is on screen waiting
+ * for a taxonomy answer to redraw it.
+ */
+export interface ResolvedList {
+  rows: ImportResolveRow[];
+  /** One entry per **distinct** matched card id — the command drops blanks and duplicates, so
+   *  this can be shorter than the list, and `buildImportPlan` matches it back by `cardId`.
+   *  Empty is a complete answer: it plans the same import, filed by type line. */
+  tags: PrintingTags[];
+}
+
+/**
+ * What the resolved printings do, in **one** read for the whole list.
+ *
+ * **One call, never one per line.** `deck_import_resolve` answers 105 names in a single
+ * command precisely so an import costs one round trip; a tag read per line would put ~100
+ * `invoke`s back where that trip saved them. The ids are deduplicated first — the backend drops
+ * duplicates anyway, and a list with six Forests has no business sending six of them.
+ *
+ * **A refused tag read is not a refused import**, which is the whole reason this is a function
+ * with a `catch` rather than a second `await` in the mutation. The taxonomy is a separate
+ * dataset with its own weekly refresh and a supported state of never having been downloaded;
+ * every line still lands, in the type-line pile the app filed it in before Oracle tags existed.
+ * Losing a 105-line paste to a taxonomy fetch would be the worst trade this dialog could make.
+ */
+async function tagsFor(rows: readonly ImportResolveRow[]): Promise<PrintingTags[]> {
+  const cardIds = [
+    ...new Set(rows.flatMap((row) => (row.matched === null ? [] : [row.matched.cardId]))),
+  ];
+  // Nothing resolved — a list of typos, or the opening sync. There is nothing to ask about.
+  if (cardIds.length === 0) return [];
+  try {
+    return await ipc.oracleTagsForPrintings(cardIds);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -52,13 +99,24 @@ export function useDeckImport() {
   const writes = { onSuccess: invalidate, onError: invalidate };
 
   /**
-   * Every name in the parsed list, in one call, answered with a printing or with nothing.
+   * Every name in the parsed list, in one call, answered with a printing or with nothing — and
+   * then what those printings **do**, in one more.
    *
    * Read-only, so it is a mutation rather than a query for the one reason a write is: it is
    * fired by a press. A query keyed on the pasted text would cache an answer per keystroke.
+   *
+   * **Two commands and one mutation, so the preview cannot draw half an answer.** The dialog
+   * crosses to its second step in this mutation's `onSuccess`; both facts are in the data by
+   * then, so the tally the reader reads is the tally Import sends. A tag read fetched
+   * separately, after the step had rendered, would put the type-line numbers on screen and then
+   * change them under the reader — and this dialog has already shipped one bug where the
+   * preview and the commit disagreed. It costs nothing: {@link tagsFor} cannot fail the press.
    */
   const resolve = useMutation({
-    mutationFn: (lines: ImportResolveLine[]) => ipc.deckImportResolve(lines),
+    mutationFn: async (lines: ImportResolveLine[]): Promise<ResolvedList> => {
+      const rows = await ipc.deckImportResolve(lines);
+      return { rows, tags: await tagsFor(rows) };
+    },
   });
 
   const commit = useMutation({

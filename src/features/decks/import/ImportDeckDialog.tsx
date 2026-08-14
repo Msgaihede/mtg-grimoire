@@ -115,10 +115,14 @@ type Step = "source" | "preview";
  * commander is going to be. Nothing is written until Import.
  *
  * **It decides nothing itself.** `parseDecklist` reads the text, `deck_import_resolve` answers
- * which printing each name means, and `buildImportPlan` makes every deck decision there is —
- * the piles, the commander, the tallies. This file draws that plan and sends it back through
- * `toImportItems`. A second opinion here about which pile a Sol Ring belongs in would be a
- * second answer to a question the app already answers in one place.
+ * which printing each name means, `oracle_tags_for_printings` answers what those printings do,
+ * and `buildImportPlan` makes every deck decision there is — the piles, the commander, the
+ * tallies. This file draws that plan and sends it back through `toImportItems`. A second
+ * opinion here about which pile a Sol Ring belongs in would be a second answer to a question
+ * the app already answers in one place.
+ *
+ * **Both reads are one press and one mutation**, so the second step is never reached holding
+ * half of what files a card — see `useDeckImport`'s `resolve`.
  *
  * **Not portalled, and `fixed` — so where it is mounted matters.** Nothing in this app is
  * portalled (the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects
@@ -213,10 +217,17 @@ function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialog
     target.kind === "new" ? formatKey : (into.deck?.formatKey ?? ""),
   );
 
-  const rows = resolve.data ?? null;
+  /**
+   * The printings the list resolved to and what they do, from the one press that asked.
+   *
+   * **Both halves arrive together**, which is what keeps the piles on this step honest: the
+   * plan is built once, from everything, rather than drawn by type line and re-filed when a
+   * taxonomy answer turns up. See `useDeckImport`'s `resolve`.
+   */
+  const resolved = resolve.data ?? null;
   const plan = useMemo(
-    () => (rows === null ? null : buildImportPlan(parsed, rows, spec)),
-    [parsed, rows, spec],
+    () => (resolved === null ? null : buildImportPlan(parsed, resolved.rows, spec, resolved.tags)),
+    [parsed, resolved, spec],
   );
 
   // The caret starts in the box the reader has to fill, which is `CreateDeckDialog`'s rule and
@@ -226,7 +237,8 @@ function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialog
   }, []);
 
   /**
-   * Which cards go into the Commander pile whatever their type line said.
+   * Which cards go into the Commander pile whatever the auto rule filed them under — the
+   * command zone outranks a functional pile as squarely as it outranks `Creature`.
    *
    * `automatic` is the plan's own answer and is not offered as a choice: one eligible card is
    * not a guess. `ask` is the reader's. The other two contribute nothing — `fromFile` means the
@@ -252,7 +264,7 @@ function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialog
    *
    * This is the whole of the tally fix: `commanderIds` is a dependency of `items`, so pressing
    * a candidate recomputes both, and the two numbers on this step describe what Import will
-   * write rather than what the type-line rule filed before anybody chose. See {@link tallyOf}
+   * write rather than what the auto rule filed before anybody chose. See {@link tallyOf}
    * for what the old shape put on screen.
    */
   const categories = useMemo(() => tallyOf(items), [items]);

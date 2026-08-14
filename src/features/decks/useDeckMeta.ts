@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ipc,
+  ipcError,
   type DeckCard,
   type DeckCategory,
   type DeckTag,
@@ -32,6 +33,29 @@ const NO_SUGGESTIONS: readonly TagSuggestion[] = [];
  * "Removal" column the first time they press it.
  */
 const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORISED];
+
+/**
+ * What the reader is told when the tag read is refused — **and the press files nothing.**
+ *
+ * The sentence says the outcome before it says the cause, because the outcome is the part that
+ * is not guessable: a reader who pressed a button promising to file by *function* would
+ * otherwise be left wondering whether half the deck had moved.
+ *
+ * **Refusing is the whole decision here, and it is not the cautious-looking one.** Falling
+ * through to the type line is what `autoCategoryFor` does for a card whose slugs come back
+ * empty, and that path is deliberate and load-bearing — a database that has never ingested the
+ * taxonomy answers every card `slugs: []` and the app files by type, which is a supported way
+ * to run it. A **rejection** is a different fact: not "these cards do nothing this app has a
+ * word for" but "nobody could ask". Proceeding on it would re-file a whole deck by type in one
+ * press, across every pile at once, and the only way back is to move the cards one at a time.
+ * A single add can afford to guess — its blast radius is one card. This cannot.
+ *
+ * Pressing again is the whole of the recovery, and it costs nothing: every refusal reachable
+ * here is a busy database or a deck another surface deleted.
+ */
+const TAG_READ_REFUSED =
+  "Nothing was filed. What these cards do could not be read, and filing the whole deck by card " +
+  "type instead is not what you pressed.";
 
 /**
  * A deck's **categories and tags as things in themselves** — the piles and the labels, rather
@@ -195,14 +219,28 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
   });
 
   /**
-   * "Auto-categorise from card types", pressed once: file the cards nobody has filed into the
-   * piles their type lines name. Answers how many cards moved.
+   * "File cards by what they do", pressed once: file the cards nobody has filed into piles
+   * named for what they *do* — falling back to what they *are*. Answers how many cards moved.
    *
-   * **One rule, and it is `autoCategoryFor`** — the type line and nothing else, in TypeScript,
-   * because the v8 migration deliberately declined to write a second copy of it in SQL. This
-   * hook does not re-derive it and must not.
+   * **One rule, and it is `autoCategoryFor`** — Land by type line, then the Oracle-tag bucket,
+   * then the type line again, in TypeScript, because the v8 migration deliberately declined to
+   * write a second copy of it in SQL. This hook does not re-derive it and must not; what it
+   * owns is the **fact** the rule reads, which is the tags.
    *
-   * Four things it will not do, each of them a way the obvious version goes wrong:
+   * **One tag read for the whole press, and it is the reason this is a mutation rather than a
+   * loop over `useDeck.addCard`'s trick.** An add carries its own type line from the call site
+   * and pays no round trip; there is no such free ride for a slug list, so the choice is one
+   * bulk read here or one read per card. `oracle_tags_for_printings` batches 500 ids to a
+   * statement, so a 100-card deck costs exactly one call. The ids are sent **distinct** and the
+   * answers matched back **by `cardId`** — never by position: the command drops blanks and
+   * duplicates, so the answer can be shorter than the request, and a deck holding one printing
+   * in two loose piles is exactly the shape that would mis-file under an index.
+   *
+   * **A refused tag read refuses the press** — see {@link TAG_READ_REFUSED}, which is the whole
+   * of that argument. An *empty* answer is not a refusal and never reaches it: a card with no
+   * slugs is filed by its type line, which is the floor this feature has always stood on.
+   *
+   * Five things it will not do, each of them a way the obvious version goes wrong:
    *
    * * It only empties {@link LOOSE_PILES}. A column a person made is theirs.
    * * It only moves cards out of an **active** category. Moving one out of a switched-off pile
@@ -226,21 +264,51 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
    * **Not atomic, and safe to press again.** There is no backend command for this — the rule
    * is TypeScript's, so the orchestration is too — so a failure part-way leaves the cards that
    * already moved where they went; `onError` re-reads, so the screen says so. Pressing again
-   * finishes the job and moves nothing twice: a card that landed in "Creature" is no longer in
+   * finishes the job and moves nothing twice: a card that landed in "Removal" is no longer in
    * a loose pile, so the second pass does not see it.
    */
   const autoCategorise = useMutation({
     mutationFn: async (cards: readonly DeckCard[]) => {
       const deck = opened(deckId);
-      const moves = cards
-        .filter(
-          (card) =>
-            card.variant === variant &&
-            card.categoryKind === "main" &&
-            card.categoryActive &&
-            LOOSE_PILES.includes(card.categoryName),
-        )
-        .map((card) => ({ card, target: autoCategoryFor(card) }))
+      const loose = cards.filter(
+        (card) =>
+          card.variant === variant &&
+          card.categoryKind === "main" &&
+          card.categoryActive &&
+          LOOSE_PILES.includes(card.categoryName),
+      );
+      // Nothing to file is answered before anything is read: a second press on a filed deck
+      // costs no tag read, which is what keeps "press it again" free.
+      if (loose.length === 0) return 0;
+
+      // One read for the press, keyed by printing. Distinct ids, because two loose piles can
+      // hold the same printing and the second copy would buy nothing.
+      let slugsByCardId: ReadonlyMap<string, readonly string[]>;
+      try {
+        const answers = await ipc.oracleTagsForPrintings([...new Set(loose.map((c) => c.cardId))]);
+        slugsByCardId = new Map(answers.map((row) => [row.cardId, row.slugs] as const));
+      } catch (cause) {
+        // The backend's own words after this app's, and the rejection itself carried along:
+        // `ipcError` is what the panel renders, `cause` is what a stack trace needs.
+        //
+        // The two-argument `Error` is ES2022 and this program targets ES2020, so it compiles
+        // only because `tsconfig.json` adds `ES2022.Error` to `lib` — added *for* this line,
+        // because ESLint's `preserve-caught-error` requires the `cause` and the type checker
+        // refused it. Dropping the second argument to "fix" a type error here re-breaks lint.
+        throw new Error(`${TAG_READ_REFUSED} ${ipcError(cause)}`, { cause });
+      }
+
+      const moves = loose
+        .map((card) => ({
+          card,
+          // A card the answer does not mention is a card with no tags — the command answers
+          // `slugs: []` for an unknown id on purpose, and a shortened list means the same
+          // thing. Both fall through to the type line, which is the rule's own floor.
+          target: autoCategoryFor({
+            typeLine: card.typeLine,
+            oracleTags: slugsByCardId.get(card.cardId) ?? null,
+          }),
+        }))
         .filter(({ card, target }) => target !== UNCATEGORISED && target !== card.categoryName);
       if (moves.length === 0) return 0;
 

@@ -161,9 +161,11 @@ function Drawer({ deckId, variant, onDismiss, onClose }: CategoriesPanelProps) {
   // two rows of one list must not name two marketplaces.
   const { marketplace } = useMarketplace();
   const meta = useDeckMeta(deckId, variant);
-  // The deck's own rows, for one control: `autoCategorise` reads type lines, so it is handed
-  // cards rather than ids. Free in the app — the editor behind this drawer is already holding
-  // `["decks", "detail", deckId, variant]`, and this is that same query.
+  // The deck's own rows, for one control: `autoCategorise` files by what a card *does* and
+  // falls back to its type line, so it is handed cards rather than ids — the type line travels
+  // on the row, and the card ids are what its one bulk tag read is keyed by. Free in the app —
+  // the editor behind this drawer is already holding `["decks", "detail", deckId, variant]`,
+  // and this is that same query.
   const { cards } = useDeck(deckId, variant);
 
   const panelRef = useRef<HTMLDivElement>(null);
@@ -801,16 +803,35 @@ function DeleteCategory({
 }
 
 /**
- * File the loose cards into piles named after their types, in one press.
+ * File the loose cards by what they do, in one press.
  *
- * The rule is `autoCategoryFor` and lives in TypeScript; `useDeckMeta` orchestrates it and
- * refuses to empty a pile a person made. What this adds is the sentence afterwards: the press
- * moves cards and the drawer does not draw any, so without a count the reader has no way to
- * know whether anything happened.
+ * The rule is `autoCategoryFor` and lives in TypeScript; `useDeckMeta` orchestrates it, reads
+ * the Oracle tags it files by in one call, and refuses to empty a pile a person made. What this
+ * adds is the words: the label, the sentence describing the rule, and the sentence afterwards.
+ *
+ * **The label says what the rule does, and it used to say what the rule *did*.** "Auto-categorise
+ * from card types" was exactly true while the type line was the whole of the rule; a card's
+ * function is the primary answer now (Removal, Ramp, Draw and ten more) and the type line is
+ * the fallback under it, so the old words undersold the press and mis-described what a reader
+ * would get back.
+ *
+ * **Two sentences, two roles, and the split is the point.** The count is news the reader asked
+ * for — a polite `role="status"`, because the drawer draws no cards and without it there is no
+ * way to tell a no-op from a failure. A refusal is news the reader did *not* ask for and has to
+ * act on, so it is an `alert`, in the section's own colour for a refused write. It is rendered
+ * here rather than through `sectionFailure` because this press is the one whose refusal has a
+ * *reach* worth stating — `useDeckMeta` words that sentence, so the hook that decided to move
+ * nothing is the thing that says so.
+ *
+ * A pile this press empties disappears from the **editor** behind the drawer (`grouping.ts`'s
+ * `drawsWhenEmpty`) and stays in the list above, which is `deck_category_list` and draws every
+ * category a deck has. That is not a contradiction: this drawer is the surface where a pile is
+ * the subject rather than a heading over cards.
  */
 function AutoCategorise({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[] }) {
   const { autoCategorise } = meta;
   const moved = autoCategorise.data;
+  const refusal = autoCategorise.isError ? ipcError(autoCategorise.error) : null;
 
   return (
     <div className="mt-2">
@@ -825,17 +846,22 @@ function AutoCategorise({ meta, cards }: { meta: DeckMeta; cards: readonly DeckC
           FOCUS,
         )}
       >
-        Auto-categorise from card types
+        File cards by what they do
       </button>
       <p role="status" className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
         {autoCategorise.isPending
           ? "Filing cards…"
           : moved === undefined
-            ? "Files the cards nobody has filed into piles named after their types. Categories you made are left alone."
+            ? "Files the cards nobody has filed by what they do — Removal, Ramp, Draw — falling back to the card’s type. Categories you made are left alone."
             : moved === 0
               ? "Nothing to file — every card is already in a pile somebody chose."
               : `Filed ${moved} ${moved === 1 ? "card" : "cards"}.`}
       </p>
+      {refusal && (
+        <p role="alert" className="mt-1 text-[0.6875rem] leading-relaxed text-destructive">
+          {refusal}
+        </p>
+      )}
     </div>
   );
 }

@@ -129,7 +129,7 @@ Every one of these has its measurement and its story in
   sink below its pickable ones (`SetCombobox` also floats the picked ones to the top, because
   the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
   is not the bug when a picker reads wrong. Pinned rows (`Any format`, `Custom…`,
-  `Auto (by card type)`, `Move…`, `Top level`) stay outside the sort, and `CategoriesPanel`'s
+  `Auto (by what it does)`, `Move…`, `Top level`) stay outside the sort, and `CategoriesPanel`'s
   `are deleted with it` stays pinned **last**. **Exactly two exemptions**: a grade scale (card
   condition, Near Mint → Damaged) and an order the reader arranged themselves (deck categories).
   Both carry a comment at the site; see

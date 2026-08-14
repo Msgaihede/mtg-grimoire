@@ -870,8 +870,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * Filtering happens **before** the grouping, so every count and price in a heading is a count
    * of what is under it — a group saying 60 over four visible rows is a heading that lies about
-   * the only thing it is for. The empty categories still draw, because that is where the next
-   * card goes whether or not the filter matches anything in them.
+   * the only thing it is for.
+   *
+   * **Filtering therefore also decides which headings exist**, which is a consequence of
+   * `grouping.ts`' `drawsWhenEmpty` rather than a rule of its own: a category the filter empties
+   * is an empty category, so it stops drawing exactly as one the reader emptied by hand does.
+   * Only the four seeded zones survive it. That is deliberate — a filter whose matches are three
+   * cards should not answer with twenty headings and three rows — but it does mean the shape of
+   * the deck on screen changes as the reader types, and the pile a card would land in may not be
+   * on screen while a filter is running.
    */
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();

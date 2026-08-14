@@ -21,6 +21,7 @@
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
+ * `CardTags`/`PrintingTags`/`OracleTagStatus`    — `src-tauri/src/oracle_tags.rs`
  *
  * **Two settings carry no struct at all.** Each is one `app_meta` row answered as a bare
  * string: `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
@@ -2111,6 +2112,80 @@ export interface FeedProgressEvent {
 }
 
 /**
+ * A card's Oracle tags, keyed by the **oracle** id — Scryfall Tagger's answer to "what does
+ * this card *do*", which is what `autoCategoryFor` files a deck add by.
+ *
+ * `slugs` carries the card's own tags **and every ancestor of them**, already expanded by
+ * `oracle_tags::ancestor_closures` and sorted. That expansion is the fact; picking which of
+ * them names a pile is the conclusion, and it stays in `features/decks/autoCategory.ts`. Rust
+ * knows nothing about "Removal" or the order the piles are tried in, deliberately.
+ *
+ * **An empty `slugs` is an answer, not a miss**, and the two are indistinguishable on purpose:
+ * an untagged card, a card id that is not in `cards`, and a printing whose `oracle_id` is NULL
+ * all come back empty, because the rule's response to all three is the same — fall back to the
+ * type line. Nothing about categorising a card may fail an add.
+ */
+export interface CardTags {
+  oracleId: string;
+  slugs: string[];
+}
+
+/**
+ * The same answer keyed by a **printing** id (`cards.id`), for the callers that hold one.
+ *
+ * Almost every categorising call site does: a drag payload, `useDeck.addCard` and
+ * `deck_import_resolve`'s rows all name a printing. A separate DTO rather than reusing
+ * {@link CardTags} because a printing id in a field called `oracleId` would be a lie, and this
+ * mirror is the one place that lie would never be caught.
+ */
+export interface PrintingTags {
+  cardId: string;
+  slugs: string[];
+}
+
+/**
+ * The Oracle tag taxonomy's own freshness — `oracle_tag_meta`, plus the shape of a database
+ * that has never fetched it.
+ *
+ * **Every field is nullable and `null` means "never ingested"**, which is a real state and not
+ * an error: the taxonomy is a second dataset with its own weekly refresh, and the app works
+ * without it — every add simply files by card type until the first ingest lands.
+ *
+ * `checkedAt` and `ingestedAt` are separate because a 304 moves only the former. Collapsing
+ * them would make an up-to-date taxonomy read as due on every launch and cost one API call per
+ * start.
+ */
+export interface OracleTagStatus {
+  /** Scryfall's own stamp for the file these rows came from. */
+  updatedAt: string | null;
+  /** Unix **seconds**. `null` = the taxonomy has never been ingested. */
+  ingestedAt: number | null;
+  /** Unix **seconds**. Moves on a 304; `ingestedAt` does not. */
+  checkedAt: number | null;
+  tagCount: number | null;
+  taggingCount: number | null;
+  stale: boolean;
+  /** Process-wide, not per database — one refresh per application. */
+  refreshing: boolean;
+}
+
+/** The phases `oracle_tags.rs` emits. Five, against `SyncPhase`'s eight. */
+export type OracleTagPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+
+/**
+ * Payload of the `oracle-tags:progress` event.
+ *
+ * A third progress event rather than a ninth `SyncPhase`, following `marketplace:progress`'
+ * precedent for the same reason: the card sync's phase list is a closed union mirrored by hand
+ * on this page, and a dataset with its own schedule has no business widening it.
+ */
+export interface OracleTagProgressEvent {
+  phase: OracleTagPhase;
+  done: number;
+  total: number;
+}
+
+/**
  * One row of the error log.
  *
  * `operation` is deliberately *not* a union: the Rust column has no `CHECK`, because a new
@@ -2693,6 +2768,53 @@ export const ipc = {
    */
   onMarketplaceProgress: (cb: (e: FeedProgressEvent) => void): Promise<UnlistenFn> =>
     listen<FeedProgressEvent>("marketplace:progress", (evt) => cb(evt.payload)),
+  /**
+   * The Oracle tags for a set of **printings** — the read every categorising call site makes.
+   *
+   * **Match the answers back by `cardId`, never by position.** Blank ids and duplicates are
+   * dropped, so the answer is one entry per *distinct* id and `result.length` can be shorter
+   * than what was asked. Reading `result[i]` against `input[i]` works right up until a caller
+   * sends the same card twice — which a decklist with two printings of one card does.
+   *
+   * One statement per 500 ids, so a whole import asks once. An unknown id answers `slugs: []`
+   * rather than being absent, because {@link CardTags} makes "no tags" and "no such card" the
+   * same answer on purpose.
+   */
+  oracleTagsForPrintings: (cardIds: string[]) =>
+    invoke<PrintingTags[]>("oracle_tags_for_printings", { cardIds }),
+  /**
+   * The same read keyed by oracle id, for a caller holding one — `DeckCard.oracleId`, a
+   * wishlist row. Same contract, same match-by-id rule.
+   */
+  oracleTagsForCards: (oracleIds: string[]) =>
+    invoke<CardTags[]>("oracle_tags_for_cards", { oracleIds }),
+  /**
+   * The taxonomy's freshness. Reads one small table, makes no network call, and **is safe
+   * before the first refresh has ever run** — a database with no meta row answers every field
+   * `null` with `stale: true` rather than rejecting, so no caller needs a guard.
+   */
+  oracleTagsStatus: () => invoke<OracleTagStatus>("oracle_tags_status"),
+  /**
+   * Fetch the taxonomy if it is due. `force` skips the weekly throttle, **not** the ETag check
+   * — a forced refresh of an unchanged file still costs one request and no ingest.
+   *
+   * ~5.8 MiB compressed and a few seconds of ingest, so it reports through the same `Activity`
+   * mechanism every other long job uses. **A failed fetch leaves the previous taxonomy in
+   * place**: stale categories beat none, and a rejection here is never a reason to stop filing
+   * cards — the type-line fallback is always available.
+   */
+  oracleTagsRefresh: (force: boolean) => invoke<OracleTagStatus>("oracle_tags_refresh", { force }),
+  /**
+   * The taxonomy being fetched, phase by phase — beside `sync:progress`, `marketplace:progress`
+   * and `update:progress`.
+   *
+   * **Subscribe once**, like all three: every extra call is another `listen` registration for
+   * the life of the app. Tauri drops events emitted before the webview registered its listener
+   * and the startup refresh can begin before this window has one, so
+   * {@link ipc.oracleTagsStatus} is the reliable half of the pair.
+   */
+  onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<OracleTagProgressEvent>("oracle-tags:progress", (evt) => cb(evt.payload)),
 };
 
 /**
