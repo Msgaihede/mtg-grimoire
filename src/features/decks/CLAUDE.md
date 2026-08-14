@@ -332,7 +332,11 @@ price | type`). An **inactive category stays its own group in all three grouping
   reader having asked**: `activeFilterCount` includes it, so the panel opens showing `Reset all 1`
   and what is narrowing the wall is always visible and clearable, while `unfiltered` — which
   captions the empty result area and is the difference between "the database is still syncing" and
-  "your search missed" — counts only a format the *reader* set.
+  "your search missed" — counts only a format that **differs from the default**. That is "the
+  reader set it" in every case but one, and the exception is written at `formatIsReaderSet`: a
+  reader who clears the filter and then picks the deck's own format back off the select reads as
+  having asked nothing, so an empty answer there is captioned "waiting for the sync". Remembering
+  the press instead would buy a caption in a case that also needs the database to be empty.
 - **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
   switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
   one holding cards and `live` is the column that fills as the reader acquires them. Reading

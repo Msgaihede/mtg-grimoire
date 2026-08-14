@@ -305,14 +305,16 @@ const group = (name: string) => screen.getByRole("region", { name });
  * deck the fence deliberately left unfiltered. Anything asserting on that default has to be past
  * this line or it is testing a query in flight.
  *
- * **`Modern` is the sentinel, and the deck's own format is not**: `pickerFormats` folds a deck's
- * format into the header's list whether or not anything has loaded, so the option a deck is
- * already on is there from the first paint and proves nothing.
+ * **The sentinel has to be a `PICKER` format the deck under test is _not_ on**: `pickerFormats`
+ * folds a deck's own format into the header's list whether or not anything has loaded, so that
+ * option is there from the first paint and waiting for it would gate on nothing. `Gladiator` is
+ * the default because every deck fixture here is on something else; the one test whose deck *is*
+ * Gladiator passes another of `PICKER`'s four.
  */
-const seeded = () =>
+const seeded = (sentinel = "Gladiator") =>
   waitFor(() =>
     expect(
-      within(screen.getByLabelText("Deck format")).getByRole("option", { name: "Modern" }),
+      within(screen.getByLabelText("Deck format")).getByRole("option", { name: sentinel }),
     ).toBeInTheDocument(),
   );
 
@@ -1293,13 +1295,16 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The other `null` spec, and it answers the same way: `decks.format_key` is deliberately not a
-   * foreign key, so a deck whose format left the seed is a state that can exist and must still
-   * open. There is no `hasLegalityData` cell to read for it — and inferring one from the key
-   * would be this file guessing at what the database can answer — so the panel opens unfiltered
-   * rather than on a filter nothing behind it has heard of.
+   * The other `null` spec, and it answers the same way. `historic` here is a key **this
+   * fixture's `PICKER` does not carry**, standing in for one the seed has lost: `decks.format_key`
+   * is deliberately not a foreign key, so a deck whose format left the seed is a state that can
+   * exist and must still open. (The real seed does carry `historic`, and a Historic deck in the
+   * shipped app opens on Historic — what is being driven here is `formatSpecFor` answering
+   * `null`, whatever made it do so.) There is no `hasLegalityData` cell to read then — and
+   * inferring one from the key would be this file guessing at what the database can answer — so
+   * the panel opens unfiltered rather than on a filter nothing behind it has heard of.
    */
-  it("opens on Any format for a deck whose format has left the seed", async () => {
+  it("opens on Any format for a deck whose format the seed does not carry", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
     await open();
     await openSearchPanel();
@@ -1307,6 +1312,34 @@ describe("DeckEditor", () => {
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
     expect(screen.getByLabelText("Deck format")).toHaveValue("historic");
+  });
+
+  /**
+   * **A format the filter row's own list has never carried, driven the whole way** — editor to
+   * panel to `FilterBar`. `gladiator` is a seeded `format_specs` row with legality data behind
+   * it and is not one of `FORMATS`' seven, which is the ordinary case for a deck: the deck picker
+   * offers every enabled row and this filter offers seven keys.
+   *
+   * So the select can only read `Gladiator` because the hook folded the default into its own
+   * option list. Without that the value would match no option, React would select the first row
+   * that is not disabled, and the panel would say `Any format` over a wall already narrowed to
+   * Gladiator. Both assertions are made for that reason: `value` reads back `""` under the bug
+   * and the option's text is the whole of what the reader sees.
+   *
+   * The sentinel is `Commander` here rather than the helper's `Gladiator`, because this deck's
+   * own format is folded into the header's list before the seed lands.
+   */
+  it("draws a deck format the filter row's own list has never carried", async () => {
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "gladiator", formatName: "Gladiator" }, [bolt()]),
+    );
+    await open();
+    await seeded("Commander");
+
+    const filter = screen.getByLabelText("Format") as HTMLSelectElement;
+    expect(filter).toHaveValue("gladiator");
+    expect(filter.selectedOptions[0]).toHaveTextContent("Gladiator");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("gladiator");
   });
 
   /**

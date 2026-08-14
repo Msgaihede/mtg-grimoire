@@ -224,8 +224,9 @@ export const DeckFormat: Story = {
     const format = (await within(panel).findByLabelText("Format")) as HTMLSelectElement;
 
     // The value is what the request carries; the option's own text is the whole of what the
-    // reader can see, and a select holding a key no option draws is blank on screen while every
-    // assertion about `value` still passes.
+    // reader can see. A select holding a key none of its options carries reports the first one
+    // instead — `Any format` — so `value` reads back `""` and the line below catches it, while
+    // only the line after that says which word the reader is actually looking at.
     await expect(format).toHaveValue("modern");
     await expect(format.selectedOptions[0]).toHaveTextContent("Modern");
 

@@ -32,10 +32,11 @@ its existing states including "Any format".
    whole of the request's second sentence. So the default seeds `format` state; it does not
    constrain it, and `Any format` stays in the list.
 3. **The deck's format may not be one of `FORMATS`' seven.** The filter row offers seven legality
-   keys; the deck picker offers twenty-four `format_specs` rows. A `<select>` whose `value` has no
-   matching `<option>` draws blank, so an unlisted default must be **folded into the option list**
-   — the same rule, for the same reason, as `pickerFormats`' `keep` argument
-   (`useFormatSpecs.ts:90-101`).
+   keys; the deck picker offers every enabled `format_specs` row. A `<select>` whose `value` has no
+   matching `<option>` does not draw blank — React selects the first row that is not disabled, so
+   the control reads `Any format` while the filter it names narrows the wall underneath. An
+   unlisted default must therefore be **folded into the option list** — the same rule, for the
+   same reason, as `pickerFormats`' `keep` argument (`useFormatSpecs.ts:90-101`).
 4. **`SearchPage` and `CollectionFilterBar` change behaviour in no way.** `useCardSearch()` called
    with no argument must behave exactly as it does today, and `FORMATS` stays exported for the
    collection's own row.
@@ -163,7 +164,8 @@ handed straight to `useCardSearch`.
    `Any format` pinned above the sorted list.
 3. Extend the doc comment over `formatOptions` to say where the list now comes from and why it
    can be longer than seven — the deck editor's panel seeds it with the open deck's format, and a
-   `<select>` whose value has no `<option>` draws blank.
+   `<select>` whose value has no `<option>` silently reports the first one, putting `Any format`
+   over a filtered wall.
 
 **Tests:** the existing file builds a `CardSearch` stub — give the stub a `formats` field
 defaulting to `FORMATS` so no existing case changes, and add: a stub carrying an extra option
@@ -238,6 +240,7 @@ file's voice and in one bullet:
 - that the default **re-seeds when the deck's format changes** and survives `resetAll` only until
   it does;
 - that an unlisted key is folded into the picker the way `pickerFormats`' `keep` is, because a
-  `<select>` with no matching `<option>` draws blank.
+  `<select>` with no matching `<option>` does not draw blank — it silently reports the first one,
+  putting `Any format` over a filtered wall.
 
 Do not re-count anything, and do not touch any other file.
