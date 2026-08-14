@@ -1116,15 +1116,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * not a row of this deck, and the store clears `paneDeckContext` in that same write precisely
    * so it cannot be shown as one.
    */
+  const panelCardBuild = useCallback(
+    (card: CardSummary) => () =>
+      buildCardMenu(searchCardTarget(card), {
+        ...cardMenuDeps,
+        viewPrintingsInPane: setSelectedCardId,
+      }),
+    [cardMenuDeps, setSelectedCardId],
+  );
   const panelCardMenu = useCallback(
-    (card: CardSummary) =>
-      menu(() =>
-        buildCardMenu(searchCardTarget(card), {
-          ...cardMenuDeps,
-          viewPrintingsInPane: setSelectedCardId,
-        }),
-      ),
-    [menu, cardMenuDeps, setSelectedCardId],
+    (card: CardSummary) => menu(panelCardBuild(card)),
+    [menu, panelCardBuild],
+  );
+  /** The keyboard's own door to the same rows. `CardGrid` takes it in a slot of its own because
+   *  a keypress has no coordinates — the panel is anchored at the tile's corner rather than at a
+   *  pointer that was never there. */
+  const panelCardMenuKey = useCallback(
+    (card: CardSummary) => menuKey(panelCardBuild(card)),
+    [menuKey, panelCardBuild],
   );
 
   // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
@@ -1906,6 +1915,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             onTargetCategoryChange={setTargetCategoryId}
             defaultFormat={searchFormatDefault}
             cardMenu={panelCardMenu}
+            cardMenuKey={panelCardMenuKey}
             roomy={roomForPanel}
             maxWidth={maxPanelWidth}
           />

@@ -4,6 +4,7 @@ import {
   useId,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { Plus, Search } from "lucide-react";
@@ -218,6 +219,10 @@ export interface DeckSearchPanelProps {
    * Absent is a panel with no menu, which is what a story or `DeckSearchPanel.test.tsx` mounts.
    */
   cardMenu?: (card: CardSummary) => (e: ReactMouseEvent) => void;
+  /** The same menu from the keyboard — Shift+F10 and the ContextMenu key, anchored at the
+   *  tile's own corner. Its own slot rather than something derived from the one above, because
+   *  a keypress has no coordinates; see `CardGrid`'s `cardMenuKey`. */
+  cardMenuKey?: (card: CardSummary) => (e: ReactKeyboardEvent) => void;
   /**
    * The widest this panel may be drawn or dragged, in px — the editor's answer, because the
    * editor is what holds the two measurements it is made of.
@@ -269,6 +274,7 @@ export function DeckSearchPanel({
   onTargetCategoryChange,
   defaultFormat,
   cardMenu,
+  cardMenuKey,
   roomy = true,
   maxWidth = Number.POSITIVE_INFINITY,
 }: DeckSearchPanelProps) {
@@ -541,6 +547,7 @@ export function DeckSearchPanel({
             targetCategoryId={targetCategoryId}
             defaultFormat={defaultFormat}
             cardMenu={cardMenu}
+            cardMenuKey={cardMenuKey}
           />
         </div>
       )}
@@ -706,9 +713,10 @@ function OpenPanel({
   targetCategoryId,
   defaultFormat,
   cardMenu,
+  cardMenuKey,
 }: Pick<
   DeckSearchPanelProps,
-  "add" | "categories" | "targetCategoryId" | "defaultFormat" | "cardMenu"
+  "add" | "categories" | "targetCategoryId" | "defaultFormat" | "cardMenu" | "cardMenuKey"
 >) {
   // The deck's format seeds the Format select and nothing else — the hook owns what a default
   // does to filter state, this panel owns only handing it the deck's answer. See
@@ -891,6 +899,7 @@ function OpenPanel({
           // The wall's own `cardMenu` slot, so this panel knows nothing about menus beyond
           // where a right-click lands.
           cardMenu={cardMenu}
+          cardMenuKey={cardMenuKey}
           badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
           action={(card) => {
             // Where this card would land, named before the press rather than reported after it.

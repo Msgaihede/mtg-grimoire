@@ -2764,6 +2764,32 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
+   * **Shift+F10, and it is not a nicety here.**
+   *
+   * The per-card `Move…` select was removed on 2026-08-14 and took the only keyboard path to
+   * moving a card with it — a caret cannot drag, and stepping to zero and adding again elsewhere
+   * is a different write that loses the slot. This menu is the replacement, so a menu only a
+   * mouse could open would restore nothing. The panel is anchored at the card's own corner
+   * rather than at a pointer that was never there, which is `menuKey`'s whole job.
+   */
+  it("opens a card's menu from the keyboard, and offers the move from there", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
+    await open();
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt")}"]`,
+    ) as HTMLElement;
+    el.focus();
+    fireEvent.keyDown(el, { key: "F10", shiftKey: true });
+
+    await screen.findByRole("menu");
+    await expand(/Move to/);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+  });
+
+  /**
    * **The whole reason this menu exists.**
    *
    * The per-card `Move…` select was removed on 2026-08-14 and it was the one control built from
@@ -2911,6 +2937,25 @@ describe("DeckEditor — a card's menu", () => {
     await screen.findByRole("menu");
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Move to/ })).not.toBeInTheDocument();
+  });
+
+  /** …and from the keyboard there too, which the wall takes in a slot of its own because a
+   *  keypress has no coordinates to anchor a panel at. */
+  it("offers the panel's tiles the same menu from the keyboard", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    await open();
+    await openSearchPanel();
+
+    const tile = await screen.findByRole("button", { name: "Goblin Guide" });
+    tile.focus();
+    fireEvent.keyDown(tile, { key: "F10", shiftKey: true });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
   });
 });
 
