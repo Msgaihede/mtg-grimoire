@@ -158,11 +158,11 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
  * is not drawn is not a drop target). The second is why this is built from the deck's
  * `categories` and never from the groups a view drew.
  *
- * **No `sortOptions`.** Deck categories are one of exactly two documented exemptions from this
- * app's option-list rule — an order the reader arranged themselves, in `CategoriesDialog` — and
- * sorting them here would list a reader's piles in one order on the desk and another in this
- * menu, over the same deck. The other exemption is a grade scale; both carry a comment at the
- * site, and this is that comment.
+ * **No `sortOptions`.** Deck categories are a documented exemption from this app's option-list
+ * rule — an order the reader arranged themselves, in `CategoriesDialog` — and sorting them here
+ * would list a reader's piles in one order on the desk and another in this menu, over the same
+ * deck. Every exemption carries a comment at its own site saying which kind it is, and this is
+ * that comment; `src/CLAUDE.md` states the test and deliberately keeps no list.
  *
  * The pile the card is **already in** is drawn and greyed rather than dropped. "Every category"
  * is what makes the list findable by position, and a row that wrote a move from a pile to itself

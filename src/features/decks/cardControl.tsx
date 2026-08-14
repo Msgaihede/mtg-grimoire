@@ -460,22 +460,23 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
  * The controls a card carries: **how many copies, and that is now all of it.**
  *
  * It used to carry a second control beside the stepper — a native `Move…` `<select>` listing
- * every other category of the deck — and that was removed whole on 2026-08-14, with a
- * replacement expected later. Two things it was load-bearing for are worth writing down, so
- * that whatever replaces it is measured against them rather than against a blank page:
+ * every other category of the deck — and that was removed whole on 2026-08-14. Two things it was
+ * load-bearing for were written down here so that whatever replaced it would be measured against
+ * them rather than against a blank page. **Its replacement is the card's right-click `Move to`
+ * (`deckCardMenu.tsx`), landed later the same day, and it closes both:**
  *
- * - **It was the only keyboard path to moving a card.** What is left is a drag, which a caret
- *   cannot perform, so a reader on the keyboard can step a card to zero and add it again
- *   elsewhere but cannot move the slot.
- * - **It was the only way to reach an empty category**, and that hole has since closed from the
- *   other end. It was written when `drawsWhenEmpty` drew no heading for a pile of the reader's
- *   own that held nothing, so the select — built from the deck's `categories` rather than from
- *   the drawn groups — was the one route to one. A pile the reader made draws empty now and is
- *   therefore its own drop target. **The pile with no drag route today is an `origin = 'auto'`
- *   one that has gone empty**: nobody asked for it, so it goes with its last card, and the way
- *   back to it is to add a card that files there or to use the "Add to" select. Whatever
- *   replaces the `Move…` control is still measured against this — it is a smaller hole, not a
- *   closed one.
+ * - **It was the only keyboard path to moving a card.** A drag is not one, so this mattered:
+ *   stepping a card to zero and adding it again elsewhere is a different write and loses the
+ *   slot. **Shift+F10 → `Move to`** is a keyboard path again, which is why
+ *   {@link deckCardMenuProps} carries a `tabIndex` and why `menuKey` is not an optional extra on
+ *   these surfaces.
+ * - **It was the only way to reach an empty category**, and that hole closed from both ends. A
+ *   pile the reader made draws empty now (`drawsWhenEmpty`) and is therefore its own drop target,
+ *   which covers the classes a reader files into deliberately; **the pile with no drag route is
+ *   an `origin = 'auto'` one that has gone empty**, since nobody asked for it and it goes with
+ *   its last card. `Move to` is built from the deck's `categories` rather than from the drawn
+ *   groups — the same choice the old select made — so it lists that pile too. What is left of
+ *   the hole is a *drag* that cannot reach one heading, not a reader who cannot get there.
  *
  * `null` when there is nothing to offer, so a view can render this unconditionally and a view
  * with no actions grows no empty box.

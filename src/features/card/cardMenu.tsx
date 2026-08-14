@@ -68,15 +68,22 @@ export interface CardMenuTarget {
   /** Only where the surface names one — a collection row, a wishlist row with a preference. */
   finish?: Finish;
   /**
-   * The card's own `type_line`, where the surface has one — the **fallback** half of
-   * `autoCategoryFor`, exactly as the four drag sources carry it.
+   * The card's own `type_line` — the **fallback** half of `autoCategoryFor`, exactly as the four
+   * drag sources carry it.
    *
-   * Optional because two of the surfaces genuinely have none: a `Printing` row says what a
-   * printing *is* and never what the card does, and neither does a wishlist row. Absent and
-   * `null` are the same answer here and both reach `useDeck.addCard` as `null`, which is the
-   * arm that consults the card's Oracle tags — **not** the arm that files everything under
-   * `DEFAULT_CATEGORY_NAME` without asking. Sending nothing at all would take the rule off a
-   * menu add that a drag of the same card gets.
+   * **Optional in the type and supplied by every surface**, which is not the same thing, and the
+   * difference is a rule rather than a nicety. `useDeck.addCard` reads **absent** as "this caller
+   * has nothing to say" and files the card under `DEFAULT_CATEGORY_NAME` with **no rule run at
+   * all**; `null` is a card whose printing has left `cards`, and it still goes through
+   * `autoCategoryFor` — the Land pin first, then the Oracle-tag buckets — reaching
+   * `Uncategorised` only when nothing matches. So omitting the key takes the filing rule off a
+   * menu add that a drag of the same card would get, and nothing goes red when it happens.
+   *
+   * The printings list is the case worth naming. A `Printing` row has no type line of its own,
+   * because it says what a *printing* is; `printingTarget` supplies the **card's**, off the same
+   * `CardDetail` it already takes the name and the oracle id from. That is the stronger answer
+   * rather than a workaround — what a card does is a fact about the card, not about the piece of
+   * cardboard.
    */
   typeLine?: string | null;
 }
@@ -236,10 +243,11 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
  * printings and because refusing to add a card over a missing column would be worse.
  *
  * The finishes are offered in the **printing's own order**, which is Scryfall's and is the
- * order `FINISHES` is written in — nonfoil, foil, etched. That is the third exemption from
- * `sortOptions` for the same reason the condition grade is one: the order carries the
- * information (plain, then the two premium treatments), and alphabetising it would draw
- * "Etched, Foil, Nonfoil" over a picker whose whole job is to be read at a glance.
+ * order `FINISHES` is written in — nonfoil, foil, etched. That is an exemption from
+ * `sortOptions` of the same kind the condition grade is: the order carries the information
+ * (plain, then the two premium treatments), and alphabetising it would draw "Etched, Foil,
+ * Nonfoil" over a picker whose whole job is to be read at a glance. `src/CLAUDE.md` states the
+ * test the exemptions are granted by; it deliberately keeps no list of them.
  */
 function collectionItem(
   target: CardMenuTarget,
@@ -551,9 +559,10 @@ export function useCardToDeck(): CardToDeck {
  * the one they are building.
  *
  * Folders come first at every level and **keep `buildFolderTree`'s order**, which is
- * `sortOrder`, then name, then id. A folder tree is an arrangement the reader made, which is
- * exactly the second of the two exemptions `src/lib/options.ts` names — the other being a grade
- * scale — and it is the same argument deck categories are exempt under: re-sorting it here
+ * `sortOrder`, then name, then id. A folder tree is an arrangement the reader made, which is one
+ * of the two kinds of list `src/lib/options.ts` exempts — the other kind being a list whose order
+ * *is* the information, like a grade scale — and it is the same argument deck categories are
+ * exempt under: re-sorting it here
  * would list a reader's drawers in one order in the gallery and another in this picker, over
  * the same cabinet, which reads as a bug and is one. **Decks within a level still go through
  * `sortOptions`**: `deck_list` answers archived-last, most-recently-touched-first, which is a

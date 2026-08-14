@@ -179,27 +179,39 @@ just made; it now asks all of them.
 
 ## Writes
 
-- **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s
-  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle,
-  the `Split X` chip), add-card, set-quantity, move, missing-to-wishlist, swap-printing. The X
-  chip is a **deck-row** write riding the same `update` as the other three, so it is not a seventh
-  mutation and it touches not one `deck_cards` row. The two outside the six are `setTag` and
-  `rememberView`, each for its own reason stated on its definition.
+- **A write to what is _in_ a deck goes through a `useDeck` mutation — but the refused-write family
+  stopped being all of one hook's on 2026-08-14.** `DeckEditor`'s `newestWrite([...])` takes
+  **every `useDeck` mutation but `rememberView`** — update (rename, cover, Built toggle, the
+  `Split X` chip), add-card, set-quantity, move, set-tag, missing-to-wishlist, swap-printing — and
+  **the `useDeckMeta` writes a right-click can now reach**, which are the tag create and a
+  category's rename, switch and delete. Read the array rather than a number here; a count stood in
+  this bullet and went stale twice. The X chip is a **deck-row** write riding the same `update` as
+  the other three, so it is not a mutation of its own and it touches not one `deck_cards` row.
+  `rememberView` is the one exclusion, for the reason stated on its definition. **The menus are
+  what grew the family**: `setTag` sat outside it for as long as nothing in the app could reach it,
+  and `useDeckMeta`'s writes had no control in this view at all — they were the Categories dialog's,
+  which draws its own sentence for its own observer. A write a reader can now make from a card's
+  menu or a pile's heading is a write whose refusal has to be said somewhere, and **the menu that
+  started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
+  *different* one from the dialog's — TanStack shares a query's cache between observers and a
+  mutation's state with nobody — so this banner speaks only for presses made out here.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
-- **A move is a drag and nothing else** (2026-08-14). Every deck card used to carry a native
-  `Move…` `<select>` beside its stepper, listing every other category of the deck; it was
-  removed whole and a different control is expected later, so `moveCard` is reached only through
-  `DeckEditor`'s `applyDrop`. Two costs, written here rather than discovered later: **there is no
-  keyboard path to moving a card** (a caret cannot drag; stepping to zero and adding again
-  elsewhere is not the same write and loses the slot), and **a pile with no heading cannot be moved
-  into at all** — a heading that is not drawn is not a drop target, and the select was the one
-  control built from `categories` rather than from the drawn groups. **Which piles those are has
-  moved twice since**: every pile of the reader's own draws empty now, and so do the Sideboard and
-  the Maybeboard, so the only pile with no drag route is an `auto` one that has gone empty — a pile
-  nobody asked for, which the next card the rule files there brings back. `cardControl.tsx`'s
-  `DeckCardControls` carries the keyboard half at the code; its second paragraph still describes the
-  first of those two rules and is the stale copy.
+- **A move has two routes: a drag, and the card's right-click `Move to`** (changed 2026-08-14, and
+  again later the same day). Every deck card used to carry a native `Move…` `<select>` beside its
+  stepper, listing every other category of the deck; it was removed whole, which left `moveCard`
+  reachable only through `DeckEditor`'s `applyDrop`, and the two costs written down at the time
+  were **no keyboard path to moving a card at all** (a caret cannot drag; stepping to zero and
+  adding again elsewhere is a different write and loses the slot) and **no way into a pile with no
+  drawn heading** (a heading that is not drawn is not a drop target). `deckCardMenu.tsx`'s
+  `Move to` closes both, and it is the **replacement** for that control rather than a duplicate of
+  the drag: **Shift+F10 → `Move to` is the keyboard path** — a menu only a mouse could open would
+  have restored nothing — and the submenu is built from `DeckEditor`'s `categories`, every category
+  the deck has in `sortOrder`, never from the drawn groups. So it reaches the one pile a drag still
+  cannot: an `auto` pile that has gone empty, which draws no heading because nobody asked for it.
+  The card's own pile is **drawn and greyed with a reason** rather than dropped, so the list stays
+  findable by position, and the categories are **not** put through `sortOptions` — a reader's piles
+  must not read in one order on the desk and another in this menu.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
   definitions would be two places to keep one rule. The two surfaces outside the editor
   (`useSwapFromPane`, `useSidebarDrops`) borrow a mutation whole and own only their own reporting.
@@ -320,6 +332,50 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   `useReducedMotion()` opt-out is owed here. The buttons' CSS half read
   `transition-property: none` **while `transition-duration` still read `0.12s`** — the false
   failure the harness contract warns about, reproduced exactly.
+- **An import can be aimed at one pile, and it is a new argument on the import path rather than a
+  new import path** (2026-08-14). A category heading's right-click opens the same dialog carrying
+  `forcedCategoryName`, and every line of the paste lands in that pile — **overriding
+  `autoCategoryFor`**, which is consistent with the rule the importer already follows (an add that
+  names a category is left untouched) and is what right-clicking a specific pile means. It is
+  applied in `buildImportPlan` and nowhere else, because **`plan.ts` makes every deck decision**;
+  the dialog only reports it, in the step-two heading (`Into <pile> · <deck>`). The argument is
+  **optional and defaults to today's behaviour**, so the toolbar's own Import passes nothing and is
+  unchanged — which is what keeps a shared importer from being reshaped by one caller.
+
+## Export
+
+`export/` is the mirror of `import/`, and the split is the repo's boundary: `format.ts` is pure
+(`(cards, format) => string` — no React, no hook, no IPC), `ExportDialog.tsx` is the surface (a
+format picker, a live preview, Copy and Save as…), and Rust supplies only the file write. It is
+category-level in this branch; the same `format.ts` is what a later deck-level export uses.
+
+- **The cards are an argument the dialog never fetches**, and that is the whole of what makes a
+  category export reusable as a deck export later — the set of cards is the caller's decision.
+  `DeckEditor` derives them from the deck's own rows and **never from `shown`**: exporting "Removal"
+  means the pile, not the four of it the toolbar's filter happens to be drawing.
+- **`format.ts` is `parse.ts`'s rules read backwards.** `//` is part of a card name, so nothing
+  here may cut one, and what this writes has to be something that parser reads — which is what the
+  round-trip test pins. LF and a trailing newline always: the parser takes CRLF, a lone LF and a
+  lone CR, but a file this app wrote should have one answer. **An empty list is an empty string in
+  every format, CSV included** — a header row over no rows is a file claiming to be a decklist and
+  is not one.
+- **Rust writes the file, and that is a permission decision rather than a division of labour.**
+  `save()` answers a *path*; writing bytes at it from the page would need an `fs:` permission this
+  app grants nowhere, so `export_write_file` takes the path and the text — the same shape
+  `deck_set_cover_image` has, for the same reason.
+  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both.
+- **`save()` resolves `null` on Cancel**, and writing that string to disk is the trap the guard in
+  `handleSaveAs` exists to prevent. A refused write is **reported and does not close the dialog**:
+  the reader's text is still on screen and still copyable, so the failure costs them nothing they
+  cannot immediately retry.
+- **The `Copied.` line is a claim about the clipboard's contents, so it is cleared the moment that
+  claim could go stale.** Switching format redraws the preview and does nothing to the clipboard,
+  which still holds the last text copied — so the format radios clear it on every press. And the
+  clipboard write can itself be refused, because it is a real Tauri plugin command rather than a
+  browser API, so it reports through the same `role="alert"` line a refused save uses.
+- **The picker's own half is unverifiable**, exactly as the importer's `open` is:
+  `dialog:allow-save` opens a native window CDP cannot reach and no test or browser can drive.
+  Path → written file is covered; click → path is not.
 
 ## Views and interaction
 
@@ -576,8 +632,11 @@ price | type`). An **inactive category stays its own group in all three grouping
   and is now the same answer as emptying a pile by hand. `EmptyGroupRules` keeps one member and
   `DeckEditor`'s memo passes only `requiresCommander`. **The flag's cost went with it**: an empty
   pile of the reader's own is a drop target under a filter again, which matters because the
-  per-card `Move…` select was removed on 2026-08-14 and a drawn heading is the whole affordance for
-  moving a card into an empty pile.
+  per-card `Move…` select was removed on 2026-08-14 and a drawn heading is the whole affordance a
+  **drag** has for moving a card into an empty pile. The card's `Move to` menu is a second route
+  and does not make this one optional: it is built from `categories` rather than from the drawn
+  groups, so it is what covers the piles no heading is drawn for, while a drop target the reader
+  can see is what a pointer reaches for first.
 - **Nothing but a view reads the drawn groups, which is what makes a missing heading survivable.**
   `DeckEditor`'s `categories` is still _every_ category the deck has, in `sortOrder`, and it is what
   the toolbar's "Add to" select and `CategoriesDialog` are built from — never the groups. **For an
@@ -590,12 +649,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   itself, and cutting a row out of it hid a pile the reader had built. The format came back one
   rung lower, and the comment on `const categories = deck.categories` says so at the site.
 - **The per-card "Move…" select was removed on 2026-08-14, and a drawn heading is what replaced
-  it.** It built from the `categories` array rather than from the drawn groups, so it reached a pile
-  that had no heading; a drop target has to be on screen. For the two classes a reader files into
-  deliberately that now costs nothing — every pile of their own draws, filter or no filter, and so
-  do the fixed zones — and the "Add to" select is a second route to both. **The one pile with no
-  drag route is an auto pile that has gone empty**, which is the class nobody asked for: the next
-  card the rule files there brings it back, and until then it is a row in the Categories dialog.
+  it — and then the card's right-click `Move to` replaced it properly, later the same day.** The
+  select built from the `categories` array rather than from the drawn groups, so it reached a pile
+  that had no heading; a *drop* target has to be on screen. For the two classes a reader files into
+  deliberately the heading costs nothing — every pile of their own draws, filter or no filter, and
+  so do the fixed zones — and the "Add to" select is a third route to both. **The one pile with no
+  drag route is an auto pile that has gone empty**, which is the class nobody asked for, and it is
+  exactly why `Move to` is built from `categories` too: the pile is listed there whether or not a
+  heading is drawn for it, by pointer and by keyboard alike. The next card the rule files there
+  brings the heading back, and until then the pile is also still a row in the Categories dialog.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
@@ -888,15 +950,21 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's **seven** full-window surfaces (Import, Categories, Tags, History, Theory diff,
-  Deck settings, Export) are held in **one** piece of state, and the anchored format check rides
-  in the same union, so at most one of its **eight** registrations is ever enabled. The original
-  reason was that `useDismissOnEscape` ordered exactly two rungs, so two `"inner"` peers open at
-  once were not ordered at all; **that hook keeps a capture stack now** and would order them, and
+- The editor's full-window surfaces — Import, Categories, Tags, History, Theory diff, Deck
+  settings, Export and the delete-category confirmation — are held in **one** piece of state, and
+  the anchored format check rides in the same union, so at most one registration is ever enabled.
+  **Count them off `Layer` in `DeckEditor.tsx` rather than from a number written here**; the list
+  grew twice in one day when the menus landed, and a number in this bullet was wrong both times.
+  The original reason for one slot was that `useDismissOnEscape` ordered exactly two rungs, so two
+  `"inner"` peers open at once were not ordered at all; **that hook keeps a capture stack now**
+  and would order them, and
   the one slot is still right — two of these open together is not a state anything here draws, and
-  a union is what makes "never two" structural rather than remembered. Two members carry a payload
-  (`export` a category id, `import` an optional forced category name), which is the other thing a
-  union buys: a second `useState` could hold a category id while a *different* layer was open.
+  a union is what makes "never two" structural rather than remembered. **Three members carry a
+  payload** — `export` and `deleteCategory` a category id, `import` an optional forced category
+  name — which is the other thing a union buys: a second `useState` could hold a category id while
+  a *different* layer was open. Each payload is an **id and never the cards**, because the deck is
+  re-read after every write and a frozen array would answer about the deck as it was at the moment
+  a menu row was pressed.
 - **The two that were drawers are centred modals, and the search column deliberately is not**
   (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
   them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
@@ -990,14 +1058,17 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
-  as the docked panel's set filter. **Six** of the editor's seven full-window surfaces are opened
-  by pressing a button — five of them in the toolbar (`Import cards · Categories · Tags · History
+  as the docked panel's set filter. **Most of the editor's full-window surfaces are opened by
+  pressing a button** — five of them in the toolbar (`Import cards · Categories · Tags · History
   · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
-  — pressing a button takes the focus out of this field, and the root's `onBlur` closes the list
+  — and pressing a button takes the focus out of this field, so the root's `onBlur` closes the list
   on the way.
-- **The seventh arrives another way, and the rung this used to say was missing has since been
-  built.** The export dialog is opened from a category heading's right-click and has no control in
-  the view at all — the first editor surface with none. This entry used to end "**that is the whole
+- **Two of them arrive another way, and the rung this used to say was missing has since been
+  built.** The export dialog and the delete-category confirmation are opened from a category
+  heading's right-click and have no *button* in the view at all — the first editor surfaces with
+  none, the affordance being the heading itself. (A pile can still be deleted from the Categories
+  dialog, which draws `DeleteCategory` for itself; this layer is the *heading's* route to the same
+  component.) This entry used to end "**that is the whole
   of what makes a third rung unnecessary**, so a future surface opened without moving the caret
   breaks it, and the fix is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope".
   **That depth exists**: the hook keeps a stack of capture-phase registrations and only the token
@@ -1005,7 +1076,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   order — which is what lets a context menu open over a dialog opened over the card pane and give
   one press to each. So the prediction was right and the remedy is the one it named; what is no
   longer true is that focus mechanics are all that hold this together. **The focus half holds for
-  this surface anyway rather than by luck**: `ContextMenu` focuses its own panel in a layout effect
+  these two anyway rather than by luck**: `ContextMenu` focuses its own panel in a layout effect
   as it opens and hands the caret to the opener before it runs a row, so a right-click has already
   taken the caret out of this field before the dialog exists. What to check for the next surface is
   therefore narrower than it was — whether it registers its rung, not whether a button was pressed.
