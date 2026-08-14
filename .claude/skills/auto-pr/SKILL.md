@@ -34,11 +34,27 @@ Exit codes: **0** fine, **1** error, **3** needs Claude.
 | Command | Does |
 | --- | --- |
 | `pr-auto.ps1 open` | push, `gh pr create --fill`, arm auto-merge. Idempotent. |
+| `pr-auto.ps1 arm` | arm auto-merge on a PR you did not open. `-All` for the fleet |
 | `pr-auto.ps1 status` | one line of state for this branch's PR |
-| `pr-auto.ps1 sync` | clear `BEHIND` now instead of in three minutes. `-All` for every open PR |
+| `pr-auto.ps1 sync` | clear `BEHIND` now instead of in three minutes. `-All` for the fleet |
 | `pr-auto.ps1 resolve` | start the local merge so a real conflict can be worked by hand |
 | `pr-auto.ps1 watch` | event stream for `Monitor` — one line per state change, exits on merge |
 | `pr-auto.ps1 fleet` | read-only board of every open PR |
+
+## `-All` never means every open PR
+
+**release-please keeps a release PR open, and arming auto-merge on it ships a version
+nobody asked for.** So `-All` works from an **allowlist**, not a blocklist: it touches only
+`worktree-*` branches, and anything it does not recognise is skipped **out loud** rather
+than silently. An unfamiliar branch is left alone by default — that is the safe direction.
+
+A PR is disqualified by any one of three independent signals, because betting a release on
+one branch-prefix string is thin: the `release-please--` branch prefix, a **bot author**
+(gh reports it as `app/github-actions`, not `github-actions[bot]`), or an
+**`autorelease:` label**. `pr-auto.test.ps1` covers each signal alone, and the CI
+`powershell` job runs it.
+
+To act on one PR deliberately, use `-Pr <n>`. Even then, a release PR is refused.
 
 ## The workflow
 
@@ -99,8 +115,9 @@ protection pins, so a green `rust (windows-latest)` says nothing about the gate.
 - **The release-please PR is not yours.** It opens in `action_required` with zero jobs —
   GitHub's recursion guard on a `GITHUB_TOKEN`-authored PR, not a broken workflow. `sync`
   and `fleet` skip it.
-- **A watch on a PR with auto-merge off never ends.** It goes green and then just sits
-  there. `watch` warns; believe the warning.
+- **An unarmed PR is the quiet failure.** It goes all the way to green and then just sits
+  there, which looks exactly like one still building. `open` and `watch` arm it, `watch`
+  re-arms if it comes off, and `fleet` shows `-` in the auto-merge column.
 
 ## Red flags — stop
 
@@ -109,3 +126,5 @@ protection pins, so a green `rust (windows-latest)` says nothing about the gate.
 - About to hand-merge a `BEHIND` PR that auto-merge would have cleared — run `sync` or wait.
 - About to say the PR is green without having run `npm run verify` in this session.
 - About to leave a `CONFLICT` from `fleet` for later. It will not clear itself.
+- About to arm auto-merge by looping over `gh pr list` yourself instead of using `arm`.
+  That is how release-please's PR gets merged and a version ships by accident.

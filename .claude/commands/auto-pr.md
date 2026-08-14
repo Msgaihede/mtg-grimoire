@@ -11,8 +11,8 @@ Do this now:
 
 1. If no PR number was given, run `npm run verify` and read the output before anything
    else. Commit with a conventional prefix if there is uncommitted work.
-2. Run `.claude/skills/auto-pr/pr-auto.ps1 open` (or `status -Pr <n>` if adopting an
-   existing PR).
+2. Run `.claude/skills/auto-pr/pr-auto.ps1 open` — or `arm -Pr <n>` when adopting a PR
+   that is already open, which arms auto-merge on it.
 3. Arm the watch with the `Monitor` tool, `persistent: true`, so it notifies on state
    changes instead of you polling:
    `pwsh -File .claude/skills/auto-pr/pr-auto.ps1 watch` — add `-Pr <n>` when adopting.

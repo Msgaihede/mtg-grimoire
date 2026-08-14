@@ -32,6 +32,7 @@ The split it draws:
 
 Actions
   open      push, open the PR, arm auto-merge
+  arm       arm auto-merge on an existing PR (add -All for every open PR)
   status    one-shot state of this branch's PR
   sync      clear BEHIND (add -All for every open PR)
   resolve   start the local merge so a real conflict can be resolved by hand
@@ -46,7 +47,7 @@ Exit codes
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('open', 'status', 'sync', 'resolve', 'watch', 'fleet')]
+    [ValidateSet('open', 'arm', 'status', 'sync', 'resolve', 'watch', 'fleet')]
     [string]$Action,
 
     [int]$Pr = 0,
@@ -101,7 +102,7 @@ function Test-CleanTree {
     return [string]::IsNullOrEmpty($s)
 }
 
-$PrFields = 'number,title,url,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,autoMergeRequest'
+$PrFields = 'number,title,url,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,autoMergeRequest,author,labels'
 
 function Get-PrData([int]$number) {
     $ghArgs = @('pr', 'view')
@@ -174,8 +175,71 @@ function Get-AutoMergeLabel($pr) {
     return 'auto-merge OFF'
 }
 
+# Not ours to touch. Three independent signals, because arming auto-merge on a release PR
+# would cut a release nobody asked for, and one prefix string is a thin thing to bet a
+# release on - a branch-prefix change in release-please config would silently disarm it.
+#   - the branch prefix release-please uses
+#   - a bot author (release-please commits as github-actions)
+#   - the `autorelease:` label it puts on its own pull requests
+# Any one of them is enough to disqualify a PR.
 function Test-Foreign($pr) {
-    return $pr.headRefName.StartsWith($ForeignBranchPrefix)
+    if ($pr.headRefName.StartsWith($ForeignBranchPrefix)) { return $true }
+    if ($pr.author -and ($pr.author.is_bot -eq $true)) { return $true }
+    # gh reports this login as `app/github-actions`, not `github-actions[bot]`, so the glob
+    # has to be loose at BOTH ends - anchoring it at the front matched nothing.
+    if ($pr.author -and $pr.author.login -like '*github-actions*') { return $true }
+    if ($pr.labels) {
+        foreach ($l in $pr.labels) {
+            if ($l.name -and $l.name.StartsWith('autorelease')) { return $true }
+        }
+    }
+    return $false
+}
+
+# What a fan-out `-All` is allowed to act on: an ALLOWLIST, not a blocklist.
+#
+# The user's rule is that nothing may ever arm auto-merge across every open PR, because
+# release-please keeps a release PR open and merging it ships a version. A blocklist gets
+# that wrong the first time something unanticipated appears - the safe default for an
+# unrecognised branch has to be "leave it alone", not "merge it".
+#
+# So `-All` only ever touches agent worktree branches, which this repo names after the
+# directory in .claude/worktrees/. Anything else is skipped OUT LOUD, and `-Pr <n>` remains
+# the way to act on one deliberately.
+$OursBranchPrefix = 'worktree-'
+
+function Test-Ours($pr) {
+    if (Test-Foreign $pr) { return $false }
+    return $pr.headRefName.StartsWith($OursBranchPrefix)
+}
+
+# Arming auto-merge IS the strategy - it is what lets the agent walk away. GitHub lands the
+# PR the moment `ci-ok` goes green, so nobody has to be alive and watching at that instant.
+# An unarmed PR goes green and then just sits there forever, which looks identical to a PR
+# that is still working.
+#
+# --merge, not --squash: squash is disabled on this repo (squashMergeAllowed is false) and
+# every existing autoMergeRequest on it records mergeMethod MERGE.
+#
+# Callers decide whether -NoAutoMerge applies; `arm` deliberately ignores it, because
+# asking to arm and asking not to arm in the same breath is not a state worth honouring.
+# Returns $true if the PR ends up armed - which includes gh merging it on the spot because
+# it was already green and up to date. That is the goal, not a failure.
+function Enable-AutoMerge($pr) {
+    if ($pr.autoMergeRequest) { return $true }
+    if ($pr.state -ne 'OPEN') { return $false }
+    if (Test-Foreign $pr) {
+        Emit "SKIP  #$($pr.number) is release-please's own PR - not ours to arm"
+        return $false
+    }
+
+    $r = Invoke-Gh @('pr', 'merge', "$($pr.number)", '--auto', '--merge')
+    if ($r.Code -eq 0) {
+        Emit "ARMED #$($pr.number) auto-merge on - GitHub lands it once ci-ok is green"
+        return $true
+    }
+    Emit "WARN  #$($pr.number) could not arm auto-merge: $($r.Out)"
+    return $false
 }
 
 function Resolve-Pr([int]$number) {
@@ -218,15 +282,41 @@ function Invoke-Open {
         Emit "OK    #$($pr.number) already open - $($pr.url)"
     }
 
-    if (-not $NoAutoMerge -and -not $pr.autoMergeRequest) {
-        # --merge, not --squash: squash is disabled on this repo and the existing
-        # autoMergeRequest entries all record mergeMethod MERGE.
-        $r = Invoke-Gh @('pr', 'merge', "$($pr.number)", '--auto', '--merge')
-        if ($r.Code -ne 0) { Emit "WARN  could not arm auto-merge: $($r.Out)" }
-        else { Emit "OK    auto-merge armed on #$($pr.number)" }
-    }
+    if (-not $NoAutoMerge) { Enable-AutoMerge $pr | Out-Null }
 
     Invoke-Status
+}
+
+# ---------------------------------------------------------------- arm
+
+function Invoke-Arm {
+    if ($All) {
+        $r = Invoke-Gh @('pr', 'list', '--state', 'open', '--json', $PrFields, '--limit', '50')
+        if ($r.Code -ne 0) { Emit "ERR   gh pr list failed: $($r.Out)"; exit 1 }
+        $prs = $r.Out | ConvertFrom-Json
+        $armed = 0
+        $already = 0
+        foreach ($p in $prs) {
+            if (-not (Test-Ours $p)) {
+                # Loudly, every time. A silent skip here is indistinguishable from having
+                # armed it, and the whole point is that you can see a release PR was left
+                # alone rather than having to trust that it was.
+                $why = if (Test-Foreign $p) { 'not ours (release PR or bot-authored)' }
+                       else { "branch is not $OursBranchPrefix*" }
+                Emit "SKIP  #$($p.number) $($p.headRefName) - $why"
+                continue
+            }
+            if ($p.autoMergeRequest) { $already++; continue }
+            if (Enable-AutoMerge $p) { $armed++ }
+        }
+        Emit "OK    $armed newly armed, $already already armed"
+        exit 0
+    }
+
+    $pr = Resolve-Pr $Pr
+    if ($pr.autoMergeRequest) { Emit "OK    #$($pr.number) is already armed"; exit 0 }
+    if (Enable-AutoMerge $pr) { exit 0 }
+    exit 1
 }
 
 # ---------------------------------------------------------------- status
@@ -303,6 +393,10 @@ function Invoke-Sync {
         $worst = 0
         foreach ($p in $prs) {
             if ((Get-State $p) -ne 'BEHIND') { continue }
+            if (-not (Test-Ours $p)) {
+                Emit "SKIP  #$($p.number) $($p.headRefName) - not ours to sync"
+                continue
+            }
             $rc = Sync-One $p
             if ($rc -gt $worst) { $worst = $rc }
         }
@@ -388,9 +482,10 @@ function Invoke-Watch {
     $number = $pr.number
     Emit "WATCH #$number $($pr.headRefName) - $(Get-AutoMergeLabel $pr) - $($pr.url)"
 
-    if (-not $pr.autoMergeRequest -and -not $NoAutoMerge) {
-        Emit "WARN  #$number has no auto-merge armed - it will go green and then just sit there."
-    }
+    # Arm on the way in rather than warn about it. A watch on an unarmed PR is a watch that
+    # never ends: it reaches CLEAN and stops there, and the notification stream goes quiet
+    # in exactly the way "still working" does.
+    if (-not $NoAutoMerge) { Enable-AutoMerge $pr | Out-Null }
 
     $deadline = if ($MaxMinutes -gt 0) { (Get-Date).AddMinutes($MaxMinutes) } else { $null }
     $last = ''
@@ -465,7 +560,16 @@ function Invoke-Watch {
                     Emit "DRAFT #$number is a draft - it will never merge until it is marked ready."
                 }
                 'CLEAN' {
-                    Emit "CLEAN #$number green and up to date - auto-merge should take it now."
+                    # Green and up to date is the one state that should not persist. If it
+                    # does, auto-merge came off at some point - re-arm rather than sit here
+                    # watching a finished PR forever.
+                    if (-not $pr.autoMergeRequest -and -not $NoAutoMerge) {
+                        Emit "CLEAN #$number green and up to date, but auto-merge is off - arming it."
+                        Enable-AutoMerge $pr | Out-Null
+                    }
+                    else {
+                        Emit "CLEAN #$number green and up to date - auto-merge should take it now."
+                    }
                 }
                 'WAITING' {
                     Emit "WAITING #$number ci-ok is running."
@@ -486,22 +590,53 @@ function Invoke-Fleet {
     $prs = $r.Out | ConvertFrom-Json
     if (-not $prs -or $prs.Count -eq 0) { Emit 'OK    no open pull requests'; exit 0 }
 
-    $needs = 0
+    # State is resolved ONCE per PR and carried, because Get-State asks gh about the checks
+    # for anything BLOCKED or UNSTABLE - recomputing it for the summary lines below doubled
+    # the API calls for a board that is meant to be cheap enough to run constantly.
+    $rows = @()
     foreach ($p in ($prs | Sort-Object number)) {
         $state = Get-State $p
-        $am = if ($p.autoMergeRequest) { 'auto' } else { '   -' }
-        $tag = if (Test-Foreign $p) { ' (release-please)' } else { '' }
-        Emit ("{0,-9} #{1,-4} {2} {3}{4}" -f $state, $p.number, $am, $p.headRefName, $tag)
-        if ($state -eq 'CONFLICT' -or $state -eq 'RED') { $needs++ }
+        # `gh pr list` does not make GitHub compute mergeability - only asking about a
+        # single PR does. Half this board came back UNKNOWN without this re-read.
+        if ($state -eq 'UNKNOWN') {
+            $fresh = Get-PrData $p.number
+            if ($fresh) { $p = $fresh; $state = Get-State $fresh }
+        }
+        $rows += [pscustomobject]@{ Pr = $p; State = $state }
     }
 
-    $behind = @($prs | Where-Object { (Get-State $_) -eq 'BEHIND' -and -not (Test-Foreign $_) })
-    if ($behind.Count -gt 0) { Emit "      $($behind.Count) BEHIND - clear them all with: pr-auto.ps1 sync -All" }
+    $needs = 0
+    foreach ($row in $rows) {
+        $p = $row.Pr
+        $am = if ($p.autoMergeRequest) { 'auto' } else { '   -' }
+        $tag = if (Test-Foreign $p) { ' (release PR - never armed)' }
+               elseif (-not (Test-Ours $p)) { ' (not a worktree branch - -All skips it)' }
+               else { '' }
+        Emit ("{0,-9} #{1,-4} {2} {3}{4}" -f $row.State, $p.number, $am, $p.headRefName, $tag)
+        if ($row.State -eq 'CONFLICT' -or $row.State -eq 'RED') { $needs++ }
+    }
+
+    # Both hints count only what `-All` would actually touch. Offering to fix five when the
+    # command will move three is how a release PR ends up looking like it was included.
+    $behind = @($rows | Where-Object { $_.State -eq 'BEHIND' -and (Test-Ours $_.Pr) })
+    if ($behind.Count -gt 0) { Emit "      $($behind.Count) BEHIND - clear them with: pr-auto.ps1 sync -All" }
+
+    # An unarmed PR is the quiet failure on this board: it can go all the way to green and
+    # then stop, looking exactly like one that is still building.
+    $unarmed = @($rows | Where-Object { -not $_.Pr.autoMergeRequest -and (Test-Ours $_.Pr) })
+    if ($unarmed.Count -gt 0) { Emit "      $($unarmed.Count) with auto-merge OFF - arm them with: pr-auto.ps1 arm -All" }
     if ($needs -gt 0) { Emit "      $needs need Claude (CONFLICT or RED)"; exit 3 }
     exit 0
 }
 
 # ----------------------------------------------------------------
+
+# PR_AUTO_TEST_NO_RUN is for pr-auto.test.ps1 only, and never set in real use. The test
+# dot-sources this file to reach Test-Foreign and Test-Ours as functions - they are pure,
+# and driving them through the CLI would need a live repo full of release PRs to assert on.
+# Returning here binds the param block and defines everything above without running an
+# action or requiring gh.
+if ($env:PR_AUTO_TEST_NO_RUN) { return }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Emit 'ERR   the GitHub CLI (gh) is not on PATH'
@@ -510,6 +645,7 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 
 switch ($Action) {
     'open'    { Invoke-Open }
+    'arm'     { Invoke-Arm }
     'status'  { Invoke-Status }
     'sync'    { Invoke-Sync }
     'resolve' { Invoke-Resolve }
