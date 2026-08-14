@@ -73,25 +73,60 @@ export function Submenu({
   const panelRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<SubmenuPlacement>(UNMEASURED);
 
-  // Measured after the commit and applied before the paint. The guard is not tidiness: an
-  // unconditional `setPlacement` would re-render this component on every open, and a re-render
-  // that reaches `children` is a `MenuLazy.Content` mounted twice. (It cannot, in fact — the
-  // element object is identical between renders, so React bails on the subtree — but the promise
-  // is worth holding at both ends.)
+  /**
+   * Measured after the commit, applied before the paint — **and measured again whenever the panel
+   * changes size**, which is the case a single reading structurally cannot cover.
+   *
+   * `MenuLazy` exists for bodies that fetch: "Add to ▸ Deck" draws `Loading decks…` while its
+   * queries are pending and then swaps in a whole folder tree. So the one reading taken at the
+   * commit that opened the panel is a reading of the *loading note*, and it decides a flip for a
+   * panel five times that size. `Submenu` does not re-render when the query resolves — React
+   * re-renders the body, which is this component's child — and `[open]` would not re-run the
+   * effect if it did. A panel opened at `top: 560` in an 800px window on 42px of note then spans
+   * 560–860 on 300px of decks, and the 60px past the edge holds real rows: there is no `max-h`, no
+   * `overflow-y` and no scroller anywhere in this module, and the ancestor is `fixed`, so nothing
+   * clips it and nothing can be scrolled to it.
+   *
+   * **A `ResizeObserver`, which the deck's stack view refuses on the grounds that "this view has
+   * no business observing its own box" — and that argument does not reach here.** It is about a
+   * *layout* view measuring the desk it lives in so as to lay itself out, where CSS already
+   * answers and a second reading lands a frame behind the layout it is reacting to. This is a
+   * floating popup measuring **itself**, to decide which side of a row it hangs off; nothing in
+   * CSS can express "flip if you would leave the window", and being a frame late is exactly the
+   * failure mode being fixed rather than one being introduced. It also cannot feed back: a flip
+   * writes `top-0`/`bottom-0` and `left-full`/`right-full`, which move the panel and change no
+   * dimension of it, so the observer has nothing to fire about.
+   *
+   * The first reading stays synchronous and stays here, ahead of the observer: `ResizeObserver`
+   * delivers its initial notification after the layout rather than during this effect, so leaning
+   * on it would trade the correction for a painted frame in the wrong place.
+   *
+   * The `setPlacement` guard is not tidiness: an unconditional write would re-render this
+   * component on every measurement, and a re-render that reaches `children` is a
+   * `MenuLazy.Content` mounted twice. (It cannot, in fact — the element object is identical
+   * between renders, so React bails on the subtree — but the promise is worth holding at both
+   * ends, and this effect takes far more readings than it used to.)
+   */
   useLayoutEffect(() => {
     const row = rowRef.current;
     const panel = panelRef.current;
     if (!open || !row || !panel) return;
-    // Both axes measured, and both clamped to the floor rather than *replaced* by it: a panel is
-    // measured after it mounts, and under jsdom every box reads a hard `0`.
-    const next = placeSubmenu(
-      row.getBoundingClientRect(),
-      Math.max(panel.offsetWidth, MENU_MIN_WIDTH),
-      Math.max(panel.offsetHeight, MENU_MIN_HEIGHT),
-    );
-    setPlacement((prev) =>
-      prev.position === next.position && prev.origin === next.origin ? prev : next,
-    );
+    const place = () => {
+      // Both axes measured, and both clamped to the floor rather than *replaced* by it: a panel is
+      // measured after it mounts, and under jsdom every box reads a hard `0`.
+      const next = placeSubmenu(
+        row.getBoundingClientRect(),
+        Math.max(panel.offsetWidth, MENU_MIN_WIDTH),
+        Math.max(panel.offsetHeight, MENU_MIN_HEIGHT),
+      );
+      setPlacement((prev) =>
+        prev.position === next.position && prev.origin === next.origin ? prev : next,
+      );
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    return () => observer.disconnect();
   }, [open]);
 
   // One rung of the Escape ladder per open panel, and the stack in `useDismissOnEscape` is what

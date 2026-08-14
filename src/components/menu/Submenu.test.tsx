@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { ContextMenuProvider } from "./ContextMenuProvider";
@@ -57,6 +58,41 @@ function restoreOffsets() {
   }
 }
 
+/**
+ * A `ResizeObserver` a test can fire, since neither jsdom nor `src/test-setup.ts` has one.
+ *
+ * The setup file's is a no-op stub — it exists so that `CardGrid`'s measuring effect does not
+ * throw — and a no-op cannot say "the box changed". This one records what was observed and lets
+ * {@link resized} deliver the notification a browser delivers after a layout in which the box did
+ * change, which is the one event jsdom can never produce on its own.
+ */
+const observers = new Set<TestResizeObserver>();
+
+class TestResizeObserver {
+  private readonly targets = new Set<Element>();
+  constructor(private readonly callback: ResizeObserverCallback) {
+    observers.add(this);
+  }
+  observe(target: Element) {
+    this.targets.add(target);
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+  disconnect() {
+    this.targets.clear();
+    observers.delete(this);
+  }
+  notify(target: Element) {
+    if (this.targets.has(target)) this.callback([], this as unknown as ResizeObserver);
+  }
+}
+
+/** The box changed. Entries are not passed on purpose: the placement re-measures the live DOM. */
+function resized(target: Element) {
+  for (const observer of observers) observer.notify(target);
+}
+
 function Host({ items }: { items: MenuItem[] }) {
   const { menu } = useContextMenu();
   return <button onContextMenu={menu(() => items)}>target</button>;
@@ -102,10 +138,13 @@ beforeEach(() => {
   statedViewport(1280, 800);
   statedSubmenuBox(MENU_MIN_WIDTH, MENU_MIN_HEIGHT);
   stateOffsets();
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
 });
 
 afterEach(() => {
   restoreOffsets();
+  observers.clear();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -142,5 +181,54 @@ describe("Submenu placement", () => {
     // Whole literals, because Tailwind scans source text for class names — and the corner it is
     // pinned by is the corner it grows from, which is the app's anchored-popup rule.
     expect(panel).toHaveClass("right-full", "top-0", "origin-top-right");
+  });
+
+  /**
+   * The vertical flip, re-decided when the panel that was measured stops being the panel drawn.
+   *
+   * `MenuLazy` exists precisely for bodies that fetch — "Add to ▸ Deck" draws a loading note while
+   * `useDecks()`/`useDeckFolders()` are pending and then swaps in the whole folder tree — so the
+   * one measurement taken at the commit that opened the panel is a measurement of the *note*.
+   * `Submenu` does not re-render when the query resolves (React re-renders the body, which is its
+   * child), and `[open]` would not re-run the effect if it did, so nothing ever asked again.
+   *
+   * Here that is a panel spanning 560–860 in an 800px window: `bottom-0` was the right answer from
+   * the moment the decks arrived, and the 60px hanging past the edge holds real rows. There is no
+   * `max-h`, no `overflow-y` and no scroller anywhere in the module, and the ancestor is `fixed`,
+   * so those rows are unreachable by pointer and by caret alike.
+   */
+  it("re-places a submenu when its lazy body has finished loading", () => {
+    const loader: { load?: () => void } = {};
+    function Content() {
+      const [loaded, setLoaded] = useState(false);
+      useEffect(() => {
+        loader.load = () => setLoaded(true);
+      }, []);
+      return loaded ? (
+        <div role="menuitem" tabIndex={-1}>
+          Atraxa Superfriends
+        </div>
+      ) : (
+        <p>Loading decks…</p>
+      );
+    }
+    openMenu([{ kind: "lazy", id: "add-deck", label: "Deck", Content }]);
+
+    // The root panel has flipped up off a right-click low on the wall, so the row sits at 560.
+    // One loading note is 42px, and 560 + 42 + 8 fits — which is the whole of what was measured.
+    const panel = expandRow(/Deck/, { left: 40, top: 560, right: 264, bottom: 592 });
+    expect(panel).toHaveClass("left-full", "top-0", "origin-top-left");
+
+    // The decks arrive and the panel grows to 300. jsdom computes no layout, so the growth is
+    // stated and the notification delivered by hand — the browser's own next step after a box
+    // changes size, and the one thing jsdom will never do on its own.
+    act(() => {
+      loader.load?.();
+      statedSubmenuBox(MENU_MIN_WIDTH, 300);
+      resized(panel);
+    });
+    expect(screen.getByRole("menuitem", { name: "Atraxa Superfriends" })).toBeInTheDocument();
+
+    expect(panel).toHaveClass("left-full", "bottom-0", "origin-bottom-left");
   });
 });
