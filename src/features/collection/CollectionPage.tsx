@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
+import { isFinish } from "@/lib/finish";
 import { ipc, ipcError, type CollectionPage as Page, type CollectionRow } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
@@ -15,6 +19,63 @@ import { useCollection, type Collection } from "./useCollection";
 /** One tile of the wall: a card, and how many copies of it the collection holds. */
 interface CollectionTile extends GridCard {
   copies: number;
+  /** Carried for the right-click menu alone — nothing on the wall draws it. A menu add is
+   *  filed by what the card *does*, exactly as a drag of the same card is. */
+  typeLine: string | null;
+}
+
+/**
+ * The card a right-click on an **entry** is about.
+ *
+ * **A collection row is a finish** — it is one of the ten columns the row's identity is made
+ * of — so the menu names it rather than asking. The `isFinish` guard is not ceremony:
+ * `collection_entries.finish` is TEXT with a CHECK rather than an enum this side knows, so a
+ * row can spell something this build has never heard of, and an unrecognised word must not
+ * arrive at the backend as a finish.
+ *
+ * `oracleId` is `null` because **a collection row carries none** — `collection_list` does not
+ * select it — so "View all printings" is drawn greyed here. That is the honest answer this
+ * surface can give; the reason the menu prints beside it is not (see the note in
+ * `CollectionPage`'s wiring).
+ *
+ * `finishes` is `null` for the same reason: the row says which finish the reader *holds*, never
+ * which ones the printing exists in.
+ */
+function rowTarget(row: CollectionRow): CardMenuTarget {
+  return {
+    cardId: row.cardId,
+    // An orphaned entry has no name — `cards` does not know this printing any more — and the
+    // set and number beside it are the entry's own columns, copied at write time for exactly
+    // this. The same fallback the wall's tiles use.
+    name: row.name ?? `${row.setCode.toUpperCase()} ${row.collectorNumber}`,
+    setCode: row.setCode,
+    collectorNumber: row.collectorNumber,
+    oracleId: null,
+    finishes: null,
+    finish: isFinish(row.finish) ? row.finish : undefined,
+    typeLine: row.typeLine,
+  };
+}
+
+/**
+ * The card a right-click on a **tile** is about.
+ *
+ * The one place this differs from {@link rowTarget} is the field that is missing: a tile is a
+ * *card*, summed over every entry behind one printing, so a foil and a played nonfoil are one
+ * piece of art and there is no single finish to name. With no printing's finish list either
+ * (a collection row carries none), the menu's own rule applies — unknown means nonfoil — and
+ * an add from the wall records a plain copy.
+ */
+function tileTarget(tile: CollectionTile): CardMenuTarget {
+  return {
+    cardId: tile.id,
+    name: tile.name,
+    setCode: tile.setCode,
+    collectorNumber: tile.collectorNumber,
+    oracleId: null,
+    finishes: null,
+    typeLine: tile.typeLine,
+  };
 }
 
 /**
@@ -188,6 +249,7 @@ export function CollectionPage() {
         collectorNumber: row.collectorNumber,
         rarity: row.rarity,
         copies: copies.get(row.cardId) ?? 0,
+        typeLine: row.typeLine,
       });
     }
     return out;
@@ -203,6 +265,30 @@ export function CollectionPage() {
     warmed.current = true;
     void ipc.prewarmCollection().catch(() => {});
   }, [rows.length]);
+
+  /**
+   * The right-click menu, as one object for the whole page — the table's rows and the wall's
+   * tiles are two drawings of one collection, and a menu whose writes differed between them
+   * would be two answers to one question.
+   *
+   * **"View all printings" is greyed on every row and tile here**, because `collection_list`
+   * answers no `oracle_id` and the menu's fence is on that field. The sentence it prints
+   * beside the greyed row — "this printing has left the card database" — is the fence's own
+   * and is wrong about this surface: the printing is fine, the *list* simply does not carry
+   * the id. Fixing it is a column on `CollectionRow`, which is a backend change.
+   */
+  const { menu } = useContextMenu();
+  const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  /** One row's handler. The item list is a **thunk** inside `menu`, so a list of a thousand
+   *  pays for nothing until a reader actually right-clicks one of them. */
+  const rowMenu = useCallback(
+    (row: CollectionRow) => menu(() => buildCardMenu(rowTarget(row), menuDeps)),
+    [menu, menuDeps],
+  );
+  const tileMenu = useCallback(
+    (tile: CollectionTile) => menu(() => buildCardMenu(tileTarget(tile), menuDeps)),
+    [menu, menuDeps],
+  );
 
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write, not either of them: with `isError` on both, a refused stepper press
@@ -297,6 +383,27 @@ export function CollectionPage() {
           )}
         </AnimatePresence>
 
+        {/* A write the right-click menu started and the backend refused. Its own banner rather
+            than a line in the one above: that one is about the list's own controls — a stepper
+            press, a removal — and this one is about a card the reader filed somewhere from a
+            menu that has already closed.
+
+            It has to be here at all because the menu cannot report it. `ctx.run` closes the
+            panel before a row's handler runs, so by the time an answer arrives there is no menu
+            left to put a sentence in. */}
+        <AnimatePresence initial={false}>
+          {menuFailure && (
+            <motion.div {...statusLine} className="overflow-hidden">
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                {menuFailure}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {!empty &&
           (view === "grid" ? (
             <CardGrid
@@ -317,6 +424,8 @@ export function CollectionPage() {
               // what is wanted. A tile at zero copies draws nothing, which is the badge's
               // own guard and the reason this view no longer has a badge of its own.
               badge={(tile) => <OwnedBadge owned={tile.copies} />}
+              // The whole tile is the target: the art, its badge and the caption.
+              cardMenu={tileMenu}
             />
           ) : (
             <>
@@ -329,6 +438,7 @@ export function CollectionPage() {
                 onNeedNextPage={onNeedNextPage}
                 onSetQuantity={onSetQuantity}
                 onRemove={onRemove}
+                rowMenu={rowMenu}
                 marketplace={marketplace}
               />
               {/* The one thing about this table a reader cannot see: removal is offered on a

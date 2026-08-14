@@ -1,4 +1,9 @@
-import { useEffect, useRef, type ComponentProps } from "react";
+import {
+  useEffect,
+  useRef,
+  type ComponentProps,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { Trash2 } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
@@ -297,6 +302,7 @@ export function CollectionTable({
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  rowMenu,
   marketplace,
 }: {
   rows: CollectionRow[];
@@ -311,6 +317,15 @@ export function CollectionTable({
   onNeedNextPage: () => void;
   onSetQuantity: (row: CollectionRow, quantity: number) => void;
   onRemove: (row: CollectionRow) => void;
+  /**
+   * What a row offers on a right-click — a ready-made `onContextMenu` handler, one per row.
+   *
+   * A prop rather than a hook here, for the reason the two callbacks above it are props: a
+   * menu's rows are *writes*, and the writes belong to the page that owns this list's cache.
+   * Absent leaves the rows without one, which is what every story and every other consumer of
+   * this table gets.
+   */
+  rowMenu?: (row: CollectionRow) => (e: ReactMouseEvent) => void;
   /** Which marketplace the Value column quotes. Passed rather than read here so the table and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
@@ -342,8 +357,17 @@ export function CollectionTable({
       // disappearing (see the stepper's contract).
       rowClassName={(row) => (row.quantity === 0 ? "text-dim" : undefined)}
       onNeedNextPage={onNeedNextPage}
+      // A right-click is not an activation: `onActivate` above is a left click and the two
+      // keys, and neither of them fires for this one — so the menu asks about the row without
+      // also opening the card in the pane.
       renderRow={(props, row) => (
-        <DraggableRow cardId={row.cardId} name={row.name} typeLine={row.typeLine} {...props} />
+        <DraggableRow
+          cardId={row.cardId}
+          name={row.name}
+          typeLine={row.typeLine}
+          {...props}
+          onContextMenu={rowMenu?.(row)}
+        />
       )}
     />
   );

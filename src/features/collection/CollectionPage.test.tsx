@@ -21,6 +21,10 @@ const prewarmCollection = vi.hoisted(() => vi.fn());
 /** Which marketplace the Value column and the header figure quote. An unmocked command is a
  *  rejected query that silently resolves to the default, so it is answered explicitly. */
 const getMarketplace = vi.hoisted(() => vi.fn());
+// What the row's own context menu writes. Both are real `invoke`s, so an unmocked one is a
+// rejection about a missing Tauri runtime rather than a call anything here could read.
+const collectionAdd = vi.hoisted(() => vi.fn());
+const wishlistAdd = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -28,6 +32,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionSummary,
     collectionSetQuantity,
     collectionRemove,
+    collectionAdd,
+    wishlistAdd,
     listSets,
     prewarmCollection,
     getMarketplace,
@@ -35,6 +41,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CollectionPage } from "./CollectionPage";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useAppStore } from "@/lib/store";
 
 const BOLT: CollectionRow = {
@@ -107,12 +114,34 @@ const lastQuery = () =>
  */
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
+/**
+ * The page, under the two providers `App` mounts above it.
+ *
+ * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
+ * is above it (so that thirteen surfaces stay renderable on their own), which means a page
+ * rendered bare would open nothing and pass every menu assertion below by never being asked.
+ */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return {
     client,
-    ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
+    ...render(
+      <QueryClientProvider client={client}>
+        <ContextMenuProvider>{ui}</ContextMenuProvider>
+      </QueryClientProvider>,
+    ),
   };
+}
+
+/**
+ * A right-click, and nothing awaited.
+ *
+ * A real `MouseEvent` rather than `fireEvent.contextMenu`, because the handler reads
+ * `clientX`/`clientY` to place the panel — and `bubbles`, because the surface's handler is on
+ * the row or the tile, never on the cell the pointer happened to be over.
+ */
+function rightClick(element: HTMLElement): void {
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
 /**
@@ -127,6 +156,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  collectionAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
+  wishlistAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   collectionList.mockReset().mockResolvedValue(page([BOLT]));
   collectionSummary.mockReset().mockResolvedValue(summary({ totalCards: 2, uniqueCards: 1 }));
   collectionSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 3, removed: false });
@@ -729,5 +760,84 @@ describe("CollectionPage", () => {
     // And no corner either: the backing collapses on a mark that rendered nothing, so a wall
     // of unowned tiles is not a wall of empty chips. (`CardGrid`'s own test pins the rule.)
     expect(container.querySelector('[class*="bg-bg/85"]')).toBeEmptyDOMElement();
+  });
+});
+
+/**
+ * The card menu, over both of this view's layouts.
+ *
+ * The two are one surface as far as the menu is concerned — one `CardMenuDeps` for the page —
+ * but they are **not** one adapter: a table row is an entry and therefore *is* a finish, while
+ * a tile is a card the reader may hold in two of them. That difference is what the two writes
+ * below are about; the panel's own markup is `ContextMenu.test.tsx`'s subject.
+ */
+describe("the card menu", () => {
+  it("opens on a right-click of a row, without opening the card", async () => {
+    wrap(<CollectionPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    rightClick(row);
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    // The pane belongs to a left click; a right-click asks a question about the row. `App`
+    // owns the pane, so the store is the whole of what opening the card means from here —
+    // asserting on a `complementary` this page never renders would be an assertion that
+    // cannot fail.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * A collection row *is* a finish — it is one of the ten columns its identity is made of — so
+   * the menu does not ask. `BOLT` is the foil entry, and a nonfoil copy recorded from it would
+   * be a different row in the same table.
+   */
+  it("adds the row's own finish without asking", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    // An action, not a submenu: the surface named the finish.
+    expect(collection).not.toHaveAttribute("aria-haspopup", "menu");
+
+    await user.click(collection);
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "c1",
+        finish: "foil",
+        condition: "NM",
+        quantity: 1,
+      }),
+    );
+  });
+
+  /**
+   * The wall's tile is a *card* — `CollectionPage` sums the entries behind one printing into
+   * one piece of art — so unlike the row it names no finish, and the printing's own list is
+   * not on a collection row either. Nonfoil is what an unknown list means everywhere in this
+   * app, and it is what a tile adds.
+   */
+  it("opens on a tile of the wall, which names no finish", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "c1",
+        finish: "nonfoil",
+        condition: "NM",
+        quantity: 1,
+      }),
+    );
+    expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 });
