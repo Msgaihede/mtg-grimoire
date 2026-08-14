@@ -481,8 +481,11 @@ export function deckCardMenuProps(
  *
  * **The handlers go on the view's own group element and never on `GroupHeader`, and that is a
  * layer decision rather than a preference.** `CategoriesDialog` draws that same component in
- * every one of its rows, *inside* a `DeckDialog` — which is `LAYER.overlay`, `z-45`, over a
- * scrim. `ContextMenu` draws at `LAYER.popup`, `z-30`. So a right-click wired onto the shared
+ * every one of its rows, *inside* a `DeckDialog` — which is `LAYER.overlay`, 45, over a scrim.
+ * `ContextMenu` draws at `LAYER.popup`, 30. (Named rather than spelled as classes: Tailwind's
+ * scanner reads a comment as eagerly as code, so a bare utility written here is a rule the build
+ * emits — which is why `layers.test.ts` sweeps prose too, and why it went red for this comment.)
+ * So a right-click wired onto the shared
  * header would open a menu **behind the dialog's own scrim**: invisible, unreachable, and
  * nothing would go red, because a z-index is not something jsdom has an opinion about.
  * `layers.ts` names that exact overlap as the one that must not exist ("a right-clickable

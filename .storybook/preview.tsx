@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import type { Decorator, Preview } from "@storybook/react-vite";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
 import { setArtMode } from "./fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
@@ -146,10 +148,28 @@ const withFake: Decorator = (Story, context) => {
   // The suite's other half of the story wiring — `MotionGlobalConfig.skipAnimations` — is
   // deliberately *not* here: this file is also the real Storybook browser, where the reader is
   // meant to see the motion. It lives in `src/test-setup.ts`.
+  //
+  // The two menu providers stand in for `src/App.tsx`'s the same way, and in its order —
+  // `CardToDeckProvider` outside `ContextMenuProvider`, because that provider draws its panel as
+  // a **sibling** of its children, so a card-to-deck context mounted inside it would be around
+  // every view and around none of the menu's own rows. **Inside `FakeWorld`**, which is what
+  // supplies the `QueryClientProvider` both of them need.
+  //
+  // `AppShell` is what forced this rather than a menu story: it consumes the refusal hook
+  // directly, so it *throws* without the outer provider and every one of its stories went red at
+  // once. That is the contract working — but the workbench's job is to stand in for the app, so
+  // the answer is to mount what the app mounts, not to soften the throw. `ContextMenuProvider`
+  // comes along because a workbench where no story can open a menu is the wrong workbench;
+  // `ContextMenu.stories.tsx` keeps its own local pair, which nests harmlessly and is that file's
+  // actual subject.
   return (
     <MotionConfig reducedMotion="user">
       <FakeWorld params={(context.parameters.fake ?? {}) as FakeParams} viewMode={context.viewMode}>
-        <Story />
+        <CardToDeckProvider>
+          <ContextMenuProvider>
+            <Story />
+          </ContextMenuProvider>
+        </CardToDeckProvider>
       </FakeWorld>
     </MotionConfig>
   );
