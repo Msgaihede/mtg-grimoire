@@ -7,6 +7,28 @@ import {
 } from "react";
 import type { MenuItem, MenuPosition } from "./types";
 
+/**
+ * Where WebView2's own menu survives.
+ *
+ * Cut, copy, paste, undo and spellcheck suggestions are things we cannot rebuild, so a text field
+ * keeps the browser's. Everywhere else the native menu is suppressed — an app that offers
+ * "Reload" and "View source" on a right-click is leaking browser chrome into a desktop window.
+ *
+ * `closest` rather than a tag test, because the press lands on whatever is under the pointer and
+ * a `contenteditable` region is a tree: a right-click on a `<strong>` inside one is a right-click
+ * in a text field.
+ *
+ * **It lives here rather than with the document suppressor that was its first caller**, because
+ * both ends of the rule need it and only one of them can own it: `ContextMenuProvider` already
+ * imports the context from this module, so the reverse import would be a cycle. It is also the
+ * honest home — this file owns what a right-click handler does to an event, and this is the one
+ * case where the answer is "nothing at all".
+ */
+export function isTextField(el: EventTarget | null): boolean {
+  if (!(el instanceof Element)) return false;
+  return el.closest("input, textarea, [contenteditable=''], [contenteditable='true']") !== null;
+}
+
 /** What the provider hands every surface: open a menu, close the one that is open. */
 export interface ContextMenuApi {
   openMenu: (items: MenuItem[], at: MenuPosition, opener: HTMLElement | null) => void;
@@ -60,6 +82,17 @@ export interface ContextMenuHandles extends ContextMenuApi {
  * **An empty item list is not a menu**: the handler leaves the event alone and the reader gets the
  * provider's plain suppression instead of an empty box. A builder that has nothing to offer for a
  * particular target says so by returning `[]`.
+ *
+ * ## Why the text-field test is here and not only on the suppressor
+ *
+ * A surface's `menu()` handler sits on a **row**, and rows contain fields: `QuantityStepper` is an
+ * `<input>` inside the collection and deck tables' rows, and `FolderTree` puts one inside a deck
+ * node. A right-click in one of those bubbles to the row's handler — and that handler's own
+ * `preventDefault()` plus `stopPropagation()` means the provider's document-level test never runs
+ * and never gets to save it. So the field would lose cut, copy, paste, undo and its spellcheck
+ * suggestions and get a card menu instead. The test belongs in the primitive rather than in
+ * thirteen callers, because a caller that forgets it produces a bug nobody can see from the call
+ * site.
  */
 export function useContextMenu(): ContextMenuHandles {
   const api = useContext(ContextMenuContext);
@@ -68,6 +101,8 @@ export function useContextMenu(): ContextMenuHandles {
     const menu =
       (build: () => MenuItem[]) =>
       (e: ReactMouseEvent): void => {
+        // Before `build()`, so a right-click in a field does not even pay for the item list.
+        if (isTextField(e.target)) return;
         const items = build();
         if (items.length === 0) return;
         e.preventDefault();
@@ -81,6 +116,9 @@ export function useContextMenu(): ContextMenuHandles {
         // The two presses Windows spells "open the context menu" with: the dedicated key, and
         // Shift+F10 for the keyboards that do not have one.
         if (e.key !== "ContextMenu" && !(e.key === "F10" && e.shiftKey)) return;
+        // The same carve-out from the keyboard: with the caret in a field, Shift+F10 is how a
+        // reader without a mouse reaches cut, copy and paste.
+        if (isTextField(e.target)) return;
         const items = build();
         if (items.length === 0) return;
         e.preventDefault();

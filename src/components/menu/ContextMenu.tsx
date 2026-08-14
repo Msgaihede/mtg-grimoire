@@ -16,7 +16,6 @@ import { Submenu } from "./Submenu";
 import {
   MENU_MIN_HEIGHT,
   MENU_MIN_WIDTH,
-  OWN_ROW_BUTTON_SELECTOR,
   PANEL_CLASS,
   ROW_CLASS,
   ROW_SELECTOR,
@@ -26,6 +25,7 @@ import {
   panelAtDepth,
   panelOf,
   placeMenu,
+  rowButtonOf,
 } from "./panel";
 import type { MenuAction, MenuItem, MenuPosition, MenuRadio } from "./types";
 
@@ -77,6 +77,12 @@ function ActionRow({ item, run }: { item: MenuAction; run: RowsContext["run"] })
       type="button"
       role="menuitem"
       tabIndex={-1}
+      // Both row attributes on one element, because a plain row *is* its button — where a submenu
+      // row is a box holding a button and a panel. The pointer and the caret find every row by
+      // `ROW_ATTR` and neither cares which shape it got; `rowButtonOf` is the one place that does.
+      // Without this the hover handler cannot resolve a plain row at all, and a submenu opened by
+      // hover stays open while the pointer sweeps past it to the row below.
+      data-menu-row={item.id}
       data-menu-row-button=""
       // `aria-disabled`, and never the `disabled` attribute. A `disabled` button leaves the tab
       // order and stops being announced, and the greyed "Set as commander" row exists to be read:
@@ -105,6 +111,8 @@ function RadioRow({ item, run }: { item: MenuRadio; run: RowsContext["run"] }) {
       type="button"
       role="menuitemradio"
       tabIndex={-1}
+      // See `ActionRow`: a plain row carries both attributes, and the hover handler needs it.
+      data-menu-row={item.id}
       data-menu-row-button=""
       aria-checked={item.checked}
       onClick={() => run(item.onSelect)}
@@ -374,10 +382,8 @@ export function ContextMenu({
         if (depth === 0) return;
         e.preventDefault();
         // Focus first, while the row this panel hangs off is still on screen, then close.
-        panel
-          .closest<HTMLElement>(ROW_SELECTOR)
-          ?.querySelector<HTMLElement>(OWN_ROW_BUTTON_SELECTOR)
-          ?.focus();
+        const parentRow = panel.closest<HTMLElement>(ROW_SELECTOR);
+        if (parentRow) rowButtonOf(parentRow)?.focus();
         ctx.closeSubmenu(depth - 1);
         return;
       }
@@ -403,8 +409,10 @@ export function ContextMenu({
     const id = row?.dataset.menuRow;
     if (!row || !panel || id === undefined) return;
     const depth = depthOf(panel);
-    const opens =
-      row.querySelector(OWN_ROW_BUTTON_SELECTOR)?.getAttribute("aria-haspopup") === "menu";
+    const opens = rowButtonOf(row)?.getAttribute("aria-haspopup") === "menu";
+    // A row that opens nothing closes whatever the row above it opened — the second half of
+    // "the pointer is pointing at this now", and the half that was unreachable while plain rows
+    // carried no row attribute for the sweep above to find.
     const next = opens ? [...openPath.slice(0, depth), id] : openPath.slice(0, depth);
     clearHover();
     if (samePath(next, openPath)) return;

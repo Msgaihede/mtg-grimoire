@@ -37,6 +37,7 @@ export const ROW_BUTTON_ATTR = "data-menu-row-button";
  */
 export const PANEL_SELECTOR = "[data-menu-panel]";
 export const ROW_SELECTOR = "[data-menu-row]";
+export const ROW_BUTTON_SELECTOR = "[data-menu-row-button]";
 /** A row's own control, and never one nested inside its submenu — hence the `:scope >`. */
 export const OWN_ROW_BUTTON_SELECTOR = ":scope > [data-menu-row-button]";
 /** Everything the caret may land on. `menuitemradio` is a row too; a separator never is. */
@@ -151,6 +152,19 @@ export function placeSubmenu(row: DOMRect, height: number): SubmenuPlacement {
         : "left-full top-0",
     origin: ORIGIN[upward ? "bottom" : "top"][toLeft ? "right" : "left"],
   };
+}
+
+/**
+ * A row's focusable control.
+ *
+ * The two shapes of row are not symmetric and cannot be. A plain row **is** its button; a submenu
+ * row is a box holding a button *and* the panel it opens, because that panel is positioned in the
+ * cascade against it. Both carry `ROW_ATTR` — that is what lets the pointer and the caret treat
+ * them alike — so this is the one place that has to know which of the two it is looking at.
+ */
+export function rowButtonOf(row: HTMLElement): HTMLElement | null {
+  if (row.matches(ROW_BUTTON_SELECTOR)) return row;
+  return row.querySelector<HTMLElement>(OWN_ROW_BUTTON_SELECTOR);
 }
 
 /** The panel a node is drawn in, or `null` for a node outside every menu. */

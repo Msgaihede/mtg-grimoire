@@ -1,6 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { SUBMENU_HOVER_MS } from "./ContextMenu";
 import { ContextMenuProvider } from "./ContextMenuProvider";
 import { useContextMenu } from "./useContextMenu";
 import type { MenuItem } from "./types";
@@ -29,7 +30,25 @@ function open(items: MenuItem[]) {
   );
 }
 
+/**
+ * The right-click the tests above open with, as one line — and inside `act`.
+ *
+ * A raw `dispatchEvent` is not flushed synchronously: React queues the update and the assertion
+ * on the next line runs against the render before it, which is why every test above has to
+ * `await findByRole`. Wrapping the dispatch lets the panel be asserted on immediately, and that
+ * is not a convenience — the hover test below runs on fake timers, where `findBy*`'s own polling
+ * has nothing real left to poll with.
+ */
+function rightClick(el: Element, at?: { clientX: number; clientY: number }) {
+  const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...at });
+  act(() => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
+
 beforeEach(() => statedViewport(1280, 800));
+afterEach(() => vi.useRealTimers());
 
 describe("ContextMenu", () => {
   it("opens on right-click and suppresses the native menu", async () => {
@@ -220,16 +239,14 @@ describe("ContextMenu", () => {
   it("flips up when it would overflow the stated viewport height", async () => {
     statedViewport(1280, 800);
     open([{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]);
-    screen
-      .getByRole("button", { name: "target" })
-      .dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          clientX: 40,
-          clientY: 790,
-        }),
-      );
+    screen.getByRole("button", { name: "target" }).dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 40,
+        clientY: 790,
+      }),
+    );
 
     const panel = await screen.findByRole("menu");
     expect(panel).toHaveClass("origin-bottom-left");
@@ -249,23 +266,33 @@ describe("ContextMenu", () => {
    * `innerWidth`. 900 + 224 + 8 is 1132 — under 1280 and over 1024. Reading the wrong width flips
    * a menu that had 356px of room, and this is the only test in the file that would go red for it.
    */
-  it("measures the room against the stated viewport and not against innerWidth", async () => {
+  it("measures the room to the right against the stated viewport, not innerWidth", async () => {
     expect(window.innerWidth).toBeLessThan(1280);
     open([{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]);
-    screen
-      .getByRole("button", { name: "target" })
-      .dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          clientX: 900,
-          clientY: 40,
-        }),
-      );
+    rightClick(screen.getByRole("button", { name: "target" }), { clientX: 900, clientY: 40 });
 
     const panel = await screen.findByRole("menu");
     expect(panel).toHaveClass("origin-top-left");
     expect(Number.parseFloat(panel.style.left)).toBe(900);
+  });
+
+  /**
+   * The same trap on the other axis, which the first version of this file left open.
+   *
+   * `clientY: 790` in the flip-up test above is 840 once the panel and the gutter are counted —
+   * over the stated 800 *and* over jsdom's `innerHeight` of 768 — so it flips either way and says
+   * nothing at all about which height was read. This one is `740`: 790 fits inside the stated
+   * viewport and overflows jsdom's, so reading the wrong one flips a menu that had room.
+   * `clientX: 40` keeps the other axis out of it — 272 is under both widths.
+   */
+  it("measures the room below against the stated viewport, not innerHeight", async () => {
+    expect(window.innerHeight).toBeLessThan(800);
+    open([{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]);
+    rightClick(screen.getByRole("button", { name: "target" }), { clientX: 40, clientY: 740 });
+
+    const panel = await screen.findByRole("menu");
+    expect(panel).toHaveClass("origin-top-left");
+    expect(Number.parseFloat(panel.style.top)).toBe(740);
   });
 
   it("a second right-click replaces rather than stacking", async () => {
@@ -304,6 +331,160 @@ describe("ContextMenu", () => {
     // A WebView2 menu offering "Reload" and "View source" does not belong in a desktop app.
     expect(event.defaultPrevented).toBe(true);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The text-field carve-out at the end the document suppressor cannot reach.
+   *
+   * A surface's `menu()` handler sits on a **row**, and rows contain fields — `QuantityStepper` is
+   * an `<input>` inside the collection and deck tables' rows, and `FolderTree` puts one inside a
+   * deck node, both of which are surfaces a later task wires. A right-click in one of those
+   * bubbles to the row's handler, which `preventDefault()`s and `stopPropagation()`s, so the
+   * provider's own test never runs and never gets the chance to save it. The field would lose
+   * cut, copy, paste, undo and its spellcheck suggestions and get a card menu in their place.
+   */
+  it("leaves the native menu alone in a field inside a surface that has a menu", () => {
+    const onSelect = vi.fn();
+    function RowHost() {
+      const { menu } = useContextMenu();
+      return (
+        <div onContextMenu={menu(() => [{ kind: "action", id: "a", label: "First", onSelect }])}>
+          <input aria-label="quantity" />
+          <span data-testid="rest-of-row">Lightning Bolt</span>
+        </div>
+      );
+    }
+    render(
+      <ContextMenuProvider>
+        <RowHost />
+      </ContextMenuProvider>,
+    );
+
+    const inField = rightClick(screen.getByLabelText("quantity"));
+    expect(inField.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // ...and the rest of the same row still gets the app's menu, so the carve-out is a carve-out
+    // and not a surface that quietly opted out.
+    const inRow = rightClick(screen.getByTestId("rest-of-row"));
+    expect(inRow.defaultPrevented).toBe(true);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  /**
+   * Hover, both halves. Plain React state and a `setTimeout`, so fake timers test it exactly.
+   *
+   * The closing half is the one that was unreachable: while only submenu rows carried the row
+   * attribute, a pointer sweeping from "Open on" down to "Copy card name" resolved to no row at
+   * all and returned, leaving the submenu hanging beside the panel until Escape or an outside
+   * press.
+   */
+  it("opens a submenu under a resting pointer and closes it when the pointer moves on", () => {
+    vi.useFakeTimers();
+    open([
+      {
+        kind: "submenu",
+        id: "open-on",
+        label: "Open on",
+        items: [{ kind: "action", id: "sf", label: "Scryfall", onSelect: vi.fn() }],
+      },
+      { kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() },
+    ]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // `fireEvent.pointerOver` rather than `user.hover`: user-event's own waits deadlock against
+    // vitest's fake clock, and `pointerover` is the event the panel actually listens for anyway —
+    // React synthesises enter/leave from over/out and does not listen for `pointerenter` at all.
+    // `QuickAdd` carries the same note about the same pair.
+    fireEvent.pointerOver(screen.getByRole("menuitem", { name: /Open on/ }));
+    // A pointer passing over a row is not a pointer pointing at it.
+    expect(screen.queryByRole("menuitem", { name: "Scryfall" })).not.toBeInTheDocument();
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
+    expect(screen.getByRole("menuitem", { name: "Scryfall" })).toBeInTheDocument();
+
+    fireEvent.pointerOver(screen.getByRole("menuitem", { name: "Copy card name" }));
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
+    expect(screen.queryByRole("menuitem", { name: "Scryfall" })).not.toBeInTheDocument();
+  });
+
+  it("takes Home and End to the ends of the list", async () => {
+    const user = userEvent.setup();
+    open([
+      { kind: "action", id: "a", label: "First", onSelect: vi.fn() },
+      { kind: "action", id: "b", label: "Second", onSelect: vi.fn() },
+      { kind: "action", id: "c", label: "Third", onSelect: vi.fn() },
+    ]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    await screen.findByRole("menu");
+
+    await user.keyboard("{End}");
+    expect(screen.getByRole("menuitem", { name: "Third" })).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("menuitem", { name: "First" })).toHaveFocus();
+  });
+
+  /**
+   * The keyboard's own way in. Both presses Windows spells "open the context menu" with, and the
+   * anchor, which cannot come from a pointer that was never there — `0, 0` would open every one of
+   * these in the corner of the window rather than under the thing they are about.
+   *
+   * jsdom has no layout, so the trigger's box is stated the way the viewport is.
+   */
+  describe("menuKey", () => {
+    function KeyHost({ items }: { items: MenuItem[] }) {
+      const { menuKey } = useContextMenu();
+      return <button onKeyDown={menuKey(() => items)}>target</button>;
+    }
+
+    function openByKey() {
+      render(
+        <ContextMenuProvider>
+          <KeyHost items={[{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]} />
+        </ContextMenuProvider>,
+      );
+      const trigger = screen.getByRole("button", { name: "target" });
+      vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+        left: 120,
+        top: 200,
+        right: 300,
+        bottom: 232,
+        width: 180,
+        height: 32,
+        x: 120,
+        y: 200,
+        toJSON: () => ({}),
+      });
+      return trigger;
+    }
+
+    it("opens on Shift+F10, at the trigger's bottom-left", async () => {
+      const user = userEvent.setup();
+      const trigger = openByKey();
+      trigger.focus();
+
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+
+      const panel = await screen.findByRole("menu");
+      expect(Number.parseFloat(panel.style.left)).toBe(120);
+      expect(Number.parseFloat(panel.style.top)).toBe(232);
+    });
+
+    // `fireEvent` rather than `userEvent` for this one: the ContextMenu key is not in
+    // user-event's keyboard map, and `{ContextMenu}` throws "Unknown key" rather than pressing it.
+    it("opens on the ContextMenu key", async () => {
+      const trigger = openByKey();
+      fireEvent.keyDown(trigger, { key: "ContextMenu" });
+
+      expect(await screen.findByRole("menu")).toBeInTheDocument();
+    });
+
+    it("leaves F10 alone without Shift", () => {
+      const trigger = openByKey();
+      fireEvent.keyDown(trigger, { key: "F10" });
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
   });
 
   /**

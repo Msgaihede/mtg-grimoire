@@ -1,24 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
 import { ContextMenu } from "./ContextMenu";
-import { ContextMenuContext, type ContextMenuApi } from "./useContextMenu";
+import { ContextMenuContext, isTextField, type ContextMenuApi } from "./useContextMenu";
 import type { MenuItem, MenuPosition } from "./types";
-
-/**
- * Where WebView2's own menu survives.
- *
- * Cut, copy, paste, undo and spellcheck suggestions are things we cannot rebuild, so a text field
- * keeps the browser's. Everywhere else the native menu is suppressed — an app that offers
- * "Reload" and "View source" on a right-click is leaking browser chrome into a desktop window.
- *
- * `closest` rather than a tag test, because the press lands on whatever is under the pointer and
- * a `contenteditable` region is a tree: a right-click on a `<strong>` inside one is a right-click
- * in a text field.
- */
-export function isTextField(el: EventTarget | null): boolean {
-  if (!(el instanceof Element)) return false;
-  return el.closest("input, textarea, [contenteditable=''], [contenteditable='true']") !== null;
-}
 
 /** The one menu that is open, if any. */
 interface OpenMenu {
@@ -39,7 +23,10 @@ interface OpenMenu {
  *    a reader expects and what saves the panel from having to reconcile two cascades.
  * 2. **It suppresses the native menu**, once, on `document`, except in a text field. One listener
  *    rather than one per surface: the background between two cards is nobody's `onContextMenu`,
- *    and it is exactly where a WebView2 menu offering "Reload" would otherwise appear.
+ *    and it is exactly where a WebView2 menu offering "Reload" would otherwise appear. This is
+ *    only *half* of the text-field carve-out and cannot be the whole of it — a surface handler
+ *    stops the event before it gets here, so `useContextMenu`'s `menu()` applies the same
+ *    `isTextField` test at its own end. Both ends, one rule, one function.
  * 3. **It renders at most one `<ContextMenu>`**, as a sibling of whatever it wraps.
  *
  * ## The ordering it rests on, which is pinned rather than assumed
