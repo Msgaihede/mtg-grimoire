@@ -1,5 +1,5 @@
-import { useCallback } from "react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import {
   buildCardMenu,
   buildDeckTargetItems,
+  CardToDeckProvider,
   DeckTargetSubmenu,
   useCardToDeck,
   type CardMenuDeps,
@@ -326,20 +327,18 @@ describe("buildDeckTargetItems", () => {
 });
 
 describe("DeckTargetSubmenu", () => {
-  function mount(onPick = vi.fn()) {
+  function mount(addToDeck = vi.fn()) {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     render(
       <QueryClientProvider client={client}>
-        <DeckTargetSubmenu
-          target={{ ...BOLT, typeLine: "Instant" }}
-          onDone={vi.fn()}
-          onPick={onPick}
-        />
+        <CardToDeckProvider value={{ addToDeck, error: null, clearError: vi.fn() }}>
+          <DeckTargetSubmenu target={{ ...BOLT, typeLine: "Instant" }} onDone={vi.fn()} />
+        </CardToDeckProvider>
       </QueryClientProvider>,
     );
-    return onPick;
+    return addToDeck;
   }
 
   beforeEach(() => {
@@ -347,14 +346,30 @@ describe("DeckTargetSubmenu", () => {
     deckFolderList.mockResolvedValue([]);
   });
 
-  it("hands the chosen deck and variant to the surface", async () => {
+  it("hands the chosen deck and variant to the app's one write", async () => {
     const user = userEvent.setup();
-    const onPick = mount();
+    const addToDeck = mount();
     const target = { ...BOLT, typeLine: "Instant" };
 
     await user.click(await screen.findByRole("menuitem", { name: /Burn/ }));
 
-    expect(onPick).toHaveBeenCalledWith(target, 7, "live");
+    expect(addToDeck).toHaveBeenCalledWith(target, 7, "live");
+  });
+
+  it("refuses to render at all where nobody has mounted the write", () => {
+    // The fence: a surface wired without the single mount fails on its first render rather than
+    // silently swallowing every add a reader makes from it.
+    const client = new QueryClient();
+    // React logs the thrown render; the throw itself is the assertion.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() =>
+      render(
+        <QueryClientProvider client={client}>
+          <DeckTargetSubmenu target={BOLT} onDone={vi.fn()} />
+        </QueryClientProvider>,
+      ),
+    ).toThrow(/CardToDeckProvider/);
+    quiet.mockRestore();
   });
 
   it("says so rather than drawing an empty panel when there are no decks", async () => {
@@ -376,11 +391,14 @@ describe("useCardToDeck", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    return renderHook(() => useCardToDeck(), {
-      wrapper: ({ children }) => (
-        <QueryClientProvider client={client}>{children}</QueryClientProvider>
-      ),
-    });
+    return {
+      client,
+      ...renderHook(() => useCardToDeck(), {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      }),
+    };
   }
 
   beforeEach(() => {
@@ -421,6 +439,39 @@ describe("useCardToDeck", () => {
     act(() => result.current.addToDeck(target, 7, "live"));
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
   });
+
+  it("takes last time's refusal down as the next add is armed", async () => {
+    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
+    const { result } = arm();
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    deckAddCard.mockResolvedValue(undefined);
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    // Not after the answer -- at the press. A sentence about the last deck must not stand over
+    // the whole of the next add's round trip.
+    expect(result.current.error).toBeNull();
+  });
+
+  it("stops observing the deck once the add has settled", async () => {
+    /**
+     * The regression this is here for: `useDeck(id, …)` is a live `deck_get`, and `addCard`
+     * invalidates the whole `["decks"]` prefix it sits under — so an armed value left set turns
+     * every surface a reader has ever added from into a permanent observer of a deck it does not
+     * draw, re-reading it on every deck write in the app. Nothing else in this file would see it:
+     * `renderHook` unmounts at the end of a test and no other assertion counts a read.
+     */
+    const { result, client } = arm();
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalled());
+    await waitFor(() => expect(client.isMutating()).toBe(0));
+
+    const readsSoFar = deckGet.mock.calls.length;
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["decks"] });
+    });
+    expect(deckGet).toHaveBeenCalledTimes(readsSoFar);
+  });
 });
 
 /* ------------------------------------------------------------------------------------------ *
@@ -431,28 +482,25 @@ const KRENKO = deck({ id: 7, name: "Krenko", folderId: 1, theoryEnabled: true })
 const COMMANDER = folder(1, "Commander");
 
 /**
- * A surface, in miniature: it owns the write and the sentence a refusal leaves, and it hands the
- * menu a picker wired to them. This is the whole shape a real surface will have.
+ * The app's single mount, in miniature: one `useCardToDeck`, provided to everything below it,
+ * and the sentence a refusal leaves drawn here — the only place it is drawn. This is the shape
+ * `AppShell` will have, and the reason a surface has nothing to forget.
  */
+function AppRoot({ children }: { children: ReactNode }) {
+  const cardToDeck = useCardToDeck();
+  return (
+    <CardToDeckProvider value={cardToDeck}>
+      {children}
+      {cardToDeck.error !== null && <p role="alert">{cardToDeck.error}</p>}
+    </CardToDeckProvider>
+  );
+}
+
+/** One of the ten. It passes `DeckTargetSubmenu` straight through, with no glue at all. */
 function Surface() {
   const { menu } = useContextMenu();
-  const { addToDeck, error } = useCardToDeck();
-  const Picker = useCallback(
-    (p: { target: CardMenuTarget; onDone: () => void }) => (
-      <DeckTargetSubmenu {...p} onPick={addToDeck} />
-    ),
-    [addToDeck],
-  );
-  const items = buildCardMenu(
-    { ...BOLT, typeLine: "Instant" },
-    deps({ DeckTargetSubmenu: Picker }),
-  );
-  return (
-    <>
-      <button onContextMenu={menu(() => items)}>target</button>
-      {error !== null && <p role="alert">{error}</p>}
-    </>
-  );
+  const items = buildCardMenu({ ...BOLT, typeLine: "Instant" }, deps({ DeckTargetSubmenu }));
+  return <button onContextMenu={menu(() => items)}>target</button>;
 }
 
 /**
@@ -473,9 +521,11 @@ function openCardMenu() {
   client.setQueryData(["decks", "folders"], [COMMANDER]);
   render(
     <QueryClientProvider client={client}>
-      <ContextMenuProvider>
-        <Surface />
-      </ContextMenuProvider>
+      <AppRoot>
+        <ContextMenuProvider>
+          <Surface />
+        </ContextMenuProvider>
+      </AppRoot>
     </QueryClientProvider>,
   );
   screen
@@ -495,6 +545,10 @@ const TO_PICKER =
   "{ArrowDown}{ArrowDown}{ArrowRight}";
 
 describe("the deck picker inside the real cascade", () => {
+  // Restored rather than left, or each `beforeEach` stacks another getter spy on the same
+  // property for the length of the file.
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     // jsdom has no layout engine, so `documentElement.clientWidth` is a hard 0 on every element
     // and the panel would place itself against nothing. Stated, and never as `window.innerWidth`.
@@ -562,8 +616,10 @@ describe("the deck picker inside the real cascade", () => {
     await user.keyboard("{ArrowRight}{ArrowRight}");
     await user.click(screen.getByRole("menuitem", { name: "Theory" }));
 
-    // `ctx.run` closes the menu *before* it calls the row's handler, so the write cannot belong
-    // to anything inside the panel. It lands because the surface holds it.
+    // The panel is on its way out — `aria-hidden` for the whole exit, so this says "closed or
+    // closing" and deliberately not more than that. What proves the write does not belong to the
+    // panel is the refusal test below: an answer that arrives after the exit still has somewhere
+    // to be said.
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", 1),

@@ -14,7 +14,17 @@
  * an optimisation — a menu that fetched on open would fire a request every time a reader
  * right-clicked the wrong tile.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import {
   Copy,
   ExternalLink,
@@ -315,29 +325,31 @@ function run(work: Promise<unknown>): void {
  * **It writes nothing, and that is not tidiness.** `ctx.run` hands focus back, closes the menu
  * and *then* calls `onSelect`, so by the time a leaf's handler runs this component is on its way
  * out — it survives only for the length of the panel's exit animation, which is no place to put
- * a write and nowhere at all to put its refusal. {@link useCardToDeck} is the other half, and it
- * is mounted by the surface, which outlives the menu. That is the split `useSidebarDrops` and
- * `useSwapFromPane` already use: borrow `useDeck` whole somewhere that persists, and own the
- * reporting there.
+ * a write and nowhere at all to put its refusal. {@link useCardToDeck} is the other half, mounted
+ * **once** above the whole app, and this reaches it through {@link useAddCardToDeck}. That is the
+ * split `useSidebarDrops` and `useSwapFromPane` already use — borrow `useDeck` whole somewhere
+ * that persists, and own the reporting there — and it is mounted once for their reason too.
+ *
+ * **The write arrives by context rather than by a prop, and that is the fence.** Its props are
+ * exactly `CardMenuDeps`' `{ target, onDone }`, so a surface passes this component itself with
+ * no glue: there is no callback to mis-wire and no `error` string for ten surfaces to forget to
+ * draw. Wiring the picker without the single mount is not a silent omission either — see
+ * {@link useAddCardToDeck}.
  *
  * `onDone` is accepted and deliberately **not called**: `ctx.run` has already closed the menu by
  * the time any row of this body runs, and calling it too would be a double close. It is for a
  * body that finishes without a row being pressed, which this one cannot do.
  */
-export function DeckTargetSubmenu(props: {
-  target: CardMenuTarget;
-  onDone: () => void;
-  /** Where a chosen leaf goes. {@link useCardToDeck}'s `addToDeck`, wired by the surface. */
-  onPick: (target: CardMenuTarget, deckId: number, variant: DeckVariant) => void;
-}) {
-  const { target, onPick } = props;
+export function DeckTargetSubmenu(props: { target: CardMenuTarget; onDone: () => void }) {
+  const { target } = props;
+  const addToDeck = useAddCardToDeck();
   const { decks, query: deckQuery } = useDecks();
   const { folders, query: folderQuery } = useDeckFolders();
 
   const items = useMemo(
     () =>
-      buildDeckTargetItems(folders, decks, (deckId, variant) => onPick(target, deckId, variant)),
-    [folders, decks, onPick, target],
+      buildDeckTargetItems(folders, decks, (deckId, variant) => addToDeck(target, deckId, variant)),
+    [folders, decks, addToDeck, target],
   );
 
   // A gallery with nothing in it and a gallery that has not answered yet are told apart by
@@ -347,28 +359,77 @@ export function DeckTargetSubmenu(props: {
   return <MenuRows items={items} />;
 }
 
+/** Where a card the reader picked in the menu is written, and what a refusal left behind. */
+export interface CardToDeck {
+  /** Called by {@link DeckTargetSubmenu}, through {@link useAddCardToDeck}. */
+  addToDeck: (target: CardMenuTarget, deckId: number, variant: DeckVariant) => void;
+  /** What the last refused add said, or `null`. Drawn by the one mount, and by nothing else. */
+  error: string | null;
+  clearError: () => void;
+}
+
+/**
+ * The context the picker reaches its write through — **provided once, for the whole app**.
+ *
+ * `null` is "nobody has mounted {@link useCardToDeck}", and {@link useAddCardToDeck} turns that
+ * into a throw rather than into a card that quietly never lands.
+ */
+const CardToDeckContext = createContext<CardToDeck | null>(null);
+
+/**
+ * Hand the app's single {@link useCardToDeck} down to every surface that draws a card menu.
+ *
+ * Mounted **once**, by the one component that also draws the sentence a refusal leaves. That is
+ * the difference between this and returning `error` to ten surfaces: `cardMenu.tsx` serves ten
+ * of them, TypeScript can force a callback but cannot force anybody to *render* a string, and a
+ * rule that lives at ten call sites is a rule that drifts. Here there is one place to forget, and
+ * it is the same place the sentence is drawn.
+ */
+export function CardToDeckProvider({
+  value,
+  children,
+}: {
+  value: CardToDeck;
+  children: ReactNode;
+}) {
+  return <CardToDeckContext.Provider value={value}>{children}</CardToDeckContext.Provider>;
+}
+
+/**
+ * The write, as a surface's picker sees it.
+ *
+ * **Throws without the provider, on render, deliberately.** The failure this fences off is a
+ * card that is never added and a refusal nobody is told about — silent in the window, silent in
+ * the suite, and reported by the reader as "the menu does nothing sometimes". A missing provider
+ * is a wiring mistake, and a wiring mistake should be loud at the first render of the surface
+ * that made it rather than quiet at the reader's tenth add.
+ */
+export function useAddCardToDeck(): CardToDeck["addToDeck"] {
+  const value = useContext(CardToDeckContext);
+  if (value === null) {
+    throw new Error("A card menu needs <CardToDeckProvider> above it — see useCardToDeck.");
+  }
+  return value.addToDeck;
+}
+
 /**
  * The other half of the deck picker: the write, and what to say when it is refused.
  *
- * **Mounted by the surface, not by the menu**, because a menu row's handler runs *after*
- * `ctx.run` has closed the menu — a write started from inside the panel lives only as long as
- * its exit animation, and an answer that arrives after that has nowhere to be reported and no
- * observer left to report it. The two surfaces that already reach a deck write from outside the
- * editor solve it the same way: `useSidebarDrops` is mounted in `AppShell` and `useSwapFromPane`
- * in the card pane, and `decks/CLAUDE.md` names both as borrowing the mutation whole while
- * owning only their own reporting. This is the third.
+ * **Mounted once, above the app, and never by the menu**, because a menu row's handler runs
+ * *after* `ctx.run` has closed the menu — a write started from inside the panel lives only as
+ * long as its exit animation, and an answer that arrives after that has nowhere to be reported
+ * and no observer left to report it. The two surfaces that already reach a deck write from
+ * outside the editor solve it the same way: `useSidebarDrops` is mounted in `AppShell` and
+ * `useSwapFromPane` in the card pane, and `decks/CLAUDE.md` names both as borrowing the mutation
+ * whole while owning only their own reporting. This is the third — and, like `useSidebarDrops`,
+ * it is mounted **once** rather than per surface.
  *
- * `error` is the surface's to draw, wherever that surface draws a refused write. Nothing is
- * invented here: there is no toast in this app, and a menu that has already closed is not a
- * place to put one.
+ * Its `error` is drawn by that one mount. Nothing is invented for it: there is no toast in this
+ * app, and a menu that has already closed is not a place to put one. The sentence belongs in the
+ * live region the sidebar's Decks entry already keeps for exactly this — what just happened to a
+ * deck, from a gesture made somewhere else in the window.
  */
-export function useCardToDeck(): {
-  /** Wire to {@link DeckTargetSubmenu}'s `onPick`. */
-  addToDeck: (target: CardMenuTarget, deckId: number, variant: DeckVariant) => void;
-  /** What the last refused add said, or `null`. */
-  error: string | null;
-  clearError: () => void;
-} {
+export function useCardToDeck(): CardToDeck {
   /**
    * The add the reader asked for. Setting it is what mounts the deck's own hook below.
    *
@@ -420,19 +481,35 @@ export function useCardToDeck(): {
         quantity: 1,
       },
       {
-        onSuccess: () => setError(null),
         onError: (refusal) => setError(ipcError(refusal)),
+        /**
+         * **Disarm, or this surface observes that deck for the rest of the session.**
+         * `useDeck(id, …)` is a live `deck_get` — the deck, every card in it and its categories —
+         * and `addCard`'s own `onSuccess` invalidates the whole `["decks"]` prefix, which that
+         * key is under. A `pending` left set therefore leaves the mount re-reading a deck nothing
+         * on screen draws, on every add, quantity change or rename anywhere in the app. Clearing
+         * it puts `useDeck` back to `null`, where its query is disabled.
+         *
+         * `onSettled` rather than a clear in each of the two arms above, because it is one line
+         * that cannot be half-applied, and it runs after both — so the sentence is already set
+         * when the observer goes away. The in-flight mutation does not care: it belongs to the
+         * mutation cache, and only the *observer's* per-call callbacks are at stake here, which
+         * have both already run.
+         */
+        onSettled: () => setPending(null),
       },
     );
   }, [pending, add]);
 
-  const addToDeck = useCallback(
-    (target: CardMenuTarget, deckId: number, variant: DeckVariant) =>
-      // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
-      // the guard above is identity on this value and a reader who adds a second copy means it.
-      setPending({ target, deckId, variant }),
-    [],
-  );
+  const addToDeck = useCallback((target: CardMenuTarget, deckId: number, variant: DeckVariant) => {
+    // Last time's refusal is not news about this add. Left standing, a sentence about a deck
+    // that has been deleted survives the whole of the next add's round trip, over rows the
+    // reader has already moved on from.
+    setError(null);
+    // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
+    // the guard above is identity on this value and a reader who adds a second copy means it.
+    setPending({ target, deckId, variant });
+  }, []);
   const clearError = useCallback(() => setError(null), []);
   return { addToDeck, error, clearError };
 }
