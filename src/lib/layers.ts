@@ -79,21 +79,27 @@ export const LAYER = {
    */
   dragTray: "z-40",
   /**
-   * A full-window layer a view opens over everything it owns: the deck editor's categories
-   * drawer, its history drawer, its theory difference dialog and its settings dialog.
+   * A full-window layer a view opens over everything it owns: the deck editor's import,
+   * categories, tags, history, theory-difference and settings dialogs.
    *
-   * **One rung for a drawer *and* a modal, deliberately, where two looks more careful.** The
-   * four surfaces above are held in one piece of state (`DeckEditor`'s `Layer` union), because
-   * `useDismissOnEscape` orders exactly two rungs and two `"inner"` peers open at once are not
-   * ordered at all. At most one of the four is ever mounted — so there is no pair for a second
-   * number to order, and inventing one would be a claim about a stack that cannot occur. If a
-   * layer ever has to open *over* one of these, that is the day the rung splits, and the split
-   * will have a real overlap to point at.
+   * **One rung for all of them, deliberately, where a rung apiece looks more careful.** They are
+   * held in one piece of state (`DeckEditor`'s `Layer` union), because `useDismissOnEscape`
+   * orders exactly two rungs and two `"inner"` peers open at once are not ordered at all. At
+   * most one is ever mounted — so there is no pair for a second number to order, and inventing
+   * one would be a claim about a stack that cannot occur. If a layer ever has to open *over* one
+   * of these, that is the day the rung splits, and the split will have a real overlap to point
+   * at.
+   *
+   * This read "categories drawer, history drawer" until 2026-08-14, when the editor's right-hand
+   * drawers became centred modals on one shell (`DeckDialog`) and the categories one split into
+   * two. That changed what is drawn on this rung and not which rung it is: a surface that covers
+   * the window covers it whichever edge it arrived from, which is the whole reason a rung is
+   * named for its *reach* rather than for its shape.
    *
    * Above `dragTray`, which is the top of what a *view* draws, and below `gate`: a sync taking
-   * the window over covers a deck dialog, never the other way round. The four used to borrow
-   * `gate` and `dragTray` two apiece — each right in effect and wrong in name, which is exactly
-   * the reading a `LAYER` entry exists to make impossible.
+   * the window over covers a deck dialog, never the other way round. The four that predate this
+   * entry used to borrow `gate` and `dragTray` two apiece — each right in effect and wrong in
+   * name, which is exactly the reading a `LAYER` entry exists to make impossible.
    */
   overlay: "z-45",
   /** `SyncProgress`'s full-window takeover, over everything. */

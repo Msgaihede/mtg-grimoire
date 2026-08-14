@@ -290,7 +290,7 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
     // artboard, and a modal in the shipped window covers the window rather than whichever
     // positioned ancestor it happens to be mounted inside.
     //
-    // `LAYER.overlay` is the rung the editor's four full-window surfaces share — above every
+    // `LAYER.overlay` is the rung the editor's six full-window surfaces share — above every
     // popup, below `SyncProgress`'s takeover, which really does outrank a shopping list.
     //
     // The number is deliberately not written out here, in prose or anywhere else: Tailwind's

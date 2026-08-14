@@ -5,14 +5,14 @@ import { auditDays } from "./auditText";
 import { opened } from "./useDeck";
 
 /** Stable identity for "nothing read yet", so {@link auditDays} is not re-run over a new empty
- *  array on every render of a drawer that is still waiting. */
+ *  array on every render of a dialog that is still waiting. */
 const NONE: readonly DeckAuditEntry[] = [];
 
 /**
- * How much history the drawer asks for: the backend's own ceiling, `deck_audit::MAX_LIMIT`.
+ * How much history the dialog asks for: the backend's own ceiling, `deck_audit::MAX_LIMIT`.
  *
  * **A cap, not a page.** This table grows by one row per edit, so a deck a person has actually
- * built is hundreds of rows rather than millions, and the drawer shows the most recent day or
+ * built is hundreds of rows rather than millions, and the dialog shows the most recent day or
  * two. Asking for the maximum is what turns "show me the history" into one read instead of a
  * cursor nobody would scroll. The backend clamps into `1..=500` regardless — which is also
  * what stops a `0` from meaning *no limit at all*, since that is how SQLite reads a negative
@@ -21,7 +21,7 @@ const NONE: readonly DeckAuditEntry[] = [];
 const LIMIT = 500;
 
 /**
- * One deck's history, grouped into the day sections the drawer draws.
+ * One deck's history, grouped into the day sections `DeckHistoryDialog` draws.
  *
  * **Read-only, and there is no write here at all** — a history row is written by the change it
  * describes, inside that change's own transaction, so an audit row that committed while its
@@ -29,11 +29,11 @@ const LIMIT = 500;
  *
  * `["decks", "audit", deckId]`, under the `["decks"]` root: **every** deck write records a row,
  * so the invalidation that already follows a rename, an add or a tag change is exactly what
- * refreshes the drawer sitting beside it. That is why no mutation anywhere needs to know this
+ * refreshes the dialog open over the deck. That is why no mutation anywhere needs to know this
  * key exists.
  *
  * **No variant.** The history covers both lists — a Theory edit is history too — and each entry
- * carries its own {@link DeckAuditEntry.variant}. A drawer that filtered would be hiding half
+ * carries its own {@link DeckAuditEntry.variant}. A dialog that filtered would be hiding half
  * of "all changes" from a reader who came to see them.
  *
  * The grouping is `auditDays` from `auditText.ts` and is deliberately not re-derived here:
@@ -60,5 +60,5 @@ export function useDeckAudit(deckId: number | null) {
   };
 }
 
-/** The whole of what a history drawer consumes, named so the view and the hook agree. */
+/** The whole of what `DeckHistoryDialog` consumes, named so the view and the hook agree. */
 export type DeckAudit = ReturnType<typeof useDeckAudit>;

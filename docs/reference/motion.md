@@ -4,9 +4,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
 - **Timings live in `src/lib/motion.ts` and nowhere else.** `DURATION` is `fast` 120 · `base`
   180 · `slow` 260 ms, `EASE` is `standard`/`enter`/`exit`, and consumers import a **preset**
-  (`scrim`, `drawerRight`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
+  (`scrim`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
   number. The 150 ms budget it replaces existed only as a prose comment and ~100 hand-copied
   `duration-150` literals. `src/index.css` carries the same scale so CSS-only sites agree.
+- **`drawerRight` was deleted on 2026-08-14**, when the deck editor's two right-hand drawers
+  (Categories & tags, History) became centred modals and it lost its last consumer. It slid a
+  right-docked panel in from `x: "100%"` on `slow`, out on `base`. `CardDetailPane` had already
+  refused it in writing — the pane is right-docked, but it lives inside `AppShell`'s
+  `overflow-auto` main region, so 384px of travel is 384px of scrollable overflow and a
+  horizontal scrollbar on every card opened; it scales from `origin-right` on `dialog` instead. A
+  dead preset in the module whose whole discipline is "timings live here and nowhere else" is the
+  drift this file's first rule exists against, so it went rather than waiting for a consumer. The
+  cost if that was wrong is one: a future right-hand drawer re-derives 260 ms/`enter` from git
+  history. The dated design spec that introduced it still lists it, deliberately — a dated spec
+  records what was decided then.
 - **`stackCard` moved from `base` to `slow` on 2026-08-14** — the tiers themselves are unchanged.
   The design spec's table filed the deck stack's reflow with the popups, and 180 ms is right for
   a surface that *appears*; this one travels **293 px**, which is drawer distance, and a reader

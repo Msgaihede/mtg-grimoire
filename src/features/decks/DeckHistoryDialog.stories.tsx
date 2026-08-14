@@ -1,14 +1,19 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { AuditDrawer } from "./AuditDrawer";
+import { DeckHistoryDialog } from "./DeckHistoryDialog";
 
 /**
- * Everything that has happened to one deck, as a drawer over the editor.
+ * Everything that has happened to one deck, as a centred dialog over the editor.
  *
  * **It renders history and derives none of it.** The day grouping is `auditDays`' and every
  * sentence is `auditSentence`'s, both from `auditText.ts` — there is exactly one of each in this
  * app, because a log meant to survive being useful cannot have its wording baked into its rows,
  * and a second day-grouping is a second chance to file a 23:30 edit under tomorrow.
+ *
+ * **The chrome is `DeckDialog`'s** — the scrim, the centred panel, `aria-modal`, the Tab trap and
+ * the titled header with its ✕. This surface was a right-hand drawer until 2026-08-14, and it
+ * gave the deck nothing in exchange for the width it took: a history is *consulted*, never
+ * dragged out of. What is left in the component is the list, which is what these stories are of.
  *
  * **Nine kinds map onto five chips**, and `quantity` is routed by its own `delta` rather than
  * given a sixth: a copy count going down is a removal to everyone except the schema. A kind this
@@ -28,26 +33,26 @@ import { AuditDrawer } from "./AuditDrawer";
  * during a story lands above these, under Today, because every write appends to the same table.
  */
 const meta = {
-  title: "Decks/AuditDrawer",
-  component: AuditDrawer,
+  title: "Decks/DeckHistoryDialog",
+  component: DeckHistoryDialog,
   tags: ["autodocs"],
   args: { deckId: 4, open: true, onDismiss: fn(), onClose: fn() },
   decorators: [
     (Story) => (
       <div
         // **`position: fixed` resolves against the nearest *transformed* ancestor**, not the
-        // viewport — so this one line turns a window-covering drawer into a story-sized one.
+        // viewport — so this one line turns a window-covering dialog into a story-sized one.
         // Without it every story on the autodocs page covers the whole page, and the reader
-        // sees one drawer where there are six.
+        // sees one dialog where there are six.
         style={{ transform: "translateZ(0)" }}
         className="relative h-[38rem] overflow-hidden rounded-lg border border-border bg-bg"
       >
-        <p className="p-4 text-sm text-dim">The deck editor sits behind the drawer.</p>
+        <p className="p-4 text-sm text-dim">The deck editor sits behind the dialog.</p>
         <Story />
       </div>
     ),
   ],
-} satisfies Meta<typeof AuditDrawer>;
+} satisfies Meta<typeof DeckHistoryDialog>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -56,15 +61,15 @@ type Story = StoryObj<typeof meta>;
  * Three days of building a Commander deck — deck 4, `Rhystic Testbed`, which is the seeded deck
  * with a history.
  *
- * The header counts the whole history and dates its oldest row, so the line says how far back the
- * drawer can see. Each day heading carries its own roll-up, and the roll-up keeps gains and losses
- * **apart** — a day that added four and cut one is not the quiet day one netted number would
- * report it as.
+ * The line beside the chips counts the whole history and dates its oldest row, so it says how far
+ * back the dialog can see. Each day heading carries its own roll-up, and the roll-up keeps gains
+ * and losses **apart** — a day that added four and cut one is not the quiet day one netted number
+ * would report it as.
  */
 export const AWeekOfBuilding: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("dialog", { name: "Deck history" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("dialog", { name: "History" })).toBeInTheDocument();
     await expect(canvas.getByRole("heading", { name: "Today" })).toBeInTheDocument();
     await expect(canvas.getByRole("heading", { name: "Yesterday" })).toBeInTheDocument();
 
@@ -72,7 +77,7 @@ export const AWeekOfBuilding: Story = {
     const yesterday = canvas.getByRole("heading", { name: "Yesterday" }).closest("section");
     await expect(within(yesterday!).getByText("+4 / −1")).toBeInTheDocument();
     // The drawn figure reads as "plus four slash minus one"; the spoken one is a sentence,
-    // and it is the only number in the drawer no row's own sentence already carries.
+    // and it is the only number here that no row's own sentence already carries.
     await expect(
       within(yesterday!).getByText("4 copies added, 1 copy removed"),
     ).toBeInTheDocument();
@@ -89,12 +94,12 @@ export const AWeekOfBuilding: Story = {
  *
  * The chips stay above the list rather than inside it, so a filter that empties the list is still
  * on screen to be undone — and the count beside them says how much of the history is being looked
- * at, which is the difference between a filtered drawer and a short one.
+ * at, which is the difference between a filtered dialog and a short one.
  */
 export const FilteredToTheStructure: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("dialog", { name: "Deck history" });
+    await canvas.findByRole("dialog", { name: "History" });
     await userEvent.click(canvas.getByRole("button", { name: "Adds" }));
     await userEvent.click(canvas.getByRole("button", { name: "Removals" }));
 
@@ -113,10 +118,10 @@ export const FilteredToTheStructure: Story = {
  *
  * A `kind` this app has never met and a payload it cannot parse, side by side. `auditText.ts` is
  * total over both — the unknown kind degrades to "Changed the deck" and the broken payload to the
- * shortest honest sentence — and the drawer's job is not to undo that: the row keeps its date, its
- * delta and its place in the day, and it gets a chip of its own so a reader can still see it and
- * still switch it off. **A row that matched no chip and quietly vanished would be a log with a
- * hole in it**, which is the one thing a log may not have.
+ * shortest honest sentence — and this dialog's job is not to undo that: the row keeps its date,
+ * its delta and its place in the day, and it gets a chip of its own so a reader can still see it
+ * and still switch it off. **A row that matched no chip and quietly vanished would be a log with
+ * a hole in it**, which is the one thing a log may not have.
  */
 export const AnOlderBuild: Story = {
   args: { deckId: 3 },
@@ -141,8 +146,8 @@ export const AnOlderBuild: Story = {
  * A deck nothing has happened to yet — deck 1, which predates the table.
  *
  * An empty screen is an invitation to act, not a blank column: it names the kinds of thing that
- * will list here and says the next one will be the first line. The header drops its count with it
- * — "0 changes since" is a sentence about nothing.
+ * will list here and says the next one will be the first line. The chips' caption goes with it —
+ * "0 changes since" is a sentence about nothing.
  */
 export const NothingYet: Story = {
   args: { deckId: 1 },
@@ -158,7 +163,7 @@ export const NothingYet: Story = {
  *
  * `deckMeta` is the fault for the reads a deck screen makes *beside* the deck — its categories,
  * its tags, the folder tree, the theory diff and this one. The deck itself read fine, which is
- * why there is a drawer open over it at all.
+ * why there is a dialog open over it at all.
  *
  * The failure is reported **before** the emptiness, and that ordering is the whole point: a failed
  * read has no rows either, and calling it "no changes recorded yet" would tell a reader their
@@ -178,9 +183,9 @@ export const HistoryUnavailable: Story = {
 /**
  * Closed, which is nothing at all.
  *
- * `open: false` renders `null` rather than a hidden panel — there is no drawer off-screen to tab
- * into, and nothing is read for it either: the editor keeps this component mounted, and a closed
- * drawer that asked anyway would spend a query on every deck the reader opens to look at.
+ * `open: false` renders `null` rather than a hidden panel — there is no panel behind the scrim to
+ * tab into, and nothing is read for it either: the editor keeps this component mounted, and a
+ * closed dialog that asked anyway would spend a query on every deck the reader opens to look at.
  */
 export const Closed: Story = {
   args: { open: false },

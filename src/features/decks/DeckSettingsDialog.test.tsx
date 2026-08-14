@@ -110,9 +110,20 @@ beforeEach(() => {
   pickFile.mockResolvedValue("C:\\pics\\dragon.png");
 });
 
+/**
+ * **The chrome is `DeckDialog`'s now, and the cases below that touch it are here on purpose.**
+ * The shell's own contract — closed mounts nothing, Escape, the scrim press, the modal role, the
+ * ✕'s label — is pinned once in `DeckDialog.test.tsx`, against a body that is only a body. What
+ * is left here is what only this host can say: that it wires `onDismiss` and `onClose` through,
+ * that a closed dialog costs no `deck_get`, and that the trap holds over the **real** form, whose
+ * selects, switch, textareas and occasionally disabled controls are the list `trapTab` reads on
+ * every press. Everything else in this file is what it always was: which command each answer
+ * writes.
+ */
 describe("DeckSettingsDialog", () => {
   /** Closed is nothing mounted — not a hidden panel — so a dialog nobody opened asks the
-   *  backend for nothing either. */
+   *  backend for nothing either. `Settings` is passed to the shell as an *element*, and an
+   *  element React never puts in the tree is a component that never ran. */
   it("renders nothing and reads nothing while it is closed", () => {
     wrap(<DeckSettingsDialog deckId={4} open={false} onDismiss={vi.fn()} onClose={vi.fn()} />);
 
@@ -120,7 +131,9 @@ describe("DeckSettingsDialog", () => {
     expect(deckGet).not.toHaveBeenCalled();
   });
 
-  /** The `"inner"` rung: one press, one layer, and the caret hand-back is the caller's. */
+  /** The `"inner"` rung: one press, one layer, and the caret hand-back is the caller's. Here it
+   *  is the *wiring* that is on trial — that this host hands its `onDismiss` to the shell — since
+   *  the rung itself is `DeckDialog`'s. */
   it("dismisses on Escape", async () => {
     const { onDismiss, onClose } = open();
     await loaded();
@@ -132,19 +145,6 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * The caret starts on the panel, which is what makes Shift+Tab wrap rather than fall out.
-   *
-   * `tabIndex={-1}` keeps the panel out of its own cycle, so "the caret is on the panel" counts
-   * as *before* the first stop.
-   */
-  it("takes the caret when it opens", async () => {
-    open();
-    const dialog = await loaded();
-
-    await waitFor(() => expect(dialog).toHaveFocus());
-  });
-
-  /**
    * **The trap, which had no test at all** — `trapTab` could be deleted whole and this file
    * stayed green, while the panel went on claiming `aria-modal="true"`. An untested trap is a
    * promise with no evidence, and the promise is made to assistive tech only: the app behind a
@@ -153,6 +153,13 @@ describe("DeckSettingsDialog", () => {
    * Both ends, because they fail separately. Forward from the last stop must wrap to the first;
    * backward from the panel (where the open effect leaves the caret) must wrap to the **last**,
    * and that one is the keystroke a reader makes immediately after opening the dialog.
+   *
+   * **Kept here rather than moved to the shell's suite**, though the trap moved with the chrome:
+   * `trapTab` reads the focusable list on every press and filters `disabled`, so what it is worth
+   * running against is a real form — a dozen stops, two selects, a switch and a cover grid — and
+   * not the one button a shell test can honestly put in a body. Its first line is also the whole
+   * of the old "takes the caret when it opens" case, which is why that one is gone from this file
+   * and lives in `DeckDialog.test.tsx` instead.
    */
   it("keeps Tab inside itself, both ways round", async () => {
     open();
@@ -180,7 +187,9 @@ describe("DeckSettingsDialog", () => {
    *
    * The `mouseDown`-with-target-check is the whole mechanism — a `click` handler would close
    * the dialog on a drag that started inside it and ended out here, because the click lands on
-   * the two targets' common ancestor.
+   * the two targets' common ancestor. That mechanism is the shell's; what this pins is that the
+   * two callbacks arrive at it the right way round, which is the half a shared chrome makes easy
+   * to swap by accident.
    */
   it("closes on a press on the scrim and not on one inside the panel", async () => {
     const { onClose, onDismiss } = open();
@@ -420,6 +429,14 @@ describe("DeckSettingsDialog", () => {
    * Every other control in this dialog has already written by the time the reader reaches for
    * the scrim, so the text fields commit on the way out too — a notes paragraph thrown away by
    * a click outside would be the one destructive thing on the screen.
+   *
+   * **The case the extraction could have broken in silence.** `useDeckField` writes on
+   * `useIsPresent()` going false, which is a React context `AnimatePresence` provides; `Settings`
+   * reaches it only because the shell renders `children` inside its own presence subtree rather
+   * than beside it. A shell that mounted the body outside would leave the hook reading the
+   * default `true` forever, and this would still pass — off the unmount backstop, a fifth of a
+   * second later and racing the editor's teardown. `DeckDialog.test.tsx`'s presence case is what
+   * separates the two; this one is the behaviour that depends on it.
    */
   it("commits a half-typed notes draft when the dialog closes", async () => {
     const { rerender, onDismiss, onClose } = open();

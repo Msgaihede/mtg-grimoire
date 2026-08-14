@@ -28,7 +28,7 @@
  * ever been downloaded — and if the download never succeeds, which is a supported way to run
  * this app. The old behaviour is the floor, not an error case.
  *
- * The categories panel's "File cards by what they do" button is this one rule pressed once
+ * The Categories dialog's "File cards by what they do" button is this one rule pressed once
  * over a whole deck — the label names the rule rather than the mechanism, and it changed with
  * this rule (it read "Auto-categorise from card types" while the type line was the whole of
  * it). The v8

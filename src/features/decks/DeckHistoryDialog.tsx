@@ -1,19 +1,15 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useCallback, useMemo, useState } from "react";
 import { ToggleChip } from "@/components/FilterChips";
 import type { DeckAuditEntry } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
-import { drawerRight, scrim } from "@/lib/motion";
-import { trapTab } from "@/lib/trapTab";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { auditSentence, type AuditDay } from "./auditText";
-import { FOCUS, FOCUS_INSET } from "./cardControl";
+import { FOCUS } from "./cardControl";
+import { DeckDialog } from "./DeckDialog";
 import { useDeckAudit } from "./useDeckAudit";
 
 /**
- * Everything that has happened to one deck, as a drawer over the editor.
+ * Everything that has happened to one deck, as a centred dialog over the editor.
  *
  * **It renders history and derives none of it.** The grouping is `auditDays`' and the sentence
  * is `auditSentence`'s, both from `auditText.ts`, because there is exactly one of each in this
@@ -22,7 +18,7 @@ import { useDeckAudit } from "./useDeckAudit";
  * tomorrow. What this file adds is the *shape* — day sections, a filter, and the roll-up a
  * sticky header prints.
  *
- * **Nothing here may take the drawer down.** The audit contract is still growing and a database
+ * **Nothing here may take the dialog down.** The audit contract is still growing and a database
  * outlives the app that wrote it, so a row's `kind` may be one this build has never heard of.
  * `auditText.ts` is already total over that; this file stays total over it too — see
  * {@link auditBand}, and the "Other" chip that appears the moment one of those rows exists.
@@ -116,7 +112,7 @@ const TIME = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   hourCycle: "h23",
 });
-/** "August 6" — the month and day, for the header's "since" and a day heading that reads
+/** "August 6" — the month and day, for the filter bar's "since" and a day heading that reads
  *  "Today". Same locale as `auditText`'s own day labels, so the two never disagree. */
 const DAY = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" });
 /** The whole stamp, on a row's `title`, for the reader who wants the date a time belongs to. */
@@ -147,40 +143,41 @@ function split(entries: readonly DeckAuditEntry[]): { gained: number; lost: numb
   return { gained, lost };
 }
 
-export interface AuditDrawerProps {
+export interface DeckHistoryDialogProps {
   deckId: number;
   open: boolean;
-  /** Escape, and the drawer's own ✕: hand focus back to whatever opened the drawer, then
-   *  close. Both, because the ✕ is *inside* the layer that is about to unmount — a press that
-   *  did not hand the caret back would drop it on `<body>` and restart the next Tab from the
-   *  top of the app. */
+  /** Escape, and the dialog's own ✕: hand focus back to whatever opened it, then close. Both,
+   *  because the ✕ is *inside* the layer that is about to unmount — a press that did not hand
+   *  the caret back would drop it on `<body>` and restart the next Tab from the top of the app.
+   *  Stable, please: {@link DeckDialog} passes it to `useDismissOnEscape` as a dependency. */
   onDismiss: () => void;
   /** Outside click: close without moving focus. The reader is already somewhere else. */
   onClose: () => void;
 }
 
 /**
- * The deck history drawer.
+ * The deck history dialog.
  *
- * An `"inner"` Escape rung — capture phase, `preventDefault()` — so one press closes the drawer
- * and leaves the card pane behind the view holding its own. Nothing else on this screen may be
- * an `"inner"` peer at the same time; `useDismissOnEscape`'s own doc has why.
+ * **The chrome is {@link DeckDialog}'s and none of it is written here.** The scrim, the centred
+ * panel, `aria-modal`, the Tab trap, the titled header with its ✕, and the `"inner"` Escape rung
+ * registered on the *flag* rather than on the panel's mount — all of that is the shell's, once,
+ * for every dialog the deck builder opens. What is left in this file is a history: the query, the
+ * bands, the day sections and the roll-up.
  *
- * **This half is always mounted and the drawer below it is not, and the split is what keeps the
- * Escape rung honest.** The editor renders all four of its overlays unconditionally, so the
- * only thing that says "this one is up" is the flag — and with an exit animation the *element*
- * outlives the flag by the length of the fade. A rung registered on the element's mount would
- * therefore still be consuming Escape while the next overlay is opening, and two `"inner"`
- * peers are not ordered by this protocol at all (`useDismissOnEscape`'s own doc). Registered
- * out here on `enabled: open`, it is dead on the render that starts the exit.
+ * It was a right-hand drawer until 2026-08-14. A drawer is a column subtracted from the desk for
+ * as long as it is up, and this surface is *consulted* rather than worked out of — nothing is
+ * dragged out of a log — so it gave the deck nothing in exchange for the width. `w-[48rem]`
+ * rather than the 40rem it docked at: a centred dialog is not full-height, so the day sections
+ * have less vertical room and want a little more horizontal.
  *
- * The filter chips' state lives out here too, and for an unrelated reason: it is the reader's,
- * and a drawer they filtered, closed and reopened should not have forgotten.
+ * **The filter chips' state lives out here, above the shell, and that is deliberate**: `children`
+ * render only while the dialog is open, so state held in the body would be forgotten on every
+ * close. The filter is the reader's, and a history they filtered, closed and reopened should not
+ * have forgotten it. The *query* stays one floor down for the opposite reason — see
+ * {@link History}.
  */
-export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerProps) {
+export function DeckHistoryDialog({ deckId, open, onDismiss, onClose }: DeckHistoryDialogProps) {
   const [hidden, setHidden] = useState<readonly AuditBand[]>([]);
-
-  useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
 
   const toggle = useCallback(
     (band: AuditBand) =>
@@ -190,55 +187,44 @@ export function AuditDrawer({ deckId, open, onDismiss, onClose }: AuditDrawerPro
   const showEverything = useCallback(() => setHidden([]), []);
 
   return (
-    <AnimatePresence>
-      {open && (
-        <Drawer
-          key="history"
-          deckId={deckId}
-          hidden={hidden}
-          onToggle={toggle}
-          onShowEverything={showEverything}
-          onDismiss={onDismiss}
-          onClose={onClose}
-        />
-      )}
-    </AnimatePresence>
+    <DeckDialog
+      open={open}
+      title="History"
+      closeLabel="Close history"
+      width="w-[48rem]"
+      onDismiss={onDismiss}
+      onClose={onClose}
+    >
+      <History
+        deckId={deckId}
+        hidden={hidden}
+        onToggle={toggle}
+        onShowEverything={showEverything}
+      />
+    </DeckDialog>
   );
 }
 
 /**
- * The drawer proper — mounted only while it is up, plus the length of its exit.
+ * The history proper — rendered only while the dialog is up, plus the length of its exit.
  *
- * **Gated by being mounted, not by a flag.** The read is the whole of what a closed drawer
- * would otherwise cost, and unmounting says "do not ask" more plainly than `enabled` does — it
- * is also what keeps the list on screen while the drawer slides out, where a query switched off
- * at the flag would answer `isPending` again and print "Reading this deck's history…" over a
- * fading panel.
+ * **Gated by being mounted, not by a flag.** The read is the whole of what a closed dialog would
+ * otherwise cost, and unmounting says "do not ask" more plainly than `enabled` does — it is also
+ * what keeps the list on screen while the panel fades out, where a query switched off at the flag
+ * would answer `isPending` again and print "Reading this deck's history…" over a fading panel.
  */
-function Drawer({
+function History({
   deckId,
   hidden,
   onToggle,
   onShowEverything,
-  onDismiss,
-  onClose,
 }: {
   deckId: number;
   hidden: readonly AuditBand[];
   onToggle: (band: AuditBand) => void;
   onShowEverything: () => void;
-} & Pick<AuditDrawerProps, "onDismiss" | "onClose">) {
+}) {
   const { query, days } = useDeckAudit(deckId);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-  /** False from the render that starts the slide out. */
-  const present = useIsPresent();
-
-  // The caret moves into the layer, as it does for every other one in the app: the drawer's own
-  // controls are then the next thing Tab reaches, and Escape has something to hand back.
-  useEffect(() => {
-    panelRef.current?.focus({ preventScroll: true });
-  }, []);
 
   const shown = useMemo<ShownDay[]>(
     () =>
@@ -270,129 +256,52 @@ function Drawer({
   const listed = shown.reduce((n, day) => n + day.entries.length, 0);
 
   return (
-    // The scrim is the outside click, and the whole window is outside: a drawer that dimmed
-    // only the view it opened over would leave the ribbon and the sidebar looking pressable
-    // while a modal layer sat beside them. `fixed` rather than the direction's `absolute`
-    // because this component is mounted by the editor and cannot know that anything above it
-    // is positioned — an `absolute` inset with no positioned ancestor lands somewhere nobody
-    // chose.
-    //
-    // The scrim and the panel are one `AnimatePresence` and two tweens: the ground darkens at
-    // the interaction tier and the panel arrives more slowly over it, so the drawer is never
-    // seen sliding across an undimmed window. Both register with the presence, so the drawer is
-    // unmounted when the *later* of the two has finished.
-    <motion.div
-      {...scrim}
-      // `onMouseDown`, not `onClick`, for the reason both dialogs write out: a click fires on
-      // the nearest common ancestor of press and release, so a selection that starts on a
-      // history line and ends past the drawer's edge would be a "click" on the scrim and would
-      // close the layer under the reader. This drawer is nothing but selectable text.
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      // On the way out the whole layer is a picture: nothing in it can be pressed, and none of
-      // it is in the accessibility tree — where a second `role="dialog"` would otherwise sit
-      // beside whichever overlay the reader opened next. Focus left with the flag, either
-      // handed back by `onDismiss` or dropped by the press that landed elsewhere.
-      aria-hidden={present ? undefined : true}
-      // `LAYER.overlay`: the rung the editor's four full-window surfaces share. Above every
-      // anchored popup and above the drag tray — nothing is being dragged, since the tray only
-      // exists during a drag this layer makes impossible — and below `gate`, which is
-      // `SyncProgress` taking the window over.
-      className={cn(
-        "fixed inset-0 flex justify-end bg-black/60",
-        !present && "pointer-events-none",
-        LAYER.overlay,
-      )}
-    >
-      <motion.div
-        {...drawerRight}
-        ref={panelRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-labelledby={titleId}
-        // **Modal, and the scrim above is the whole argument.** This drawer used to claim the
-        // opposite — that the editor behind stayed reachable, so a reader who spotted a mistake
-        // in the history could go and fix it without dismissing what told them about it. That
-        // reading was already false for a pointer: the `bg-black/60` above covers the window,
-        // and a scrim is a statement that what is behind it is not available right now. Leaving
-        // Tab able to walk out was not preserving the capability, it was offering it to one
-        // input method and denying it to the other. Escape is the way back to the editor, and it
-        // hands the caret to the control that opened this.
-        //
-        // (`ValidationPanel` is genuinely not modal and is right not to be — it is a popup
-        // anchored to its chip, with no scrim at all. The two questions look alike and are not.)
-        aria-modal="true"
-        onKeyDown={trapTab}
-        className={cn(
-          "flex h-full w-[40rem] max-w-full flex-col border-l border-border bg-bg shadow-2xl",
-          // Inside, not off the edge — `CategoriesPanel`'s measured case on the sibling drawer:
-          // this panel is flush against the window's right edge, and the open effect above
-          // focuses it, so a keyboard-opened drawer matches `:focus-visible` and an outline
-          // standing 2px *off* it is painted off-screen. That is a WCAG 2.4.7 failure nobody
-          // testing with a mouse ever sees.
-          FOCUS_INSET,
+    <>
+      {/* The chips ride above the list rather than inside it, so a filter that empties the list
+          is still on screen to be undone.
+
+          The reach of the history rides here too, and it used to sit beside the title: the
+          shell's header takes a title and nothing else, on purpose — four dialogs with four
+          differently furnished headers is the resemblance `DeckDialog` was made to end. This is
+          the honest home for it anyway. The count is the **whole** history and the date is its
+          oldest row, so the line says how far back this dialog can see, which is a caption for
+          the filter beside it rather than for the deck's name. Both are read off the rows rather
+          than told to the dialog, because a count the backend sent separately is a count that
+          can disagree with the list under it. */}
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-5 py-3">
+        <div role="group" aria-label="Filter the history by kind" className="flex flex-wrap gap-2">
+          {chips.map((band) => (
+            <ToggleChip
+              key={band.id}
+              label={band.label}
+              hint={band.hint}
+              pressed={!hidden.includes(band.id)}
+              onClick={() => onToggle(band.id)}
+            />
+          ))}
+        </div>
+        {hidden.length > 0 && total > 0 && (
+          <p aria-live="polite" className="font-mono text-[0.7rem] text-dim">
+            {listed} of {total} shown
+          </p>
         )}
-      >
-        <div className="flex flex-shrink-0 items-center gap-3 border-b border-border px-5 py-4">
-          <h2 id={titleId} className="font-heading text-xl leading-none">
-            Deck history
-          </h2>
-          {total > 0 && oldest !== null && (
-            <p className="min-w-0 truncate font-mono text-[0.7rem] text-dim">
-              {plural(total, "change", "changes")} since {DAY.format(new Date(oldest * 1000))}
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={onDismiss}
-            aria-label="Close the history"
-            className={cn(
-              "ml-auto rounded-md p-1 text-dim transition-colors duration-150",
-              "hover:text-text motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </div>
+        {total > 0 && oldest !== null && (
+          <p className="ml-auto min-w-0 truncate font-mono text-[0.7rem] text-dim">
+            {plural(total, "change", "changes")} since {DAY.format(new Date(oldest * 1000))}
+          </p>
+        )}
+      </div>
 
-        {/* The chips ride above the list rather than inside it, so a filter that empties the
-            list is still on screen to be undone. */}
-        <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-5 py-3">
-          <div
-            role="group"
-            aria-label="Filter the history by kind"
-            className="flex flex-wrap gap-2"
-          >
-            {chips.map((band) => (
-              <ToggleChip
-                key={band.id}
-                label={band.label}
-                hint={band.hint}
-                pressed={!hidden.includes(band.id)}
-                onClick={() => onToggle(band.id)}
-              />
-            ))}
-          </div>
-          {hidden.length > 0 && total > 0 && (
-            <p aria-live="polite" className="font-mono text-[0.7rem] text-dim">
-              {listed} of {total} shown
-            </p>
-          )}
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6">
-          <Body
-            days={shown}
-            pending={query.isPending}
-            error={query.isError ? query.error : null}
-            empty={total === 0}
-            onShowEverything={onShowEverything}
-          />
-        </div>
-      </motion.div>
-    </motion.div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6">
+        <Body
+          days={shown}
+          pending={query.isPending}
+          error={query.isError ? query.error : null}
+          empty={total === 0}
+          onShowEverything={onShowEverything}
+        />
+      </div>
+    </>
   );
 }
 
@@ -435,7 +344,7 @@ function Body({
         {error instanceof Error && error.message
           ? error.message
           : "The app could not reach its own database."}{" "}
-        Close the drawer and open it again to try once more.
+        Close the dialog and open it again to try once more.
       </Notice>
     );
   }
@@ -488,8 +397,11 @@ function Section({ shown }: { shown: ShownDay }) {
       <div
         className={cn(
           "sticky top-0 flex items-baseline gap-2.5 bg-bg py-1.5",
-          // The heading sits over the rows scrolling under it — inside this drawer's own
-          // stacking context, which the scrim's layer opens.
+          // The heading sits over the rows scrolling under it. `sticky` answers to the nearest
+          // scrolling ancestor, which is the body's own scroller either way — the panel being a
+          // centred dialog rather than a full-height drawer changes how tall that scroller is
+          // and nothing about how this behaves. The rung is scoped to the dialog's own stacking
+          // context, which the shell's scrim opens.
           LAYER.header,
         )}
       >
@@ -515,7 +427,7 @@ function Section({ shown }: { shown: ShownDay }) {
  * The day's copies, in and out.
  *
  * Drawn as `+7 / −6` and spoken as a sentence: read literally, that string is "plus seven slash
- * minus six", and this is the one figure in the drawer that no row's sentence already carries.
+ * minus six", and this is the one figure in this dialog that no row's sentence already carries.
  */
 function Delta({ gained, lost }: { gained: number; lost: number }) {
   const quiet = gained === 0 && lost === 0;
