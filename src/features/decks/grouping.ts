@@ -34,6 +34,28 @@ export const GROUP_BY_OPTIONS: readonly { value: GroupBy; label: string }[] = [
   { value: "type", label: "Type" },
 ];
 
+/** What a deck is grouped by until somebody says otherwise — the editor's initial state, and
+ *  what a stored value this build cannot draw falls back to. */
+export const DEFAULT_GROUP_BY: GroupBy = "category";
+
+/** Derived from {@link GROUP_BY_OPTIONS} rather than written out a second time: a fourth
+ *  grouping added to that array is offered *and* accepted from storage in one edit. */
+const GROUP_BY_VALUES: ReadonlySet<string> = new Set(GROUP_BY_OPTIONS.map((o) => o.value));
+
+/**
+ * A stored `Group by` as a mode this build actually has, or {@link DEFAULT_GROUP_BY}.
+ *
+ * `DeckRow.lastGroupBy` arrives as a `string` on purpose — the vocabulary is this module's and
+ * a database outlives the app, so a row written by a newer build, or one holding a word this
+ * build has since dropped, is a value the wire has to carry rather than reject. What it must
+ * **not** do is reach the toolbar: a select holding a value that is in none of its own options
+ * is a control the reader cannot see their way out of. So an unknown word degrades to the
+ * default and the editor draws a mode it can also leave.
+ */
+export function asGroupBy(value: string): GroupBy {
+  return GROUP_BY_VALUES.has(value) ? (value as GroupBy) : DEFAULT_GROUP_BY;
+}
+
 /**
  * One heading and the cards under it.
  *

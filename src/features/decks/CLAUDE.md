@@ -51,8 +51,9 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s
-  `newest([...])` counts **six** of them: update (rename, cover, Built toggle), add-card,
-  set-quantity, move, missing-to-wishlist, swap-printing.
+  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle),
+  add-card, set-quantity, move, missing-to-wishlist, swap-printing. The two outside it are
+  `setTag` and `rememberView`, each for its own reason stated on its definition.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
@@ -60,6 +61,16 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   (`useSwapFromPane`, `useSidebarDrops`) borrow a mutation whole and own only their own reporting.
 - The deck _row_ is a different hook: the gallery's `useDecks` owns create, update, remove and
   duplicate.
+- **Switching the theory list on _moves_ the live deck into it — it does not copy it.** What the
+  reader has built is the plan, so it becomes the theory list and `live` starts empty and fills as
+  they acquire cards; the same write sets `last_variant = 'theory'`, so the editor lands where
+  the deck now is instead of on a blank page nobody emptied. Only on the false→true transition,
+  and only when the theory list is empty. **The rule it replaces copied**, on the reasoning that
+  an empty theory list beside a full live one reads as data loss. Right danger, wrong half:
+  nothing is deleted either way — the two lists are the same table — and what the copy actually
+  handed the reader was two identical lists with no way to tell which one they were editing.
+  `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
+  plan".
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
@@ -160,6 +171,31 @@ price | type`). An **inactive category stays its own group in all three grouping
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, `StackView`'s
   pinned column — still sees a sideboard in the two modes that otherwise have no categories in
   them, which is the right answer in both cases and is a special case in neither.
+- **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
+  switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
+  one holding cards and `live` is the column that fills as the reader acquires them. Reading
+  left to right is then plan → reality, which is the direction the difference readout beside it
+  already counts in.
+- **The editor reopens on the view the reader left, and the deck row is where that is kept.**
+  `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
+  `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
+  history and reallocates nothing — looking at a deck is not editing it. It is deliberately
+  **not** `useAppStore`: `cardZoom`, `searchView` and `collectionView` are one session-wide
+  answer, and which list of a _particular_ deck the reader was reading is a fact about that deck.
+- **The narrowing is TypeScript's, and that is the boundary rather than a missing constraint.**
+  `ALTER TABLE ADD COLUMN` cannot add a CHECK, so Rust validates only `last_variant`, whose
+  vocabulary the crate owns, and stores the other two verbatim as facts. `GroupBy` and `SortBy`
+  are this layer's words, so `asGroupBy` (`grouping.ts`) and `asSortBy` (`sorting.ts`) narrow
+  them on read and fall back to the default — a stored word nothing offers reopens the editor on
+  `category`/`alphabetical` rather than in a state no control can draw.
+- **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
+  interesting part.** The editor is already showing what the reader picked; this write only makes
+  it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
+  back the three fields it *restores from* a beat after the press, which is how a second press
+  made inside that beat gets undone by the first one's echo. It is also outside `DeckEditor`'s
+  refused-write family on purpose — **that family is writes to what is _in_ the deck**, and this
+  one changes no card — so its failure is silent, the cost being a deck that reopens on its old
+  tab.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:

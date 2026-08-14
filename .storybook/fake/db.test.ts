@@ -18,6 +18,7 @@ import type {
   CollectionPage,
   CollectionSortKey,
   DeckDetail,
+  DeckVariant,
   EntryChange,
   EntryInput,
   ImportResolveLine,
@@ -105,6 +106,9 @@ function deck(over: Partial<FakeDeck> = {}): FakeDeck {
     folderId: null,
     notes: null,
     theoryEnabled: false,
+    lastVariant: "live",
+    lastGroupBy: "category",
+    lastSortBy: "alphabetical",
     isBuilt: false,
     archived: false,
     updatedAt: WHEN,
@@ -2118,6 +2122,64 @@ describe("the deck row itself", () => {
     const row = writeHandlers(db).deck_update({ id: 1, patch: { isBuilt: true } });
     expect(row).toMatchObject({ name: "Burn", description: "fast", isBuilt: true });
   });
+
+  /**
+   * The three columns that remember where the reader was — and the three things this write
+   * deliberately does **not** do, which is most of why it is a command of its own rather than a
+   * `DeckPatch` field: no `updated_at` bump, no history row, no reallocation. Looking at a tab
+   * is not editing a deck, and a patch field would have inherited all three.
+   */
+  it("writes each view-state field, leaves an absent one alone, and moves nothing else", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    const row = db.decks[0];
+    const state = () => [row.lastVariant, row.lastGroupBy, row.lastSortBy];
+    expect(state()).toEqual(["live", "category", "alphabetical"]);
+
+    w.deck_set_view_state({ deckId: 1, viewState: { variant: "theory" } });
+    expect(state()).toEqual(["theory", "category", "alphabetical"]);
+
+    // The variant is not sent this time, so it is still the one the press before chose: absent
+    // means "leave it", per field, so three controls write without sharing any state.
+    w.deck_set_view_state({ deckId: 1, viewState: { groupBy: "manaValue", sortBy: "price" } });
+    expect(state()).toEqual(["theory", "manaValue", "price"]);
+
+    expect(row.updatedAt).toBe(WHEN);
+    expect(db.deckAudit).toEqual([]);
+  });
+
+  /**
+   * The three refusals, and they are checked by three different amounts on purpose: the deck has
+   * to exist, the variant is the backend's own word list, and a grouping or a sort is only
+   * refused for being **blank** — a build that refused a word it did not know would refuse the
+   * future, since that vocabulary is TypeScript's.
+   */
+  it("refuses an unknown deck, an unknown variant and a blank mode, and stores the rest", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    expect(() =>
+      w.deck_set_view_state({ deckId: 99, viewState: { variant: "theory" } }),
+    ).toThrow(/not there any more/);
+    expect(() =>
+      w.deck_set_view_state({
+        deckId: 1,
+        viewState: { variant: "sideboard" as DeckVariant },
+      }),
+    ).toThrow(/not a deck variant/);
+    expect(() => w.deck_set_view_state({ deckId: 1, viewState: { sortBy: "" } })).toThrow(
+      /cannot be blank/,
+    );
+    // Refused whole, and this is the call that proves it: every field is checked before the row
+    // is touched, so a good `variant` beside a blank `groupBy` lands neither.
+    expect(() =>
+      w.deck_set_view_state({ deckId: 1, viewState: { variant: "theory", groupBy: "  " } }),
+    ).toThrow(/cannot be blank/);
+    expect([db.decks[0].lastVariant, db.decks[0].lastGroupBy]).toEqual(["live", "category"]);
+
+    // Anything that is not blank is stored, whether or not this build has a mode by that name.
+    w.deck_set_view_state({ deckId: 1, viewState: { groupBy: "byArtist" } });
+    expect(db.decks[0].lastGroupBy).toBe("byArtist");
+  });
 });
 
 describe("missing to the wishlist", () => {
@@ -2423,6 +2485,9 @@ describe("the busy fault", () => {
       // the mode is looked at, which is the order the Rust has — but it is here because the
       // rule this record stands for is that `invoke` matches by name, not by position.
       mode: "artist",
+      // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
+      // absent means "leave it".
+      viewState: {},
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -2440,10 +2505,15 @@ describe("the busy fault", () => {
     // again: the write refuses under a sync, the read (`printing_group_by`, on `db_read`) does
     // not. Re-measured 2026-08-14, on a branch whose siblings touch no handler in this table.
     //
+    // The tab memory then added `deck_set_view_state` — the one write here that answers `void`,
+    // moves no `updated_at` and records no history, and refusable all the same because it takes
+    // the same write lock as every other. That it changes so little is exactly why it belongs in
+    // this sweep: a handler that forgot `refuseIfBusy` would look identical from outside.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(38);
+    expect(names).toHaveLength(39);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -2996,21 +3066,70 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(wish.quantity).toBeGreaterThanOrEqual(1);
   });
 
-  it("switching the plan on seeds it from live, and switching it off keeps every row", () => {
+  it("switching the plan on moves the deck into it, and switching it off keeps every row", () => {
     const { db, w } = testbed();
     const rowsOf = (variant: string) =>
       db.deckCards.filter((dc) => dc.deckId === 1 && dc.variant === variant).length;
     const live = rowsOf("live");
     expect(rowsOf("theory")).toBe(0);
 
-    // Deck 1 has no plan at all, so the flag fills it in the same write — an empty plan beside
-    // a full deck reads as data loss rather than as a blank page.
-    expect(w.deck_update({ id: 1, patch: { theoryEnabled: true } }).theoryEnabled).toBe(true);
+    // Deck 1 has no plan at all, so the switch hands it the deck: what the reader built **is**
+    // the plan now, and the live list is what they will fill as they acquire it. A copy would
+    // leave a live list nobody had decided was real.
+    const row = w.deck_update({ id: 1, patch: { theoryEnabled: true } });
+    expect(row.theoryEnabled).toBe(true);
     expect(rowsOf("theory")).toBe(live);
+    expect(rowsOf("live")).toBe(0);
+    // And the reader is left on the tab their cards are on, in the same write.
+    expect(row.lastVariant).toBe("theory");
 
-    // Off keeps every row: it hides a switch, it does not delete a list.
+    // Off keeps every row: it hides a switch, it does not delete a list. Nothing comes back to
+    // live either — the move is not undone by putting the switch back.
     w.deck_update({ id: 1, patch: { theoryEnabled: false } });
     expect(rowsOf("theory")).toBe(live);
+    expect(rowsOf("live")).toBe(0);
+  });
+
+  /**
+   * The guard, and it is about not destroying an edit: a plan the reader has already started is
+   * not something a **re-press** of the switch may pour the live deck over.
+   *
+   * Deck 4 is the case in one deck — it has both lists — and switching it off and back on is
+   * the exact gesture that would do the damage. The reader who really does want the deck copied
+   * into a plan they have begun asks for it by name, through `deck_theory_copy_from_live`.
+   */
+  it("leaves a plan the reader has already started alone, and the deck beside it", () => {
+    const { db, w } = testbed();
+    const rowsOf = (variant: string) =>
+      db.deckCards.filter((dc) => dc.deckId === 4 && dc.variant === variant).length;
+    const [live, theory] = [rowsOf("live"), rowsOf("theory")];
+    expect([live, theory]).not.toContain(0);
+
+    w.deck_update({ id: 4, patch: { theoryEnabled: false } });
+    w.deck_update({ id: 4, patch: { theoryEnabled: true } });
+
+    expect([rowsOf("live"), rowsOf("theory")]).toEqual([live, theory]);
+  });
+
+  /**
+   * The move releases what the deck was holding, and deck 2 is the only place that is visible:
+   * it is the one **built** deck, so its claims come off what every other deck can see.
+   *
+   * `deck_allocations` is `live`-only, so in the app the move is followed by a reallocation that
+   * drops this deck's rows. Here `allocate` reads the live list at read time and finds it empty,
+   * which is the same answer arrived at from the other end — and the number that moves is the
+   * one the editor's story already names: deck 1 can reach 1 of the 4 Counterspells it wants
+   * while deck 2 is built and holding one, and 2 the moment deck 2 is not holding it.
+   */
+  it("releases the deck's claims, because a plan reserves nothing", () => {
+    const { r, w } = testbed();
+    const counterspell = () =>
+      r.deck_get({ id: 1, variant: "live" })!.cards.find((c) => c.name === "Counterspell")!;
+    expect(counterspell().ownedQuantity).toBe(1);
+
+    w.deck_update({ id: 2, patch: { theoryEnabled: true } });
+
+    expect(counterspell().ownedQuantity).toBe(2);
   });
 
   it("puts a custom cover on without clearing the card underneath it", () => {
