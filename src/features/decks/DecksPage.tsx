@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
@@ -23,6 +24,7 @@ import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { CreateDeckDialog } from "./CreateDeckDialog";
+import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import {
   buildFolderTree,
@@ -374,7 +376,7 @@ export function DecksPage() {
   }, []);
 
   const askDelete = useCallback(
-    (deck: DeckRow, opener: HTMLButtonElement) =>
+    (deck: DeckRow, opener: HTMLButtonElement | null) =>
       open({ kind: "deleteDeck", deckId: deck.id }, opener),
     [open],
   );
@@ -420,6 +422,33 @@ export function DecksPage() {
       open({ kind: "deckSettings" }, opener);
     },
     [open],
+  );
+
+  /**
+   * The tile's menu, as data — one object for the whole wall rather than one per tile.
+   *
+   * **Every opener is `null`, and that is the menu's own contract rather than an omission.** A
+   * layer raised from a menu has no trigger of its own on screen; the panel hands the caret back
+   * to the element that was right-clicked before it runs the row's `onSelect`, so a second
+   * hand-back out of `openerRef` would fight it. `askDelete` is the confirmation and not the
+   * delete — see {@link DeckMenuDeps}, which carries no `remove` at all.
+   *
+   * The two mutations are taken as `mutate` rather than as the mutation objects: `useMutation`
+   * answers a fresh object every render and a stable `mutate`, so this memo would otherwise be
+   * rebuilt on every render of a wall that redraws on every drag.
+   */
+  const moveDeck = setFolder.mutate;
+  const duplicateDeck = decks.duplicate.mutate;
+  const deckMenuDeps = useMemo<DeckMenuDeps>(
+    () => ({
+      setOpenDeckId,
+      startRename: (deck) => startDeckRename(deck, null),
+      openSettings: (deckId) => openDeckSettings(deckId, null),
+      moveToFolder: (deckId, folderId) => moveDeck({ id: deckId, folderId }),
+      duplicate: duplicateDeck,
+      askDelete: (deck) => askDelete(deck, null),
+    }),
+    [setOpenDeckId, startDeckRename, openDeckSettings, moveDeck, duplicateDeck, askDelete],
   );
 
   const confirmDelete = useCallback(
@@ -834,7 +863,7 @@ export function DecksPage() {
                   onAskMove={askMove}
                   onStartRename={startDeckRename}
                   onRename={renameDeck}
-                  onOpenSettings={openDeckSettings}
+                  menuDeps={deckMenuDeps}
                   onMove={(folderId) =>
                     setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                   }
@@ -894,7 +923,7 @@ export function DecksPage() {
                       onAskMove={askMove}
                       onStartRename={startDeckRename}
                       onRename={renameDeck}
-                      onOpenSettings={openDeckSettings}
+                      menuDeps={deckMenuDeps}
                       onMove={(folderId) =>
                         setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                       }
@@ -1115,7 +1144,7 @@ function DeckTile({
   onAskMove,
   onStartRename,
   onRename,
-  onOpenSettings,
+  menuDeps,
   onMove,
   onConfirmDelete,
   onCancelPanel,
@@ -1135,8 +1164,10 @@ function DeckTile({
   onStartRename: (deck: DeckRow, opener: HTMLButtonElement | null) => void;
   /** The field's own Save. */
   onRename: (name: string) => void;
-  /** Alt+Enter — and the menu's "Deck settings…". */
-  onOpenSettings: (deckId: number, opener: HTMLButtonElement | null) => void;
+  /** Everything the tile's right-click menu does that is not the deck. One object for the whole
+   *  wall, built by {@link DecksPage} — a menu is data, and `buildDeckMenu` is what turns this
+   *  and the deck into rows. */
+  menuDeps: DeckMenuDeps;
   onMove: (folderId: number | null) => void;
   onConfirmDelete: (deck: DeckRow) => void;
   /** Cancel: a control *in* the layer, so the caret goes back to what opened it. */
@@ -1146,6 +1177,7 @@ function DeckTile({
 }) {
   const ref = useRef<HTMLLIElement>(null);
   const { id, name } = deck;
+  const { menu } = useContextMenu();
 
   // The gesture half of filing. The whole tile is the handle — the art is the deck — and the
   // controls in the corner mark themselves `data-no-drag` so a press on Delete is a press on
@@ -1171,22 +1203,24 @@ function DeckTile({
       <button
         type="button"
         onClick={() => onOpen(deck.id)}
-        // The two keys a file manager gives a file, for the two things this tile could not do
-        // until now: **F2 renames** — the tree's own key, one floor along, and the keyboard's
-        // route to the field below — and **Alt+Enter opens the deck's properties**, which here
-        // is everything about a deck that is not a card in it. Both are shortcuts rather than
-        // the only way in: the tile's context menu is the pointer's route to each.
+        // The tile's right-click menu, **on the button rather than on the `<li>`**: the panel
+        // hands the caret back to the element the menu was opened on, and an `<li>` cannot take
+        // it — `focus()` on a non-focusable node is a no-op, so Escape would drop the reader on
+        // `<body>`. It is also the element a `menuKey` (Shift+F10) has to sit on, since only a
+        // focusable one receives the press.
         //
-        // `preventDefault` on the Alt+Enter arm is load-bearing: Enter on a button is an
-        // activation, so without it the settings dialog would open *and* the deck would.
+        // `build` is a thunk, so a wall of forty tiles builds no menu until one is right-clicked;
+        // the handler stops the event itself, so an outer surface offering its own menu never
+        // replaces these rows.
+        onContextMenu={menu(() => buildDeckMenu(deck, menuDeps))}
+        // **F2 renames the tile the caret is on** — the tree's own key, one floor along
+        // (`FolderTree`'s row answers the same press), and the keyboard's route to the field
+        // below. A shortcut rather than the only way in: the tile's context menu is the
+        // pointer's route to the same field.
         onKeyDown={(e) => {
-          if (e.key === "F2") {
-            e.preventDefault();
-            onStartRename(deck, e.currentTarget);
-          } else if (e.key === "Enter" && e.altKey) {
-            e.preventDefault();
-            onOpenSettings(deck.id, e.currentTarget);
-          }
+          if (e.key !== "F2") return;
+          e.preventDefault();
+          onStartRename(deck, e.currentTarget);
         }}
         // How the caret finds its way back here from an editor: the tile the reader left
         // through is the tile they should return to, and this is the only handle that

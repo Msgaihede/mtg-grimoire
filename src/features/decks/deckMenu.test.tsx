@@ -179,8 +179,37 @@ describe("buildDeckMenu", () => {
     expect(deckFolderList).not.toHaveBeenCalled();
 
     expand(moveTo);
-    await screen.findByRole("menuitem", { name: /^Modern/ });
+    const row = await screen.findByRole("menuitem", { name: /^Modern/ });
     expect(deckFolderList).toHaveBeenCalled();
+
+    // The two attributes the panel finds a row by. The caret reaches these rows through their
+    // **role**, but the pointer's hover handler resolves a row through `ROW_ATTR` — and without
+    // it a submenu opened by hover stays open while the pointer sweeps past to the row below,
+    // which is a defect nothing else here would notice.
+    expect(row).toHaveAttribute("data-menu-row", "destination-3");
+    expect(row).toHaveAttribute("data-menu-row-button");
+  });
+
+  /**
+   * **The menu and the tile's own Move popup must answer the same about one deck.**
+   *
+   * `DecksPage` hands `MoveToFolder` a `currentId` normalised through the folder list it really
+   * has (`folderOf`), so a deck whose `folderId` names a folder that list has lost reads as being
+   * at the root. Passed raw, this menu would mark nothing inert and offer a live
+   * `deck_set_folder(id, null)` for a deck already at the root — a write that changes nothing and
+   * bumps `updated_at`. `folderDestinations` normalises, so both surfaces agree.
+   */
+  it("marks the root as where it is now for a deck whose folder has left the list", async () => {
+    const moveToFolder = vi.fn();
+    const menu = buildDeckMenu({ ...ATRAXA, folderId: 99 }, deps({ moveToFolder }));
+    expand(find(menu, "Move to") as MenuLazy);
+
+    const root = await screen.findByRole("menuitem", { name: /^All decks/ });
+    expect(root).toHaveAttribute("aria-disabled", "true");
+    expect(root).toHaveTextContent("Here now");
+
+    await userEvent.click(root);
+    expect(moveToFolder).not.toHaveBeenCalled();
   });
 
   it("marks the folder the deck is already in as where it is now", async () => {
@@ -356,11 +385,23 @@ describe("folderDestinations", () => {
     });
   });
 
-  /** A `folderId` naming a folder this list does not carry marks nothing — the tree resolves
-   *  such a deck at the root, and a destination list that greyed a row for it would be greying
-   *  the wrong one. */
-  it("marks nothing when the deck is filed under a folder the list has lost", () => {
+  /**
+   * A `folderId` naming a folder this list does not carry resolves at the **root**, so the root
+   * is what reads "Here now" — the rule `buildFolderTree` applies to a child with a missing
+   * parent, and the one `DecksPage`'s `folderOf` applies before it hands the tile's own
+   * `MoveToFolder` a `currentId`.
+   *
+   * **This is the case where a menu and the popup one press away could disagree about one deck.**
+   * Read raw, the menu would mark nothing and offer a live `deck_set_folder(id, null)` for a deck
+   * that is already at the root: the no-op write that bumps `updated_at` and changes nothing,
+   * which is what `Here now` exists to prevent. Normalised inside `folderDestinations` rather
+   * than at the call site, so no third caller can miss it.
+   */
+  it("marks the root as where it is now when the deck's folder has left the list", () => {
     const destinations = folderDestinations(FOLDERS, { currentId: 99, moving: null });
-    expect(destinations.filter((d) => d.inert !== null)).toEqual([]);
+
+    expect(destinations.filter((d) => d.inert !== null)).toEqual([
+      { folderId: null, name: "All decks", inert: "Here now" },
+    ]);
   });
 });

@@ -70,14 +70,27 @@ export interface FolderDestination {
  * not go inside itself or inside anything it holds — the backend refuses it in words, and that
  * refusal is a fence rather than the affordance, because `deck_folders.parent_id` cascades onto
  * itself and a cycle is a graph SQLite would walk forever the day the folder is deleted.
+ *
+ * **`currentId` is normalised against this very list, and that is done here rather than at either
+ * call site.** A `folderId` naming a folder the list does not carry — a refused folder read, a
+ * folder another surface deleted between the two reads — resolves to the **root**, which is the
+ * rule `buildFolderTree` already applies to a child whose parent is missing and the rule
+ * `DecksPage`'s own `folderOf` applies before it hands the tile's `MoveToFolder` a `currentId`.
+ * Reading it raw is how a menu and the popup one press away come to two answers about one deck:
+ * the popup marks `All decks` "Here now" and the menu marks nothing, offering a live
+ * `deck_set_folder(id, null)` for a deck that already resolves to the root — the no-op write that
+ * bumps `updated_at` and changes nothing, which is the whole thing {@link HERE_NOW} exists to
+ * prevent. Folded in here so that a third caller cannot miss it.
  */
 export function folderDestinations(
   folders: readonly DeckFolder[],
   { currentId, moving }: { currentId: number | null; moving: number | null },
 ): FolderDestination[] {
   const held = moving === null ? null : folderDescendants(folders, moving);
+  const here =
+    currentId !== null && folders.some((folder) => folder.id === currentId) ? currentId : null;
   const inertness = (id: number | null): string | null => {
-    if (id === currentId) return HERE_NOW;
+    if (id === here) return HERE_NOW;
     if (id === null || moving === null) return null;
     if (id === moving) return "Cannot go inside itself";
     return held?.has(id) === true ? "Cannot go inside what it holds" : null;

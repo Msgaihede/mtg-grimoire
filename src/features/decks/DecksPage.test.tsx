@@ -63,6 +63,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DecksPage } from "./DecksPage";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useAppStore } from "@/lib/store";
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
@@ -198,11 +199,31 @@ function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  // The menu provider is `App.tsx`'s in the shipped window, and it is here for the tile's
+  // right-click. `useContextMenu` degrades to a no-op without one — deliberately, so that every
+  // surface's own suite and story can render alone — so a test that forgot it would find a
+  // right-click doing nothing rather than an error saying why.
+  return render(
+    <QueryClientProvider client={client}>
+      <ContextMenuProvider>{ui}</ContextMenuProvider>
+    </QueryClientProvider>,
+  );
 }
 
 /** The tile, addressed the way a reader sees it: the deck's name first. */
 const tileFor = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}`) });
+
+/**
+ * A right-click, and the menu it opens.
+ *
+ * A real `MouseEvent` rather than `fireEvent.contextMenu`, because the handler reads `clientX`
+ * and `clientY` to place the panel — and `bubbles`, because the menu's own suppressor and the
+ * surface's handler are on different elements.
+ */
+async function rightClick(target: HTMLElement) {
+  target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  await screen.findByRole("menu");
+}
 
 beforeEach(() => {
   deckList.mockReset().mockResolvedValue([BURN, DRAFT, FILED]);
@@ -757,21 +778,58 @@ describe("DecksPage", () => {
    * mutation and imports no hook that reaches the backend, which is exactly what lets a third
    * host draw it; nothing in that file or its suite changed to allow this.
    *
-   * Alt+Enter is Windows' own Properties key, beside F2 above: two file-manager gestures for
-   * the two things a deck has that its tile cannot show. The pointer's route is the menu.
+   * Reached the way the spec says it is reached: the tile's own right-click menu.
    */
   it("opens a deck's settings over the gallery, without opening the editor", async () => {
     wrap(<DecksPage />);
-    const tile = await tileFor("Burn");
-    tile.focus();
 
-    await userEvent.keyboard("{Alt>}{Enter}{/Alt}");
+    await rightClick(await tileFor("Burn"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Deck settings…" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Deck settings" });
     expect(await within(dialog).findByLabelText("Name")).toHaveValue("Burn");
     expect(deckGet).toHaveBeenCalledWith(4, "live", expect.anything());
     // The editor is what this saves the reader: the deck is not opened.
     expect(useAppStore.getState().openDeckId).toBeNull();
+  });
+
+  /**
+   * The menu's other five rows, and the one that must not write.
+   *
+   * The rows themselves are `deckMenu.test.tsx`'s; what is asserted here is the **wiring** — that
+   * this screen's callbacks are what the menu was built with, which is the half a pure builder's
+   * test cannot see.
+   */
+  it("offers the deck's menu on a right-click, and routes delete through the question", async () => {
+    wrap(<DecksPage />);
+
+    await rightClick(await tileFor("Burn"));
+
+    expect(screen.getAllByRole("menuitem").map((row) => row.textContent)).toEqual([
+      "Open deck",
+      "Rename…",
+      "Move to",
+      "Deck settings…",
+      "Duplicate",
+      "Delete…",
+    ]);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    // A menu opens by accident, so the destructive row asks rather than writes.
+    expect(deckDelete).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: /delete burn/i })).toBeInTheDocument();
+  });
+
+  /** The field the menu's "Rename…" opens is the tile's own — the same one F2 opens, and not a
+   *  second control for one gesture. */
+  it("opens the tile's rename field from the menu", async () => {
+    wrap(<DecksPage />);
+
+    await rightClick(await tileFor("Burn"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+
+    expect(await screen.findByLabelText("Rename Burn")).toHaveValue("Burn");
   });
 
   /** Closed is nothing mounted — `DeckDialog`'s guarantee, and what makes hosting this on a
