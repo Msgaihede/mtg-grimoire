@@ -15,7 +15,7 @@ import { deckGroupProps, useCategoryDrop, type DeckCardActions } from "../cardCo
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns, SIDEBOARD_ATTR, splitSideboard } from "./columns";
+import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -69,11 +69,11 @@ export function stackColumnWidth(zoom: number): number {
  * `DropIndicator`'s `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for
  * the same reason.
  *
- * **The Sideboard's rail is deliberately not one of these.** This attribute means "a box
- * `packColumns` produced", and the rail is by construction the one box it did not: it is taken
- * out of the packer's input, so a sweep that counts columns is counting what the pack decided
- * and must not find it. It carries `SIDEBOARD_ATTR` (`columns.ts`) alone — one name, shared with
- * `TextView`, which has no columns of this kind to be confused with.
+ * **The rail is deliberately not one of these.** This attribute means "a box `packColumns`
+ * produced", and the rail is by construction the one box it did not: its groups are taken out of
+ * the packer's input, so a sweep that counts columns is counting what the pack decided and must
+ * not find it. It carries `RAIL_ATTR` (`columns.ts`) alone — one name, shared with `TextView`,
+ * which has no columns of this kind to be confused with.
  */
 export const STACK_COLUMN_ATTR = "data-stack-column";
 
@@ -142,13 +142,14 @@ export function StackView({
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
   // **The split happens before the pack, and it has to.** `packColumns` fills a column in the
-  // reader's own order and never re-orders anything, so a sideboard left in that stream lands
-  // in whichever column happened to have room for it. A rail held against the right edge is not
-  // a column the packer may put anything in, so it is taken out of the packer's *input* rather
-  // than pulled back out of its answer — which would mean lifting a group out of a column
-  // somebody else is already sharing and re-flowing the rest. Why `kind === "side"` is the whole
-  // test, and why there is no grouping-mode check beside it: {@link splitSideboard}.
-  const { flow, sideboard } = splitSideboard(groups);
+  // reader's own order and never re-orders anything, so a sideboard or a maybeboard left in that
+  // stream lands in whichever column happened to have room for it. A rail held against the right
+  // edge is not a column the packer may put anything in, so those groups are taken out of the
+  // packer's *input* rather than pulled back out of its answer — which would mean lifting a group
+  // out of a column somebody else is already sharing and re-flowing the rest. Which kinds are
+  // railed, why the rail is not sorted here, and why there is no grouping-mode check beside the
+  // kind: {@link splitRail}.
+  const { flow, rail } = splitRail(groups);
   // The pack has to see the zoom too — a taller stack is fewer groups to a column. Wrapped
   // rather than passed by name, because `packColumns` takes a measurement of one item and knows
   // nothing about decks, let alone about how big the reader is drawing them.
@@ -226,21 +227,30 @@ export function StackView({
           </div>
         ))}
       </div>
-      {/* The rail: the Sideboard, on the right, never packed and never wrapped away from the
-          edge while there is room for it. It draws for an **empty** Sideboard too — an empty
-          pile is where the next sideboard card goes, and a rail that appeared with the first
-          card would move the whole layout under the reader's hand at the moment they were
-          using it. `ml-auto` is a no-op while the flowing half is `flex-1`, and does the work
-          in the one case that matters: the rail on its own line, still right. The width is the
-          same `stackColumnWidth` the columns are, inline and in both halves of the shorthand,
-          because a Tailwind class built from a number emits no CSS rule at all. */}
-      {sideboard.length > 0 && (
+      {/* The rail: the piles played *beside* the deck — the Sideboard and the Maybeboard, in the
+          reader's own `sortOrder` and never re-arranged here — on the right, never packed and
+          never wrapped away from the edge while there is room for it. It draws for an **empty**
+          pile too: an empty pile is where the next card of that kind goes, and a rail that
+          appeared with the first card would move the whole layout under the reader's hand at the
+          moment they were using it.
+
+          **The Maybeboard is seeded switched off, so this rail routinely holds a dimmed pile**,
+          which is the first thing a reader will notice about it and needs no code here at all: a
+          group in the rail is the same `StackGroup` as one in the flow, so the wash, the dimmed
+          heading and the stack's `opacity-60` arrive with it rather than being defined twice. The
+          rail is *where* a pile is drawn, never *what* it is.
+
+          `ml-auto` is a no-op while the flowing half is `flex-1`, and does the work in the one
+          case that matters: the rail on its own line, still right. The width is the same
+          `stackColumnWidth` the columns are, inline and in both halves of the shorthand, because a
+          Tailwind class built from a number emits no CSS rule at all. */}
+      {rail.length > 0 && (
         <div
-          {...{ [SIDEBOARD_ATTR]: "" }}
+          {...{ [RAIL_ATTR]: "" }}
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
           className="ml-auto flex flex-col gap-5"
         >
-          {sideboard.map((group) => (
+          {rail.map((group) => (
             <StackGroup
               key={group.key}
               group={group}

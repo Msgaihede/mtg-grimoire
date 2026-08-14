@@ -306,7 +306,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   `kind`, so a switched-off
   Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
-  views' Sideboard rail — still sees a sideboard in the two modes that otherwise have no categories
+  views' rail — still sees a sideboard in the two modes that otherwise have no categories
   in them, which is the right answer in both cases and is a special case in neither.
 - **The deck stats are a band at the foot of the editor, and there is no control that hides
   them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
@@ -448,23 +448,69 @@ price | type`). An **inactive category stays its own group in all three grouping
   `sum(curve) + (variableCost ?? 0) + unknownManaValue` is `nonlands` in both modes. The tenth
   bar's width arithmetic, and why the 280px panel did not grow to hold it, are in
   [decks-storage.md](../../../docs/reference/decks-storage.md).
-- **An empty category draws no heading**, and the exception is the four seeded
-  `PREDEFINED_CATEGORIES` (Commander, Sideboard, Companion, Maybeboard), which draw empty because
-  they are the fixed zones and an empty command zone is itself a fact about the deck. The rule is
-  `grouping.ts`'s **`drawsWhenEmpty`**, in one place so it can be narrowed to Commander alone
-  later, and it takes a `Pick<CardGroup, "isPredefined">` so it **structurally cannot read the
-  name** — a pile a user called "Sideboard" is theirs and hides like any other. Derived groups
-  (`manaValue`, `type`) are built _from_ cards, so an empty one never existed to hide.
+- **An empty category draws its heading, and that is the reverse of the rule this folder used to
+  carry.** A pile the reader made and emptied is a _place_: an empty `Ramp` is where the next ramp
+  spell goes, and a column that vanished with its last card would move the layout under their hand
+  and take its own drop target with it. The old rule hid every empty pile bar the four seeded ones,
+  on the argument that a category is a card's **function** now (`autoCategory.ts`: Removal, Ramp,
+  Draw and ten more), so a deck accumulates columns faster than it fills them — an argument that
+  was really about a deck being _narrowed_, which is the one case it still governs. The rule is
+  still `grouping.ts`'s **`drawsWhenEmpty`**, in one place, and it is asked about **empty piles
+  only**: `buildGroups`' `cards.length > 0` arm runs in front of the call, so no answer here can
+  hide cardboard — a Modern deck whose Commander pile still holds the card it was built around
+  draws that pile.
+- **Two of the four fixed zones are conditional now, and each is conditional for its own reason.**
+  `commander` draws empty only where the deck's format has a command zone
+  (`FormatSpec.requiresCommander`, off `useFormatSpecs`): an empty command zone is a fact about a
+  deck's _validity_ only in a format that wants a commander, and in a Standard deck it is a heading
+  about a rule that does not apply. `companion` never draws empty in any format: a companion is a
+  card you either have or do not, so a slot for one is a slot for nothing until it is filled, and
+  the heading arrives with the card. Sideboard, Maybeboard and every pile of the reader's own are
+  unconditional. **`spec` is `null` twice over** — while the specs load, and for a deck whose
+  `format_key` has left the seed — and `?? false` is the deliberate answer to both: no format
+  opinion, no empty command zone, and the zone appears the moment it holds a card.
+- **`drawsWhenEmpty` takes a `Pick<CardGroup, "kind" | "isPredefined">` and an `EmptyGroupRules`,
+  and still structurally cannot read the name.** `deck_category_create` takes `(deck_id, name)`
+  and no kind, so `commander` and `companion` can only ever be the two seeded zones, while a pile a
+  reader called "Sideboard" is a `main` like every other pile of theirs. The old note that the rule
+  sat in one place "so it can be narrowed to Commander alone later" was a prediction and it has
+  partly come true: the narrowing happened, on `kind` rather than on a name list, and it took the
+  Companion with it. **The `isPredefined` half decides nothing on an unfiltered deck** and survives
+  as the test for the narrowed case below. Derived groups (`manaValue`, `type`) are built _from_
+  cards, so an empty one never existed to hide.
 - **Empty and inactive are independent, and conflating them is the mistake to avoid**: an inactive
-  category _holding cards_ still draws, and the empty seeded Maybeboard draws too.
-- **Filtering therefore also decides which headings exist.** The filter runs before the grouping,
-  so a category the filter empties is an empty category and stops drawing. That is deliberate — a
-  filter matching three cards should not answer with twenty headings — but the shape of the deck
-  changes as the reader types, and **a hidden category is not a drop target**. The panel's
-  "Add to" select builds from the category list rather than from the drawn groups, so every
-  empty category stays reachable by name **for an add**. It is no longer reachable for a *move*:
-  the per-card "Move…" select that built from the same list was removed on 2026-08-14 (below),
-  so a card can be dragged only into a pile that is currently drawn.
+  category _holding cards_ still draws, and the empty seeded Maybeboard draws too. **There is also
+  no per-category "hide" flag, and `isActive` is not one** — it means "counts toward nothing" (size,
+  copy limits, legality, the allocator) and deliberately keeps drawing the pile, because the
+  affordance for switching it back on is seeing what is in it. Delete is the only way to remove one
+  of the reader's own piles, and the four seeded ones cannot be deleted at all.
+- **Filtering is now the _only_ thing that takes a heading away, which makes it the point rather
+  than a footnote.** The filter runs before the grouping, so a category the filter empties is an
+  empty category — and there, and only there, the old rule stands, cut down to the fixed zones:
+  `EmptyGroupRules.narrowed` (the toolbar's text field or its tag chips) makes `isPredefined` the
+  test for an empty pile, so a three-letter filter answers with the piles that matched plus the
+  fixed zones, rather than with twenty headings over three cards. That is exactly where the old
+  rule was earned. **The two conditional arms run in front of it**, so a Standard deck's empty
+  command zone and an empty Companion stay out under a filter exactly as they do without one —
+  narrowing subtracts headings and never adds one.
+  Its cost is unchanged: the shape of the deck changes as the reader types, and **a hidden category
+  is not a drop target**.
+- **Hiding a heading is survivable because nothing else reads the drawn groups**, which is the
+  objection the old rule was written against. `DeckEditor`'s `categories` is still _every_ category
+  the deck has, in `sortOrder`, and it is what the toolbar's "Add to" select and `CategoriesPanel`
+  are built from — never the groups. So every pile stays reachable by name; nothing becomes
+  unreachable, and only a heading with nothing under it goes away. **The filter belongs at
+  `drawsWhenEmpty` and never in that array**: a format filter used to sit on the category list
+  itself, and cutting a row out of it hid a pile the reader had built. The format came back one
+  rung lower, and the comment on `const categories = deck.categories` says so at the site.
+- **The per-card "Move…" select was removed on 2026-08-14, and that is what makes the reversal
+  above load-bearing rather than cosmetic.** It built from the same `categories` array, so while
+  empty piles were hidden it was the only way to reach one — and the note it left behind said that
+  if the rule were ever reversed, *this* would be what made the case. It was. A drawn heading _is_
+  a drop target, so drawing every empty pile is now the affordance itself, and the "Add to" select
+  is the second route rather than the only one. **The one place a pile is still unreachable by drag
+  is under a filter**, which is the cost named in the bullet above and is bounded by the reader
+  clearing the box.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
@@ -489,27 +535,39 @@ price | type`). An **inactive category stays its own group in all three grouping
   live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
   16px gap leave **362 — room for exactly one**. The same deck that used to show ~2.7 columns
   across a sideways scroll is thirteen stacked lines now. That is the trade and it was made
-  deliberately: the reader asked for the Sideboard to be somewhere fixed, and a pile they can
-  always find is worth more than a column they have to scroll to. **It is also the number to
-  check first** if the rail is ever widened or the columns narrowed.
-- **The Sideboard is a rail pinned to the right of the flow, and is never packed.** `splitSideboard`
-  in `views/columns.ts` takes it out before the pack runs, on **`kind === "side"` and nothing else**
-  — the name is the user's (`DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so any pile may be called
-  "Sideboard"), and the kind is what the rules read. It used to be the greedy pack's worst case: a
-  category like any other, so it landed wherever the run put it, which on a long sideways run was
-  off the right-hand edge. **`packColumns` keeps its whole contract** — greedy, in the reader's
-  order, never reordering, never splitting a group, an over-tall group taking its own column —
-  and is simply handed fewer groups. The rail is drawn for an **empty** Sideboard too: an empty pile
-  is where the next sideboard card goes, and a rail that appeared with the first card would move the
-  layout under the reader's hand. **No group with that kind is no rail at all** — and which groups
+  deliberately: the reader asked for the piles played beside the deck to be somewhere fixed, and a
+  pile they can always find is worth more than a column they have to scroll to. **It is also the
+  number to check first** if the rail is ever widened or the columns narrowed. **The width did not
+  move when the Maybeboard joined it** — the two piles share one rail, one column wide — so the 602,
+  the 224, the 16 and the 362 are still exactly the measurements they were, taken on the date they
+  were taken. What the second pile changes is the rail's _height_, and that a new deck's rail holds
+  two empty piles rather than one; the thirteen lines were counted with the Maybeboard still in the
+  flow. Nothing here has been re-driven.
+- **The Sideboard and the Maybeboard are a rail pinned to the right of the flow, and neither is
+  ever packed.** `splitRail` in `views/columns.ts` takes them out before the pack runs, on
+  **`kind === "side" || kind === "maybe"` and nothing else** — the name is the user's
+  (`DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so any pile may be called "Sideboard"), and the kind
+  is what the rules read. Both were the greedy pack's worst case: a category like any other, so each
+  landed wherever the run put it, which on a long sideways run was off the right-hand edge. **The
+  Maybeboard is there for the same three reasons the Sideboard is** — it is played _beside_ the deck
+  rather than in it, it is routinely big because it is where the cuts and the candidates accumulate,
+  and it is the other pile a reader looks for by _position_, which for a category seeded last means
+  the far end of a long run. **`packColumns` keeps its whole contract** — greedy, in the reader's
+  order, never reordering, never splitting a group, an over-tall group taking its own column — and
+  is simply handed fewer groups. The rail is drawn for an **empty** pile too: an empty pile is where
+  the next card of that kind goes, and a rail that appeared with the first card would move the
+  layout under the reader's hand. **No group with either kind is no rail at all** — and which groups
   carry the kind is `buildGroups`' answer, never a view's. Under `Group by` mana value or type the
   derived buckets are headings with `kind: null` and they flow, but **every switched-off category
   is appended as itself**, so a reader who turns the Sideboard off and then groups by mana value
-  gets a rail beside a layout made almost entirely of headings. The split reads `kind` and nothing
-  else — not `isActive`, and never `groupBy`, which would push a deck concept into the one file
-  here whose whole discipline is not knowing what a deck is. A group in the rail is the same
-  `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with it
-  rather than being defined twice.
+  gets a rail beside a layout made almost entirely of headings — and the Maybeboard, seeded
+  switched off, reaches the rail by that route almost every time. **Nothing here sorts the rail**:
+  the Sideboard sits above the Maybeboard because that is where the reader's own `sortOrder` puts
+  them, and a reader who reorders their categories gets the order they chose. The split reads `kind`
+  and nothing else — not `isActive`, and never `groupBy`, which would push a deck concept into the
+  one file here whose whole discipline is not knowing what a deck is. A group in the rail is the
+  same `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with
+  it rather than being defined twice.
 - **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
   column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
   own `flex-wrap` drops the rail onto the next line — `ml-auto` is what keeps it on the right when
@@ -525,26 +583,35 @@ price | type`). An **inactive category stays its own group in all three grouping
   rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
   downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
   shadow draws a permanent divider across a layout in which nothing moves. `ml-auto` is the whole
-  mechanism that is left. The rail therefore carries `SIDEBOARD_ATTR` **only**: `STACK_COLUMN_ATTR`
-  means "a box `packColumns` produced", and the rail is by construction the one box it never saw,
-  so a sweep counting columns goes on counting what the packer decided. `views.test.tsx` asserts
+  mechanism that is left. The rail therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
+  `STACK_COLUMN_ATTR` means "a box `packColumns` produced", and the rail is by construction the one
+  box it never saw, so a sweep counting columns goes on counting what the packer decided. The
+  constant is spelled for the *rail* rather than for the Sideboard, because the Sideboard is no
+  longer the only thing in it. `views.test.tsx` asserts
   those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
   no other test would notice.
-- **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a commander is one card
-  and a companion is one card, and railing either would spend a column's width on a pile that is
-  read at a glance. What it prevents at the other end is a drag with no destination on screen: the
-  Sideboard sorts last, so packed it was the far end of the run, and a card dragged out of the main
-  deck had nowhere to be let go of. The rail is drawn only when a `side` group exists, and **that
-  condition is real for a story and not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard
-  into every deck, a category group draws whether or not anything is in it, and a predefined pile
-  cannot be deleted — so under `category` the rail is there from the moment a deck is created, empty
-  or not. **It costs `stackColumnWidth(zoom)` beside the flow** — 224px at 1×, 434px at 2×, both
-  derived from that one function — which at 2× on a 1280px window is a third of the width standing
-  beside a pile that on a new deck holds nothing. The wrap is what makes that bearable rather than
-  what removes it: below one column plus the rail, the rail takes its own line instead. **The sticky
-  rail's live figures went with the sticky rail** — the `position: sticky`, `z-index: 10` and
-  occlusion readings taken on 2026-08-14 measured the one-commit implementation this branch
-  replaced, and nothing about the wrapping layout has been driven in the window yet.
+- **`commander` and `companion` are still not railed, and that is not an omission** — one card
+  each, by construction, and railing either would spend a column's width on a pile that is read at
+  a glance, permanently, in every deck. What the rail prevents at the other end is a drag with no
+  destination on screen: the two railed piles sort last, so packed they were the far end of the
+  run, and a card dragged out of the main deck had nowhere to be let go of. The rail is drawn only
+  when a `side` **or** `maybe` group exists, and **that condition is real for a story and not for
+  the app**: `PREDEFINED_CATEGORIES` seeds both into every deck, both draw whether or not anything
+  is in them (neither is one of the two conditional zones), and a predefined pile cannot be deleted
+  — so under `category` the rail is there from the moment a deck is created, holding two empty piles
+  or two full ones. **It costs `stackColumnWidth(zoom)` beside the flow** — 224px at 1×, 434px at
+  2×, both derived from that one function — which at 2× on a 1280px window is a third of the width;
+  the second pile costs the rail height and no width at all. The wrap is what makes that bearable
+  rather than what removes it: below one column plus the rail, the rail takes its own line instead.
+  **The sticky rail's live figures went with the sticky rail** — the `position: sticky`,
+  `z-index: 10` and occlusion readings taken on 2026-08-14 measured the one-commit implementation
+  that was replaced. The wrapping rail has since been driven and its figures are in
+  [frontend-design.md](../../../docs/reference/frontend-design.md). **The two-pile rail has been
+  driven in Storybook over CDP and not in the shipped window** (2026-08-14): the rail held
+  `["Sideboard", "Maybeboard"]` in that order with neither in a packed column. What that pass could
+  not answer is anything about _size_ — a headless browser at a story's own viewport is not the
+  app's window — so the rail's **height** remains the unmeasured thing, and its width was never in
+  question.
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,

@@ -22,14 +22,29 @@ import { DeckEditor } from "./DeckEditor";
  * `staleTime: Infinity` is what keeps a window refocus in the Storybook browser from creating a
  * second deck.
  *
+ * **`formatKey` matters only on that path, and it is an argument because the format is now one of
+ * the two facts that decide which empty headings are drawn** (`grouping.ts`' `drawsWhenEmpty`).
+ * The same four seeded piles read differently in Modern and in Commander, and the pair of stories
+ * that shows it — {@link EmptyDeck} and {@link EmptyCommandZone} — differ in this and in nothing
+ * else. It is in the query key too: a deck is made once per key, so two formats have to be two
+ * keys or the second story would open the first one's deck.
+ *
  * The pane is a **sibling** of the editor here exactly as it is in `App.tsx`, keyed on the card
  * id for the same reason: a swap re-keys it onto the printing the deck now holds, and the
  * sentence saying what happened has to cross that unmount.
  */
-function Editor({ deckId, pane = false }: { deckId: number | null; pane?: boolean }) {
+function Editor({
+  deckId,
+  pane = false,
+  formatKey = "modern",
+}: {
+  deckId: number | null;
+  pane?: boolean;
+  formatKey?: string;
+}) {
   const created = useQuery({
-    queryKey: ["story", "empty-deck"],
-    queryFn: () => ipc.deckCreate({ name: "Untitled", formatKey: "modern" }),
+    queryKey: ["story", "empty-deck", formatKey],
+    queryFn: () => ipc.deckCreate({ name: "Untitled", formatKey }),
     enabled: deckId === null,
     staleTime: Infinity,
   });
@@ -56,8 +71,9 @@ const meta = {
   args: { deckId: 1 },
   // Keyed, so changing the deck in Controls mounts a fresh editor rather than one that inherits
   // the last deck's view, grouping, filter and add target — which is what `App.tsx` does with
-  // the same key, for the same reason.
-  render: (args) => <Editor key={`${args.deckId}:${args.pane}`} {...args} />,
+  // the same key, for the same reason. `formatKey` is in the key because on the `deckId: null`
+  // path it changes which deck is made, and therefore which headings the editor draws.
+  render: (args) => <Editor key={`${args.deckId}:${args.pane}:${args.formatKey}`} {...args} />,
   decorators: [
     // The editor is `h-full`, so it needs a parent with a height or its views have none.
     // 1032px is exactly the content column at the 1280×800 window `tauri.conf.json` opens: 1280
@@ -84,14 +100,25 @@ const meta = {
           "`grouping.ts` says what the groups are and `views/` draw them, which is what stops " +
           "four surfaces answering “how many cards are in the Ramp column” four ways.\n\n" +
           "**The groups are the deck's own categories** (schema v8), in `sortOrder`, " +
-          "switched-off ones included — never a fixed set of zones, and never filtered by the " +
-          "format. A category is a row the user names, orders and switches on or off; the format " +
-          "still *judges* the deck through the check chip and no longer decides what is drawn.\n\n" +
-          "**An empty category does not draw**, with the four seeded zones (Commander, " +
-          "Sideboard, Companion, Maybeboard) as the exception — `grouping.ts`' `drawsWhenEmpty`. " +
-          "Switched-off is not empty: an inactive category holding cards still draws, because " +
-          "the two flags answer different questions. Note this applies to the *filtered* deck, " +
-          "so typing in the toolbar's filter changes which headings exist.\n\n" +
+          "switched-off ones included — never a fixed set of zones. A category is a row the user " +
+          "names, orders and switches on or off, and no pile of theirs is ever cut out of this " +
+          "list: the format judges the deck through the check chip, and the only thing it " +
+          "decides about the *drawing* is the two zones below.\n\n" +
+          "**Every category draws, empty or not** — a column is a *place* as well as a heading, " +
+          "and an empty `Ramp` is where the next ramp spell goes. The exceptions are the two " +
+          "**conditional zones**: a command zone is drawn empty only where the format has one " +
+          "(`requiresCommander`), and a companion slot is never drawn empty in any format, " +
+          "because a companion is a card you either have or do not. **A pile holding cards " +
+          "always draws whatever the format says** — `grouping.ts`' `drawsWhenEmpty` is asked " +
+          "about empty piles only, so nothing here can hide cardboard, and a Modern deck whose " +
+          "Commander pile still holds a card draws it. Switched-off is a third question again: " +
+          "an inactive category holding cards still draws, because `isActive` decides whether a " +
+          "pile *counts* and the cards under it decide whether it is *drawn*.\n\n" +
+          "**A filter is the one case where the older rule survives.** While the toolbar's text " +
+          "field or a tag chip is narrowing the deck, an empty pile is the filter's doing rather " +
+          "than the deck's, so only the four fixed zones outlive it — without which three " +
+          "letters would answer with twenty headings over three cards. That is why typing in " +
+          "the toolbar changes which headings exist.\n\n" +
           "**Five layers, one piece of state.** The format check, the categories drawer, the " +
           "history drawer, the theory difference dialog and the deck settings dialog each " +
           'register the `"inner"` Escape rung, and `useDismissOnEscape` orders exactly two ' +
@@ -156,9 +183,12 @@ const meta = {
           "rows — 60 main, 15 sideboard, 2 on the Maybeboard — and validates **clean**; " +
           "**deck 2 `Kenrith Two-Drops`** is 99 main + 1 commander + 1 companion and produces " +
           "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards. " +
-          "Those three came through the v8 migration, so their five groups read Commander, " +
-          "Main deck, Sideboard, Companion, Maybeboard — a deck made *today* starts with only " +
-          "the four predefined ones ({@link EmptyDeck}) and grows the rest by name. **Deck 4 " +
+          "Those three came through the v8 migration, so all three carry five *categories* — " +
+          "Commander, Main deck, Sideboard, Companion, Maybeboard — which is no longer the same " +
+          "number as five *headings*: only deck 2 draws all five, because only its format has a " +
+          "command zone and only its companion slot holds a card. Decks 1 and 3 draw three. A " +
+          "deck made *today* starts with only the four predefined categories " +
+          "({@link EmptyDeck}) and grows the rest by name. **Deck 4 " +
           "`Rhystic Testbed`** is that second shape filled in: three piles the reader named, " +
           "one of them switched off, two game changers, a tagged card, a copy limit broken on " +
           "purpose and a theory list that differs from the deck. The categories, tags, history " +
@@ -176,19 +206,28 @@ type Story = StoryObj<typeof meta>;
 /**
  * Sixty Modern-legal cards, a full sideboard, and nothing wrong with any of it.
  *
- * **Five groups, because the deck has five categories** — and Modern's rules have nothing to say
- * about which of them are drawn. The editor used to filter the four fixed zones by the format's
- * seeded spec (no commander column unless `requiresCommander`, no sideboard unless
- * `sideboardMax`); schema v8 makes a category a row the *user* named, ordered and switched on or
- * off, so hiding one would hide a pile they built. This deck is Modern and its Commander group
- * is drawn, empty, saying "Nothing here yet."
+ * **Five categories, three headings** — and which three is the format's answer rather than the
+ * deck's. Every pile of the reader's own draws whether or not anything is in it, so Main deck,
+ * Sideboard and Maybeboard are all here; the two that are missing are the **conditional zones**,
+ * and each is missing for its own reason. Modern has no command zone at all, so an empty
+ * Commander pile is not a fact about this deck but a zone the game it is being built for does not
+ * have. An empty Companion pile is hidden in every format, Commander included: a companion is a
+ * card you either have or do not, and an empty slot says nothing its absence does not say more
+ * quietly. {@link CommanderDeck} is the same two piles with cards in them, and
+ * {@link EmptyCommandZone} is the command zone drawn empty where the format wants one.
+ *
+ * **Neither category is gone, and neither is unreachable.** `deck.categories` is still all five —
+ * the toolbar's "Add to" select and `CategoriesPanel` are built from
+ * that list and not from the drawn groups — and the moment a card is filed into the Commander
+ * pile the heading arrives with it, because `drawsWhenEmpty` is never asked about a group holding
+ * cards.
  *
  * The order is the v8 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
  * — because a *seeded* deck comes out of that migration rather than out of `deck_create`. That
- * is the order the categories are **in**, and in Stacks it is no longer the order they are
- * **drawn**: the Sideboard is pinned to the right of the desk and the other four pack in front
- * of it, so the two differ by exactly that one pile. See `Decks/Views/StackView`'s
- * `PinnedSideboard` for what the pin is for.
+ * is the order the categories are **in**, and in Stacks it is not the order they are **drawn**:
+ * the Sideboard and the Maybeboard are pinned to the right-hand rail and everything else packs
+ * in front of them, which for this deck leaves the Main deck alone in the flow. See
+ * `Decks/Views/StackView` for what the rail is for.
  *
  * The stats aside's headline figure is 60 with "+ 15 sideboard" under it, and that split is the
  * whole reason `DeckStats` imports `SIZE_KINDS` from the validation engine: the chip in the
@@ -208,8 +247,13 @@ export const Modern60: Story = {
     // text beside it, in the data face, drawn the same way by all four views.
     await expect(await canvas.findByRole("region", { name: "Main deck" })).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Sideboard" })).toBeVisible();
-    // Modern requires no commander and this pile is empty, and the group is here all the same.
-    await expect(canvas.getByRole("region", { name: "Commander" })).toBeVisible();
+    // The empty Maybeboard is here too: a pile of the reader's own draws with nothing in it.
+    await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
+    // …and the two conditional zones are not, each for its own reason: Modern has no command
+    // zone, and an empty companion slot draws in no format. Asserted beside the three positives
+    // above on purpose — a pair of absences alone would pass against a view that drew nothing.
+    await expect(canvas.queryByRole("region", { name: "Commander" })).toBeNull();
+    await expect(canvas.queryByRole("region", { name: "Companion" })).toBeNull();
     await expect(
       within(canvas.getByRole("region", { name: "Main deck" })).getByText("60 cards"),
     ).toBeInTheDocument();
@@ -234,7 +278,11 @@ export const Modern60: Story = {
  *
  * The Sideboard group is drawn even though every singleton commander format has
  * `sideboardMax: 0`, and that is the point of the v8 model: the format judges the deck (the chip
- * below still counts its one issue) and no longer decides which piles exist.
+ * below still counts its one issue) and decides nothing about which piles exist. **The two
+ * conditional zones are drawn here because they hold cards and not because this is Commander** —
+ * `drawsWhenEmpty` is asked about empty piles only, so the command zone and the companion slot in
+ * this deck would draw in Modern too. {@link EmptyCommandZone} is the half the format really
+ * answers, and {@link Modern60} is the same two piles empty in a format that has neither.
  *
  * **A clean Commander companion is not buildable from this corpus, and the fixture stages that
  * dead end deliberately.** Lurrus of the Dream-Den asks that every permanent card in the starting
@@ -421,8 +469,9 @@ export const MaybePile: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // No disclosure to press: the pile is a group, drawn from the first paint in its own
-    // `sortOrder` position (last, for a deck that came through the v8 migration).
+    // No disclosure to press: the pile is a group, drawn from the first paint. In Stacks it
+    // rides the right-hand rail under the Sideboard, which is its own `sortOrder` (last, for a
+    // deck that came through the v8 migration) and never a sort by kind.
     const pile = await canvas.findByRole("region", { name: "Maybeboard" });
     await expect(within(pile).getByText("INACTIVE")).toBeInTheDocument();
     const tomb = within(pile).getByRole("button", { name: /^Ancient Tomb/ });
@@ -630,18 +679,30 @@ export const NeverTwoLayers: Story = {
  * and the format check is a full sentence from the first card onwards: advisory, never blocking,
  * because an illegal deck is a deck somebody is still building.
  *
- * **Four groups, not five, and no "Main deck" among them.** `deck_create` seeds
+ * **Four categories, and no "Main deck" among them.** `deck_create` seeds
  * `schema::PREDEFINED_CATEGORIES` — Commander, Sideboard, Companion, Maybeboard — and there is
  * deliberately no `main` row in that list: a deck may own any number of `main` categories and
  * the seed names none, so the pile a plain add goes to is *found or created by name* on the
  * first add rather than born with the deck. That is the difference between a deck made today and
  * one the v8 migration converted, which is why the seeded decks above have five.
+ *
+ * **Two of those four are drawn, because this deck is Modern.** Sideboard and Maybeboard are
+ * unconditional piles and say "Nothing here yet."; the command zone belongs to a format this
+ * deck is not being built for, and the companion slot draws empty in no format at all. So the
+ * emptiest state the editor has is also the one where the conditional rule is easiest to read —
+ * {@link EmptyCommandZone} is this same act one format over, and the only thing that differs
+ * between the two stories is the word in `formatKey`.
  */
 export const EmptyDeck: Story = {
   args: { deckId: null },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("region", { name: "Commander" })).toBeVisible();
+    await expect(await canvas.findByRole("region", { name: "Sideboard" })).toBeVisible();
+    await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
+    // Seeded, reachable by name from the "Add to" select, and not drawn: Modern
+    // has no command zone, and an empty companion slot is drawn in no format.
+    await expect(canvas.queryByRole("region", { name: "Commander" })).toBeNull();
+    await expect(canvas.queryByRole("region", { name: "Companion" })).toBeNull();
     await expect(canvas.queryByRole("region", { name: "Main deck" })).toBeNull();
     await expect(canvas.getAllByText("Nothing here yet.").length).toBeGreaterThan(0);
 
@@ -653,6 +714,44 @@ export const EmptyDeck: Story = {
     // sentence about a deck that does not exist yet.
     await expect(canvas.queryByText("Mana curve")).toBeNull();
     await expect(canvas.queryByText(/^All 0 owned/)).toBeNull();
+  },
+};
+
+/**
+ * The same empty deck one format over — **and the command zone is here, saying nothing is in
+ * it.**
+ *
+ * {@link EmptyDeck} and this story differ in a single word, `formatKey`, and that is the whole
+ * demonstration: a Commander deck's four seeded piles draw three headings where a Modern deck's
+ * four draw two. **An empty command zone in a Commander deck is itself a fact about the deck** —
+ * it is the one heading the editor must never answer a question about by leaving it out, and the
+ * check chip beside it is saying the same thing in words. In Modern that same empty pile is not a
+ * fact about the deck at all, but a zone the game it is being built for does not have, which is
+ * why `drawsWhenEmpty` reads the format's `requiresCommander` rather than the pile.
+ *
+ * **The Companion slot is absent here too, and that is the half that is not about the format.**
+ * Commander allows companions; an empty companion pile still draws nothing, in this format and in
+ * every other, because a companion is a card you either have or do not and an empty slot says
+ * nothing that its absence does not say more quietly. One rule, two clauses, and only the first
+ * of them asks what format the deck is.
+ */
+export const EmptyCommandZone: Story = {
+  args: { deckId: null, formatKey: "commander" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const commander = await canvas.findByRole("region", { name: "Commander" });
+    await expect(within(commander).getByText("Nothing here yet.")).toBeInTheDocument();
+    // The unconditional piles, so the absence below is read against a view that drew something.
+    await expect(canvas.getByRole("region", { name: "Sideboard" })).toBeVisible();
+    await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
+    await expect(canvas.queryByRole("region", { name: "Companion" })).toBeNull();
+
+    // The heading and the sentence are the same fact drawn twice: the zone is empty, and this
+    // format needs it not to be. The count is left to the regex — the size rule is talking too.
+    await userEvent.click(canvas.getByRole("button", { name: /^\d+ issues$/ }));
+    await expect(canvas.getByRole("dialog", { name: "Commander check" })).toHaveTextContent(
+      "Commander decks need a commander; the commander zone is empty.",
+    );
   },
 };
 

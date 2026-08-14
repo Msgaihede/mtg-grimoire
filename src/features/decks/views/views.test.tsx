@@ -14,7 +14,7 @@ import { stackCardWidth, stackHeight } from "../CardStack";
 import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
-import { SIDEBOARD_ATTR } from "./columns";
+import { RAIL_ATTR } from "./columns";
 import { GridView } from "./GridView";
 import { StackView, STACK_COLUMN_ATTR, stackColumnWidth } from "./StackView";
 import { TableView } from "./TableView";
@@ -51,9 +51,17 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
 
 const RAMP = category();
 const COMMANDER = category({ id: 3, name: "Commander", kind: "commander", sortOrder: 0 });
-/** A seeded zone, and the only kind of category that reaches a view with nothing in it —
- *  `grouping.ts` draws no empty pile of the reader's own. */
+/** A seeded zone, used as the deck that is one empty pile and nothing else. A fixed zone is the
+ *  pile that reaches a view empty under *either* of `drawsWhenEmpty`'s answers — every empty pile
+ *  on an unfiltered deck, only the fixed ones while a filter is narrowing it — so it is the
+ *  fixture that keeps saying what this case is about however that rule is tuned. */
 const SIDEBOARD = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
+/**
+ * The other pile the rail exists for, and it is seeded **switched off** — `fixtures.ts` mirrors
+ * `schema::PREDEFINED_CATEGORIES`, where the Maybeboard is the one predefined category born
+ * inactive. So a rail holding it routinely holds a dimmed pile, and the views need no code for
+ * that: a group in the rail is the same `StackGroup`/`TextGroup` as one in the flow.
+ */
 const MAYBE = category({
   id: 5,
   name: "Maybeboard",
@@ -62,7 +70,7 @@ const MAYBE = category({
   sortOrder: 4,
 });
 /**
- * The pile the rail exists for.
+ * The pile the rail was built for first.
  *
  * Added beside the three above rather than folded into one of them: every count and every
  * order asserted in this file is a claim about that fixture, and a fourth category in `GROUPS`
@@ -70,11 +78,23 @@ const MAYBE = category({
  *
  * `sortOrder` 2 puts it **between** Ramp and the Maybeboard, which is exactly where a greedy
  * in-order pack used to leave it — the middle of a sideways run — and is what lets a test show
- * the rail drawing it past a pile that comes after it. The **id** is the only one here that is
- * load-bearing: it is `fixtures.ts`'s own for a `side` card, so `card({ categoryKind: "side" })`
- * lands in this category rather than arriving as a stray group.
+ * the rail drawing it past a pile that comes after it. It is also what makes the rail's own order
+ * a claim worth asserting: Sideboard above Maybeboard is these two `sortOrder`s and nothing in
+ * `splitRail`. The **id** is the only one here that is load-bearing: it is `fixtures.ts`'s own for
+ * a `side` card, so `card({ categoryKind: "side" })` lands in this category rather than arriving
+ * as a stray group.
  */
 const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
+/**
+ * An empty pile of the reader's own, and the packing cases' third group.
+ *
+ * That part used to be the Maybeboard's, which is exactly what this change took away: the
+ * Maybeboard is railed now, so a fixture that packed it was asserting the pack against a group
+ * the packer no longer sees. A `main` category is the honest stand-in — 66px of heading with
+ * nothing under it, flowing, and drawn empty because every pile of the reader's own is a *place*
+ * (`drawsWhenEmpty`).
+ */
+const DRAW = category({ id: 6, name: "Draw", kind: "main", sortOrder: 3 });
 
 const CARDS: DeckCard[] = [
   card({ name: "Sol Ring", quantity: 2, unitPrice: 1.99, gameChanger: true }),
@@ -518,11 +538,10 @@ describe("the views that are not the table", () => {
    * nothing else — there is no column for it to be a place *in*. The other three draw a
    * sentence, because an empty Sideboard is where the next sideboard card goes.
    *
-   * **The empty group is the Sideboard and no longer `Ramp`**, and the swap is the point rather
-   * than a fixture tidy: `grouping.ts` stopped drawing a category of the reader's own once its
-   * last card leaves, so an empty `Ramp` reaches no view at all now and this case asserted
-   * nothing. The fixed zones are what still arrives empty, and they are exactly the piles that
-   * need the sentence.
+   * **The empty group is the Sideboard rather than `Ramp`**, and it is a fixed zone on purpose:
+   * `drawsWhenEmpty` draws every empty pile of an unfiltered deck but only the fixed zones while
+   * a filter is narrowing one, so a seeded pile is the fixture that keeps reaching a view empty
+   * whichever way that rule is tuned. The sentence is what this asserts either way.
    */
   it.each([
     ["StackView", <StackView key="s" groups={empty} marketplace={TCG} />],
@@ -539,7 +558,7 @@ describe("StackView columns", () => {
   const columns = () => [...document.querySelectorAll(`[${STACK_COLUMN_ATTR}]`)];
   /** The rail is **not** one of the boxes above — `STACK_COLUMN_ATTR` marks what `packColumns`
    *  produced, and the rail is the one box it never saw — so it is found by its own attribute. */
-  const rail = () => document.querySelector<HTMLElement>(`[${SIDEBOARD_ATTR}]`);
+  const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
   /** By the id each section is `aria-labelledby`, which is the heading's own handle rather
    *  than a guess at the header's shape. */
   const headingsIn = (column: Element) =>
@@ -568,7 +587,7 @@ describe("StackView columns", () => {
       <StackView
         groups={buildGroups(
           [...three("commander"), ...three("main")],
-          [COMMANDER, RAMP, MAYBE],
+          [COMMANDER, RAMP, DRAW],
           "category",
           "alphabetical",
         )}
@@ -581,8 +600,11 @@ describe("StackView columns", () => {
         // the live figure is `stackHeight(3)` = 34×2 + 319 + 8 = **395**, where the 319 is
         // 293 of image + 2 hairlines + the 28px data line less its 4px rise.
         //
-        // At exactly two groups the empty Maybeboard's 66 does not fit, so it starts the second
-        // column — which is what makes this assert a *pack* rather than a single box.
+        // At exactly two groups the empty `Draw` pile's 66 does not fit, so it starts the second
+        // column — which is what makes this assert a *pack* rather than a single box. That third
+        // group used to be the Maybeboard, and it cannot be one any more: a railed group never
+        // reaches `packColumns` at all, so the pack would have been asserted against two groups
+        // and one column. See {@link DRAW}.
         marketplace={TCG}
         columnHeight={2 * (66 + stackHeight(3))}
       />,
@@ -591,7 +613,7 @@ describe("StackView columns", () => {
     expect(columns()).toHaveLength(2);
     // In the sortOrder the reader set, never a shape the packer preferred.
     expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
-    expect(headingsIn(columns()[1])).toEqual(["Maybeboard"]);
+    expect(headingsIn(columns()[1])).toEqual(["Draw"]);
     // And never split: all three of Ramp's cards are in the one Ramp stack.
     expect(
       within(screen.getByRole("list", { name: "Ramp" })).getAllByRole("listitem"),
@@ -666,7 +688,7 @@ describe("StackView columns", () => {
       );
     const groups = buildGroups(
       [...three("commander"), ...three("main")],
-      [COMMANDER, RAMP, MAYBE],
+      [COMMANDER, RAMP, DRAW],
       "category",
       "alphabetical",
     );
@@ -675,13 +697,13 @@ describe("StackView columns", () => {
 
     render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
     expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
-    expect(headingsIn(columns()[1])).toEqual(["Maybeboard"]);
+    expect(headingsIn(columns()[1])).toEqual(["Draw"]);
     cleanup();
 
     useAppStore.setState({ cardZoom: 2 });
     render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
     expect(headingsIn(columns()[0])).toEqual(["Commander"]);
-    expect(headingsIn(columns()[1])).toEqual(["Ramp", "Maybeboard"]);
+    expect(headingsIn(columns()[1])).toEqual(["Ramp", "Draw"]);
   });
 
   /** One column when everything fits — the case the assertion above would have passed
@@ -704,20 +726,26 @@ describe("StackView columns", () => {
   });
 
   /**
-   * **The Sideboard is not part of the pack**, and that is the whole of the change. It is split
-   * off before `packColumns` sees anything and drawn in the rail beside the columns — so a reader
-   * running a fifteen-category deck down the page never loses the pile they are cutting to.
+   * **Neither the Sideboard nor the Maybeboard is part of the pack**, and that is the whole of
+   * the change. Both are split off before `packColumns` sees anything and drawn in the rail beside
+   * the columns — so a reader running a fifteen-category deck down the page never loses the pile
+   * they are cutting to, nor the one they are cutting *from*.
    *
    * The desk is the same derived two-group height the pack above uses, and what the split moves
-   * is **which groups share a column**: left in the stream, these four pack as Commander and Ramp,
-   * then the Sideboard and the empty Maybeboard sharing the second comfortably — the same *count*
-   * as the split answer, with the sideboard buried in the middle of it. So the headings are what
-   * this reads, and a count alone would pass against the bug.
+   * is **which groups share a column**: left in the stream, these five pack as Commander and Ramp,
+   * then the Sideboard, the empty Draw pile and the Maybeboard filling the second — the same
+   * *count* as the split answer, with both railed piles buried in the middle of it. So the
+   * headings are what this reads, and a count alone would pass against the bug.
+   *
+   * **The rail's order is the reader's own `sortOrder` and nothing `splitRail` did.** Sideboard
+   * (2) above Maybeboard (4) is where the seed put them, which is why this asserts a list rather
+   * than a set: a split that sorted by kind would answer the same two headings here and would
+   * quietly overrule a reader who had dragged their Maybeboard above their Sideboard.
    *
    * The rail is asserted as the other half rather than instead: "the Sideboard is not in a column"
    * is equally true of a view that dropped the pile on the floor.
    */
-  it("pulls the sideboard out of the pack and draws it in the rail", () => {
+  it("pulls both piles played beside the deck out of the pack and into the rail", () => {
     const three = (kind: "main" | "commander" | "side") =>
       Array.from({ length: 3 }, (_, i) =>
         card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
@@ -726,7 +754,7 @@ describe("StackView columns", () => {
       <StackView
         groups={buildGroups(
           [...three("commander"), ...three("main"), ...three("side")],
-          [COMMANDER, RAMP, SIDE, MAYBE],
+          [COMMANDER, RAMP, SIDE, DRAW, MAYBE],
           "category",
           "alphabetical",
         )}
@@ -738,11 +766,13 @@ describe("StackView columns", () => {
     expect(columns()).toHaveLength(2);
     // The flowing groups, still in the reader's own order and still never split.
     expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
-    expect(headingsIn(columns()[1])).toEqual(["Maybeboard"]);
-    // The Sideboard is in neither, and it is in the rail — the pile the pack would have dropped
-    // between them, drawn past a category whose `sortOrder` puts it later.
-    expect(columns().some((c) => headingsIn(c).includes("Sideboard"))).toBe(false);
-    expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
+    expect(headingsIn(columns()[1])).toEqual(["Draw"]);
+    // Both railed piles are in no column — the two the pack would have dropped in the middle of
+    // the run, drawn past a category whose `sortOrder` puts it between them.
+    for (const name of ["Sideboard", "Maybeboard"]) {
+      expect(columns().some((c) => headingsIn(c).includes(name))).toBe(false);
+    }
+    expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
   });
 
   /**
@@ -799,7 +829,13 @@ describe("StackView columns", () => {
    * rail. The Sideboard's heading is absent from this fixture because the pile is **active** and
    * `grouping.ts` buckets an active pile's cards into the derived groups (`buildGroups` line
    * 210, `if (!card.categoryActive) continue;`) — so there is no `side` group left, rather than a
-   * `side` group being passed over. The switched-off case below is the pair that says so.
+   * `side` group being passed over. The switched-off cases below are the pair that says so.
+   *
+   * **The Maybeboard had to leave this fixture, and where it went is the point.** It was in the
+   * category list here and it is not any more: it is seeded switched off, so `buildGroups` appends
+   * it as itself under a derived grouping — a real `maybe` group, which `splitRail` now rails. The
+   * pile did not stop arriving; it stopped being an example of "nothing here is railed". That case
+   * moved to the switched-off pair below, where it belongs.
    *
    * The cards are asserted **present** as well: "no Sideboard heading" is also true of a view
    * that dropped the pile on the floor.
@@ -815,7 +851,7 @@ describe("StackView columns", () => {
               card({ name: "Blood Moon", categoryKind: "side" }),
               card({ name: "Pyroblast", categoryKind: "side" }),
             ],
-            [RAMP, SIDE, MAYBE],
+            [RAMP, SIDE],
             groupBy,
             "alphabetical",
           )}
@@ -831,9 +867,9 @@ describe("StackView columns", () => {
   );
 
   /**
-   * **A switched-off Sideboard still reaches the rail under a derived grouping**, and this is the
-   * pair to the case above: together they say the split reads the group's own `kind` and never the
-   * mode the toolbar is in.
+   * **A switched-off railed pile still reaches the rail under a derived grouping**, and this is
+   * the pair to the case above: together they say the split reads the group's own `kind` and never
+   * the mode the toolbar is in.
    *
    * `buildGroups` buckets the **active** cards and appends every switched-off pile as itself,
    * unchanged and last (its own line 204–207) — so under `manaValue` a sideboard the reader has
@@ -842,33 +878,45 @@ describe("StackView columns", () => {
    * own name, still a drop target with a `categoryId` — the switch says it counts toward
    * nothing, never that it has stopped being the sideboard.
    *
+   * **Both kinds, because for the Maybeboard this is the ordinary case rather than the corner
+   * one.** A sideboard is switched off by a reader who chose to; the Maybeboard is seeded off, so
+   * under a derived grouping it arrives by this route almost every time. If the split ever grew an
+   * `isActive` check the Sideboard would lose the rail only for readers who had turned it off, and
+   * the Maybeboard would lose it for everybody.
+   *
    * Without this, `StackView` could grow a `groupBy` check — or a `group.isActive` one — and
    * every assertion in this file would stay green while a reader who switched their sideboard
    * off and grouped by curve lost the rail.
    */
-  it("still draws the rail for a switched-off sideboard when the grouping is derived", () => {
-    const off = category({ id: 2, name: "Sideboard", kind: "side", isActive: false, sortOrder: 2 });
-    render(
-      <StackView
-        groups={buildGroups(
-          [
-            card({ name: "Sol Ring" }),
-            card({ name: "Blood Moon", categoryKind: "side", categoryActive: false }),
-          ],
-          [RAMP, off],
-          "manaValue",
-          "alphabetical",
-        )}
-        marketplace={TCG}
-      />,
-    );
+  it.each([
+    { kind: "side", name: "Sideboard", id: 2, sortOrder: 2, cardName: "Blood Moon" },
+    { kind: "maybe", name: "Maybeboard", id: 5, sortOrder: 4, cardName: "Avacyn" },
+  ] as const)(
+    "still draws the rail for a switched-off $name when the grouping is derived",
+    ({ kind, name, id, sortOrder, cardName }) => {
+      const off = category({ id, name, kind, isActive: false, sortOrder });
+      render(
+        <StackView
+          groups={buildGroups(
+            [
+              card({ name: "Sol Ring" }),
+              card({ name: cardName, categoryKind: kind, categoryActive: false }),
+            ],
+            [RAMP, off],
+            "manaValue",
+            "alphabetical",
+          )}
+          marketplace={TCG}
+        />,
+      );
 
-    expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
-    // And the derived bucket the *active* card went into is a packed column, not a second rail:
-    // the pile the reader switched off is the only thing on the right.
-    expect(columns()).toHaveLength(1);
-    expect(headingsIn(columns()[0])).toEqual(["Mana value 1"]);
-  });
+      expect(headingsIn(rail()!)).toEqual([name]);
+      // And the derived bucket the *active* card went into is a packed column, not a second rail:
+      // the pile the reader switched off is the only thing on the right.
+      expect(columns()).toHaveLength(1);
+      expect(headingsIn(columns()[0])).toEqual(["Mana value 1"]);
+    },
+  );
 });
 
 /**
@@ -983,37 +1031,44 @@ const COLUMN_VIEWS = [
 ] as const;
 
 /**
- * **The Sideboard is pinned to the right, and the columns beside it come down rather than
- * running off the edge.**
+ * **The piles played beside the deck are pinned to the right, and the columns beside them come
+ * down rather than running off the edge.**
  *
  * Both views packed every group into a row of fixed-width columns that grew sideways, so a
  * fifteen-category deck was an X scrollbar across the whole desk — the one thing `DeckEditor`'s
  * 1024px floor exists to prevent, arriving by a route that floor never measured. And the
- * Sideboard, being a category like any other to a greedy in-order pack, landed wherever the
- * pack dropped it: usually the far end of that run, i.e. off screen.
+ * Sideboard and the Maybeboard, being categories like any other to a greedy in-order pack, landed
+ * wherever the pack dropped them: usually the far end of that run, i.e. off screen.
+ *
+ * **Two piles in one rail, not two rails.** They share a single box and stack down it in the
+ * reader's own `sortOrder`, so the desk still spends exactly one column's width on everything
+ * played beside the deck — which is the trade `frontend-design.md` measured, and doubling it
+ * would have taken the last flowing column at the app's own 1280px window.
  *
  * Every claim below is about which of the scroller's two boxes a group is in, and how wide that
  * box is. **jsdom lays nothing out**, so none of it can watch a column actually wrap — what a
  * test can see is the inputs CSS applies the rule to, which is what these read.
  */
 describe.each(COLUMN_VIEWS)(
-  // `$name sideboard rail`, not `$name's`: vitest quotes an interpolated string, so the
-  // possessive would print as `'StackView''s`. Same shape as `$name editing` above.
-  "$name sideboard rail",
+  // `$name rail`, not `$name's`: vitest quotes an interpolated string, so the possessive would
+  // print as `'StackView''s`. Same shape as `$name editing` above.
+  "$name rail",
   ({ render: renderView, heading, width, zoomedWidth }) => {
     /** The zoom is one number for the whole app and this store outlives a test — the reason
      *  `StackView columns` resets it, and the same reason here. */
     afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
 
-    /** `GROUPS`' deck with a Sideboard in the middle of the reader's own order. */
-    const withSideboard = buildGroups(
+    /** `GROUPS`' deck with a Sideboard in the middle of the reader's own order, and the
+     *  Maybeboard after it — the two piles the rail takes, arriving from opposite ends of the
+     *  pack the rail replaces. */
+    const withRail = buildGroups(
       [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
       [COMMANDER, RAMP, SIDE, MAYBE],
       "category",
       "alphabetical",
     );
 
-    const rail = () => document.querySelector<HTMLElement>(`[${SIDEBOARD_ATTR}]`);
+    const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
     /**
      * The box the columns flow in — read as the rail's own **previous** sibling rather than by
      * position in the tree, because the order of the two is load-bearing. `ml-auto` puts the
@@ -1024,23 +1079,27 @@ describe.each(COLUMN_VIEWS)(
     const headingsIn = (root: Element) =>
       [...root.querySelectorAll(`[id^="${heading}"]`)].map((n) => n.textContent);
 
-    const draw = (groups: readonly CardGroup[] = withSideboard, over: Partial<ViewProps> = {}) =>
+    const draw = (groups: readonly CardGroup[] = withRail, over: Partial<ViewProps> = {}) =>
       render(renderView({ groups, marketplace: TCG, ...over }));
 
     /**
-     * **A `side` group is never packed.** Read as two lists — what is in the flow, and what is
-     * in the rail — because either half alone is satisfied by a broken layout: "the Sideboard
-     * is in the rail" passes against a view that draws the pile twice, and "the Sideboard is on
-     * screen" passed against the packed layout this replaces, which is how the bug survived.
+     * **A `side` group and a `maybe` group are never packed.** Read as two lists — what is in the
+     * flow, and what is in the rail — because either half alone is satisfied by a broken layout:
+     * "the Sideboard is in the rail" passes against a view that draws the pile twice, and "the
+     * Sideboard is on screen" passed against the packed layout this replaces, which is how the
+     * bug survived.
      *
-     * The three that stay are asserted **in order**, which is `packColumns`' whole contract:
-     * lifting one group out must close the gap up rather than reshuffle what is left.
+     * Both lists are asserted **in order**. For the flow that is `packColumns`' whole contract:
+     * lifting two groups out must close the gaps up rather than reshuffle what is left. For the
+     * rail it is the claim that nothing sorted it — Sideboard (`sortOrder` 2) above Maybeboard
+     * (4) is the reader's own arrangement arriving intact, and a `splitRail` that ordered by kind
+     * would answer this same pair while silently overruling a reader who had swapped them.
      */
-    it("lifts a side group out of the pack and into the rail", () => {
+    it("lifts the side and maybe groups out of the pack and into the rail", () => {
       draw();
 
-      expect(headingsIn(flow())).toEqual(["Commander", "Ramp", "Maybeboard"]);
-      expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
+      expect(headingsIn(flow())).toEqual(["Commander", "Ramp"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
     });
 
     /**
@@ -1057,6 +1116,34 @@ describe.each(COLUMN_VIEWS)(
 
       expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
       expect(within(rail()!).getByText("Nothing here yet.")).toBeInTheDocument();
+    });
+
+    /**
+     * **The Maybeboard reaches the rail on its own, with no Sideboard beside it.**
+     *
+     * Worth its own case because the rail was the Sideboard's for its whole life, and the two
+     * shapes a regression would take both pass everything above: a `splitRail` that still keyed on
+     * `side` and merely *drew* the maybe groups after it would answer the pair fixture correctly
+     * and answer nothing at all here, and so would one that railed `maybe` only in the presence of
+     * a `side` group.
+     *
+     * The pile is a real one rather than an empty heading — the switch is off, so the group is
+     * `isActive: false`, which is the state a reader will actually see. That it is dimmed is the
+     * group's business and not the rail's; what is asserted here is that the rail exists, holds
+     * it, and is the only place it is drawn.
+     */
+    it("draws the rail for a Maybeboard with no sideboard in the deck", () => {
+      draw(
+        buildGroups(
+          [card({ name: "Sol Ring" }), card({ name: "Avacyn", categoryKind: "maybe" })],
+          [RAMP, MAYBE],
+          "category",
+          "alphabetical",
+        ),
+      );
+
+      expect(headingsIn(rail()!)).toEqual(["Maybeboard"]);
+      expect(headingsIn(flow())).toEqual(["Ramp"]);
     });
 
     /**
@@ -1100,37 +1187,70 @@ describe.each(COLUMN_VIEWS)(
     });
 
     /**
-     * No `side` group, no rail — `GROUPS` is Commander, Ramp and the Maybeboard, and none of
-     * them is one. A rail drawn unconditionally would hold a column's width of empty space at
-     * the right edge of every deck without a sideboard, which reads as a layout that has simply
-     * been given too much room rather than as a bug.
+     * No `side` and no `maybe` group, no rail. A rail drawn unconditionally would hold a column's
+     * width of empty space at the right edge of every deck that has neither, which reads as a
+     * layout that has simply been given too much room rather than as a bug.
+     *
+     * **The fixture is this test's own, and it had to become one.** It used to be `GROUPS` —
+     * Commander, Ramp and the Maybeboard — which was a deck with no rail in it right up until the
+     * Maybeboard joined the rail, at which point the file's one assertion that the split can
+     * answer *nothing* would have started asserting the opposite. It is a deck of a command zone
+     * and a pile of the reader's own now, which is what "neither" means and what it will go on
+     * meaning.
      *
      * **It is also what protects every column count in this file.** The `StackView columns` block
      * packs decks of ordinary categories, and each of those counts would quietly move the day the
-     * split fired on something wider than `kind === "side"` — `isPredefined`, say, or a name a
+     * split fired on something wider than `side` and `maybe` — `isPredefined`, say, or a name a
      * reader typed — failing as arithmetic inside `packColumns`, a long way from the change that
-     * caused it. This says the real thing once, so that failure has somewhere to point.
+     * caused it. This says the real thing once, so that failure has somewhere to point. The two
+     * kinds it asserts *do not* rail are exactly the two `splitRail`'s doc gives a reason for
+     * leaving in the flow: a commander and a companion are one card each.
      */
-    it("draws no rail when nothing in the deck is a sideboard", () => {
-      draw(GROUPS);
+    it("draws no rail when nothing in the deck is played beside it", () => {
+      draw(
+        buildGroups(
+          [
+            card({ name: "Sol Ring" }),
+            card({ name: "Serah Farron", categoryKind: "commander" }),
+            card({ name: "Lurrus", categoryKind: "companion" }),
+          ],
+          [
+            COMMANDER,
+            RAMP,
+            category({ id: 4, name: "Companion", kind: "companion", sortOrder: 3 }),
+          ],
+          "category",
+          "alphabetical",
+        ),
+      );
       expect(rail()).toBeNull();
     });
 
     /**
      * **A group in the rail is the same group, so a card can still be dropped into it.** The
      * rail is a second place these views draw a pile, and a second, lighter definition of one
-     * would take the drop target with it: the card would follow the pointer, the Sideboard would
+     * would take the drop target with it: the card would follow the pointer, the pile would
      * light up nothing, and letting go would do nothing at all.
+     *
+     * **Both piles in the rail, and the Maybeboard is the one that would break quietly.** It is
+     * seeded switched off, so it is also the group whose drop target a view would be most tempted
+     * to skip — and a Maybeboard that cannot be dragged into is a pile a reader can put nothing in
+     * except through the "Move…" select, which is exactly the affordance the rail was meant to
+     * restore. That it is inactive changes nothing here: `useCategoryDrop` reads a `categoryId`
+     * and the switch is about counting, not about placing.
      *
      * Driven as the real gesture rather than by finding `DECK_GROUP_ATTR`, because the attribute
      * is the half that survives forgetting to call the hook — `deckGroupProps` writes it,
      * `useCategoryDrop` is what makes it a place, and only the drop tells the two apart.
      */
-    it("takes a dropped card into the sideboard in the rail", async () => {
+    it.each([
+      { name: "sideboard", id: SIDE.id },
+      { name: "Maybeboard", id: MAYBE.id },
+    ])("takes a dropped card into the $name in the rail", async ({ id }) => {
       const drop = vi.fn();
-      draw(withSideboard, { actions: { setQuantity: vi.fn(), drop } });
+      draw(withRail, { actions: { setQuantity: vi.fn(), drop } });
 
-      const target = rail()!.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${SIDE.id}"]`);
+      const target = rail()!.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${id}"]`);
       expect(target).not.toBeNull();
       const marked = document.querySelector<HTMLElement>(
         `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
@@ -1142,7 +1262,7 @@ describe.each(COLUMN_VIEWS)(
         write: "move",
         cardId: "c-Sol Ring",
         from: RAMP.id,
-        to: SIDE.id,
+        to: id,
       });
     });
   },
