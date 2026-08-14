@@ -1551,6 +1551,37 @@ describe("the folder row's menu", () => {
     );
   });
 
+  /**
+   * **The row's inline field is not part of the row's menu, and the boundary is the button.**
+   *
+   * A "New folder in …" field is drawn inside this row's `<li>`, as a sibling of the box the row
+   * is in — so a handler on either of those would answer a right-click *inside a half-typed
+   * field*, and its own `preventDefault()` plus `stopPropagation()` would keep the provider's
+   * document-level carve-out from ever running: the reader would lose cut, copy, paste, undo and
+   * the spellcheck suggestions and get a folder menu instead.
+   *
+   * `isTextField` in the primitive is the fence for the input itself. It is **not** a fence for
+   * the field's own Save control, which is a `<button>` — so this is asserted on that control,
+   * where the only thing keeping the menu away is which element it was attached to.
+   */
+  it("does not answer a right-click inside the field the row opened", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Commander, 2 decks"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New subfolder…" }));
+    await screen.findByLabelText("New folder name");
+
+    screen
+      .getByRole("button", { name: "Create folder" })
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    // …and the field is still there to be typed into, rather than replaced by a menu about the
+    // folder the reader is in the middle of making one inside.
+    expect(screen.getByLabelText("New folder name")).toBeInTheDocument();
+  });
+
   /** …and the heading's own "New deck" still makes one at the top level, which is what makes the
    *  assertion above about the *folder* rather than about the dialog's default. */
   it("still creates at the top level from the heading's New deck", async () => {
