@@ -15,7 +15,8 @@
  */
 import type { ComponentType, JSX, ReactNode } from "react";
 import { Folder, FolderInput, FolderPlus, Layers, Pencil, Plus, Trash2 } from "lucide-react";
-import { ROW_CLASS } from "@/components/menu/panel";
+import { MenuRows } from "@/components/menu/ContextMenu";
+import { ROW_ATTR } from "@/components/menu/panel";
 import type { MenuItem } from "@/components/menu/types";
 import { ipcError, type DeckFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -26,12 +27,30 @@ import { useDeckFolders } from "./useDeckFolders";
 /**
  * How a destination row says which folder it is — for a test, and for a `cdp.mjs --probe`.
  *
- * Its own attribute rather than `FolderTree`'s `FOLDER_ROW_ATTR`, which means "a row of the
- * tree" and is what `DecksPage` hands the caret back to after a rename: these rows are drawn by
- * the menu panel, which is a sibling of `AppShell` and therefore outside the wall that
- * `querySelector` searches. Two ideas, two names, and neither can pick up the other's element.
+ * **The menu's own row attribute, because the row is the menu's own row.** These were
+ * hand-rolled buttons carrying a `data-destination-folder-id` of their own until 2026-08-14 —
+ * which is also how they came to skip the panel's caret hand-back, the defect
+ * {@link moveToFolderContent} records. They are `ActionRow`s now, and an `ActionRow` carries
+ * `data-menu-row` and nothing a caller may add to it, so what a row stands for is said in its
+ * **id** — {@link folderDestinationRowId}, which `MenuRows` already requires to be unique within
+ * one level.
+ *
+ * Still not `FolderTree`'s `FOLDER_ROW_ATTR`, which means "a row of the tree" and is what
+ * `DecksPage` hands the caret back to after a rename: these rows are drawn by the menu panel, a
+ * sibling of `AppShell` and therefore outside the wall that `querySelector` searches. Two ideas,
+ * two names, and neither can pick up the other's element.
  */
-export const FOLDER_DESTINATION_ATTR = "data-destination-folder-id";
+export const FOLDER_DESTINATION_ATTR = ROW_ATTR;
+
+/**
+ * Which folder a destination row is, as the row's own id — `root` for the top level, which is a
+ * real offer and not a folder.
+ *
+ * Exported so that a test and a `cdp.mjs --probe` compose the id rather than re-spelling it;
+ * paired with {@link FOLDER_DESTINATION_ATTR}, which says where to read it.
+ */
+export const folderDestinationRowId = (folderId: number | null): string =>
+  `destination-${folderId ?? "root"}`;
 
 /** The top level, named as `MoveToFolder` names it — one wording for the same offer, whether
  *  the reader reaches it from the tile's popup or from a menu. */
@@ -118,6 +137,23 @@ export function folderDestinations(
  *
  * A factory rather than a component with props, because {@link MenuLazy.Content} is handed only
  * an `onDone`: what is being moved, and where it is now, are closed over when the menu is built.
+ *
+ * **The rows are `MenuRows`, and that is what puts the caret back where the reader left it**
+ * (fixed 2026-08-14). They were hand-rolled `role="menuitem"` buttons that called `onPick` and
+ * then `onDone` — and `onDone` is `ctx.close`, which `ContextMenu` documents as "close the whole
+ * menu and hand focus **nowhere**". A destination is chosen exactly as `Rename…` or `Delete…` is,
+ * so it has to end where they end: `ctx.run`, which focuses the opener *while the row is still
+ * mounted*, then closes, then writes. Skipping it left the caret on a panel that was unmounting,
+ * dropped it on `<body>`, and the next Tab restarted from the top of the app — with the folder
+ * row still on screen and still focusable. It also ran the write **before** the close, which is
+ * the same three lines in the wrong order.
+ *
+ * This is the case `MenuRows` exists to prevent: a lazy body offering real choices should not
+ * have to rebuild a row. `ActionRow` draws everything this markup did — the icon, the label,
+ * `aria-disabled` and the reason beside it — and it is the one place the hand-back lives, so a
+ * second drawing of a row is a second place for it to be got wrong. `onDone` is therefore
+ * accepted and **not called**: `ctx.run` has already closed the menu by the time a row of this
+ * body runs, and calling it too would be a second close of something already gone.
  */
 export function moveToFolderContent({
   currentId,
@@ -130,7 +166,29 @@ export function moveToFolderContent({
   moving: number | null;
   onPick: (folderId: number | null) => void;
 }): ComponentType<{ onDone: () => void }> {
-  return function MoveToFolderContent({ onDone }: { onDone: () => void }): JSX.Element {
+  /**
+   * The offers, as the panel's own rows.
+   *
+   * An inert one is drawn and read and never pressed: `disabled` becomes `aria-disabled` on the
+   * row — never the attribute, which would take it out of the tab order — and the `reason` is
+   * "Here now" or one of the two fences, drawn beside the name. `ActionRow`'s own `onClick` is
+   * what refuses the press, so an inert row's `onSelect` can never run and says so by doing
+   * nothing.
+   */
+  const destinationItems = (folders: readonly DeckFolder[]): MenuItem[] =>
+    folderDestinations(folders, { currentId, moving }).map((destination): MenuItem => {
+      const row = {
+        kind: "action",
+        id: folderDestinationRowId(destination.folderId),
+        label: destination.name,
+        Icon: destination.folderId === null ? Layers : Folder,
+      } as const;
+      return destination.inert === null
+        ? { ...row, onSelect: () => onPick(destination.folderId) }
+        : { ...row, disabled: true, reason: destination.inert, onSelect: () => {} };
+    });
+
+  return function MoveToFolderContent(): JSX.Element {
     const folders = useDeckFolders();
 
     // A cabinet with no drawers in it and one that has not answered yet are told apart by
@@ -140,67 +198,9 @@ export function moveToFolderContent({
       return <Note failed>Could not read your folders — {ipcError(folders.query.error)}</Note>;
     }
 
-    return (
-      <>
-        {folderDestinations(folders.folders, { currentId, moving }).map((destination) => (
-          <button
-            key={destination.folderId ?? "root"}
-            type="button"
-            role="menuitem"
-            // The panel owns the caret: a menu is one roving tab stop, so every row it can land
-            // on is out of the tab order and reached by `moveCaret` rather than by Tab. It finds
-            // these rows by their **role**, which is what lets a lazy panel's own rows — rows it
-            // never saw — take the caret like any other.
-            tabIndex={-1}
-            // Both row attributes on one element, because a plain row *is* its button. The
-            // pointer's hover handler resolves a row by `ROW_ATTR`, and without it a submenu
-            // opened by hover stays open while the pointer sweeps past to the row below —
-            // `ContextMenu`'s `ActionRow` carries the pair for the same reason.
-            data-menu-row={`destination-${destination.folderId ?? "root"}`}
-            data-menu-row-button=""
-            // `aria-disabled`, never the attribute — a `disabled` button leaves the tab order,
-            // and a greyed row here exists to be *read*: "Here now" and the two fences are
-            // answers rather than omissions. `menuRowsIn` reads exactly this to keep the caret
-            // off them.
-            aria-disabled={destination.inert === null ? undefined : true}
-            {...(destination.folderId === null
-              ? {}
-              : { [FOLDER_DESTINATION_ATTR]: destination.folderId })}
-            onClick={() => {
-              if (destination.inert !== null) return;
-              onPick(destination.folderId);
-              onDone();
-            }}
-            className={cn(ROW_CLASS, destination.inert === null ? LIVE_ROW : INERT_ROW)}
-          >
-            {destination.folderId === null ? (
-              <Layers className="size-4 flex-none" aria-hidden="true" />
-            ) : (
-              <Folder className="size-4 flex-none" aria-hidden="true" />
-            )}
-            <span className="min-w-0 flex-1 truncate">{destination.name}</span>
-            {destination.inert !== null && (
-              <span className="flex-none text-[0.7rem] text-dim">{destination.inert}</span>
-            )}
-          </button>
-        ))}
-      </>
-    );
+    return <MenuRows items={destinationItems(folders.folders)} />;
   };
 }
-
-/**
- * A destination row's two states, over the panel's own {@link ROW_CLASS}.
- *
- * The geometry is imported rather than copied, so a row this file draws inside a menu really is
- * one of that menu's rows — `ContextMenu`'s `ActionRow` and `Submenu`'s trigger are built the
- * same way, and the colours are the row's own to add because they are what differs by state.
- * **The caret is real focus here**, which is why the live state names `focus:` alongside
- * `hover:`, exactly as `ActionRow`'s `LIVE_ROW` does; the greyed state paints no hover at all,
- * because a row that cannot be pressed must not light up under the pointer.
- */
-const LIVE_ROW = "text-text hover:bg-bg focus:bg-bg";
-const INERT_ROW = "cursor-default text-dim";
 
 /**
  * What the panel says while it is reading, or when the read was refused — never a blank box,

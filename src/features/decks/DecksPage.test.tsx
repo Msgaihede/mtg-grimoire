@@ -1505,6 +1505,35 @@ describe("the folder row's menu", () => {
   });
 
   /**
+   * **And the caret comes back to the row**, which is the half the write above cannot see.
+   *
+   * A destination is chosen exactly as `Delete…` or `Rename…` is — a `role="menuitem"` on the
+   * caret's walk — so it has to end where they end. The rows behind `Move to` are drawn by a
+   * `lazy` body rather than by the panel, and a body is handed only `onDone`, which
+   * `ContextMenu` documents as "close the whole menu and hand focus nowhere": a row that closed
+   * itself that way left the caret on a panel that was unmounting, dropped it on `<body>`, and
+   * the next Tab restarted from the top of the app — with the row still on screen and still
+   * focusable. Drawing the destinations with the panel's own rows is what fixes it, because
+   * `ctx.run` is where the hand-back lives.
+   *
+   * `document.activeElement`, never `toHaveFocus` on something the test pressed: `user.click`
+   * focuses what it is handed, and what it is handed here is a row that is about to unmount.
+   */
+  it("hands the caret back to the row when the menu's Move to writes", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    const row = await rowFor("Legends, 1 deck");
+    await rightClick(row);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "All decks" }));
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(row);
+  });
+
+  /**
    * The destructive row asks rather than writes, because a menu opens by accident — and a
    * folder's delete is the one a reader guesses wrong, since the decks inside are kept and the
    * folders inside are not. The question is the gallery's own, so it is asked about the folder

@@ -17,6 +17,7 @@ import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import {
   buildFolderMenu,
   folderDestinations,
+  folderDestinationRowId,
   FOLDER_DESTINATION_ATTR,
   type FolderMenuDeps,
 } from "./folderMenu";
@@ -102,17 +103,24 @@ function expand(item: MenuLazy) {
   return { onDone };
 }
 
-/** The folders a "Move to" offers but will not take, by id. The attribute is on the row for
- *  this and for a live probe; the top-level row carries none, because it is not a folder. */
+/**
+ * The folders a "Move to" offers but will not take, by id.
+ *
+ * A destination row says which folder it is in its **id** — these are the panel's own
+ * `ActionRow`s, which carry `data-menu-row` and nothing a caller may add — so a row is matched
+ * by composing that id rather than by reading an attribute this file spells for itself. The top
+ * level has an id of its own (`destination-root`) and is not a folder, so it never matches.
+ */
 async function forbiddenFor(items: MenuItem[]): Promise<number[]> {
   expand(find(items, "Move to") as MenuLazy);
   await screen.findAllByRole("menuitem");
-  return screen
+  const inert = screen
     .getAllByRole("menuitem")
     .filter((row) => row.getAttribute("aria-disabled") === "true")
-    .map((row) => row.getAttribute(FOLDER_DESTINATION_ATTR))
-    .filter((id): id is string => id !== null)
-    .map(Number);
+    .map((row) => row.getAttribute(FOLDER_DESTINATION_ATTR));
+  return FOLDERS.filter((folder) => inert.includes(folderDestinationRowId(folder.id))).map(
+    (folder) => folder.id,
+  );
 }
 
 beforeEach(() => {
@@ -235,8 +243,14 @@ describe("buildDeckMenu", () => {
 
     await userEvent.click(await screen.findByRole("menuitem", { name: /^Commander › Budget/ }));
     expect(moveToFolder).toHaveBeenCalledWith(ATRAXA.id, BUDGET.id);
-    // The menu closes on the pick, the way every other row does.
-    expect(onDone).toHaveBeenCalled();
+    // **The menu closes on the pick, the way every other row does — through `ctx.run` and never
+    // through `onDone`.** These are the panel's own rows now, so choosing one focuses the opener,
+    // closes the menu and *then* writes; `onDone` is `ctx.close`, which hands focus nowhere, and
+    // calling it as well would be a second close of something already gone. That is why nothing
+    // is asserted about it here and why the hand-back is asserted where the opener lives —
+    // `DecksPage.test.tsx`'s "hands the caret back to the row when the menu's Move to writes".
+    // Rendered on its own, as here, a row's press is `NO_CASCADE.run`: the write and no close.
+    expect(onDone).not.toHaveBeenCalled();
 
     // `null` is an offer with a meaning: `DeckPatch.folderId` writes `coalesce(?n, folder_id)`
     // and cannot express it, so this row is the only way back to the root.
@@ -331,7 +345,7 @@ describe("buildFolderMenu", () => {
     const row = (id: number) =>
       screen
         .getAllByRole("menuitem")
-        .find((r) => r.getAttribute(FOLDER_DESTINATION_ATTR) === String(id))!;
+        .find((r) => r.getAttribute(FOLDER_DESTINATION_ATTR) === folderDestinationRowId(id))!;
 
     // One sentence per row, rather than one under the list: `MenuAction.reason`'s shape, and
     // the two fences are different sentences.
