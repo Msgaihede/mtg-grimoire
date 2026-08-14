@@ -401,24 +401,52 @@ export function LayoutToggle({
 /**
  * Clear every filter at once, with the number of them on it.
  *
- * Absent rather than disabled when there is nothing to clear: a control that spends most
- * of its life greyed out teaches the reader to stop looking at it. The rule lives here so
- * that every view that offers a reset offers the same one.
+ * **Always drawn, and greyed at zero.** It used to return `null` with nothing to clear, on the
+ * theory that a control spending most of its life dimmed teaches the reader to stop looking at
+ * it. That is true and it is the smaller cost: the search box these rows open with is `flex-1`,
+ * so a button appearing mid-row takes its whole width out of the box and *every control to the
+ * right of it slides left* — the colour chips, the mana values, the set picker. The reader
+ * presses a colour, the row shifts under the cursor, and the second press lands on a chip they
+ * did not aim at. A filter row that moves while it is being used is the worse control, so the
+ * width is spent up front and the button is dead rather than gone.
+ *
+ * `aria-disabled` and never `disabled`, like every other out-of-reach control here — the button
+ * keeps its place in the tab order — and the greying is `FILTER_UNAVAILABLE`, so "cannot be
+ * pressed" arrives in one treatment across the whole row rather than two.
+ *
+ * **The badge is `aria-hidden` and the count is spelled into the button's own name instead.**
+ * Left to itself the accname algorithm puts no separator between inline boxes, so this button
+ * announced as `"Reset all6"` (measured 2026-08-09 with `computeAccessibleName` from
+ * `dom-accessibility-api`). That was a small defect while the button only existed with a filter
+ * on; drawn always, it would be `"Reset all0"` on every quiet row in the app. The visible label
+ * still leads the name (WCAG 2.5.3) and the digit is still in it.
+ *
+ * The rule lives here so that every view that offers a reset offers the same one.
  */
 export function ResetAll({ count, onReset }: { count: number; onReset: () => void }) {
-  if (count <= 0) return null;
+  const empty = count <= 0;
+  const name = `Reset all — ${count} filter${count === 1 ? "" : "s"} active`;
   return (
     <button
       type="button"
-      onClick={onReset}
+      onClick={() => {
+        if (!empty) onReset();
+      }}
+      aria-disabled={empty || undefined}
+      aria-label={name}
+      title={name}
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,
-        "inline-flex items-center gap-2 border-border px-2.5 text-dim hover:text-text",
+        "inline-flex items-center gap-2 border-border px-2.5 text-dim",
+        empty ? FILTER_UNAVAILABLE : "hover:text-text",
       )}
     >
       Reset all
-      <span className="rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground">
+      <span
+        aria-hidden="true"
+        className="rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground"
+      >
         {count}
       </span>
     </button>

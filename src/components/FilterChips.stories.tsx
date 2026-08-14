@@ -96,8 +96,9 @@ function LayoutPair({ initial }: { initial: SearchView }) {
   );
 }
 
-/** Resetting takes the count to zero, which takes the control off the screen — the rule this
- *  control exists to hold, and the one thing about it worth watching happen. */
+/** Resetting takes the count to zero, which greys the control where it stands rather than
+ *  removing it — the rule this control exists to hold, and the one thing about it worth
+ *  watching happen: the button does not move, and nothing beside it does either. */
 function ResettableAll({ initial }: { initial: number }) {
   const [count, setCount] = useState(initial);
   return <ResetAll count={count} onReset={() => setCount(0)} />;
@@ -318,20 +319,32 @@ export const Reset: Story = {
 };
 
 /**
- * Nothing at all when there is nothing to clear.
+ * Greyed, and still there, when there is nothing to clear.
  *
- * Absent rather than disabled: a control that spends most of its life greyed out teaches the
- * reader to stop looking at it, and the rule lives in the control so that every view offering a
- * reset offers the same one. A story that renders *empty* is the contract here, not a broken
- * story — which is why the claim is asserted rather than left to a reader looking at a blank
- * canvas.
+ * Dimmed rather than absent, which is the trade this control is the wrong way round on until
+ * you see it in a row: a button that spends most of its life greyed does teach the reader to
+ * stop looking at it, and a button that *appears* on the first press takes its width out of the
+ * `flex-1` search box beside it and slides every chip to its right left — under the finger that
+ * just pressed one. The row must not move while it is being used. `aria-disabled` and not
+ * `disabled`, like every other out-of-reach control here, so it keeps its place in the tab
+ * order; the count is spoken rather than read off the badge, because an inline `<span>` joins
+ * the accessible name with no separator before it.
  */
 export const NothingToReset: Story = {
   args: { label: "Owned", pressed: false },
   parameters: { controls: { disable: true } },
   render: () => <ResetAll count={0} onReset={noop} />,
   play: async ({ canvasElement }) => {
-    await expect(canvasElement).toBeEmptyDOMElement();
+    const canvas = within(canvasElement);
+    const reset = canvas.getByRole("button", { name: /^Reset all/ });
+    await expect(reset).toHaveAttribute("aria-disabled", "true");
+    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+
+    // Still a tab stop: `aria-disabled` says "cannot be pressed" without taking the control
+    // out from under a keyboard reader mid-row. That the press is refused is
+    // `FilterChips.test.tsx`'s to assert — the shared `noop` here is called by other stories.
+    reset.focus();
+    await expect(reset).toHaveFocus();
   },
 };
 
