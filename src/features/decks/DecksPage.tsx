@@ -102,6 +102,10 @@ const FOLDER_ARTS = 3;
  * {@link DeckRow.cardCount} counts the **live** list only, so a deck with theory switched on
  * and nothing live in it is a plan and not yet a deck: `THEORY ONLY`. One derivation, because
  * a badge and the editor's Live/Theory switch must never disagree about which lists a deck has.
+ *
+ * `THEORY ONLY` is the state **switching the theory list on now produces**, rather than an
+ * unusual one: the write moves the live list into the plan and leaves live empty, so the badge
+ * reads the deck the way the editor does from that moment.
  */
 export type DeckBadge = "LIVE" | "LIVE + THEORY" | "THEORY ONLY";
 

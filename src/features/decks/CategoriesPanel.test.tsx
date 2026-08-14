@@ -119,6 +119,9 @@ const DECK_ROW: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
 };
 
 const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };

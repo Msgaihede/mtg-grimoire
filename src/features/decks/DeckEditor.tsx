@@ -28,10 +28,16 @@ import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPane
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
-import { buildGroups, GROUP_BY_OPTIONS, type GroupBy } from "./grouping";
+import {
+  asGroupBy,
+  buildGroups,
+  DEFAULT_GROUP_BY,
+  GROUP_BY_OPTIONS,
+  type GroupBy,
+} from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { QuickAdd } from "./QuickAdd";
-import { SORT_OPTIONS, type SortBy } from "./sorting";
+import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -211,8 +217,17 @@ type Layer =
  * them, and which of six layers is open. It draws no card and no group heading itself —
  * `grouping.ts` says what the groups are and `views/` draw them, so four surfaces cannot answer
  * "how many cards are in the Ramp column" four ways.
+ *
+ * **Three of those decisions outlive the editor**: the variant, the grouping and the sort are
+ * columns on the deck row, restored on the way in and written on every press
+ * (`deck.rememberView`). The view, the filter, the tag chips and the stats block are not — they
+ * are how the reader is looking *now*, and a deck that reopened filtered would be a deck missing
+ * cards until somebody noticed the field.
  */
 export function DeckEditor({ deckId }: { deckId: number }) {
+  // Live until the deck row says otherwise, which it does on the first read — a deck nobody has
+  // switched remembers `"live"` too, so this is the same answer arriving twice rather than a
+  // guess the restore has to correct.
   const [variant, setVariant] = useState<DeckVariant>("live");
   // Every price on this screen — four views, every heading, the stats strip and the line under
   // the deck — is quoted from here. Read once at the top of the editor and threaded, so no two
@@ -245,8 +260,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const other = useDeck(theoryEnabled ? deckId : null, variant === "live" ? "theory" : "live");
 
   const [view, setView] = useState<DeckView>("stacks");
-  const [groupBy, setGroupBy] = useState<GroupBy>("category");
-  const [sortBy, setSortBy] = useState<SortBy>("alphabetical");
+  // The two the deck row remembers, seeded from the same constants a stored word this build
+  // cannot draw falls back to — so "never chosen" and "chosen and since dropped" are one state
+  // rather than two. The restore below overwrites both the moment the row lands.
+  const [groupBy, setGroupBy] = useState<GroupBy>(DEFAULT_GROUP_BY);
+  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_BY);
   const [filter, setFilter] = useState("");
   const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
   const [statsOpen, setStatsOpen] = useState(true);
@@ -279,6 +297,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * quick-add field said so in its own label.
    */
   const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
+
+  /**
+   * The remembered triple this editor has already put on screen, so the restore below honours a
+   * *value* rather than a deck — see it for why that is the difference that matters.
+   *
+   * State rather than a ref, and not a stylistic choice: this is React's own "adjusting state
+   * when a prop changes" pattern, where the previous value is held in state precisely so the
+   * comparison and the update are both part of the render the new value arrived in. A ref read
+   * during render is the thing `react-hooks/refs` forbids, and for the reason that would bite
+   * here — a ref written in a render React then discards would leave the editor believing it
+   * had honoured a triple it never drew.
+   */
+  const [honouredView, setHonouredView] = useState<string | null>(null);
 
   /** What is in the name field while it is being typed in, or `null` when the field is simply
    *  the deck's name (`QuantityStepper`'s draft, for its reason). */
@@ -370,9 +401,76 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // one is open, and an `"inner"` layer nothing draws is a layer that eats the first Escape of
   // whatever the reader does next. Reset during render (`CardDetailPane`'s face, `Cover`'s art).
   if (gone && layer !== null) setLayer(null);
+
+  // Put the reader back where they left this deck: the tab, the grouping and the sort the row
+  // remembers. Another reset during render — React's own answer to state that has to follow a
+  // prop, and the pattern this file already uses twice (the `targetCategoryId` clamp above and
+  // the `variant` clamp below).
+  //
+  // **Honoured once per *triple*, not once per deck**, which is the whole of what makes it
+  // co-operate with the reader rather than fight them: `honouredView` holds the triple that was
+  // applied, so a row answering the same one again changes nothing, while a row answering a
+  // *new* one — the deck being opened, or `theoryEnabled` being switched on, which leaves
+  // `lastVariant` at `"theory"` because the cards moved there — moves the controls.
+  //
+  // **It cannot loop, and the reason is that `rememberView` does not invalidate.** A press
+  // writes the columns without re-reading the deck, so the triple on this row changes only when
+  // the deck is genuinely read again — opening it, or any card write's `["decks"]`
+  // invalidation — and by then it is the reader's own stored choice, which the three `!==`
+  // guards make a no-op. Restoring writes nothing back, deliberately: this is a read of what is
+  // already stored.
+  const remembered =
+    row === null ? null : `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`;
+  if (row !== null && honouredView !== remembered) {
+    setHonouredView(remembered);
+    // Narrowed rather than cast: a word a future build stops offering must land the editor on
+    // the default, not in a mode its own select cannot draw.
+    const storedGroupBy = asGroupBy(row.lastGroupBy);
+    const storedSortBy = asSortBy(row.lastSortBy);
+    // A remembered `"theory"` on a deck that keeps no plan is an ordinary state, not a corrupt
+    // one — switching the list off does not rewrite the column — and the clamp below would take
+    // it straight back. Asking for it anyway would cost a `deck_get` for a list the reader has
+    // no control to reach, fired and thrown away on the way in. So the restore asks for what
+    // this deck can actually show, and the clamp stays what it is: the guarantee rather than
+    // the mechanism.
+    const storedVariant = theoryEnabled ? row.lastVariant : "live";
+    if (storedVariant !== variant) setVariant(storedVariant);
+    if (storedGroupBy !== groupBy) setGroupBy(storedGroupBy);
+    if (storedSortBy !== sortBy) setSortBy(storedSortBy);
+  }
+
   // Same reason, one field along: a switch the header stops drawing must not leave the editor
   // reading a list nothing can get back to.
+  //
+  // **After the restore, and still the guarantee even though the restore no longer hands it a
+  // `"theory"` to take back.** A deck that kept a plan and no longer does can perfectly well
+  // remember `"theory"`, since switching the list off does not rewrite the column; the restore
+  // reads that as Live rather than asking for a list the reader has no control to reach (its
+  // own comment says why). What is left for this line is the case the restore is not part of:
+  // the switch being turned off under an editor that is already reading the plan.
   if (row !== null && !theoryEnabled && variant !== "live") setVariant("live");
+
+  /**
+   * The three toolbar controls the deck remembers, each writing **only the field that moved**.
+   *
+   * The state is what the editor draws and the write is what makes it survive the deck being
+   * closed — in that order, and nothing waits on the answer: `rememberView` does not invalidate
+   * and fails silently, so a press lands exactly as fast as it did before anything was stored.
+   * Sending one field rather than three is `DeckViewState`'s absent-means-leave-it rule used
+   * for what it is for — pressing Sort cannot write back a grouping read out of a stale render.
+   */
+  const pickVariant = (next: DeckVariant) => {
+    setVariant(next);
+    deck.rememberView.mutate({ variant: next });
+  };
+  const pickGroupBy = (next: GroupBy) => {
+    setGroupBy(next);
+    deck.rememberView.mutate({ groupBy: next });
+  };
+  const pickSortBy = (next: SortBy) => {
+    setSortBy(next);
+    deck.rememberView.mutate({ sortBy: next });
+  };
 
   // The caret comes here on the way in, once the deck's name is known so the region announces
   // which deck it is. The gallery's New deck button had the caret and unmounts the moment this
@@ -913,16 +1011,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                         drawn and not what the control is *called*, so a `capitalize` switch is
                         one a reader sees as "Live" and voice control has to be asked for as
                         "live". */}
+                    {/* **Theory first, Live second.** The plan is the list a reader building a
+                        deck is in; the live list is what they come back to when they sleeve it
+                        up. It is also what makes turning the switch on land somewhere that reads
+                        right — the write *moves* the deck into theory and leaves `lastVariant`
+                        there, so the reader arrives on the tab their cards are now under, with
+                        the empty one beside it rather than under their pointer. */}
                     {(
                       [
-                        { id: "live", label: "Live" },
                         { id: "theory", label: "Theory" },
+                        { id: "live", label: "Live" },
                       ] as const
                     ).map(({ id, label }) => (
                       <button
                         key={id}
                         type="button"
-                        onClick={() => setVariant(id)}
+                        onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
                         className={cn(
                           "h-7 px-2.5 text-xs",
@@ -1106,7 +1210,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <select
               id="deck-group-by"
               value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+              onChange={(e) => pickGroupBy(e.target.value as GroupBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
               {GROUP_BY_PICKER.map((option) => (
@@ -1124,7 +1228,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <select
               id="deck-sort-by"
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortBy)}
+              onChange={(e) => pickSortBy(e.target.value as SortBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
               {SORT_BY_PICKER.map((option) => (

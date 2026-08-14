@@ -50,6 +50,57 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the _live_ deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
   Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
   perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
+- **Switching the theory list on _moves_ the live deck into it. It does not copy it.** The deck
+  the reader has built **is the plan**, so it becomes the theory list — and `live`, what is
+  actually sleeved up, **starts empty** and fills as they acquire the cards. The guard is the one
+  it always was: only on the false→true _transition_, and only when the theory list is empty,
+  because a plan the reader has already started is not something a re-press of the switch may
+  pour the live deck over. Two things ride along in the same transaction. The deck's
+  `last_variant` becomes `theory`, so the reader lands where their deck now is rather than on a
+  blank page they did not empty. And the move **reallocates**: `deck_allocations` claims
+  collection copies for `live` only, so cards that have just left the live list must release the
+  copies they were holding — otherwise a deck with nothing sleeved up goes on reserving a binder
+  it no longer plays from, and every other deck reads the shortage. **The rule this inverts was a
+  seeding copy** — live was left alone and theory filled from it, on the reasoning that an empty
+  theory list beside a full live one is not a blank page but reads as data loss. That got the
+  right danger and the wrong half: nothing is ever deleted here, both lists being the same table,
+  and what the copy actually produced was two identical lists with no way to tell which one was
+  being edited. A reader who switches the theory list on is saying _what I have is the plan_.
+  **`deck_theory_copy_from_live` is unchanged** and still means "copy what is sleeved up into the
+  plan" — it is simply no longer what the switch does.
+- **The empty-theory guard is now load-bearing twice, and the second reason is the one to know.**
+  `variant` is _in_ `DECK_CARD_GRAIN`, and the move is a bare `UPDATE … SET variant` with no
+  `ON CONFLICT` clause — so re-labelling a live row over a theory row of the same deck, category
+  and printing is a `UNIQUE constraint failed` that fails the caller's whole write. Adding an
+  `ON CONFLICT` here would be the wrong repair twice over: it would hide the guard's removal, and
+  either arm of it, skip or fold, silently rewrites a plan the reader started. The copy that used
+  to sit here could carry `DO NOTHING` precisely because it was a copy; a move cannot.
+- **The editor's last view is stored on the deck, because reading a deck is not editing it.**
+  Schema v12 adds `decks.last_variant`, `last_group_by` and `last_sort_by` — three `TEXT NOT NULL`
+  columns defaulting to `live`, `category` and `alphabetical` — carried on `DeckRow` as
+  `lastVariant`/`lastGroupBy`/`lastSortBy` and written by one command,
+  `deck_set_view_state(deckId, viewState)`, whose `{ variant?, groupBy?, sortBy? }` reads an
+  absent field as "leave it" — `DeckPatch`'s own `coalesce(?n, column)` convention. Three things
+  it deliberately does **not** do, each of which the obvious implementation would have done: it
+  does not move `updated_at`, because pushing a deck to the top of a gallery sorted by "most
+  recently touched" for the crime of somebody looking at its Theory tab is a lie about what
+  happened; it writes **no `deck_audit` row**, because the history holds changes to the deck and
+  which tab was open is not one; and it **reallocates nothing**. An unknown deck id is refused by
+  name (`GONE`) rather than passed over silently — the editor is exactly where a deck deleted in
+  another window is discovered.
+- **`last_variant` is validated in Rust and the other two are not, which is the boundary rather
+  than an omission.** `ALTER TABLE … ADD COLUMN` cannot add a CHECK, so none of the three carries
+  one in SQL and the fence has to sit somewhere. `last_variant` is checked against
+  `schema::DECK_VARIANTS`, because that is a word the crate owns — the same word
+  `deck_cards.variant` holds. `last_group_by` and `last_sort_by` hold a **TypeScript**
+  vocabulary (`category|manaValue|type` and `alphabetical|manaCost|price|type`) the crate
+  deliberately does not know: Rust stores the reader's answer verbatim as a fact, and TypeScript
+  narrows it on read with a fallback to the default. Teaching `schema.rs` those seven words would
+  put the deck editor's grouping and sorting modes in two places, and the copy that could not be
+  changed without a migration is the wrong one to have. **The one thing Rust does check about
+  those two is that neither is blank** (`NO_MODE`): an empty string is not a word in anybody's
+  vocabulary, it is a bug in the caller, and storing it hands the editor back a remembered choice
+  of nothing.
 - **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
   else.** All categories and all tags come back whatever the variant — an empty category still
   draws its column, an inactive one always draws — but a category's _and a tag's_ `card_count`
@@ -86,9 +137,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
   decides what is allocated for) then row id, and within a card, exact printing, then real
   copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
-  `set_category_active`, `delete_category` or `commit_import`** — those six and nothing else,
+  `set_category_active`, `delete_category`, `commit_import` or the theory list being switched
+  on** — those seven and nothing else,
   which is worth knowing while debugging, because pressing "Send missing to wishlist" or
-  switching a pile off rebuilds a deck's allocations as a side effect. The import is the one
+  switching a pile off rebuilds a deck's allocations as a side effect. The theory move is the
+  seventh and the least obvious of them: it empties `live`, and a claim held for a card that is
+  no longer sleeved up is a copy no other deck can see. The import is the one
   that runs it for **many** cards at once and still only once, which is the whole reason
   `deck_import_commit` is a command rather than a loop over `deck_add_card`. A **built** deck's claims are subtracted from
   what other decks can see. The
@@ -124,9 +178,11 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
   It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
-  **Six writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
+  **Seven writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
   deck, so a row would be orphaned by its own event); **both** `missing_to_wishlist` commands,
-  `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); and **three of the four
+  `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); `deck_set_view_state`
+  (which tab the reader had open is not a change to the deck, and a history that filled up with
+  them would bury the ones that are); and **three of the four
   folder writes** — create, rename and move — because a folder belongs to no deck and
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
@@ -333,8 +389,10 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
   promise the answer before the press.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
-  `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
-  add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
+  `newestWrite([...])` counts six of the hook's eight** — update (the rename, the cover and the
+  Built toggle), add-card, set-quantity, move, missing-to-wishlist, swap-printing. The other two
+  are `setTag` and `rememberView`, and neither is a write to what is _in_ the deck.
+  **There is no remove
   mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
   removes a deck row. The deck _row_ is a different hook — the gallery's `useDecks` owns create,
   update, remove and duplicate, and `useDeck.update` is that same `deck_update` narrowed to the
