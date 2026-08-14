@@ -51,7 +51,7 @@ import type {
   FakeWish,
 } from "./db";
 import { DECK_CATEGORIES, printing } from "./fixtures";
-import type { CategoryKind, DeckAuditKind, DeckVariant } from "@/lib/ipc";
+import type { CategoryKind, CategoryOrigin, DeckAuditKind, DeckVariant } from "@/lib/ipc";
 
 export type SeedName = "empty" | "starter" | "needsReview" | "large";
 
@@ -190,6 +190,11 @@ function anyPrintingWish(
  * Ids are handed out deck by deck from one sequence, so category 1 is deck 1's Commander and
  * category 6 is deck 2's. Nothing outside this file may assume that arithmetic —
  * {@link categoryOf} and {@link categoryNamed} are how a row finds its category.
+ *
+ * **`origin` is the third thing these two shapes differ about, and it is the one a name cannot
+ * tell you.** Decks 1–3 are all `user`: four predefined seeds plus the pile v8's migration
+ * built, which the v15 backfill deliberately leaves alone. Deck 4 has one of each class, so a
+ * story can see all three answers at once — see the tuples below.
  */
 function starterCategories(): FakeDeckCategory[] {
   const next = ids();
@@ -201,33 +206,51 @@ function starterCategories(): FakeDeckCategory[] {
       kind: c.kind,
       isActive: c.isActive,
       sortOrder: c.sortOrder,
+      origin: c.origin,
     })),
   );
-  /** Deck 4's, `(kind, name, isActive)` in `sortOrder` — the four predefined first, because
-   *  `create_deck` writes them before the reader has added anything. */
-  const testbed: [CategoryKind, string, boolean][] = [
-    ["commander", "Commander", true],
-    ["side", "Sideboard", true],
-    ["companion", "Companion", true],
-    ["maybe", "Maybeboard", false],
-    ["main", "Ramp", true],
-    ["main", "Card advantage", true],
+  /**
+   * Deck 4's, `(kind, name, isActive, origin)` in `sortOrder` — the four predefined first,
+   * because `create_deck` writes them before the reader has added anything.
+   *
+   * **The last three are the whole point of the column.** `Ramp` is a pile no one asked for:
+   * the reader added a Sol Ring, `autoCategoryFor` answered "Ramp" and `category_for_name` made
+   * it — so it is `auto`, and it draws only for as long as it holds something. The two below it
+   * are the reader's own, and *neither is distinguishable from `Ramp` by its name*: "Card
+   * advantage" was made by hand and then renamed (the history says so — it used to be "Value"),
+   * and "Cut list" is a pile they made and switched off. A rule matching names would have had to
+   * guess at all three and would have got at least one wrong.
+   */
+  const testbed: [CategoryKind, string, boolean, CategoryOrigin][] = [
+    ["commander", "Commander", true, "user"],
+    ["side", "Sideboard", true, "user"],
+    ["companion", "Companion", true, "user"],
+    ["maybe", "Maybeboard", false, "user"],
+    // Made by the add path, and holding cards in both lists — so it is drawn in both, and what
+    // its `auto` says is only that emptying it would take the heading with it.
+    ["main", "Ramp", true, "auto"],
+    ["main", "Card advantage", true, "user"],
     // **The point of the whole fixture.** A pile the *reader* made and switched off, which
     // counts toward nothing — no size, no copy limit, no legality check — and claims no copies,
     // exactly as the Maybeboard above it does. Nothing in the engine, the allocator or the
     // stats knows which of the two is which, and the illegal card filed here is how a story can
     // show that: switch it on and the deck reports a banned card.
-    ["main", "Cut list", false],
+    //
+    // It is also this seed's **empty user pile**: it holds one card in the live list and none in
+    // the plan, so opening deck 4 on its theory tab draws it with nothing under it. An `auto`
+    // pile in that state would not be drawn at all.
+    ["main", "Cut list", false, "user"],
   ];
   return [
     ...migrated,
-    ...testbed.map(([kind, name, isActive], sortOrder) => ({
+    ...testbed.map(([kind, name, isActive, origin], sortOrder) => ({
       id: next(),
       deckId: 4,
       name,
       kind,
       isActive,
       sortOrder,
+      origin,
     })),
   ];
 }

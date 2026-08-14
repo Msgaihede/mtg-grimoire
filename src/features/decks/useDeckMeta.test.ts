@@ -43,6 +43,9 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
   return {
     deckId: 4,
     kind: "main",
+    // Before the spread, so a caller can ask for `auto` — the default is the schema's, and it
+    // is what keeps a pile in these fixtures drawn when it holds nothing.
+    origin: "user",
     isActive: true,
     sortOrder: 0,
     cardCount: 0,

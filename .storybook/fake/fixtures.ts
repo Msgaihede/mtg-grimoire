@@ -31,7 +31,14 @@ import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
 import type { ValidationIssue } from "@/features/decks/validation/types";
-import type { CategoryKind, DeckCard, DeckCategory, ReleaseInfo, UpdateAsset } from "@/lib/ipc";
+import type {
+  CategoryKind,
+  CategoryOrigin,
+  DeckCard,
+  DeckCategory,
+  ReleaseInfo,
+  UpdateAsset,
+} from "@/lib/ipc";
 
 /**
  * A fixture printing, by the two columns that identify one — the set code and the collector
@@ -90,14 +97,20 @@ export const DECK_CATEGORIES: readonly {
   name: string;
   isActive: boolean;
   sortOrder: number;
+  origin: CategoryOrigin;
 }[] = [
-  { kind: "commander", name: "Commander", isActive: true, sortOrder: 0 },
-  { kind: "main", name: "Main deck", isActive: true, sortOrder: 1 },
-  { kind: "side", name: "Sideboard", isActive: true, sortOrder: 2 },
-  { kind: "companion", name: "Companion", isActive: true, sortOrder: 3 },
+  { kind: "commander", name: "Commander", isActive: true, sortOrder: 0, origin: "user" },
+  // **`user`, and "Main deck" is the one row where that takes explaining.** `origin` is written
+  // by whoever made the row: `ensure_predefined_categories` seeds the other four as `user`, and
+  // v15's backfill marks an existing pile `auto` only where its name is one `autoCategoryFor`
+  // can produce. "Main deck" is deliberately not on that list — the v8 migration's pile is a
+  // real pile holding real cards — so it draws when empty like any pile the reader owns.
+  { kind: "main", name: "Main deck", isActive: true, sortOrder: 1, origin: "user" },
+  { kind: "side", name: "Sideboard", isActive: true, sortOrder: 2, origin: "user" },
+  { kind: "companion", name: "Companion", isActive: true, sortOrder: 3, origin: "user" },
   // The one seeded inactive category, and **that** is the whole of what makes a Maybeboard
   // special — not its kind. Switch it on and it counts like anything else.
-  { kind: "maybe", name: "Maybeboard", isActive: false, sortOrder: 4 },
+  { kind: "maybe", name: "Maybeboard", isActive: false, sortOrder: 4, origin: "user" },
 ];
 
 /**
@@ -125,6 +138,12 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
     kind: category.kind,
     isActive: category.isActive,
     sortOrder: category.sortOrder,
+    // All five of these rows are `user` (see the table), so a fixture wanting the *other* class
+    // — a pile the app made while filing a card, which draws only while it holds one — says
+    // `origin: "auto"` in its overrides. It is not derivable from the name here any more than it
+    // is in the app: `Ramp` is both a bucket `autoCategoryFor` answers with and a pile people
+    // make by hand.
+    origin: category.origin,
     cardCount: 0,
     totalPrice: null,
     ...over,
@@ -340,6 +359,13 @@ export function deckGroups(
   // it is moved rather than left to tie with `Removal` and be ordered by row id.
   const side: DeckCategory = { ...deckCategory("side"), sortOrder: 3 };
   const maybe = deckCategory("maybe");
+  // **Both are `origin: "user"`, which they inherit, and the names are why that is worth a
+  // sentence.** "Ramp" and "Removal" are exactly what `autoCategoryFor` answers with *and*
+  // exactly what a person calls a pile they made — so a rule that hid empty piles by matching
+  // that list would hide these two, which the doc above says are the reader's own. The class is
+  // `deck_categories.origin`, written by whichever path made the row: `category_for_name` finds
+  // a pile of this name before it creates one, so filing a ramp spell into the reader's "Ramp"
+  // leaves it theirs.
   const ramp: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp", sortOrder: 1 };
   const removal: DeckCategory = { ...deckCategory("main"), id: 11, name: "Removal", sortOrder: 2 };
 

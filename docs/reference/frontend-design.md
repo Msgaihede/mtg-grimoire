@@ -264,9 +264,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
   build at 1280×800**, driven over `scripts/cdp.mjs` against the deck "test (copy)" (Commander, 11
   cards, 9 categories, 6 stack columns). **That column count is the fixture as it stood on the day
-  and is no longer what this deck draws**: its empty Companion is not drawn at all now and its
-  Maybeboard rides the rail rather than the pack, while its empty `Enchantment` pile has started
-  drawing — see `grouping.ts`'s `drawsWhenEmpty` and `columns.ts`'s `splitRail`. Nothing measured
+  and is no longer what this deck draws**: its empty Companion is not drawn at all now, its
+  Maybeboard rides the rail rather than the pack, and whether its empty `Enchantment` pile draws is
+  a question about who made it — `drawsWhenEmpty` reads the pile's `deck_categories.origin`, and
+  the v15 backfill marks a `main` pile of that name `auto`, so on that database it is out again.
+  See `grouping.ts`'s `drawsWhenEmpty` and `columns.ts`'s `splitRail`. Nothing measured
   below depends on it; every reading here is per-`<section>` and holds wherever the section is
   drawn. Every `StackGroup` `<section>` computed
   `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)`: the box survives and the line does
@@ -303,9 +305,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   is spelled for the *rail* rather than for the Sideboard because the Sideboard is no longer the
   only thing in it. It is rendered only when a `side` **or** `maybe` group exists, which is a real
   condition for a story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES`
-  seeds both into every deck, an empty category group is drawn (neither of them is one of the two
-  conditional zones — see `grouping.ts`'s `drawsWhenEmpty`), and a predefined pile cannot be
-  deleted — so in `category` mode the rail is there from the moment a deck is created. **The cost
+  seeds both into every deck, an empty category group is drawn for each (neither of them is one of
+  the two conditional zones, and the seed writes both `origin: 'user'` — see `grouping.ts`'s
+  `drawsWhenEmpty`), and a predefined pile cannot be deleted — so in `category` mode the rail is
+  there from the moment a deck is created. **The cost
   is `stackColumnWidth(zoom)` beside the flow** — 224px at 1× and 434px at 2×, both derived from
   that one function — which at 2× is a third of a 1280px window standing beside two piles that on a
   new deck hold nothing at all; below one column plus the rail it takes its own line instead, which
@@ -319,9 +322,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   freshly created **Commander**-format deck drew `Commander, Sideboard, Maybeboard` — the command
   zone empty, the companion slot still absent in a format that allows one. Creating a category
   through the Categories drawer put an empty `Ramp` on the desk immediately, in `sortOrder` between
-  `Main deck` and the rail, which is the reversal itself: under the old rule it was invisible from
-  the moment it was made. Typing `bolt` into the filter removed `Ramp` and left `Main deck,
-  Sideboard, Maybeboard` — the narrowed arm, cut to the fixed zones. **No number here is a
+  `Main deck` and the rail, which is the reversal itself: under the rule before that one it was
+  invisible from the moment it was made. **That reading has since gained a second subject and still
+  holds**: the drawer writes `origin: 'user'`, so what it shows is a reader's pile drawing under a
+  name the app also files by — the case a name test would have got wrong.
+  **The filter reading describes a rule that no longer exists.** Typing `bolt` removed `Ramp` and
+  left `Main deck, Sideboard, Maybeboard` — `EmptyGroupRules.narrowed`, cut to the fixed zones —
+  and that flag has been deleted: a filter decides nothing about which headings exist, so the same
+  press leaves that `Ramp` drawing today. Nothing here has been re-driven. **No number here is a
   measurement**: a headless browser at a story's viewport says nothing about the app's geometry,
   and nothing above was measured in pixels.
 - **A rail this view used to hold sticky is the one thing not to reinstate.** For one commit
@@ -566,6 +574,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     rail's *height* and, by one group, what is left to flow: the **5888px** scroll and the
     **13-column** deck were read with the Maybeboard still packed among the twelve named piles.
     Read those two as facts about that run rather than about today's layout.
+  - **It predates `deck_categories.origin` as well, and that caveat runs the same way.** Every
+    empty pile drew on the day of the pass; `drawsWhenEmpty` now leaves an empty `auto` one out,
+    which can only take headings off a deck and never add one — so the **5888px** and the
+    **13 columns** are a ceiling for that seeded deck rather than a reading of it today. Nothing
+    has been re-driven. The widths and both thresholds are untouched either way: they are
+    arithmetic about one column, and a column is the same width whoever made the pile in it.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

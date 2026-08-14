@@ -421,7 +421,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * not.** What the spec answers now is {@link emptyGroupRules}, which `buildGroups` consults
    * about a group holding **nothing**: a Modern deck draws no empty command zone. This array is
    * untouched by it and is still every category of the deck. It is what the toolbar's "Add to"
-   * select and `CategoriesPanel` are built from, so every pile
+   * select and `CategoriesDialog` are built from, so every pile
    * stays reachable by name whether or not a heading is drawn for it — and a pile that *holds*
    * a card draws whatever the format says, because `drawsWhenEmpty` is never asked about a
    * group with cards in it. Nothing holding cardboard is hidden, and nothing at all is hidden
@@ -936,16 +936,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * of what is under it — a group saying 60 over four visible rows is a heading that lies about
    * the only thing it is for.
    *
-   * **Filtering therefore also decides which headings exist**, which is a consequence of
-   * `grouping.ts`' `drawsWhenEmpty` rather than a rule of its own — and it is **no longer the
-   * same answer as emptying a pile by hand**. A category the reader emptied themselves *stays*:
-   * it is a place they made, and a column that vanished with its last card is one they cannot
-   * put a card back into. A category the *filter* empties is the filter's doing rather than the
-   * deck's, so there — and only there — the older rule holds and only the four seeded zones
-   * survive. That half is exactly where it was earned: without it, three letters in the filter
-   * box answer with twenty headings and three rows. It does mean the shape of the deck on screen
-   * changes as the reader types, and the pile a card would land in may not be on screen while a
-   * filter is running. {@link emptyGroupRules}' `narrowed` is what carries the distinction.
+   * **Filtering used to decide which headings exist and no longer decides anything about it.**
+   * `emptyGroupRules` carried a `narrowed` flag: while this filter was running, `grouping.ts`'
+   * `drawsWhenEmpty` kept only the four seeded zones, because three letters in the box otherwise
+   * answered with twenty headings over three rows. That wall was always made of piles the *app*
+   * had created while filing cards, and those hide whenever they are empty now — filter or no
+   * filter, since a pile this filter empties is an empty pile. So a filtered deck answers with
+   * the reader's own deliberate piles and the fixed zones, which is what the narrowing was
+   * reaching for, and **emptying a pile by hand and emptying it with the box are the same answer
+   * again**. The shape of the deck still changes as they type — that is what a filter is — but
+   * an empty pile of theirs stays on screen and stays a drop target while it does.
    */
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -975,8 +975,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /**
    * What `buildGroups` needs beyond the piles themselves to decide which **empty** headings are
-   * drawn. Neither half can reach a group that holds a card — `drawsWhenEmpty` is not asked
-   * about one — so nothing here hides cardboard.
+   * drawn — the deck's format, and nothing else. It cannot reach a group that holds a card,
+   * because `drawsWhenEmpty` is not asked about one, so nothing here hides cardboard.
    *
    * `requiresCommander` falls back to `false`, and the fallback is the half worth writing down.
    * `useFormatSpecs` answers `null` twice over: while the table is still loading, and for a deck
@@ -986,17 +986,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * card** draws whatever the format says, so the heading arrives with the first card filed
    * there and never after it.
    *
-   * `narrowed` is the one exception to "a pile the reader made is always drawn". An empty pile
-   * while the filter box or a tag chip is running is the *filter's* doing rather than the deck's,
-   * so the old rule — only the fixed zones survive — stays exactly where it was earned. What it
-   * prevents is a three-letter filter answering with twenty headings and three cards.
+   * **The `narrowed` half is gone, and the filter is deliberately not a dependency of this memo
+   * any more.** It reported whether the toolbar's box or a tag chip was running, and while one
+   * was, only the four seeded zones drew empty. Every pile that wall was made of was one the app
+   * had created while filing a card, and `grouping.ts` now keeps those out whenever they are
+   * empty — a pile the filter emptied included. What is left drawing under a filter is the
+   * reader's own piles, which is what they asked for, so the editor has one fact to pass rather
+   * than two and this recomputes only when the format does.
    */
   const emptyGroupRules = useMemo(
-    () => ({
-      requiresCommander: spec?.requiresCommander ?? false,
-      narrowed: filter.trim() !== "" || tagIds.length > 0,
-    }),
-    [spec, filter, tagIds],
+    () => ({ requiresCommander: spec?.requiresCommander ?? false }),
+    [spec],
   );
 
   const groups = useMemo(

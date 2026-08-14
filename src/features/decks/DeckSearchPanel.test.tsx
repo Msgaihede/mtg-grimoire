@@ -137,6 +137,10 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     deckId: 4,
     name: "Main deck",
     kind: "main",
+    // Before the spread so a caller may override it. This panel never reads it — it offers
+    // every category by name whatever made them — but the DTO carries it, and a fixture that
+    // lied about the shape would be the wrong kind of local.
+    origin: "user",
     isActive: true,
     sortOrder: 0,
     cardCount: 0,

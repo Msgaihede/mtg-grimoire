@@ -809,6 +809,28 @@ export interface WishlistPage {
 export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe";
 
 /**
+ * Who made a category — `deck_categories.origin`, schema v15.
+ *
+ * **Rust records the provenance as a fact; this layer draws the conclusion from it.** `'auto'`
+ * is written by `category_for_name`, the find-or-create the add and import paths file a card
+ * with; `'user'` by `create_category` (the panel's "New category" button) and by the four seeds
+ * in `ensure_predefined_categories`. `category_for_name` **finds before it creates**, so a pile
+ * the reader made keeps `'user'` for ever even once the app starts filing cards into it.
+ *
+ * That last sentence is the entire reason this is a column and not a name list. "Ramp", "Draw",
+ * "Removal" and "Lands" are exactly what a person calls their own piles, and
+ * `DECK_CATEGORY_GRAIN` is `(deck_id, name)` — one pile per name per deck — so a rule reading
+ * the *name* would quietly take over the pile a reader made deliberately. **The name is the
+ * user's; the kind is what the rules read**, and provenance is the same kind of fact as the
+ * kind.
+ *
+ * No CHECK behind it (`ALTER TABLE ADD COLUMN` cannot add one) and no Rust validation either,
+ * which is the deliberate difference from `decks.last_variant`: `origin` is never supplied by a
+ * caller, so there is no untrusted value to fence.
+ */
+export type CategoryOrigin = "user" | "auto";
+
+/**
  * The two decks every deck secretly is — `schema::DECK_VARIANTS`.
  *
  * `live` is what is actually sleeved up: the gallery's card count, the allocator's claims and
@@ -832,6 +854,22 @@ export interface DeckCategory {
   /** As the user wrote it — a column heading, and what every refusal about a card in it says. */
   name: string;
   kind: CategoryKind;
+  /**
+   * Who made this pile — {@link CategoryOrigin} — and, beside `kind`, the only thing
+   * `grouping.ts`'s `drawsWhenEmpty` reads.
+   *
+   * `'auto'` means the app made it while filing a card and the reader never asked for it, so it
+   * is drawn only while it holds one: *Ramp* arrives with the first ramp spell and goes with
+   * the last. `'user'` is a pile made with intent — **including the four seeded zones**, which
+   * the schema writes as `user` because nobody wants the Sideboard disappearing — and it draws
+   * until the reader deletes it. There is no hide flag and none is wanted; delete is the
+   * removal, and {@link DeckCategory.isActive} still means "counts toward nothing" rather than
+   * "goes away".
+   *
+   * Rows that predate v15 were backfilled by a one-time name guess, which is the one place this
+   * field is not evidence: both ways of being wrong are mild and self-correcting.
+   */
+  origin: CategoryOrigin;
   /**
    * **`categoryActive` is the whole of what `maybe` used to mean.** A card in an inactive
    * category counts toward no deck size, no copy limit and no legality check, and the
