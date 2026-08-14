@@ -38,8 +38,9 @@ A 2px horizontal rule of the five-color gradient (W→U→B→R→G, soft blends
 
 ## Layout
 
-- **Global ribbon** (replaces in-page header actions): left = app mark + view title; right = sync status line, Refresh, future global actions (settings, import/export). One row, 48px, `bg-surface`, mana line beneath.
-- **Sidebar:** unchanged concept (Search/Collection/Wishlist/Decks/Settings), gold active indicator.
+- **Global ribbon** (replaces in-page header actions): left = app mark + view title; right = sync status line, Refresh, future global actions (settings, import/export). One row, **56px** (48px as first drawn; enlarged 2026-08-14), `bg-surface`, mana line beneath.
+- **Sidebar:** unchanged concept (Search/Collection/Wishlist/Decks/Settings), gold active indicator. **208px wide and pinned there** — `main` is what a wider column takes the width out of, and `DeckEditor`'s docked search panel has 10px of headroom at the app's own 1280px window.
+- **The chrome's scale is one step above the content's** (2026-08-14): 20px view title and app mark, 16px nav labels and ribbon buttons, 14px status line, 20px icons. The mana line stays 2px — a signature that grows with its frame is a border.
 - **Content:** view-owned; filters live with their view, not in the ribbon.
 
 ## Search filters (user requirements, binding)

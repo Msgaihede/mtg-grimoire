@@ -151,17 +151,19 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
       )}
     >
       {/* The name in full, and the only place in the app it is set in type — the ribbon
-          shows the mark alone, because 48px of chrome is not where a two-word name earns
+          shows the mark alone, because 56px of chrome is not where a two-word name earns
           its keep, and this screen is nothing but room. Deliberately the ribbon's own
-          treatment (`font-heading text-lg leading-none text-dim`, Cinzel's 18px floor)
-          with letterspacing for the one thing that differs: this is a wordmark rather than
-          the first step of app › view. Dim rather than gold — gold means "you can act on
-          this", and a name is not an action. Hidden from the accname for the ribbon mark's
-          reason: the window title bar already says it, and the dialog is named by the
-          heading below. */}
+          treatment (`font-heading text-xl leading-none text-dim`, clear of Cinzel's 18px
+          floor) with letterspacing for the one thing that differs: this is a wordmark rather
+          than the first step of app › view. **The pairing is the point, so this size follows
+          the ribbon's**: it went 18 → 20px with it on 2026-08-14, and a reader who watches
+          this screen fill finds the same treatment in the ribbon a second later. Dim rather
+          than gold — gold means "you can act on this", and a name is not an action. Hidden
+          from the accname for the ribbon mark's reason: the window title bar already says it,
+          and the dialog is named by the heading below. */}
       <p
         aria-hidden="true"
-        className="font-heading text-lg leading-none tracking-[0.2em] text-dim"
+        className="font-heading text-xl leading-none tracking-[0.2em] text-dim"
       >
         MTG Grimoire
       </p>

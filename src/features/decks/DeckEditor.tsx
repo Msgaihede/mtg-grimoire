@@ -135,9 +135,10 @@ const DESK_GAP = 16;
  *
  * **So the editor scrolls, and that is the trade this whole arrangement is.** Three things want
  * the column's height — the deck, the price strip and the band — and at 1280×800 they come to
- * **847px** in a **710px** editor. Rather than cut one of them, the section is
- * `overflow-y-auto`: the deck holds 384, the band draws whole, and the last ~137px of it is one
- * scroll away. At 1920×1080 nothing scrolls and the deck takes the surplus (**527px**). A band
+ * **847px** in a **702px** editor (710 when this was measured, less the 8px the ribbon gained on
+ * 2026-08-14). Rather than cut one of them, the section is
+ * `overflow-y-auto`: the deck holds 384, the band draws whole, and the last ~145px of it is one
+ * scroll away. At 1920×1080 nothing scrolls and the deck takes the surplus (**519px**). A band
  * that shrank instead was measured at **92px** with 229px of charts inside it, which is a
  * scrollbar over a chart nobody can read — the thing `DeckStats` refuses when it wraps rather
  * than truncates.

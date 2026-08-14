@@ -52,13 +52,22 @@ export interface RibbonProps {
 }
 
 /**
- * The global ribbon: one 48px row that owns every action which is not about the view
+ * The global ribbon: one 56px row that owns every action which is not about the view
  * below it.
  *
  * Refresh and the sync status used to live in a per-view header, which made them look
  * like properties of whatever was on screen. They are properties of the *app*, so they
  * belong in one place that never changes — and the mana line beneath is what marks that
  * place as the app's edge rather than the content's.
+ *
+ * **56px rather than the 48px the direction was drawn at** (2026-08-14), with every piece of
+ * type and every icon in it one step up the same ladder: the title and the mark 18 → 20px, the
+ * two buttons 14 → 16px, the status line 12 → 14px, the icons 16 → 20px. The row was legible
+ * and small, and the app it fronts is full-window card art — chrome that reads as a footnote
+ * beside its own content is chrome the reader has to aim at. **The one thing that did not
+ * scale is the mana line**: a 2px rule is the signature, and a signature that grows with its
+ * frame is a border. The sidebar's width did not move either, for a reason that is nothing to
+ * do with this row — see `AppShell`.
  */
 export function Ribbon({
   title,
@@ -96,20 +105,21 @@ export function Ribbon({
 
   return (
     <div className="shrink-0">
-      <div className="flex h-12 items-center gap-3 bg-surface px-4">
+      <div className="flex h-14 items-center gap-4 bg-surface px-5">
         {/* The mark, not the product name: the window title bar already says that in full,
-            and 48px of vertical space is not where a five-word name earns its keep. Dim
+            and 56px of vertical space is not where a five-word name earns its keep. Dim
             rather than gold — gold means "you can act on this, or this is where you are",
             and a wordmark is neither. Quiet, it reads as the first step of app › view. */}
-        <span aria-hidden="true" className="font-heading text-lg leading-none text-dim">
+        <span aria-hidden="true" className="font-heading text-xl leading-none text-dim">
           MTG
         </span>
-        <span aria-hidden="true" className="h-4 w-px bg-border" />
+        <span aria-hidden="true" className="h-5 w-px bg-border" />
         {/* Cinzel's only job in the chrome, and never below 18px — the direction is
-            explicit that the display face is for titles, not for interface text. */}
-        <h1 className="truncate font-heading text-lg leading-none">{title}</h1>
+            explicit that the display face is for titles, not for interface text. 20px now,
+            which moves it further from that floor rather than nearer it. */}
+        <h1 className="truncate font-heading text-xl leading-none">{title}</h1>
 
-        <div className="ml-auto flex min-w-0 items-center gap-3">
+        <div className="ml-auto flex min-w-0 items-center gap-4">
           {/* Before the status line and Refresh, because it is the rarer and more
               consequential thing on this row — and gold rather than the border grey every
               other control wears, which is the app's existing word for "you can act on
@@ -121,8 +131,8 @@ export function Ribbon({
               type="button"
               onClick={onOpenUpdate}
               className={cn(
-                "inline-flex shrink-0 items-center gap-2 rounded-md border border-accent/60 px-3 py-1.5",
-                "text-sm text-accent hover:bg-accent/10",
+                "inline-flex shrink-0 items-center gap-2 rounded-md border border-accent/60 px-3.5 py-2",
+                "text-base text-accent hover:bg-accent/10",
                 // One arbitrary property list rather than a colour utility beside a transform
                 // one: those two compile to the same CSS longhand, so tailwind-merge keeps
                 // whichever it saw last and the press feedback snaps with nothing to show.
@@ -132,7 +142,7 @@ export function Ribbon({
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               )}
             >
-              <CircleArrowUp className="size-4" aria-hidden="true" />
+              <CircleArrowUp className="size-5" aria-hidden="true" />
               {/* Two labels, because they are two different promises. This install can
                   replace itself; an MSI or Linux build can only be shown where to
                   download — and a control says exactly what happens when it is used. */}
@@ -151,7 +161,7 @@ export function Ribbon({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={TRANSITION.fast}
-                className="shrink-0 text-xs text-dim"
+                className="shrink-0 text-sm text-dim"
               >
                 Already up to date
               </motion.p>
@@ -166,7 +176,7 @@ export function Ribbon({
               row so the gap between its neighbours does not grow by a phantom element. */}
           <p
             role="status"
-            className={said ? "min-w-0 truncate text-xs text-dim" : "sr-only"}
+            className={said ? "min-w-0 truncate text-sm text-dim" : "sr-only"}
             title={tooltip}
           >
             {said}
@@ -191,7 +201,7 @@ export function Ribbon({
             disabled={busy}
             aria-busy={busy || undefined}
             className={cn(
-              "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm",
+              "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3.5 py-2 text-base",
               "hover:bg-bg",
               "transition-[color,background-color,border-color,opacity,transform,scale]",
               "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
@@ -204,7 +214,7 @@ export function Ribbon({
               "disabled:active:scale-100",
             )}
           >
-            <RefreshCw className="size-4" aria-hidden="true" />
+            <RefreshCw className="size-5" aria-hidden="true" />
             Refresh data
           </button>
         </div>
