@@ -61,13 +61,14 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   has never downloaded the taxonomy, a card Tagger has never tagged, an unknown printing and a
   refused tag read all file by type line. **Nothing about categorising a card may fail an add** —
   `useDeck`'s `oracleTagsFor` catches and answers `[]`, and its doc comment says not to turn that
-  into a rethrow. The one place that refuses instead is the Categories panel's bulk action, whose
-  blast radius is every loose card in the deck rather than one.
+  into a rethrow. The one place that refuses instead is the **Categories dialog's** bulk action
+  ("File cards by what they do", `CategoriesDialog.tsx`), whose blast radius is every loose card
+  in the deck rather than one.
 - **That bulk action can now take a column off the desk, and nobody had written that down.** "File
   cards by what they do" empties `useDeckMeta`'s `LOOSE_PILES` — `DEFAULT_CATEGORY_NAME` and
   `Uncategorised` — and `Uncategorised` is a name the app files under, so the pile it empties is an
   `auto` one and its heading goes with its last card. Nothing breaks and nothing is lost: the row
-  is still there, still in the Categories panel, and it comes back with the next card the rule
+  is still there, still in the Categories dialog, and it comes back with the next card the rule
   cannot place. `Main deck` is the other loose name and the v8 migration's own pile, which the v15
   backfill deliberately leaves `user` — so an old deck's main column keeps drawing under the same
   press.
@@ -509,7 +510,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   the four seeded zones drew empty and nothing else did — and then the survivor test while a filter
   was running; both are gone, because Sideboard and Maybeboard now reach the last line and draw
   exactly as a pile of the reader's own does, "always, until it is deleted" being one answer for
-  both. The field survives on `CardGroup` for `CategoriesPanel`'s Rename and Delete affordances and
+  both. The field survives on `CardGroup` for `CategoriesDialog`'s Rename and Delete affordances and
   for nothing else, and its doc says so. Derived groups (`manaValue`, `type`) and strays are built
   _from_ cards, so an empty one never existed to hide; their `isAuto: false` is that fact rather
   than a claim about who made them.
@@ -520,7 +521,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   limits, legality, the allocator) and deliberately keeps drawing the pile, because the affordance
   for switching it back on is seeing what is in it. **Delete is the removal**, and the four seeded
   piles cannot be deleted at all. An auto pile that goes empty is not deleted and loses nothing:
-  it is still a row, still in `DeckEditor`'s `categories`, still listed in the Categories panel
+  it is still a row, still in `DeckEditor`'s `categories`, still listed in the Categories dialog
   with its name, its order and its switch — it draws no heading until a card is in it again.
 - **A filter decides nothing about which headings exist, and the rule that said it did has been
   deleted.** `EmptyGroupRules.narrowed` reported whether the toolbar's text field or a tag chip was
@@ -536,7 +537,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   moving a card into an empty pile.
 - **Nothing but a view reads the drawn groups, which is what makes a missing heading survivable.**
   `DeckEditor`'s `categories` is still _every_ category the deck has, in `sortOrder`, and it is what
-  the toolbar's "Add to" select and `CategoriesPanel` are built from — never the groups. **For an
+  the toolbar's "Add to" select and `CategoriesDialog` are built from — never the groups. **For an
   emptied auto pile that panel is the only surface it appears on at all**, so "every row, always" is
   load-bearing rather than tidy: it is where such a pile is found, renamed, reordered, switched or
   deleted. The panel has **no format branch and no origin branch** and must never grow one — its
@@ -551,7 +552,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   deliberately that now costs nothing — every pile of their own draws, filter or no filter, and so
   do the fixed zones — and the "Add to" select is a second route to both. **The one pile with no
   drag route is an auto pile that has gone empty**, which is the class nobody asked for: the next
-  card the rule files there brings it back, and until then it is a row in the Categories panel.
+  card the rule files there brings it back, and until then it is a row in the Categories dialog.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
@@ -799,10 +800,32 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's five full-window surfaces (Import, Categories & tags, History, Theory diff, Deck
+- The editor's **six** full-window surfaces (Import, Categories, Tags, History, Theory diff, Deck
   settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
-  rungs and two `"inner"` peers open at once are not ordered at all. The format check rides in the
-  same union, so at most one of its six registrations is ever enabled.
+  rungs and two `"inner"` peers open at once are not ordered at all. The anchored format check
+  rides in the same union, so at most one of its **seven** registrations is ever enabled.
+- **The two that were drawers are centred modals, and the search column deliberately is not**
+  (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
+  them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
+  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
+  one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
+  the two of them draw with. Those three and `DeckSettingsDialog` — **four** surfaces — are built
+  on one shell, `DeckDialog.tsx`; the editor's other two full-window overlays (Import cards, the
+  theory difference) were never drawers, still carry their own copy of that chrome and are the
+  next two to move onto the shell. **Five** is only the count of *toolbar buttons*. The
+  reason for all of it is the desk row: every one of these is **consulted** — read, or
+  edited and shut — and a right-hand drawer took the width it needed out of the deck for as long
+  as it was up while giving the deck nothing. The card search column stayed a docked sidebar
+  because it is the one surface here that is **worked out of**: its tiles are drag sources into
+  the deck's own category columns beside it, so a scrim would end the drag path and cover the card
+  pane a reader flips printings in. It opens **collapsed** instead, which is the same 602px
+  argument answered the other way — the deck starts with the whole desk and one press on the rail
+  gets the wall back. **Its body is mounted on the reader's press and merely _hidden_ when the
+  editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
+  choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
+  filters and format away on a *resize* — opening the card pane at 1024 was enough. Never opened
+  is still nothing mounted, which is what keeps the search off a deck nobody searched from.
+  The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
 
 ## The quick add
 
@@ -816,7 +839,8 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **It is a shortcut over the docked panel's wall, not a second way of choosing a printing.** The
   search is `collapse: true`, so every suggestion is the newest printing of that name — the same
   one the panel offers first for the same text. A reader who cares which printing they get has the
-  panel open beside them, so this field never grows a set column or a printing picker.
+  panel open beside them — one press on its rail, since it opens collapsed — so this field never
+  grows a set column or a printing picker.
   `MAX_SUGGESTIONS` is **five**, and the ceiling is the reader's rather than the backend's: a list
   long enough to need a scrollbar has stopped being a shortcut and started being the wall again.
 - **Three routes reach one write, and the third is the one that looks removable.** Enter on the
@@ -847,9 +871,11 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
-  as the docked panel's set filter. Every one of the editor's five surfaces is opened by pressing a
-  toolbar button, pressing a button takes the focus out of this field, and the root's `onBlur`
-  closes the list on the way. **That is the whole of what makes a third rung unnecessary**, so a
+  as the docked panel's set filter. Every one of the editor's six full-window surfaces is opened
+  by pressing a button — five of them in the toolbar (`Import cards · Categories · Tags · History
+  · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
+  — pressing a button takes the focus out of this field, and the root's `onBlur` closes the list
+  on the way. **That is the whole of what makes a third rung unnecessary**, so a
   future surface opened without moving the caret — a hotkey, an auto-open — breaks it, and the fix
   is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope.
 - **The query carries no `marketplace`, and that is a documented exception** to the app's rule that

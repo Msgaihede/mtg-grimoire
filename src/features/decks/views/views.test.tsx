@@ -254,7 +254,7 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
    *
    * Reached with `user.tab()` and never with `.focus()`: placing the caret by hand would make
    * this pass on a view that had stopped drawing a control at all, which is exactly the shape
-   * `CategoriesPanel.test.tsx` records as self-repairing. Tab from `<body>` walks the document
+   * `CategoriesDialog.test.tsx` records as self-repairing. Tab from `<body>` walks the document
    * in order, so what it lands on is the view's own first stop.
    */
   it("puts a deck card in the tab order", async () => {

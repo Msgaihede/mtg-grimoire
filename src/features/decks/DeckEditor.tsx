@@ -21,9 +21,9 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
-import { AuditDrawer } from "./AuditDrawer";
 import { DECK_CARD_VARIANT, focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
-import { CategoriesPanel } from "./CategoriesPanel";
+import { CategoriesDialog } from "./CategoriesDialog";
+import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
@@ -38,6 +38,7 @@ import {
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { QuickAdd } from "./QuickAdd";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
+import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -186,16 +187,19 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
  * would both close on a single press. Every member below registers that same `"inner"` rung
  * from inside its own component, so they are modelled as *one* piece of state: "never two" is
- * then structural rather than remembered, and at most one of the six registrations is ever
+ * then structural rather than remembered, and at most one of the seven registrations is ever
  * enabled. `DecksPage`'s `Panel` is the same arrangement, for the same reason.
  *
- * **A union rather than six booleans, and the rebuild is what makes that worth saying twice.**
- * Six flags are six ways to be in a state the Escape protocol cannot order, and the failure
+ * **A union rather than seven booleans, and the rebuild is what makes that worth saying twice.**
+ * Seven flags are seven ways to be in a state the Escape protocol cannot order, and the failure
  * is invisible: two layers close on one press, two focus hand-backs race for the caret, and
  * every test that opens one layer at a time still passes. The union cannot express it.
  *
- * `check` is the format check anchored to its chip; the other five are **full-window overlays**
- * on `LAYER.overlay` — which is one rung and not five for exactly this reason (see `layers.ts`).
+ * `check` is the format check anchored to its chip; the other six are **full-window overlays**
+ * on `LAYER.overlay` — which is one rung and not six for exactly this reason (see `layers.ts`).
+ * Categories and tags used to be one of them: a single right-hand drawer with two sections in
+ * it. Splitting it into two dialogs adds a member here and takes nothing away from the
+ * argument — one slot is one slot however many things can occupy it.
  *
  * **Two more `"inner"` peers sit on this screen and neither is in this union**: the set filter
  * inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`), and the quick
@@ -213,18 +217,30 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
  * way the set filter is, by focus — it closes when the caret leaves its root, and every layer
  * here focuses itself on the way up. The preview is a *dwell*, so it can coexist with an
- * anchored layer out here; the five overlays make it unreachable, because a pointer cannot get
+ * anchored layer out here; the six overlays make it unreachable, because a pointer cannot get
  * to the pane through a scrim.
  *
- * **All five overlays are modal, and that is what makes the sentence above true of a keyboard
- * too.** Each paints a full-window scrim, each claims `aria-modal="true"`, and each installs
- * `lib/trapTab.ts` — so nothing behind one can be reached by Tab any more than by a pointer.
- * Two of them used to argue the opposite in their own docs; the scrim had always contradicted
- * it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds the five together.
+ * **All six overlays are modal, and that is what makes the sentence above true of a keyboard
+ * too**: each paints a full-window scrim, claims `aria-modal="true"` and runs `lib/trapTab.ts`,
+ * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
+ * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
+ * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds all six
+ * together, and it is a **behavioural** sweep for a reason worth reading before the next
+ * modality edit.
+ *
+ * **Four of the six are a `DeckDialog`** — Categories, Tags, History and Deck settings — where
+ * the scrim, the centring, `aria-modal`, the trap, the ✕ and the `"inner"` rung are written
+ * once. **`TheoryDiffDialog` and `ImportDeckDialog` are not**: each still carries its own copy
+ * of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of scope when the
+ * shell was written rather than exempt from it, and they are the next two to move onto it.
+ * `CreateDeckDialog` is a third such copy outside this editor. So a change to how a modal
+ * behaves here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
+ * is an edit to **four files, not one**, until those three are converted.
  */
 type Layer =
   | { kind: "check" }
   | { kind: "categories" }
+  | { kind: "tags" }
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
@@ -246,7 +262,7 @@ type Layer =
  *
  * **What this component is and is not.** It is a header, a toolbar and a frame: it decides which
  * variant is read, how the rows are grouped, sorted and filtered, which of the four views draws
- * them, and which of six layers is open. It draws no card and no group heading itself —
+ * them, and which of seven layers is open. It draws no card and no group heading itself —
  * `grouping.ts` says what the groups are and `views/` draw them, so four surfaces cannot answer
  * "how many cards are in the Ramp column" four ways.
  *
@@ -382,7 +398,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // whichever is still holding an error: a refused move used to leave its sentence up while the
   // reader went on to rename the deck successfully (the collection table's lesson). That rule
   // is `lib/writes.ts` now, shared with the gallery, the settings dialog and the categories
-  // drawer, because four copies of it were four places to keep one rule — and one of the four
+  // dialog, because four copies of it were four places to keep one rule — and one of the four
   // had it backwards. The docked panel's add is deliberately not here — it says so in the
   // panel, beside the button that was pressed, and two banners for one refusal would be worse
   // than one in the wrong place.
@@ -404,7 +420,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * not.** What the spec answers now is {@link emptyGroupRules}, which `buildGroups` consults
    * about a group holding **nothing**: a Modern deck draws no empty command zone. This array is
    * untouched by it and is still every category of the deck. It is what the toolbar's "Add to"
-   * select and `CategoriesPanel` are built from, so every pile
+   * select and `CategoriesDialog` are built from, so every pile
    * stays reachable by name whether or not a heading is drawn for it — and a pile that *holds*
    * a card draws whatever the format says, because `drawsWhenEmpty` is never asked about a
    * group with cards in it. Nothing holding cardboard is hidden, and nothing at all is hidden
@@ -619,7 +635,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
   const close = useCallback(() => setLayer(null), []);
 
-  /** Open one of the six, from the control that was pressed — and never a second one, because
+  /** Open one of the seven, from the control that was pressed — and never a second one, because
    *  there is one slot. */
   const openLayer = useCallback((next: NonNullable<Layer>, trigger: HTMLButtonElement | null) => {
     openerRef.current = trigger;
@@ -1269,7 +1285,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   // only tell apart by position. It names what it puts in the deck, the way
                   // the gallery's `Import deck` names what it makes.
                   { kind: "import", label: "Import cards" },
-                  { kind: "categories", label: "Categories & tags" },
+                  // **Two buttons where there was one called "Categories & tags".** The piles
+                  // and the labels were two sections of one drawer, so reaching the second cost
+                  // a press and a scroll; they are two dialogs now, each one press away and each
+                  // sized for what it draws. The ampersand went with the split — a control named
+                  // for two things is a control that can only ever be right about one of them.
+                  { kind: "categories", label: "Categories" },
+                  { kind: "tags", label: "Tags" },
                   { kind: "history", label: "History" },
                   { kind: "settings", label: "Deck settings" },
                 ] as const
@@ -1616,26 +1638,41 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </section>
       )}
 
-      {/* The five overlays, mounted **at the editor's top level and as siblings of the layout
+      {/* The six overlays, mounted **at the editor's top level and as siblings of the layout
           above**, which is not a tidiness preference. Each is `fixed inset-0` and none is
           portalled, so a transformed ancestor would become its containing block and pin it to
           whatever box that ancestor happens to occupy — and this editor has transformed
           elements in it (a virtualised table's rows are `absolute` *and* `transform`ed, which
           is a stacking context and a containing block both). Mounted inside the view area, a
-          drawer would cover a column instead of the window.
+          dialog would centre itself over a column instead of over the window.
 
-          Each is closed by `open`, and each of the five unmounts everything behind that flag —
+          Each is closed by `open`, and each of the six unmounts everything behind that flag —
           so a closed one costs no query, no window listener and no state. That is what makes it
-          safe to mount all five unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than five booleans. */}
-      <CategoriesPanel
+          safe to mount all six unconditionally, and it is why the editor can hold them in one
+          `Layer` union rather than six booleans. For four of them `DeckDialog` guarantees it:
+          `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
+          The theory diff and the import dialog are not on that shell (see the `Layer` union's
+          doc) and each guarantees the same thing with an `AnimatePresence` of its own — which
+          is a second and a third copy of the rule rather than a second reading of it.
+
+          **Two of them were one until 2026-08-14.** `CategoriesPanel` drew the deck's piles and
+          its labels as two sections of a single right-hand drawer; they are `CategoriesDialog`
+          and `TagsDialog` now, which is why the toolbar above has a button for each. */}
+      <CategoriesDialog
         deckId={deckId}
         variant={variant}
         open={layer?.kind === "categories"}
         onDismiss={dismiss}
         onClose={close}
       />
-      <AuditDrawer
+      <TagsDialog
+        deckId={deckId}
+        variant={variant}
+        open={layer?.kind === "tags"}
+        onDismiss={dismiss}
+        onClose={close}
+      />
+      <DeckHistoryDialog
         deckId={deckId}
         open={layer?.kind === "history"}
         onDismiss={dismiss}
@@ -1653,7 +1690,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The fifth overlay, and the one whose target has to be **the list on screen**: an
+      {/* The last of the six, and the one whose target has to be **the list on screen**: an
           import lands in one variant and a `replace` clears at most one, so a paste made while
           Theory is up must never touch what is sleeved. `cardsInVariant` is what a `replace`
           would clear, said in words before it is chosen.

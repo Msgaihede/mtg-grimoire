@@ -553,7 +553,7 @@ describe("the categories that draw with nothing in them", () => {
 
     expect(names(groups)).toEqual(["Main deck", "Sideboard", "Sideboard"]);
     expect(groups.map((g) => g.categoryId)).toEqual([MAIN.id, SIDE.id, mine.id]);
-    // The seeded one is furniture and theirs is not — a distinction `CategoriesPanel` reads for
+    // The seeded one is furniture and theirs is not — a distinction `CategoriesDialog` reads for
     // its Rename and Delete affordances, and `drawsWhenEmpty` deliberately does not.
     expect(groups.map((g) => g.isPredefined)).toEqual([false, true, false]);
   });

@@ -57,7 +57,7 @@ export function ZoomBadge({ zoom }: { zoom: number }) {
         "pointer-events-none fixed inset-x-0 bottom-10 flex justify-center",
         // The rung for "floating over the page", which is what this is — above a table's sticky
         // header, which would otherwise paint over it, and deliberately **below** the drag tray,
-        // the full-window overlays and the sync gate. A reader who has a drawer or a dialog open
+        // the full-window overlays and the sync gate. A reader who has a dialog open
         // is not zooming the wall behind it, and a figure about that wall must not be the one
         // thing drawn on top of a surface they opened. It only competes in the root stacking
         // context, so mount it at the app root and not inside a transformed ancestor.

@@ -21,7 +21,7 @@
  * |---|---|---|
  * | {@link DURATION.fast} | 120ms | press feedback, chevrons, colour |
  * | {@link DURATION.base} | 180ms | popups, status lines |
- * | {@link DURATION.slow} | 260ms | drawers and dialogs, which cross the window, and the deck stack's reflow |
+ * | {@link DURATION.slow} | 260ms | dialogs, which cross the window, and the deck stack's reflow |
  *
  * `src/index.css` carries the same three as `--duration-*` and the same three curves as
  * `--ease-*`, so a CSS-only transition and a JS one cannot drift. `motion.test.ts` compares
@@ -38,7 +38,7 @@
  * ```
  *
  * A variant *label* propagates from a parent to any child that has not defined its own, which
- * is a feature for an orchestrated list and a trap for these seven — they are leaves that
+ * is a feature for an orchestrated list and a trap for these six — they are leaves that
  * happen to sit inside other animated things. A spread also type-checks against `motion`'s own
  * prop types at the call site, where the mistake is made. {@link variants} is here for the case
  * that genuinely wants propagation; nothing in the app needs it yet.
@@ -84,8 +84,9 @@ export const DURATION = {
   /** The interaction tier, and the app's old 150ms budget rounded to the scale. */
   base: 180,
   /**
-   * For a surface that crosses the window — a docked drawer, a modal — and for the deck
-   * stack's 293px reflow, which travels about as far and is *read* rather than dismissed.
+   * For a surface that crosses the window — a modal over a scrim, the card pane arriving beside
+   * the view — and for the deck stack's 293px reflow, which travels about as far and is *read*
+   * rather than dismissed.
    */
   slow: 260,
 } as const;
@@ -136,12 +137,13 @@ export interface EnterExit {
 }
 
 /**
- * The full-window backdrop behind a drawer or a dialog — `bg-black/60`, `fixed inset-0`.
+ * The full-window backdrop behind a dialog — `bg-black/60`, `fixed inset-0`.
  *
  * `base` in **both** directions, which is not the usual asymmetry and is deliberate: the scrim
- * has a partner. Entering it is quicker than {@link drawerRight} so the ground darkens and
- * *then* the panel arrives; leaving, the two are the same length so the panel is never seen
- * sliding out over unscrimmed content.
+ * has a partner. Entering it is quicker than the {@link dialog} it stands behind — `base`
+ * against `slow` — so the ground darkens and *then* the panel arrives; leaving, the two are the
+ * same length so the panel is never seen dismissing itself over unscrimmed content. Pair the
+ * two in the same `AnimatePresence`.
  */
 export const scrim: EnterExit = {
   initial: { opacity: 0 },
@@ -150,23 +152,18 @@ export const scrim: EnterExit = {
 };
 
 /**
- * A right-docked panel, sliding in from its own width. `AuditDrawer` and `CategoriesPanel`.
+ * A centred surface drawn over the view: `DeckDialog` (and through it the deck editor's
+ * categories, tags, history and settings), `CreateDeckDialog`, `TheoryDiffDialog`,
+ * `ImportDeckDialog`, and `CardDetailPane`, which is docked but arrives by scaling from its own
+ * right edge.
  *
- * `x: "100%"` rather than a pixel offset, so the preset needs to know nothing about how wide
- * the panel is — and a panel whose width is a percentage of the window still starts exactly
- * off-screen. Pair it with {@link scrim} in the same `AnimatePresence`.
- *
- * Under reduced motion this becomes instant, because `x` is a transform. That is the intended
- * outcome and the whole point of the rule: the panel appears, it does not travel.
- */
-export const drawerRight: EnterExit = {
-  initial: { x: "100%" },
-  animate: { x: 0, transition: arriving(DURATION.slow) },
-  exit: { x: "100%", transition: leaving(DURATION.base) },
-};
-
-/**
- * A centred surface drawn over the view: `DeckSettingsDialog`, `TheoryDiffDialog`.
+ * **There is no drawer preset, and its absence is a decision** (2026-08-14). `drawerRight` slid a
+ * right-docked panel in from `x: "100%"` for the deck editor's two drawers; both are centred
+ * modals now, `CardDetailPane` had already refused it in writing — 384px of travel inside
+ * `AppShell`'s `overflow-auto` main region is 384px of scrollable overflow — and a preset with no
+ * consumer in the module whose whole discipline is "timings live here and nowhere else" is the
+ * drift this file exists against. A future right-hand drawer adds one back with a sentence saying
+ * what it is for, which is the same rule as any other new preset.
  *
  * The scale is 0.97 and not 0.9 on purpose — a dialog that grows visibly reads as a zoom, and
  * this one is meant to read as arriving. Exits a touch *above* 1 so the gesture reverses rather

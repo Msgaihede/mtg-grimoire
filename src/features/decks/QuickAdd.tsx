@@ -204,7 +204,8 @@ export function QuickAdd({
    * **No ordinal here on purpose**: `DeckEditor`'s `Layer` union is where that census is kept,
    * and a count copied into a second file is a count that rots in one of them. What matters is
    * that this one sits *outside* the union, so what keeps it apart is **focus, not structure** —
-   * every layer in that union is opened by pressing a toolbar button, pressing a button takes
+   * every layer in that union is opened by pressing a button (most of them in the toolbar, the
+   * theory diff from the control beside the variant tabs), pressing a button takes
    * the focus out of this field, and `onBlur` below closes this list on the way. The two cannot
    * be open at once, so there is no pair for a third rung to order. A surface that ever opened
    * *without* moving the caret would break that, and the answer then is a depth in the hook
@@ -248,7 +249,7 @@ export function QuickAdd({
       // Tab out of the field and the list should not still be hanging over the deck with the
       // caret three controls further along. `onBlur` is React's `focusout`, so it catches the
       // input losing focus to anything at all; a `relatedTarget` inside this root is not
-      // leaving. It is also what keeps this layer and the editor's five full-window surfaces
+      // leaving. It is also what keeps this layer and the editor's six full-window surfaces
       // from ever being open together — see the Escape comment above.
       onBlur={(e) => {
         if (!rootRef.current?.contains(e.relatedTarget)) setOpen(false);

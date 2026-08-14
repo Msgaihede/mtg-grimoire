@@ -101,7 +101,7 @@ export interface CardGroup {
   isActive: boolean;
   /**
    * One of the four `schema::PREDEFINED_CATEGORIES` — cannot be renamed or deleted, and that is
-   * now the whole of what it is for: `CategoriesPanel` reads it to decide whether a row gets
+   * now the whole of what it is for: `CategoriesDialog` reads it to decide whether a row gets
    * Rename and Delete affordances.
    *
    * **It decides nothing about whether a heading is drawn.** It was once the whole of

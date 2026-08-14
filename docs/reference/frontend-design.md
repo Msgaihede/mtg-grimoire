@@ -350,17 +350,51 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
 - **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
-  `layers.test.ts` asserts every link of it. **`overlay` is one rung for a drawer _and_ a modal,
-  deliberately, where two looks more careful**: the deck editor's five full-window surfaces —
-  Import, Categories & tags, History, Theory diff, Deck settings — are held in **one** piece of
+  `layers.test.ts` asserts every link of it. **`overlay` is one rung for every full-window
+  surface, deliberately, where two looks more careful**: the deck editor's **six** — Import,
+  Categories, Tags, History, Theory diff, Deck settings — are held in **one** piece of
   state (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and
-  two `"inner"` peers open at once are not ordered at all. At most one of the five is ever
+  two `"inner"` peers open at once are not ordered at all. At most one of the six is ever
   mounted,
   so there is no pair for a second number to order and inventing one would be a claim about a
   stack that cannot occur. They used to borrow `gate` and `dragTray` two apiece — each right in
   effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
   `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
-  and each hands focus back to the control that opened it.
+  and each hands focus back to the control that opened it. (That was five surfaces, two of them
+  right-hand drawers, when the reading was taken; the entry below is what changed and what did
+  not.)
+- **A surface opened from a view is a centred modal, not a docked column, unless the reader works
+  out of it while editing beside it** (2026-08-14). The deck editor's two right-hand drawers
+  became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
+  `CategoriesDialog` and `TagsDialog` — two sections of one drawer that each cost a press and a
+  scroll are two dialogs one press apart, each sized for what it draws. All of them and
+  `DeckSettingsDialog` are now built on **one shell, `src/features/decks/DeckDialog.tsx`**, so
+  "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
+  `scrim` preset, `aria-modal`, `trapTab`, the `"inner"` Escape rung registered on the open flag
+  (the panel outlives that flag by the length of its fade), and **nothing mounted while closed**,
+  which is what lets each body start its queries and its state clean on every open. The shell
+  does not own the body's scroller — the history body has a sticky roll-up inside its own — so
+  each body renders its own `min-h-0 flex-1 overflow-y-auto`.
+  **The argument is width, and it is the desk row's own number.** At the app's own 1280×800 with
+  the card pane docked that row measures **602px** (`DeckEditor`'s `DECK_FLOOR`), so the 384px
+  search panel plus its 16px gap leave the deck **202px** — one stack column. A drawer that is
+  merely *consulted* took its width out of the deck for as long as it was up and gave the deck
+  nothing back; centred over a scrim, the deck keeps the whole desk underneath it.
+  **The card search column stays docked, and that is the other half of the rule.** It is the one
+  surface here that is worked *out of*: its tiles are drag sources into the deck's own category
+  columns beside it, so a scrim would end the drag path and cover the card pane a reader flips
+  printings in. What changed for it is its default — `DeckSearchPanel` opens **collapsed** now,
+  because the same 602/384/202 arithmetic says an open-by-default panel charged every reader one
+  stack column on every deck they opened whether or not they were adding cards. Collapsed, the
+  deck starts with the whole desk and one press on the rail gets the wall back. The choice is the
+  component's own `useState` and deliberately not a `useAppStore` field: it is per editor-open and
+  not remembered, on the same line `cardZoom`/`searchView`/`collectionView` sit the other side of
+  — those are session-wide answers about the *app*.
+  `src/lib/motion.ts`'s `drawerRight` lost its last consumer to this change and was deleted; see
+  [motion.md](motion.md). **None of this has been driven in the shipped window yet** — the layer,
+  focus and Escape figures above were taken on the drawers this replaced, and the collapsed
+  default's effect on the desk is arithmetic from `DECK_FLOOR`'s measurement rather than a new
+  reading.
 - **A popup is pinned to, and grows from, the corner nearest its trigger's own edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
@@ -548,15 +582,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `sort_order`, deck categories by the reader's own drag — and each of those is still the
     right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
   - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
-    `Custom…` a table-header sort leaves behind, `Auto (by card type)`, `Top level`.
-    `CategoriesPanel`'s `are deleted with it` is pinned **last** — the destructive answer is
+    `Custom…` a table-header sort leaves behind, `Auto (by what it does)`, `Top level`.
+    `CategoriesDialog`'s `are deleted with it` is pinned **last** — the destructive answer is
     not allowed to become the default by alphabet. (A sixth, the deck card's permanent `Move…`
     verb, went with that select on 2026-08-14.)
   - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
     Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
-    reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesPanel`
+    reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesDialog`
     and rendered in that order by all four deck views, so an alphabetical dropdown would
-    disagree with the panel beside it. Both carry a comment at the site saying so, because
+    disagree with the columns beside it. Both carry a comment at the site saying so, because
     the next sweep for unsorted selects will otherwise "fix" them.
 
 ## Vendored components and tokens

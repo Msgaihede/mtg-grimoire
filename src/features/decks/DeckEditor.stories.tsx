@@ -97,7 +97,7 @@ const meta = {
           "“autosave drafts” honestly means for a deck — the row *is* the draft.\n\n" +
           "**This component is a header, a toolbar and a frame.** It decides which variant is " +
           "read, how the cards are grouped, sorted and filtered, which of the four views draws " +
-          "them and which of five layers is open — and it draws no card and no heading itself. " +
+          "them and which of seven layers is open — and it draws no card and no heading itself. " +
           "`grouping.ts` says what the groups are and `views/` draw them, which is what stops " +
           "four surfaces answering “how many cards are in the Ramp column” four ways.\n\n" +
           "**The groups are the deck's own categories** (schema v8), in `sortOrder`, " +
@@ -134,12 +134,29 @@ const meta = {
           "and a pile the filter empties **is** empty, so they stay out either way — while the " +
           "reader's own piles go on drawing, filter or no filter, exactly as they do when the " +
           "reader empties one by hand.\n\n" +
-          "**Five layers, one piece of state.** The format check, the categories drawer, the " +
-          "history drawer, the theory difference dialog and the deck settings dialog each " +
-          'register the `"inner"` Escape rung, and `useDismissOnEscape` orders exactly two ' +
-          "rungs — so two of them open at once would both close on one press. A union rather " +
-          "than five booleans is what makes “never two” structural; {@link NeverTwoLayers} is " +
-          "that, pressed.\n\n" +
+          "**Seven layers, one piece of state.** The anchored format check and six full-window " +
+          "dialogs — Import cards, Categories, Tags, History, the theory difference and Deck " +
+          'settings — each register the `"inner"` Escape rung, and `useDismissOnEscape` orders ' +
+          "exactly two rungs, so two of them open at once would both close on one press. A " +
+          "union rather than seven booleans is what makes “never two” structural; " +
+          "{@link NeverTwoLayers} is that, pressed.\n\n" +
+          "**Four of the six dialogs are one component, `DeckDialog`** (2026-08-14) — " +
+          "Categories, Tags, History and Deck settings. Categories and history used to be " +
+          "right-hand drawers, and “in the style of Deck settings” used to be a resemblance " +
+          "between three files rather than one shell — so the scrim, the " +
+          "centring, `aria-modal`, the tab trap, the ✕ and the Escape rung are written once and " +
+          "every host passes a title, a close label and a width. **Import cards and the theory " +
+          "difference are not on it yet**: each still carries its own copy of that chrome, " +
+          "deliberately out of scope rather than exempt, and they should move onto the shell — " +
+          "until they do, a change to how a modal behaves in this editor is an edit to more " +
+          "than one file. **The card search column did " +
+          "not follow them**, because it is worked *out of* rather than consulted: its tiles " +
+          "are drag sources into the deck's own columns, and a scrim would end that path and " +
+          "cover the card pane a reader flips printings in. It stays docked, and collapsed " +
+          "until pressed.\n\n" +
+          "**Categories and tags are two dialogs, not two sections of one drawer.** They shared " +
+          "a panel and a scroll; each is one press now, and each is sized for what it draws — " +
+          "`w-[48rem]` for the piles and their reordering, `w-[36rem]` for the labels.\n\n" +
           "**The first three toolbar controls are remembered on the deck row.** Which list, " +
           "which grouping, which sort: each press writes its own field through " +
           "`deck_set_view_state`, which moves no `updated_at`, records no history and " +
@@ -212,9 +229,10 @@ const meta = {
           "copy limit broken on purpose and a theory list that differs from the deck. Its " +
           "`Ramp` is the pile whose *name* proves nothing: the two beside it are the reader's " +
           "and one of them is called `Card advantage`. The categories, tags, history " +
-          "and theory commands the four overlays read are all the fake's now, so those " +
-          "surfaces are driven rather than degraded — see `Decks/CategoriesPanel`, " +
-          "`Decks/AuditDrawer` and `Decks/TheoryDiffDialog` for what each of them draws.",
+          "and theory commands the dialogs read are all the fake's now, so those surfaces are " +
+          "driven rather than degraded — see `Decks/CategoriesDialog`, `Decks/TagsDialog`, " +
+          "`Decks/DeckHistoryDialog` and `Decks/TheoryDiffDialog` for what each of them draws, " +
+          "and `Decks/Dialog shell` for the shell they share.",
       },
     },
   },
@@ -244,7 +262,7 @@ type Story = StoryObj<typeof meta>;
  * deck made today.
  *
  * **Neither category is gone, and neither is unreachable.** `deck.categories` is still all five —
- * the toolbar's "Add to" select and `CategoriesPanel` are built from
+ * the toolbar's "Add to" select and `CategoriesDialog` are built from
  * that list and not from the drawn groups — and the moment a card is filed into the Commander
  * pile the heading arrives with it, because `drawsWhenEmpty` is never asked about a group holding
  * cards.
@@ -671,33 +689,45 @@ export const FilterAndStats: Story = {
 };
 
 /**
- * Five dismissible surfaces, one piece of state — and the reason it has to be one.
+ * Seven dismissible surfaces, one piece of state — and the reason it has to be one.
  *
  * `useDismissOnEscape` orders exactly two rungs: one capture-phase `"inner"` layer and one
  * bubble-phase `"outer"` one. Every layer this editor owns registers the `"inner"` one, so two
  * of them open at once are not ordered at all — both would consume a single press, and two focus
- * hand-backs would race for the caret. A union cannot express that state; five booleans can, and
- * the failure is invisible to any test that opens one layer at a time.
+ * hand-backs would race for the caret. A union cannot express that state; seven booleans can,
+ * and the failure is invisible to any test that opens one layer at a time.
  *
- * What this story asserts is the *arrangement* rather than either layer's contents: pressing the
- * second trigger leaves exactly one dialog on screen, and it is the second one. The drawer's own
- * contents are `Decks/CategoriesPanel`'s.
+ * **Categories and Tags are the pair worth pressing in a row**, because until 2026-08-14 they
+ * were one drawer called "Categories & tags" and a reader reaching for the second still reaches
+ * for it next. Two dialogs, one slot: the second press replaces the first rather than stacking
+ * on it.
+ *
+ * What this story asserts is the *arrangement* rather than any layer's contents: each press
+ * leaves exactly one dialog on screen, and it is the one just pressed. Their own contents are
+ * `Decks/CategoriesDialog`'s and `Decks/TagsDialog`'s.
  */
 export const NeverTwoLayers: Story = {
   args: { deckId: 2 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const chip = await canvas.findByRole("button", { name: "1 issue" });
+    const only = async (name: string) => {
+      await waitFor(async () => {
+        await expect(canvas.getAllByRole("dialog")).toHaveLength(1);
+      });
+      await expect(canvas.getByRole("dialog", { name })).toBeInTheDocument();
+    };
 
     await userEvent.click(chip);
     await expect(canvas.getByRole("dialog", { name: "Commander check" })).toBeInTheDocument();
 
-    await userEvent.click(canvas.getByRole("button", { name: "Categories & tags" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Categories" }));
+    await only("Categories");
 
-    await waitFor(async () => {
-      await expect(canvas.getAllByRole("dialog")).toHaveLength(1);
-    });
-    await expect(canvas.getByRole("dialog", { name: "Categories and tags" })).toBeInTheDocument();
+    // The half the split makes worth showing: the button beside it, pressed while the first is
+    // still up, and no second panel behind it.
+    await userEvent.click(canvas.getByRole("button", { name: "Tags" }));
+    await only("Tags");
 
     // Escape closes the one that is up and hands the caret back to the control that opened it —
     // the editor is a *view*, so the deck is still on screen afterwards.
@@ -705,7 +735,7 @@ export const NeverTwoLayers: Story = {
     await waitFor(async () => {
       await expect(canvas.queryByRole("dialog")).toBeNull();
     });
-    await expect(canvas.getByRole("button", { name: "Categories & tags" })).toHaveFocus();
+    await expect(canvas.getByRole("button", { name: "Tags" })).toHaveFocus();
   },
 };
 
@@ -831,14 +861,14 @@ export const AutoPileArrivesWithItsCard: Story = {
     await canvas.findByRole("region", { name: "Sideboard" });
 
     // --- the pile the reader asks for -------------------------------------------------------
-    await userEvent.click(canvas.getByRole("button", { name: "Categories & tags" }));
-    const drawer = await canvas.findByRole("dialog", { name: "Categories and tags" });
-    await userEvent.type(within(drawer).getByLabelText("New category name"), "Combo pieces");
-    await userEvent.click(within(drawer).getByRole("button", { name: "Add" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Categories" }));
+    const dialog = await canvas.findByRole("dialog", { name: "Categories" });
+    await userEvent.type(within(dialog).getByLabelText("New category name"), "Combo pieces");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
     await waitFor(async () => {
-      await expect(within(drawer).getByText("Combo pieces")).toBeInTheDocument();
+      await expect(within(dialog).getByText("Combo pieces")).toBeInTheDocument();
     });
-    // Out of the way: the drawer is `position: fixed` over the deck it is about.
+    // Out of the way: the dialog is `position: fixed` over the deck it is about.
     await userEvent.keyboard("{Escape}");
     await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
 
@@ -864,8 +894,11 @@ export const AutoPileArrivesWithItsCard: Story = {
     // Empty since it was made, and still drawn: a place the reader chose to keep.
     await expect(canvas.getByRole("region", { name: "Combo pieces" })).toBeVisible();
     // The row is still in `deck.categories`, which is what the "Add to" select is built from —
-    // undrawn is not deleted, and the next Sol Ring lands back in it by name.
-    const addTo = within(canvas.getByLabelText("Add to"));
+    // undrawn is not deleted, and the next Sol Ring lands back in it by name. That select lives
+    // in the docked search panel, which opens collapsed, so it is disclosed here; what is being
+    // asserted is where the options come from, which the disclosure does not touch.
+    await userEvent.click(await canvas.findByRole("button", { name: "Search cards" }));
+    const addTo = within(await canvas.findByLabelText("Add to"));
     await expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
     await expect(addTo.getByRole("option", { name: "Combo pieces" })).toBeInTheDocument();
   },
@@ -1004,10 +1037,16 @@ export const SwapFolds: Story = {
   args: { deckId: 2, pane: true },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // **The panel starts collapsed**, so the story presses the disclosure before it can search:
+    // 384px plus a gap is most of the desk at the app's own window, and a reader who is not
+    // adding cards should not pay for the wall on every deck they open. The button and the
+    // search field share the name "Search cards" — the disclosure names what it reveals — so
+    // each is addressed by its own role.
+    await userEvent.click(await canvas.findByRole("button", { name: "Search cards" }));
+
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `src/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
-    // of 36 cards that its tile is not mounted. The searchbox is addressed by role because the
-    // panel's disclosure carries the same name, "Search cards", as this field's `sr-only` label.
+    // of 36 cards that its tile is not mounted.
     await userEvent.type(
       await canvas.findByRole("searchbox", { name: "Search cards" }),
       "Sol Ring",

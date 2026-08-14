@@ -18,22 +18,27 @@ const deckCategoryRename = vi.hoisted(() => vi.fn());
 const deckCategorySetActive = vi.hoisted(() => vi.fn());
 const deckCategoryReorder = vi.hoisted(() => vi.fn());
 const deckCategoryDelete = vi.hoisted(() => vi.fn());
-const deckTagList = vi.hoisted(() => vi.fn());
-const deckTagCreate = vi.hoisted(() => vi.fn());
-const deckTagUpdate = vi.hoisted(() => vi.fn());
-const deckTagDelete = vi.hoisted(() => vi.fn());
-const deckTagSuggestions = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 /** What the auto-filer files by: the one read behind "File cards by what they do". */
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
-/** The history drawer's one read — this file mounts that drawer too, for the exit-window test
- *  at the bottom, which needs a *second* overlay to open under the first one's fade. */
-const deckAuditList = vi.hoisted(() => vi.fn());
+/**
+ * The tag reads, which this dialog draws nothing from.
+ *
+ * `useDeckMeta` is one hook over a deck's piles *and* its labels, so mounting it here fires the
+ * tag queries too — the cost of the two dialogs sharing one hook, and cheap, because only one of
+ * them is ever open. They are mocked so nothing rejects unhandled, and asserted nowhere in this
+ * file: what they answer is `TagsDialog.test.tsx`'s subject.
+ */
+const deckTagList = vi.hoisted(() => vi.fn());
+const deckTagSuggestions = vi.hoisted(() => vi.fn());
+const deckTagCreate = vi.hoisted(() => vi.fn());
+const deckTagUpdate = vi.hoisted(() => vi.fn());
+const deckTagDelete = vi.hoisted(() => vi.fn());
 
 // The fake sits under `ipc.ts` everywhere else in this repository; here it replaces the object,
-// because these commands are what the panel *is* — every assertion below is about the argument
-// one of them was handed. `importOriginal` keeps `ipcError`, which the panel renders refusals
+// because these commands are what the dialog *is* — every assertion below is about the argument
+// one of them was handed. `importOriginal` keeps `ipcError`, which the body renders refusals
 // through.
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -51,13 +56,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagSuggestions,
     deckGet,
     deckMoveCard,
-    deckAuditList,
     oracleTagsForPrintings,
   },
 }));
 
-import { AuditDrawer } from "./AuditDrawer";
-import { CategoriesPanel, movedTo } from "./CategoriesPanel";
+import { CategoriesDialog, movedTo } from "./CategoriesDialog";
+import { TagsDialog } from "./TagsDialog";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
@@ -96,28 +100,14 @@ const CATEGORIES: DeckCategory[] = [
   category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 }),
 ];
 
+/** Whatever the shared hook's tag reads answer — see the mock's doc. */
 const TAGS: DeckTag[] = [
   { id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 3 },
-  { id: 11, deckId: 1, name: "Playtest", color: "azure", cardCount: 0 },
 ];
+const SUGGESTIONS: TagSuggestion[] = [{ name: "Budget swap", color: "moss" }];
 
-/**
- * The **theory** list's tag counts, which the drawer reads as well — see
- * {@link useDeckMeta}'s second `deck_tag_list`.
- *
- * Empty by default, so these fixtures are single-list decks and a confirmation's number equals
- * the row's. The tests that make them differ are the point, exactly as the category fixture's
- * `cardCountAllVariants` default is.
- */
-const NO_THEORY_TAGS: DeckTag[] = [];
-
-const SUGGESTIONS: TagSuggestion[] = [
-  { name: "Cut candidate", color: "ember" },
-  { name: "Budget swap", color: "moss" },
-];
-
-/** The deck row `deck_get` answers with. Nothing on this panel reads a field of it — the one
- *  thing the drawer wants out of `deck_get` is `cards`, for the auto-categoriser. */
+/** The deck row `deck_get` answers with. Nothing on this dialog reads a field of it — the one
+ *  thing it wants out of `deck_get` is `cards`, for the auto-categoriser. */
 const DECK_ROW: DeckRow = {
   id: 1,
   name: "Serah's Toolbox",
@@ -190,13 +180,13 @@ function deckCard(over: Partial<DeckCard> & { cardId: string }): DeckCard {
   };
 }
 
-function mount(props: Partial<Parameters<typeof CategoriesPanel>[0]> = {}) {
+function mount(props: Partial<Parameters<typeof CategoriesDialog>[0]> = {}) {
   const onDismiss = vi.fn();
   const onClose = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
     <QueryClientProvider client={client}>
-      <CategoriesPanel
+      <CategoriesDialog
         deckId={1}
         variant="live"
         open
@@ -220,12 +210,7 @@ function row(name: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   deckCategoryList.mockResolvedValue(CATEGORIES);
-  // Variant-aware, because the drawer asks twice: the list on screen and the other one. A mock
-  // that answered the same rows to both would make every tag's two counts agree by accident,
-  // which is the fixture shape that let the undercount through in the first place.
-  deckTagList.mockImplementation((_deckId: number, variant: string) =>
-    Promise.resolve(variant === "live" ? TAGS : NO_THEORY_TAGS),
-  );
+  deckTagList.mockResolvedValue(TAGS);
   deckTagSuggestions.mockResolvedValue(SUGGESTIONS);
   deckGet.mockResolvedValue(DECK);
   deckCategoryCreate.mockResolvedValue(category({ id: 6, name: "Draw" }));
@@ -236,7 +221,6 @@ beforeEach(() => {
   deckTagCreate.mockResolvedValue(TAGS[0]);
   deckTagUpdate.mockResolvedValue(TAGS[0]);
   deckTagDelete.mockResolvedValue(undefined);
-  deckAuditList.mockResolvedValue([]);
   // Nothing tagged: the shape of a database that has never ingested the taxonomy, which is a
   // supported way to run this app and not a failure. The tests about tags say otherwise.
   oracleTagsForPrintings.mockResolvedValue([]);
@@ -268,110 +252,112 @@ describe("movedTo", () => {
   });
 });
 
-/* ----------------------------------------------------------------------- drawer ------- */
+/* ----------------------------------------------------------------------- shell ------- */
 
-describe("CategoriesPanel", () => {
+describe("CategoriesDialog", () => {
   it("draws nothing at all when it is closed", () => {
     const { container } = mount({ open: false });
     expect(container).toBeEmptyDOMElement();
-    // Not merely hidden: a closed drawer must cost no query, which is what lets the editor
-    // mount it unconditionally.
+    // Not merely hidden: a closed dialog must cost no query, which is what lets the editor
+    // mount it unconditionally beside five others.
     expect(deckCategoryList).not.toHaveBeenCalled();
-  });
-
-  it("reads both lists for the variant it was given", async () => {
-    mount({ variant: "theory" });
-    await screen.findByText("Ramp");
-    expect(deckCategoryList).toHaveBeenCalledWith(1, "theory", "tcgplayer");
-    expect(deckTagList).toHaveBeenCalledWith(1, "theory");
-    // And the tags of the **other** variant too, which is a different question and has one
-    // consumer: the delete confirmation, whose reach is not scoped by the variant on screen.
-    // Categories need no second read — the backend answers their both-lists count as a column.
-    expect(deckTagList).toHaveBeenCalledWith(1, "live");
-    expect(deckCategoryList).toHaveBeenCalledTimes(1);
+    expect(deckGet).not.toHaveBeenCalled();
   });
 
   /**
-   * The two rules that are not guessable from the controls, spelled out where the controls are.
-   * Asserted on the *sentence* rather than on a class: this is copy the panel exists to carry.
+   * **One wiring test, not a second copy of the shell's suite.** The scrim, the trap, the caret
+   * moving into the panel and the `aria-modal` claim are all `DeckDialog`'s now and are tested
+   * where they live. What is this file's business is that this dialog hands that shell the right
+   * four things: a title, a close label that is a sentence, and the two different ways out.
    */
-  it("says what an inactive category costs and where the suggestions come from", async () => {
-    mount();
-    expect(
-      await screen.findByText(/Only active categories count toward the deck/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/come from\s+every deck you have/)).toBeInTheDocument();
-  });
-
-  it("closes and hands focus back on Escape, consuming the press", async () => {
+  it("is a dialog named Categories, dismissed by Escape and closed by the scrim", async () => {
     const { onDismiss, onClose } = mount();
-    await screen.findByText("Ramp");
+    const dialog = await screen.findByRole("dialog", { name: "Categories" });
+    expect(within(dialog).getByRole("button", { name: "Close categories" })).toBeInTheDocument();
 
     const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
     window.dispatchEvent(press);
-
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
     // The `"inner"` half of the handshake: an outer layer reads this and stands down, so one
     // press closes one layer.
     expect(press.defaultPrevented).toBe(true);
-  });
 
-  it("closes without moving focus when the press lands outside the drawer", async () => {
-    const { onDismiss, onClose } = mount();
-    const drawer = await screen.findByRole("dialog", { name: "Categories and tags" });
     const user = userEvent.setup();
-
-    await user.click(within(drawer).getByRole("heading", { name: "Categories" }));
+    await user.click(within(dialog).getByRole("heading", { name: "Categories" }));
     expect(onClose).not.toHaveBeenCalled();
 
-    const scrim = drawer.parentElement;
+    const scrim = dialog.parentElement;
     if (!scrim) throw new Error("no scrim");
     await user.click(scrim);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onDismiss).not.toHaveBeenCalled();
+    // A press outside closes without moving focus, which is the half that differs from Escape.
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the deck's categories for the variant it was given", async () => {
+    mount({ variant: "theory" });
+    await screen.findByText("Ramp");
+    expect(deckCategoryList).toHaveBeenCalledWith(1, "theory", "tcgplayer");
+    expect(deckCategoryList).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The rule that is not guessable from the controls, spelled out where the controls are.
+   * Asserted on the *sentence* rather than on a class: this is copy the dialog exists to carry.
+   */
+  it("says what an inactive category costs", async () => {
+    mount();
+    expect(
+      await screen.findByText(/Only active categories count toward the deck/),
+    ).toBeInTheDocument();
   });
 });
 
 /* ------------------------------------------------------------- the exit window ------- */
 
 /**
- * The hazard an exit animation introduced, and the reason all four of the editor's overlays
- * register their Escape rung on the **flag** rather than on the panel's mount.
+ * The hazard an exit animation introduced, and the reason every one of the editor's dialogs
+ * registers its Escape rung on the **flag** rather than on the panel's mount.
  *
- * The editor renders its four overlays unconditionally and holds "which one is up" in a single
- * `Layer` union, which is what guarantees that two `"inner"` rungs are never live at once —
- * and `useDismissOnEscape` orders exactly two rungs, one capture-phase and one bubble-phase, so
- * two `"inner"` peers are not ordered by it at all. That guarantee used to come free from
- * synchronous unmounting: the flag went false and the listener came down in the same commit.
- * With an exit animation the *element* outlives the flag, so a rung registered on the mount
- * would still be consuming Escape while the next overlay was opening — and the press would
- * close a drawer the reader had already dismissed, or both.
+ * The editor renders its dialogs unconditionally and holds "which one is up" in a single `Layer`
+ * union, which is what guarantees that two `"inner"` rungs are never live at once — and
+ * `useDismissOnEscape` orders exactly two rungs, one capture-phase and one bubble-phase, so two
+ * `"inner"` peers are not ordered by it at all. That guarantee used to come free from synchronous
+ * unmounting: the flag went false and the listener came down in the same commit. With an exit
+ * animation the *element* outlives the flag, so a rung registered on the mount would still be
+ * consuming Escape while the next dialog was opening — and the press would close a dialog the
+ * reader had already dismissed, or both.
  *
- * The test drives exactly that: one commit that closes A and opens B, then a press while A is
- * still painted. It asserts the exit window is real first, because without that this test is
- * green over a drawer that had already vanished and proves nothing.
+ * **The rung it proves is `DeckDialog`'s**, and this is deliberately not a second copy of that
+ * file's own tests: the case needs *two peers*, and these two are the realest pair the editor
+ * has — Categories and Tags are one press apart in the same toolbar, and they split out of one
+ * drawer where the reader used to scroll between them. It drives exactly that: one commit that
+ * closes A and opens B, then a press while A is still painted. It asserts the exit window is
+ * real first, because without that this test is green over a dialog that had already vanished
+ * and proves nothing.
  */
-describe("Escape during an overlay's exit", () => {
+describe("Escape during a dialog's exit", () => {
   it("leaves exactly one layer listening while the previous one fades out", async () => {
     const categoriesDismiss = vi.fn();
-    const historyDismiss = vi.fn();
+    const tagsDismiss = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    /** The editor's own arrangement: both overlays mounted always, one union deciding which. */
-    const overlays = (layer: "categories" | "history") => (
+    /** The editor's own arrangement: both dialogs mounted always, one union deciding which. */
+    const overlays = (layer: "categories" | "tags") => (
       <QueryClientProvider client={client}>
-        <CategoriesPanel
+        <CategoriesDialog
           deckId={1}
           variant="live"
           open={layer === "categories"}
           onDismiss={categoriesDismiss}
           onClose={vi.fn()}
         />
-        <AuditDrawer
+        <TagsDialog
           deckId={1}
-          open={layer === "history"}
-          onDismiss={historyDismiss}
+          variant="live"
+          open={layer === "tags"}
+          onDismiss={tagsDismiss}
           onClose={vi.fn()}
         />
       </QueryClientProvider>
@@ -380,20 +366,20 @@ describe("Escape during an overlay's exit", () => {
     const { rerender } = render(overlays("categories"));
     await screen.findByText("Ramp");
 
-    // The switch, in one commit, as pressing History with Categories open makes it.
-    act(() => rerender(overlays("history")));
+    // The switch, in one commit, as pressing Tags with Categories open makes it.
+    act(() => rerender(overlays("tags")));
 
     // The window this test exists for. `getByText` and not `getByRole`, deliberately: the
     // exiting layer is `aria-hidden`, so a role query cannot see it — which is itself the other
     // half of the contract, asserted two lines down.
-    expect(screen.getByText("Categories & tags")).toBeInTheDocument();
+    expect(screen.getByText("Categories")).toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "Deck history" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Tags" })).toBeInTheDocument();
 
     const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
     window.dispatchEvent(press);
 
-    expect(historyDismiss).toHaveBeenCalledTimes(1);
+    expect(tagsDismiss).toHaveBeenCalledTimes(1);
     expect(categoriesDismiss).not.toHaveBeenCalled();
     expect(press.defaultPrevented).toBe(true);
   });
@@ -410,8 +396,8 @@ describe("categories", () => {
    * (bar the two conditional ones), a pile the reader made draws, and a pile the app made while
    * filing a card (`origin: "auto"`) does not — it arrives with its first card and leaves with
    * its last. So an emptied `Draw` is a pile with **no heading anywhere in the editor**, and this
-   * drawer is the only place left to find it, rename it or delete it. A `origin` branch in here
-   * would close the one door, which is why the panel's header says there must never be one.
+   * dialog is the only place left to find it, rename it or delete it. An `origin` branch in here
+   * would close the one door, which is why this file's header says there must never be one.
    *
    * The empty user pile beside it is what keeps this discriminating: a panel that had quietly
    * grown the editor's rule would drop the auto row and keep that one, and the two together say
@@ -436,7 +422,7 @@ describe("categories", () => {
   });
 
   /**
-   * `RULE` is `GroupHeader`'s decision and this panel renders that component rather than
+   * `RULE` is `GroupHeader`'s decision and this dialog renders that component rather than
    * drawing its own line, so the marker cannot come to mean one thing in a column heading and
    * another here. The Maybeboard is the case worth pinning: it is predefined, and it carries
    * `INACTIVE` instead — `RULE` is *not* "predefined and undeletable".
@@ -507,6 +493,10 @@ describe("categories", () => {
    * and `user.clear` **focus the element they are given**, so a test that reaches for the field
    * by hand repairs the very thing it was meant to check. `user.keyboard` types wherever the
    * caret already is, which is the only honest way to ask this question.
+   *
+   * `RenameField` is `metaRows.tsx`'s now and `TagsDialog.test.tsx` asks it the same question on
+   * a tag row, which is not a duplicate: shared today is not a guarantee about tomorrow, and a
+   * caret is a thing every host of that field owes its reader.
    */
   it("puts the caret in the rename field, so the first keystroke lands in it", async () => {
     mount();
@@ -617,7 +607,7 @@ describe("categories", () => {
   /* -------------------------------------------------------------------- delete ------- */
 
   /**
-   * The one destructive control on the drawer, and the thing this dialog exists to make
+   * The one destructive control on this dialog, and the thing its question exists to make
    * unmistakable: `moveToCategoryId: null` takes the cards with the category by cascade, and an
    * id moves them first in the same transaction. The safe answer is the default.
    */
@@ -696,10 +686,10 @@ describe("categories", () => {
    * The row **disables** its Delete trigger the moment the confirmation opens, and Chromium
    * blurs a control it disables — so without the effect this asserts, the caret is on `<body>`
    * and the next Tab restarts at the top of the document. That is the bug commit `10761c1`
-   * fixed for this file's rename field; this is the same one on the sibling control.
+   * fixed for the rename field; this is the same one on the sibling control.
    *
    * `toHaveFocus` **plus a real Tab**, never a hand-placed focus: the assertion pair is what
-   * makes this discriminate. `user.tab()` from `<body>` would land on the drawer's ✕ (the first
+   * makes this discriminate. `user.tab()` from `<body>` would land on the dialog's ✕ (the first
    * stop in the document), so the second expectation fails on the broken code even if the first
    * somehow did not — and no line here reaches for the element it goes on to assert about.
    */
@@ -714,8 +704,8 @@ describe("categories", () => {
     expect(dialog).toHaveFocus();
     expect(trigger).toBeDisabled();
 
-    // From the panel, the first stop is the panel's own first control — which is only true if
-    // the caret is inside the layer.
+    // From the question, the first stop is the question's own first control — which is only
+    // true if the caret is inside it.
     await user.tab();
     expect(within(dialog).getByLabelText("Its 12 cards")).toHaveFocus();
 
@@ -773,7 +763,7 @@ describe("categories", () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "File cards by what they do" }));
-    // An empty deck moves nothing, which is the sentence a reader needs — the drawer draws no
+    // An empty deck moves nothing, which is the sentence a reader needs — this dialog draws no
     // cards, so without a count there is no way to tell a no-op from a failure.
     expect(await screen.findByText(/Nothing to file/)).toBeInTheDocument();
     expect(deckGet).toHaveBeenCalledWith(1, "live", "tcgplayer");
@@ -786,7 +776,7 @@ describe("categories", () => {
    *
    * Falling through to the type line here would re-file every loose card in the deck by a rule
    * the reader did not press — across every pile at once, with one manual move per card as the
-   * way back. Silence would be worse still: the drawer draws no cards, so a reader who pressed
+   * way back. Silence would be worse still: this dialog draws no cards, so a reader who pressed
    * a button and saw the same screen would have no way to tell "nothing needed doing" from "the
    * whole deck was just re-filed the other way".
    *
@@ -812,185 +802,5 @@ describe("categories", () => {
     // And the count sentence claims nothing — "Filed 12 cards" beside that alert would be two
     // answers to one press.
     expect(screen.queryByText(/^Filed /)).not.toBeInTheDocument();
-  });
-});
-
-/* ------------------------------------------------------------------------ tags ------- */
-
-describe("tags", () => {
-  it("lists a deck's tags with their colour and their copies", async () => {
-    mount();
-    const tag = await screen.findByText("Cut candidate");
-    const li = tag.closest("li");
-    expect(li).not.toBeNull();
-    expect(within(li as HTMLElement).getByText("3 cards")).toBeInTheDocument();
-  });
-
-  /** `deck_tag_update` renames **and** recolours in one command and has no patch shape, so the
-   *  field has to send a colour back even when only the name changed. */
-  it("sends both the name and the colour on a rename", async () => {
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
-
-    await user.click(within(li).getByRole("button", { name: "Rename" }));
-    const field = await within(li).findByLabelText("Rename Cut candidate");
-    // Both rows share one `RenameField`; asserted on both anyway, because "shared today" is not
-    // a guarantee about tomorrow and this is the caret's only test on this row.
-    expect(field).toHaveFocus();
-    await user.clear(field);
-    await user.type(field, "On the block");
-    await user.click(within(li).getByRole("button", { name: "Save" }));
-
-    expect(deckTagUpdate).toHaveBeenCalledWith(10, "On the block", "ember");
-  });
-
-  it("says a deleted tag keeps its cards", async () => {
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
-
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
-    // The trigger and the control inside what it opens must not share an accessible name: the
-    // decks page had to rename three of its heading triggers for exactly that collision. Here
-    // the inner controls are named for the *object* — "Delete tag", "Delete “Ramp”" — so the
-    // trigger stays uniquely addressable, and `getByRole` throwing on two matches is the proof.
-    expect(within(li).getByRole("button", { name: "Delete" })).toBeDisabled();
-    // `deck_cards.tag_id` is `ON DELETE SET NULL`: the cards are untagged, never deleted.
-    expect(
-      within(dialog).getByText(/cards stay in the deck and lose the label/),
-    ).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole("button", { name: "Delete tag" }));
-    expect(deckTagDelete).toHaveBeenCalledWith(10);
-  });
-
-  /**
-   * The confirmation counts **both lists**, because `deck_cards.tag_id` is `ON DELETE SET NULL`
-   * across both — the same correction the category delete already carries, on the control 250
-   * lines below it in the same file.
-   *
-   * **The fixture makes the two numbers differ on purpose**, and that is the whole of why this
-   * test can fail: with an empty theory list, `cardCount` and the both-lists total are the same
-   * number, so a dialog reading the wrong one still prints the right answer. Every other tag
-   * test here has them equal, which is exactly how the bug survived a suite.
-   */
-  it("quotes the copies wearing a tag in both lists, not just the one on screen", async () => {
-    deckTagList.mockImplementation((_deckId: number, variant: string) =>
-      Promise.resolve(
-        variant === "live"
-          ? [{ id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 2 }]
-          : [{ id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 5 }],
-      ),
-    );
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
-
-    // The row is still the list being edited, and is right to be. Only the confirmation
-    // changes scope.
-    expect(within(li).getByText("2 cards")).toBeInTheDocument();
-
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
-
-    expect(within(dialog).getByText(/^Its 7 cards stay in the deck/)).toHaveTextContent(
-      "both the live and theory lists, not just the one on screen",
-    );
-  });
-
-  /**
-   * The zero arm, which is the one that read as a flat falsehood: "No card is wearing it" over
-   * a theory list with five. Its own test, because it is a different sentence and because the
-   * arm that says "nothing will happen" is the one a reader presses through without reading.
-   */
-  it("does not say a tag is worn by nothing when the other list wears it", async () => {
-    deckTagList.mockImplementation((_deckId: number, variant: string) =>
-      Promise.resolve([
-        {
-          id: 10,
-          deckId: 1,
-          name: "Cut candidate",
-          color: "ember",
-          cardCount: variant === "live" ? 0 : 5,
-        },
-      ]),
-    );
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
-
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
-
-    expect(within(dialog).queryByText(/No card in either list is wearing it/)).toBeNull();
-    expect(within(dialog).getByText(/^Its 5 cards stay in the deck/)).toHaveTextContent(
-      "both the live and theory lists",
-    );
-  });
-
-  /** `CategoryRow`'s caret contract, on the tag row. Same pair, same reason — see the category
-   *  test's doc for why either half alone would pass against the broken code. */
-  it("puts the caret in the tag delete question, and hands it back on Keep it", async () => {
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
-
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
-    expect(dialog).toHaveFocus();
-
-    await user.tab();
-    expect(within(dialog).getByRole("button", { name: "Delete tag" })).toHaveFocus();
-
-    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
-    await waitFor(() => expect(within(li).getByRole("button", { name: "Delete" })).toHaveFocus());
-  });
-
-  it("makes a tag of this deck from a suggestion, and offers no name it already has", async () => {
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-
-    expect(screen.queryByRole("button", { name: "Add tag Cut candidate" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Add tag Budget swap" }));
-
-    // The suggestion's own colour travels with it — a name used across decks reads the same
-    // colour in each.
-    expect(deckTagCreate).toHaveBeenCalledWith(1, "Budget swap", "moss");
-  });
-
-  it("makes a first tag from the field, in the colour the picker is on", async () => {
-    deckTagList.mockResolvedValue([]);
-    deckTagSuggestions.mockResolvedValue([]);
-    mount();
-    await screen.findByText("No tags yet.");
-    const user = userEvent.setup();
-
-    await user.type(screen.getByLabelText("New tag name"), "Playtest");
-    await user.click(screen.getByRole("button", { name: "Moss" }));
-    await user.click(screen.getByRole("button", { name: "Add tag" }));
-
-    // A token, never a hex string: a stored colour has to outlive the theme that chose it.
-    expect(deckTagCreate).toHaveBeenCalledWith(1, "Playtest", "moss");
-  });
-
-  it("says why a refusal happened rather than losing it", async () => {
-    deckTagDelete.mockRejectedValue("That tag is not this deck's.");
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = screen.getByText("Cut candidate").closest("li") as HTMLElement;
-
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    await user.click(screen.getByRole("button", { name: "Delete tag" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("That tag is not this deck's.");
   });
 });
