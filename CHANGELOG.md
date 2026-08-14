@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.7.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.6.0...v0.7.0) (2026-08-14)
+
+
+### Features
+
+* add a card zoom ladder and the ctrl+wheel gesture behind it ([bd60bb7](https://github.com/Msgaihede/mtg-grimoire/commit/bd60bb7958ffc76f5b4a471c4e8c25bf6100c429))
+* auto-merge main into worktrees and resolve conflicts in place ([0498ac5](https://github.com/Msgaihede/mtg-grimoire/commit/0498ac536f7b2b6cb7383be4a387efefd6e6381e))
+* create a whole deck from the New deck dialog ([4496811](https://github.com/Msgaihede/mtg-grimoire/commit/4496811ffb36525f6f79aca70d87a74061ca3322))
+* create a whole deck from the New deck dialog ([22ae798](https://github.com/Msgaihede/mtg-grimoire/commit/22ae7986d47208eba657a750eef33e0ceccdd1b0))
+* crown game changers on the card search cards ([37f9fc1](https://github.com/Msgaihede/mtg-grimoire/commit/37f9fc18bc0cd6a72d1194700e893c5abf84a839))
+* crown game changers on the card search cards ([1be287c](https://github.com/Msgaihede/mtg-grimoire/commit/1be287c8a74a3fb940170e24d11c7b8df2677976))
+* ctrl+scroll zoom for the card sections ([51efffa](https://github.com/Msgaihede/mtg-grimoire/commit/51efffa38fc884a9687c2e5b9345c374c3f22ddb))
+* **decks,search:** an X mana category ([02566be](https://github.com/Msgaihede/mtg-grimoire/commit/02566be8b3e2758d7cf0e83efb98d944c11e702d))
+* **decks,search:** an X mana category ([09ea7db](https://github.com/Msgaihede/mtg-grimoire/commit/09ea7dbb9d8d717728774224e4a0119829fd498b))
+* **decks:** carry the set's name on a deck card ([2531667](https://github.com/Msgaihede/mtg-grimoire/commit/2531667a2363226c88130f8a2e203f0cdb0c225c))
+* **decks:** draw no heading for an empty category ([ce4c3e7](https://github.com/Msgaihede/mtg-grimoire/commit/ce4c3e75ed264f5889f240423eb02dec687e0ef5))
+* **decks:** draw the stack's card from the CardStack.dc.html canvas ([374ebcc](https://github.com/Msgaihede/mtg-grimoire/commit/374ebccad1052a15703601db0f5ec3e3cfac56eb))
+* **decks:** draw the stack's card from the CardStack.dc.html canvas ([5cf6ea1](https://github.com/Msgaihede/mtg-grimoire/commit/5cf6ea1b22f4b6fe3ee7a70bfd4a413eec647b2d))
+* **decks:** drop the card stacks' resting border, pin the sideboard right ([a3f2c8d](https://github.com/Msgaihede/mtg-grimoire/commit/a3f2c8dc6bd3acc92e5bffdf5b013826bcb7e7d3))
+* **decks:** drop the card stacks' resting border, pin the sideboard right ([cf13568](https://github.com/Msgaihede/mtg-grimoire/commit/cf135684f54c2d2b84e258b72f019e810ab9e59e))
+* **decks:** file cards by what they do, not by what they are ([c98e8fc](https://github.com/Msgaihede/mtg-grimoire/commit/c98e8fc060e942cdd3e6fe72d5cbc10093750996))
+* **decks:** file cards by what they do, not by what they are ([7c07595](https://github.com/Msgaihede/mtg-grimoire/commit/7c075956f3157e38c105b7c1cffc087cc8d2d85a))
+* **decks:** wrap the deck views' columns and pin the Sideboard right ([16b76de](https://github.com/Msgaihede/mtg-grimoire/commit/16b76de46449721858862460ba606ce6a47ca943))
+* **decks:** wrap the deck views' columns and pin the Sideboard right ([2b6e5d5](https://github.com/Msgaihede/mtg-grimoire/commit/2b6e5d51c1c394506b1a6552064a2f571883f8c4))
+* group card printings four ways, view the foil, swap by clicking ([e121561](https://github.com/Msgaihede/mtg-grimoire/commit/e1215611990a2be107cc246d6ceaf70f97c53743))
+* group card printings four ways, view the foil, swap by clicking ([5eeebea](https://github.com/Msgaihede/mtg-grimoire/commit/5eeebea1ee420a3bde8626cb49bd19afaa60d5e0))
+* move the deck stats under the deck as a static band ([e60097e](https://github.com/Msgaihede/mtg-grimoire/commit/e60097e953f2adfa7526caf57490c6bb337c1ea8))
+* move the deck stats under the deck as a static band ([7635fa6](https://github.com/Msgaihede/mtg-grimoire/commit/7635fa605063b4fac1b6eede7414119d54d98282))
+* order every option list alphabetically, dead facets last ([554780e](https://github.com/Msgaihede/mtg-grimoire/commit/554780e2c1a2e0a3bde24d633724eef217ca926e))
+* order every option list alphabetically, dead facets last ([0423af0](https://github.com/Msgaihede/mtg-grimoire/commit/0423af0c18ab4b7028f8e43c7658d1e552881974))
+* remember each deck's tab, grouping and sort; theory takes the deck ([f80e519](https://github.com/Msgaihede/mtg-grimoire/commit/f80e5197d9c0867c973321597101b5a95a391892))
+* remember each deck's tab, grouping and sort; theory takes the deck ([a01aab7](https://github.com/Msgaihede/mtg-grimoire/commit/a01aab7938419fbc26c769082befea4cdddd2fa5))
+* represent a collapsed search row with the cheapest printing of its latest release ([a7d3fda](https://github.com/Msgaihede/mtg-grimoire/commit/a7d3fdaaa653cda622c089d28a942a35d18fff42))
+* represent a collapsed search row with the cheapest printing of its latest release ([59afed5](https://github.com/Msgaihede/mtg-grimoire/commit/59afed55df137319fb1ad2eb351309111a717934))
+* **search:** hide the printings no format allows, behind a chip that brings them back ([e9a6f19](https://github.com/Msgaihede/mtg-grimoire/commit/e9a6f19e6d388dd6752440babb17acf252b2730e))
+* **search:** hide the printings no format allows, behind a chip that brings them back ([79d52bc](https://github.com/Msgaihede/mtg-grimoire/commit/79d52bc63cff8e77fedc37eae8735d32fa822ba0))
+* show the zoom level while zooming, and fade it when it stops ([68b2e3e](https://github.com/Msgaihede/mtg-grimoire/commit/68b2e3e57c38223a73cac98d40421f3b8a48839c))
+* suggest up to five cards in the deck editor's quick add ([f21df30](https://github.com/Msgaihede/mtg-grimoire/commit/f21df30876919c0961d90bd99981950b342a5522))
+* suggest up to five cards in the deck editor's quick add ([b1d9b35](https://github.com/Msgaihede/mtg-grimoire/commit/b1d9b3584ef685e2b150f31c5b68fc685c404d8a))
+* zoom the card sections, and only the card sections ([28be1fc](https://github.com/Msgaihede/mtg-grimoire/commit/28be1fc7ba606ce6bc22435cccc6fc3dc1adc514))
+
+
+### Bug Fixes
+
+* carry the zoom through the data line main added to the stack card ([e28afa3](https://github.com/Msgaihede/mtg-grimoire/commit/e28afa3ab8bbe63afa979c1d7c6c50a303060cb6))
+* **decks:** clear the tag-refresh line, and stop the picker saying "by card type" ([0d1a943](https://github.com/Msgaihede/mtg-grimoire/commit/0d1a943dd4cdd56eda00a60e2f413ebc195341f1))
+* slow the deck stack's flip-through so the eye can follow a card ([d822243](https://github.com/Msgaihede/mtg-grimoire/commit/d8222435e5928593a5bbf43efefc7cc1570f66af))
+* slow the deck stack's flip-through so the eye can follow a card ([9e944c3](https://github.com/Msgaihede/mtg-grimoire/commit/9e944c379a129c6d0560c4245287af084b758fa8))
+
 ## [0.6.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.5.0...v0.6.0) (2026-08-12)
 
 
