@@ -436,6 +436,38 @@ describe("facet counts", () => {
     expect(f.manaValues["8"]).toBe(3);
   });
 
+  /**
+   * **The X chip is a member of the mana OR group, not a second question ANDed onto it.**
+   * `filters.rs` puts `mana_cost LIKE '%{X}%'` in among the `cmc IN (…)` alternatives for
+   * exactly this reason, and the fake mirrors it — an AND would answer *nothing* here, since
+   * no card is both mana value 0 and variable-cost, and the row would look like a filter that
+   * had simply stopped working.
+   */
+  it("asks the mana chips and the X chip as one OR, never as an intersection", () => {
+    const db = makeDb();
+    const zeros = facets(db, { manaValues: [0] }).total;
+    const xs = facets(db, { manaX: true }).total;
+
+    // `Agadeem's Awakening` (`{X}{B}{B}{B}`, mana value 3) is the corpus' one paper `{X}`
+    // printing, so the two sets cannot overlap and their union is exactly their sum.
+    expect(xs).toBe(1);
+    expect(zeros).toBeGreaterThan(0);
+    expect(facets(db, { manaValues: [0], manaX: true }).total).toBe(zeros + xs);
+  });
+
+  /**
+   * `base("mana")` drops the **whole** mana question — the numerals and X together — because
+   * one OR group is one dimension. A base that dropped only `manaValues` would grey X out the
+   * moment a numeral it has nothing to do with was pressed.
+   */
+  it("counts the X chip over the same base the numerals are counted over", () => {
+    expect(facets(makeDb(), {}).manaX).toBe(1);
+    expect(facets(makeDb(), { manaValues: [0] }).manaX).toBe(1);
+    // A filter from another dimension does narrow it, which is the half that proves the count
+    // is a count and not a constant.
+    expect(facets(makeDb(), { format: "nonesuch" }).manaX).toBe(0);
+  });
+
   it("counts the chips and the format select with their own filter removed", () => {
     const mana = facets(makeDb(), { manaValues: [1] });
     expect(mana.total).toBe(12);
@@ -494,6 +526,11 @@ describe("facet counts", () => {
     expect(cold.manaValues).toEqual({});
     expect(cold.formats).toEqual({});
     expect(cold.owned).toEqual({ owned: 0, missing: 0 });
+    // **`manaX` is the one that cannot say "we did not count".** It is a scalar, so where the
+    // maps have an absent key it has a `0` — and `0` is exactly what the greying rule reads as
+    // "nothing in this search". `ready: false` is the whole of the guard, spent by
+    // `facetsOrUndefined` before any chip sees this object.
+    expect(cold.manaX).toBe(0);
   });
 
   /**

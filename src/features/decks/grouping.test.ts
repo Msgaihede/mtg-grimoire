@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DeckCategory } from "@/lib/ipc";
+import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { card } from "./validation/fixtures";
-import { buildGroups, GROUP_BY_OPTIONS } from "./grouping";
+import { buildGroups, GROUP_BY_OPTIONS, X_GROUP_KEY, X_GROUP_NAME } from "./grouping";
 
 /**
  * One `deck_categories` row. The ids match `validation/fixtures`' `CATEGORIES` table so a
@@ -374,5 +374,192 @@ describe("buildGroups by a derived key", () => {
   it("offers exactly the three groupings the toolbar shows", () => {
     expect(GROUP_BY_OPTIONS.map((o) => o.value)).toEqual(["category", "manaValue", "type"]);
     expect(GROUP_BY_OPTIONS.map((o) => o.label)).toEqual(["Categories", "Mana value", "Type"]);
+  });
+});
+
+/**
+ * The deck's own `separateXGroup` preference, applied.
+ *
+ * A spell printing `{X}` has a mana value — Scryfall counts the variable as 0, so Fireball is
+ * mana value 1 — and that number is honest about a card nobody casts for one mana. The switch
+ * is the reader's answer to whether their curve should say so.
+ *
+ * **Every card here is one array built once and handed to both calls**, which is what lets the
+ * off case be compared against the on case at all: `card()` hands out a fresh row id per call,
+ * so two separately-built fixtures are never deep-equal. `buildGroups` mutates nothing it is
+ * given — `sortCards` copies — so one array can serve both.
+ */
+describe("buildGroups with the X pile split out", () => {
+  /** Fireball's real cost and mana value, so the fixture is about the thing it is about. */
+  const fireball = (over: Partial<DeckCard> = {}) =>
+    card({ name: "Fireball", manaCost: "{X}{R}", cmc: 1, ...over });
+
+  /**
+   * **Off is the default and off is exactly what this function answered before the switch
+   * existed.** Every caller that has not heard of `separateX` — and every test above this
+   * line — keeps the grouping it had, which is the whole reason the parameter is last and
+   * optional.
+   */
+  it("groups identically with the switch off and with it omitted", () => {
+    const cards = [
+      fireball(),
+      card({ name: "Lightning Bolt", manaCost: "{R}", cmc: 1 }),
+      card({ name: "Orphan", manaCost: null, cmc: null }),
+    ];
+
+    expect(buildGroups(cards, [MAIN], "manaValue", "alphabetical", false)).toEqual(
+      buildGroups(cards, [MAIN], "manaValue", "alphabetical"),
+    );
+    // And the X card is bucketed by its mana value like anything else: Fireball is a 1-drop.
+    const groups = buildGroups(cards, [MAIN], "manaValue", "alphabetical");
+    expect(groups.map((g) => g.key)).toEqual(["mv-1", "mv-unknown"]);
+    expect(names(groups[0].cards)).toEqual(["Fireball", "Lightning Bolt"]);
+  });
+
+  /**
+   * **The card leaves its bucket rather than appearing in two.** Every surface that draws these
+   * headings counts copies and sums prices per group, so a card in both piles makes the
+   * headings add up to more than the deck — and nothing on screen would say which one lied.
+   * The two assertions at the foot are that arithmetic, stated as arithmetic.
+   */
+  it("moves an {X} card's copies and money out of its mana-value bucket", () => {
+    const cards = [
+      fireball({ quantity: 2, unitPrice: 1.5 }),
+      card({ name: "Lightning Bolt", manaCost: "{R}", cmc: 1, quantity: 3, unitPrice: 0.5 }),
+    ];
+
+    const [before] = buildGroups(cards, [MAIN], "manaValue", "alphabetical");
+    expect(before.count).toBe(5);
+    expect(before.totalPrice).toBeCloseTo(4.5, 5);
+
+    const after = buildGroups(cards, [MAIN], "manaValue", "alphabetical", true);
+    expect(after.map((g) => g.key)).toEqual(["mv-1", X_GROUP_KEY]);
+    const [one, x] = after;
+
+    expect(names(one.cards)).toEqual(["Lightning Bolt"]);
+    expect(one.count).toBe(3);
+    expect(one.totalPrice).toBeCloseTo(1.5, 5);
+
+    expect(names(x.cards)).toEqual(["Fireball"]);
+    expect(x.count).toBe(2);
+    expect(x.totalPrice).toBeCloseTo(3, 5);
+
+    expect(one.count + x.count).toBe(before.count);
+    expect((one.totalPrice ?? 0) + (x.totalPrice ?? 0)).toBeCloseTo(before.totalPrice ?? 0, 5);
+  });
+
+  /** A heading and nothing more, like every other mana-value group: no id, so nothing can be
+   *  dropped into it — `cardControl.tsx`'s `deckGroupProps` and `useCategoryDrop` both gate on
+   *  `categoryId === null`, and an id here would quietly make the curve a drop target. */
+  it("names a derived group nothing can be dropped into", () => {
+    const [x] = buildGroups([fireball()], [MAIN], "manaValue", "alphabetical", true);
+
+    expect(x).toMatchObject({
+      key: X_GROUP_KEY,
+      name: X_GROUP_NAME,
+      categoryId: null,
+      kind: null,
+      isActive: true,
+      isPredefined: false,
+    });
+  });
+
+  /**
+   * `0 … 8 or more, X, unknown`. Like "8 or more", X is open-ended rather than a number, so it
+   * belongs at the tail of the curve rather than at the head where a reader counts their
+   * cheapest spells — and *unknown* stays behind it, because it is the absence of an answer
+   * rather than an answer.
+   */
+  it("reads 0 through 8, then X, then unknown", () => {
+    const curve = [
+      ...Array.from({ length: 9 }, (_, mv) =>
+        card({ name: `Spell ${mv}`, manaCost: `{${mv}}`, cmc: mv }),
+      ),
+      fireball(),
+      card({ name: "Orphan", manaCost: null, cmc: null }),
+    ];
+
+    const groups = buildGroups(curve, [MAIN], "manaValue", "alphabetical", true);
+
+    expect(groups.map((g) => g.key)).toEqual([
+      "mv-0",
+      "mv-1",
+      "mv-2",
+      "mv-3",
+      "mv-4",
+      "mv-5",
+      "mv-6",
+      "mv-7",
+      "mv-8",
+      X_GROUP_KEY,
+      "mv-unknown",
+    ]);
+    expect(names(groups[9].cards)).toEqual(["Fireball"]);
+  });
+
+  /**
+   * **An X in the printed cost is knowledge; "unknown" is for a row that carries none.** So the
+   * X test runs before the `cmc` check: an orphaned row whose card left the database keeps the
+   * cost `deck_cards` copied at write time, and filing it under "Mana value unknown" would
+   * throw away the one thing it still says about itself.
+   */
+  it("files an {X} card with no mana value under X rather than unknown", () => {
+    const groups = buildGroups(
+      [card({ name: "Orphaned X", manaCost: "{X}{B}{B}{B}", cmc: null })],
+      [MAIN],
+      "manaValue",
+      "alphabetical",
+      true,
+    );
+
+    expect(groups.map((g) => g.key)).toEqual([X_GROUP_KEY]);
+    expect(names(groups[0].cards)).toEqual(["Orphaned X"]);
+  });
+
+  /**
+   * **It is a `manaValue` rule and inert everywhere else.** Under `category` the headings are
+   * the reader's own piles and under `type` they are what a card *is*; neither is a curve, and
+   * an "X" column beside Creature would be a fourth grouping wearing the third one's name.
+   */
+  it("changes nothing under the other two groupings", () => {
+    const cards = [
+      fireball({ typeLine: "Sorcery" }),
+      card({ name: "Sol Ring", manaCost: "{1}", cmc: 1, typeLine: "Artifact" }),
+    ];
+
+    for (const groupBy of ["category", "type"] as const) {
+      expect(buildGroups(cards, [MAIN], groupBy, "alphabetical", true)).toEqual(
+        buildGroups(cards, [MAIN], groupBy, "alphabetical", false),
+      );
+    }
+  });
+
+  /**
+   * The file's governing rule, unchanged by the switch: an inactive pile is never bucketed
+   * into somebody else's curve and never hidden either — including when the card in it is an
+   * X spell, which must not turn up in an X heading it was switched out of.
+   */
+  it("appends an inactive category whole in both X modes", () => {
+    const cards = [
+      fireball(),
+      {
+        ...card({ name: "Comet Storm", manaCost: "{X}{R}", cmc: 2 }),
+        categoryId: 5,
+        categoryName: "Maybeboard",
+        categoryKind: "maybe" as const,
+        categoryActive: false,
+      },
+    ];
+
+    for (const separateX of [false, true]) {
+      const groups = buildGroups(cards, [MAIN, MAYBE], "manaValue", "alphabetical", separateX);
+
+      const inactive = groups.filter((g) => !g.isActive);
+      expect(names(inactive)).toEqual(["Maybeboard"]);
+      expect(names(inactive[0].cards)).toEqual(["Comet Storm"]);
+
+      const derived = groups.filter((g) => g.categoryId === null);
+      expect(derived.flatMap((g) => names(g.cards))).toEqual(["Fireball"]);
+    }
   });
 });

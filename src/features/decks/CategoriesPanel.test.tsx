@@ -119,6 +119,7 @@ const DECK_ROW: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  separateXGroup: false,
 };
 
 const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };

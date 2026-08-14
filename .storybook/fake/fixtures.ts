@@ -323,8 +323,18 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
  * choose between and neither has this. A view story about another marketplace is a story about
  * different `unitPrice` values on the rows — which is a seeded world's job, not a fixture
  * parameter's.
+ *
+ * `separateX` is the deck's own `separateXGroup` read as `buildGroups` takes it, and it
+ * **defaults to `false`** for the reason that function's own argument does: every story written
+ * before the switch existed keeps the grouping it was written against. It is a `manaValue` rule
+ * and inert under the other two groupings, so a story asking for the split passes both — the
+ * pair `("manaValue", …, true)` is the only combination that draws anything new.
  */
-export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alphabetical") {
+export function deckGroups(
+  groupBy: GroupBy = "category",
+  sortBy: SortBy = "alphabetical",
+  separateX = false,
+) {
   const commander = deckCategory("commander");
   // The seeded Sideboard sorts at 2 and the reader's own two piles are ahead of it here, so
   // it is moved rather than left to tie with `Removal` and be ordered by row id.
@@ -354,6 +364,16 @@ export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alph
       }),
     ),
     inPile(ramp, deckCard(printing("lea", "161"), { ownedQuantity: 1, gameChanger: true })),
+    // **The corpus's only `{X}` printing** (`{X}{B}{B}{B}`, mana value 3), and the whole of what
+    // the `separateX` argument has to move: without it the X heading is a heading over nothing
+    // and the switch draws the same curve twice. Filed under Ramp because the back face is a
+    // land — an MDFC is in the pile its player casts it from.
+    //
+    // Mana value 3 is the useful part rather than an accident: Dismember below is also 3, so
+    // switching the split on **moves this card out of a bucket that survives it**. A curve where
+    // the `3` column vanished with the card would leave a reader unable to tell a re-filing from
+    // a disappearance, which is exactly the misreading the X heading exists to prevent.
+    inPile(ramp, deckCard(printing("znr", "90"), { ownedQuantity: 1 })),
     inPile(
       removal,
       deckCard(printing("isd", "51"), {
@@ -369,7 +389,7 @@ export function deckGroups(groupBy: GroupBy = "category", sortBy: SortBy = "alph
     inPile(maybe, deckCard(printing("wwk", "31"))),
   ];
 
-  return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy);
+  return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy, separateX);
 }
 
 /**

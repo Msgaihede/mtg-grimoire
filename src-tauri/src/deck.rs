@@ -135,6 +135,18 @@ pub struct DeckPatch {
     /// as a blank page. Switching it off **keeps every row**: it hides a switch, it does not
     /// delete a list. Both halves live in [`crate::deck_theory`].
     pub theory_enabled: Option<bool>,
+    /// Whether this deck files its variable-cost cards under a heading of their own.
+    ///
+    /// **Storage only, on this side.** Rust records the switch; what an X group *is* — which
+    /// cards fall into it, what it is called, where it sorts against the type piles — is
+    /// grouping logic and lives in TypeScript with the rest of it, for the boundary the crate
+    /// root states. A card carrying an `{X}` is a fact (`cards.mana_cost`, and
+    /// [`crate::filters::VARIABLE_COST_LIKE`] is how every SQL reader asks for it); which pile
+    /// it belongs in is a conclusion.
+    ///
+    /// Per deck rather than per user, like [`Self::theory_enabled`]: it is a statement about how
+    /// *this* list is read, so two decks may disagree and a duplicate must not.
+    pub separate_x_group: Option<bool>,
 }
 
 /// One deck as the gallery shows it.
@@ -195,6 +207,12 @@ pub struct DeckRow {
     /// theory list happens to be empty — which is exactly the state
     /// [`crate::deck_theory::seed_from_live`] exists to make impossible to interpret.
     pub theory_enabled: bool,
+    /// Whether this deck files its variable-cost cards under a heading of their own.
+    ///
+    /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s
+    /// reason: a switch the app can set and never see is a switch nothing can draw. The
+    /// grouping it controls happens in TypeScript — this is the stored answer, not the rule.
+    pub separate_x_group: bool,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -374,7 +392,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND dc.variant = 'live'
                          AND cat.is_active = 1
                          AND cat.kind IN ('main','commander','maybe')), 0),
-            d.updated_at, d.folder_id, d.notes, d.theory_enabled
+            d.updated_at, d.folder_id, d.notes, d.theory_enabled, d.separate_x_group
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -396,6 +414,10 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         folder_id: r.get(12)?,
         notes: r.get(13)?,
         theory_enabled: r.get(14)?,
+        // Positional, like every read above it — a column added anywhere but the **end** of
+        // `DECK_SELECT`'s list shifts every index after it, silently, into a field of the same
+        // SQLite type. New columns go last here for exactly that reason.
+        separate_x_group: r.get(15)?,
     })
 }
 
@@ -462,6 +484,7 @@ struct DeckBefore {
     folder_id: Option<i64>,
     notes: Option<String>,
     theory_enabled: bool,
+    separate_x_group: bool,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id when the deck is
@@ -513,7 +536,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     let before: DeckBefore = tx
         .query_row(
             "SELECT name, format_key, description, cover_card_id, cover_kind, is_built,
-                    archived, folder_id, notes, theory_enabled
+                    archived, folder_id, notes, theory_enabled, separate_x_group
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -528,6 +551,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     folder_id: r.get(7)?,
                     notes: r.get(8)?,
                     theory_enabled: r.get(9)?,
+                    separate_x_group: r.get(10)?,
                 })
             },
         )
@@ -553,6 +577,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 folder_id = coalesce(?8, folder_id),
                 notes = coalesce(?9, notes),
                 theory_enabled = coalesce(?10, theory_enabled),
+                -- `?12` and not `?11`: that hole is `COVER_CARD_ART` above, which is bound
+                -- rather than spelled. A new column takes the next number at the **end** of the
+                -- list, never the next one that reads free.
+                separate_x_group = coalesce(?12, separate_x_group),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -567,6 +595,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.notes,
                 patch.theory_enabled,
                 COVER_CARD_ART,
+                patch.separate_x_group,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -669,6 +698,14 @@ fn record_deck_edit(
     // deck somebody typed out.
     if let Some(to) = patch.theory_enabled.filter(|t| *t != before.theory_enabled) {
         field("theory", json!(before.theory_enabled), json!(to))?;
+    }
+    // `xGroup`, camelCase like every other key in a `deck` payload — `src/features/decks/
+    // auditText.ts` is the only thing that words these, and it matches on the field name.
+    if let Some(to) = patch
+        .separate_x_group
+        .filter(|x| *x != before.separate_x_group)
+    {
+        field("xGroup", json!(before.separate_x_group), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         record_filed(tx, id, Some(to))?;
@@ -928,7 +965,10 @@ struct CopiedCard {
 /// that made them, and the copy earns its own at its first card write), it is not sleeved up
 /// on a table, and it is not something the user filed away. Everything that describes the
 /// deck rather than its state — format, description, cover, notes, which folder it is filed
-/// in, whether it keeps a theory list — comes across, so the copy looks like what was copied.
+/// in, whether it keeps a theory list, whether it groups its X cards — comes across, so the
+/// copy looks like what was copied. `separate_x_group` is on that side of the line for the
+/// plainest reason available: it decides how the list is *read*, and a copy that reads
+/// differently from its original is a surprise nobody asked for.
 ///
 /// **Both variants are copied.** A theory list is the deck's plan for itself, and a copy made
 /// to try something out is exactly the copy that wants the plan too. `theory_enabled` travels
@@ -968,9 +1008,9 @@ pub fn duplicate_deck(
         .query_row(
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 cover_image_path, folder_id, notes, theory_enabled,
-                                is_built, archived, created_at, updated_at)
+                                separate_x_group, is_built, archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
-                    cover_image_path, folder_id, notes, theory_enabled,
+                    cover_image_path, folder_id, notes, theory_enabled, separate_x_group,
                     0, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, cover_kind",
@@ -4306,6 +4346,7 @@ mod tests {
             folder_id: Some(7),
             notes: None,
             theory_enabled: true,
+            separate_x_group: true,
         })
         .unwrap();
         assert_eq!(
@@ -4316,7 +4357,8 @@ mod tests {
                 "coverKind": "card_art",
                 "coverArtist": "Christopher Rush", "isBuilt": true, "archived": false,
                 "cardCount": 60, "updatedAt": 1800000000,
-                "folderId": 7, "notes": null, "theoryEnabled": true
+                "folderId": 7, "notes": null, "theoryEnabled": true,
+                "separateXGroup": true
             })
         );
 
@@ -4330,11 +4372,97 @@ mod tests {
         );
         assert!(input.description.is_none());
 
-        let patch: DeckPatch = serde_json::from_str(r#"{"coverCardId":"bolt-lea","isBuilt":true}"#)
-            .expect("the patch payload");
+        let patch: DeckPatch = serde_json::from_str(
+            r#"{"coverCardId":"bolt-lea","isBuilt":true,"separateXGroup":true}"#,
+        )
+        .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(patch.is_built, Some(true));
+        assert_eq!(patch.separate_x_group, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
+    }
+
+    /// The X-group switch, end to end: it is off on a new deck, it survives a patch, it leaves
+    /// one history row, and a patch that repeats the value it already has records nothing.
+    ///
+    /// The last of those is [`update_deck`]'s rule rather than this field's, and it is asserted
+    /// here because the field is new: a Save on an untouched form must not fill the drawer with
+    /// edits nobody made.
+    #[test]
+    fn the_x_group_switch_round_trips_and_is_recorded_once() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.separate_x_group,
+            "off on a new deck — the column's own DEFAULT 0, never a Rust fallback"
+        );
+
+        let on = |v: bool| {
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    separate_x_group: Some(v),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        assert!(on(true).separate_x_group, "and the readback is the write");
+        assert!(
+            read_deck(&conn, deck.id).unwrap().unwrap().separate_x_group,
+            "…including through `DECK_SELECT`'s positional reads, which is where a column \
+             added anywhere but the end goes wrong silently"
+        );
+
+        // Every other field is untouched by it, which is the `coalesce(?n, column)` contract —
+        // and the fence against a mis-numbered `?` hole writing over the neighbour.
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(after.separate_x_group, "an absent field means leave it");
+        assert_eq!(after.name, "Burn");
+        assert!(!after.theory_enabled);
+
+        assert!(!on(false).separate_x_group);
+
+        let words: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 10)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .filter(|p: &serde_json::Value| p["field"] == "xGroup")
+            .collect();
+        assert_eq!(
+            words,
+            vec![
+                json!({ "field": "xGroup", "from": true, "to": false }),
+                json!({ "field": "xGroup", "from": false, "to": true }),
+            ],
+            "newest first, two presses, and the no-op patch between them recorded nothing"
+        );
+    }
+
+    /// A copy reads the way its original read. `separate_x_group` is a property of *how the
+    /// list is shown*, not of the deck's state, so it travels with the format, the notes and
+    /// the theory switch rather than being reset the way `is_built` and `archived` are.
+    #[test]
+    fn a_duplicate_keeps_the_x_group_switch() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                separate_x_group: Some(true),
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        assert!(copy.separate_x_group, "how it is read comes across");
+        assert!(!copy.archived, "what state it is in does not");
     }
 
     /// The allocator's whole contract in one scene: 4 Bolts wanted, 3 owned across two

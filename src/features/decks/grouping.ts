@@ -13,8 +13,15 @@
  * switching it back on is seeing it. Under `manaValue` and `type` the derived groups are
  * built from the **active** cards only, and every **inactive category** is then appended as
  * itself, unchanged, in `sortOrder`.
+ *
+ * The one thing above this line that is the *reader's* to decide is `separateX`: whether a
+ * spell printing `{X}` is counted at the mana value Scryfall gives it or gathered into a pile
+ * of its own at the tail of the curve. It is a preference about how a curve reads and says
+ * nothing about what is in the deck — which is why it is a per-deck column
+ * (`decks.separate_x_group`) rather than anything the validation engine has heard of.
  */
 import type { CategoryKind, DeckCard, DeckCategory } from "@/lib/ipc";
+import { hasVariableCost } from "@/lib/mana";
 import {
   autoCategoryDisplayOrder,
   autoCategoryFor,
@@ -85,15 +92,41 @@ export interface CardGroup {
 }
 
 /**
- * The mana-value buckets: 0–7 exactly, 8 open-ended, unknown last.
+ * The X pile's key and heading, exported so no caller — a chart, a story, a test — re-spells
+ * either one. The key is a `CardGroup.key` like `mv-3` and shares its namespace deliberately:
+ * it is one more mana-value heading, not a category, and nothing can be dropped into it.
+ */
+export const X_GROUP_KEY = "mv-x";
+export const X_GROUP_NAME = "Mana value X";
+
+/**
+ * The mana-value buckets: 0–7 exactly, 8 open-ended, X, unknown last.
  *
  * `null` is *unknown* rather than zero — `cards.cmc` is nullable and an orphaned row has no
  * mana value at all, so filing it under 0 would be a number this app made up, sitting at the
  * head of the curve where a reader counts their cheapest spells.
+ *
+ * **`separateX` is the reader's own preference and the X test runs first.** A card printing
+ * `{X}` has a `cmc` — Scryfall counts the variable as 0, so Fireball is mana value 1 — and
+ * that number is honest about a spell nobody would cast for one mana. When the switch is on,
+ * such a card leaves its `cmc` bucket entirely; see {@link buildGroups} for why it cannot be
+ * in both. Running the test *before* the `null` check is the second half of the rule: an X in
+ * the printed cost is knowledge, and *unknown* is for a row that carries none.
+ *
+ * X takes order 9 and unknown moves to 10, so the curve reads `0 … 8 or more, X, unknown`.
+ * Like "8 or more", X is open-ended rather than a number, so it belongs at the tail rather
+ * than at the head where a reader counts their cheapest spells; unknown stays behind it
+ * because it is the absence of an answer rather than an answer.
  */
-function manaValueBucket(cmc: number | null): { key: string; name: string; order: number } {
-  if (cmc === null) return { key: "mv-unknown", name: "Mana value unknown", order: 9 };
-  const mv = Math.min(8, Math.max(0, Math.floor(cmc)));
+function manaValueBucket(
+  card: Pick<DeckCard, "cmc" | "manaCost">,
+  separateX: boolean,
+): { key: string; name: string; order: number } {
+  if (separateX && hasVariableCost(card.manaCost)) {
+    return { key: X_GROUP_KEY, name: X_GROUP_NAME, order: 9 };
+  }
+  if (card.cmc === null) return { key: "mv-unknown", name: "Mana value unknown", order: 10 };
+  const mv = Math.min(8, Math.max(0, Math.floor(card.cmc)));
   return {
     key: `mv-${mv}`,
     name: mv === 8 ? "Mana value 8 or more" : `Mana value ${mv}`,
@@ -164,17 +197,32 @@ function strayGroup(cards: DeckCard[]): CardGroup {
  * @param categories every category of the deck, in `sortOrder` — including the empty ones
  * @param groupBy what the headings are
  * @param sortBy the order inside each heading
+ * @param separateX the deck's own `separateXGroup` preference — see below. Defaults to
+ *   `false`, which is what this function answered before the switch existed, so every caller
+ *   that has not heard of it keeps the grouping it had.
  *
  * **There is no currency argument any more.** It took one while every row carried two prices,
  * so that a heading's total and the `price` order under it could not be computed from
  * different ones. Rust now answers a single `unitPrice` per row, at the marketplace the deck
  * was read at, so the heading and its rows agree by construction and there is nothing to pass.
+ *
+ * **`separateX` is a `manaValue` rule and is inert everywhere else.** Under `category` the
+ * headings are the reader's own piles, and under `type` they are what a card *is*; neither is
+ * a curve, and an "X" column beside Creature would be a fourth grouping wearing the third
+ * one's name. It is passed through to {@link manaValueBucket}, which is called from the one
+ * `manaValue` arm, so the inertness is structural rather than a branch to keep in step.
+ *
+ * **A card is in the X group or in its `cmc` bucket, never in both.** Every surface that draws
+ * these headings counts copies and sums prices per group — the editor's column captions, the
+ * curve, the stats strip — so a card counted twice makes the headings add up to more than the
+ * deck, and the reader has no way to see which pile lied.
  */
 export function buildGroups(
   cards: readonly DeckCard[],
   categories: readonly DeckCategory[],
   groupBy: GroupBy,
   sortBy: SortBy,
+  separateX = false,
 ): CardGroup[] {
   const byCategory = new Map<number, DeckCard[]>();
   for (const card of cards) {
@@ -210,7 +258,7 @@ export function buildGroups(
     if (!card.categoryActive) continue;
     const bucket =
       groupBy === "manaValue"
-        ? manaValueBucket(card.cmc)
+        ? manaValueBucket(card, separateX)
         : (() => {
             // What the card *is* comes from the matching order; where its heading *sits*
             // comes from the reading order, which puts Land last. See `autoCategory.ts` for

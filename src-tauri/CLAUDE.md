@@ -54,7 +54,10 @@ both plus the frontend.
   its version and then has the lower block write back over it. Only the newest step may
   create from `CARDS_INDEXES`, which describes the table _at head_; a step that _changes_ an
   index definition must `DROP` it first or the widening is a silent no-op on exactly the
-  machines that need it. Schema is at **v11** — see
+  machines that need it. **A step whose DDL is not idempotent (`ADD COLUMN`, unlike
+  `CREATE TABLE IF NOT EXISTS`) also owes a line in every rewind fixture in `schema.rs`'s
+  tests** — those walk to head and undo one step, so every step above the version they claim is
+  replayed over them. Schema is at **v12** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
 - **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
   is dropped on every sync, so a price column would be destroyed by the next refresh —

@@ -352,6 +352,21 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         text: flag(p.to) ? "Filed the deck away" : "Took the deck out of the archive",
         detail: null,
       };
+    // `decks.separate_x_group` (schema v12). **The one multi-word field name in this switch** —
+    // every other arm is a single lowercase word, so this is the first place the backend's
+    // `field(…)` spelling could drift from ours without anything going red: the `default` arm
+    // below answers an unrecognised field with a sentence that is true of every deck edit, so a
+    // typo here reads as a bland history line rather than a failure. The word is `deck.rs`'s.
+    //
+    // It says *how the deck is read*, not what is in it, so neither half claims a card moved:
+    // nothing was added, removed or refiled by this press.
+    case "xGroup":
+      return {
+        text: flag(p.to)
+          ? "Split the X spells into their own group"
+          : "Folded the X spells back into their mana values",
+        detail: null,
+      };
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

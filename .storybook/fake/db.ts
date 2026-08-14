@@ -154,6 +154,10 @@ import type {
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
+// The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
+// answers, and a second reading of "does this cost name X" would let the workbench and the
+// window disagree about which cards are X while both looked right.
+import { hasVariableCost } from "@/lib/mana";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -263,6 +267,21 @@ export interface FakeDeck {
    *  written, because the editor's Live/Theory control *is* this boolean — a switch the app
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
+  /**
+   * `decks.separate_x_group` (schema v12): whether this deck's curve gathers the `{X}` spells
+   * under a heading of their own instead of counting each at the mana value Scryfall gives it.
+   *
+   * A **reading** preference and nothing more — `grouping.ts`'s `separateX` argument, which is
+   * inert outside the `manaValue` grouping and reaches no rule. Nothing in `validation/` has
+   * heard of it.
+   *
+   * **Optional here alone**, where every other column of this row is required, and the reason is
+   * the column's `NOT NULL DEFAULT 0`: a seed written before this existed is a deck the DDL
+   * default answers for, not a deck missing an answer. {@link toDeckRow} is where that stops —
+   * it resolves the absence to `false`, so no DTO this file hands out can carry an `undefined`
+   * the app would have to think about.
+   */
+  separateXGroup?: boolean;
   updatedAt: number;
 }
 
@@ -431,8 +450,10 @@ export interface FakeUpdate {
  * **`indexCold`** is a third kind again: not a failure and not a row, but the search index
  * mid-build. `facets::run_facets` answers a cold index with `ready: false` and **empty maps**
  * rather than with an error or with zeros, and the UI leaves every control live on it —
- * not-greyed has to mean "we do not know". The fake has no warm-up of its own, so this fault
- * is the only way a story can stand in that state.
+ * not-greyed has to mean "we do not know". (`manaX` is the one count that is not a map and so
+ * has no empty to answer with; it reads 0, and `ready` is what stops that being read as a
+ * verdict.) The fake has no warm-up of its own, so this fault is the only way a story can stand
+ * in that state.
  *
  * **`deckMeta`** is the one read failure among them, and it is a read failure on purpose.
  * `busy` is a *write* lock and no read here honours it; `gone` is a row that is not there.
@@ -1121,15 +1142,27 @@ function matchesCardFilters(
     if (picked.length > 0 && (setCode === null || !picked.includes(setCode))) return false;
   }
 
-  if (f.manaValues && f.manaValues.length > 0) {
+  // **One question, asked of two columns.** The numeric chips and the X chip are a single OR
+  // group — `push_card_filters` puts `mana_cost LIKE '%{X}%'` inside the same parenthesis as
+  // `cmc IN (…)` — so a row passes if it answers *either*, and the group is only asked at all
+  // when something in it is on. ANDing them would make picking `1` and `X` together return the
+  // cards that are both, which is the opposite of what a chip row means.
+  const manaValues = f.manaValues ?? [];
+  if (manaValues.length > 0 || f.manaX) {
     const cmc = card?.cmc ?? null;
-    const exact = new Set(f.manaValues.filter((v) => v < MANA_VALUE_OPEN_ENDED));
-    const openEnded = f.manaValues.some((v) => v >= MANA_VALUE_OPEN_ENDED);
+    const exact = new Set(manaValues.filter((v) => v < MANA_VALUE_OPEN_ENDED));
+    const openEnded = manaValues.some((v) => v >= MANA_VALUE_OPEN_ENDED);
     // `cmc` is REAL and nullable: a card with no cost matches no chip, and a fractional
     // un-card cost matches none *below* 8 (exact equality) but is returned by the open-ended
     // chip, which is `>= 8` — the same split `push_card_filters` emits.
-    const hit = cmc !== null && (exact.has(cmc) || (openEnded && cmc >= MANA_VALUE_OPEN_ENDED));
-    if (!hit) return false;
+    const numeric = cmc !== null && (exact.has(cmc) || (openEnded && cmc >= MANA_VALUE_OPEN_ENDED));
+    // **The asymmetry with the line above is the point, and it is the SQL's own**: the LIKE
+    // consults `mana_cost` and never `cmc`, so a row whose mana value is unknown still matches
+    // the X chip when its printed cost names `{X}`. An X in the cost is knowledge; a missing
+    // `cmc` is the absence of a different fact. An **orphan** is a third case and still fails —
+    // it has no `mana_cost` either, and `NULL LIKE '%{X}%'` is NULL, which is not true.
+    const variable = (f.manaX ?? false) && hasVariableCost(card?.manaCost ?? null);
+    if (!numeric && !variable) return false;
   }
 
   const rarity = nonblank(f.rarity);
@@ -1719,6 +1752,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
+    // v12's, and the one column whose absence on the row is an answer rather than a gap —
+    // `NOT NULL DEFAULT 0`, so a deck that has never been asked is a deck that says no.
+    separateXGroup: d.separateXGroup ?? false,
   };
 }
 
@@ -2710,6 +2746,12 @@ export function readHandlers(db: FakeDb) {
       if (db.fault === "indexCold" || db.cards.length === 0) {
         return {
           colors: {},
+          // `0` rather than an absence, because {@link FacetResponse.manaX} is a **number** and
+          // not a map: there is no empty value for a scalar to take, and Rust's own struct
+          // answers a `u32`. It says the same thing the empty maps beside it do only because
+          // `ready: false` is what the UI reads — a zero here is "we did not count", exactly as
+          // a missing key is, and neither may grey the chip.
+          manaX: 0,
           manaValues: {},
           formats: {},
           sets: {},
@@ -2725,7 +2767,13 @@ export function readHandlers(db: FakeDb) {
       const base = (skip: FacetSkip | null): FakeCard[] => {
         const f: CardFilters = { ...req, text: undefined, rarity: undefined };
         if (skip === "colors") f.colors = undefined;
-        if (skip === "mana") f.manaValues = undefined;
+        // Both halves of the chip row leave together, because they are one OR group and
+        // therefore one dimension: a base that dropped the numbers and kept the X would count
+        // every numeric chip against a search still narrowed to the X cards.
+        if (skip === "mana") {
+          f.manaValues = undefined;
+          f.manaX = undefined;
+        }
         if (skip === "sets") {
           f.sets = undefined;
           f.setCode = undefined;
@@ -2773,6 +2821,13 @@ export function readHandlers(db: FakeDb) {
       for (let v = 0; v <= MANA_VALUE_OPEN_ENDED; v++) {
         manaValues[String(v)] = countWith(manaBase, { manaValues: [v] });
       }
+      // The tenth chip of the same row, counted over the **same base** as the nine above it, so
+      // it greys on the same rule and at the same moment. It is deliberately *not* a key of the
+      // map: the map is keyed by mana value and `"x"` is not one, and the two **overlap** — an
+      // X card is counted here and again under its own `cmc`, which is what makes pressing both
+      // chips return that card once rather than twice. Adding this to the map's numbers would
+      // therefore double-count, which is the arithmetic a shared key invites.
+      const manaX = countWith(manaBase, { manaX: true });
 
       const formatBase = base("formats");
       const formats: Record<string, number> = {};
@@ -2795,6 +2850,7 @@ export function readHandlers(db: FakeDb) {
       return {
         colors,
         manaValues,
+        manaX,
         formats,
         sets,
         owned: { owned, missing: ownedBase.length - owned },
@@ -4323,6 +4379,9 @@ export function writeHandlers(db: FakeDb) {
         folderId: null,
         notes: null,
         theoryEnabled: false,
+        // Spelled out rather than left absent, because `create_deck` names every column it
+        // writes: a new deck's curve is the plain one until the reader says otherwise.
+        separateXGroup: false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -4331,8 +4390,8 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck::update_deck` — rename, re-format, cover, notes, build, archive and the theory
-     * switch all arrive here.
+     * `deck::update_deck` — rename, re-format, cover, notes, build, archive, the theory switch
+     * and the X-group switch all arrive here.
      *
      * `coalesce(?n, column)`, so absent means "leave it" and there is no field that *clears*
      * one: `description: ""` writes an empty string rather than a NULL, `coverCardId` cannot be
@@ -4389,6 +4448,21 @@ export function writeHandlers(db: FakeDb) {
       if (patch.theoryEnabled !== undefined && patch.theoryEnabled !== before.theoryEnabled) {
         field("theory", before.theoryEnabled, patch.theoryEnabled);
       }
+      // Read through `?? false` on the `from` side for {@link FakeDeck.separateXGroup}'s reason:
+      // an absent column is the DDL's `0`, so a deck that has never been asked and a deck
+      // switched off are one state, and switching *on* is one change from either.
+      //
+      // **The word is `deck.rs`'s and is not derived from the column name** — the two above it
+      // are (`theory_enabled` → `theory`, `is_built` → `built`), and reading that pattern
+      // forward gives `separateX`, which is wrong. `deck.rs` writes `"xGroup"`, and it is the
+      // one multi-word field name in the switch `auditText.ts` reads. Nothing enforces the
+      // agreement: an unrecognised field falls through `auditText`'s default arm to a bland
+      // "Changed the deck", so a disagreement here is a history line quietly saying less than
+      // it knows rather than anything that goes red.
+      const separateXWas = before.separateXGroup ?? false;
+      if (patch.separateXGroup !== undefined && patch.separateXGroup !== separateXWas) {
+        field("xGroup", separateXWas, patch.separateXGroup);
+      }
       if (patch.folderId !== undefined && patch.folderId !== before.folderId) {
         recordFiled(db, deck.id, patch.folderId);
       }
@@ -4408,6 +4482,11 @@ export function writeHandlers(db: FakeDb) {
         deck.theoryEnabled = patch.theoryEnabled;
         if (patch.theoryEnabled && theoryCopies(db, deck.id) === 0) seedFromLive(db, deck.id);
       }
+      // `coalesce(?n, separate_x_group)`, and **nothing else happens**: this switch writes one
+      // column and touches not one `deck_cards` row. Where the theory switch above seeds a list,
+      // this one only changes how the same cards are read — the curve is regrouped in TS, by
+      // `buildGroups`, on the rows the next read hands back.
+      deck.separateXGroup = patch.separateXGroup ?? deck.separateXGroup;
       deck.updatedAt = stamp(db);
       return toDeckRow(db, deck);
     },
@@ -4484,6 +4563,11 @@ export function writeHandlers(db: FakeDb) {
      * never `archived`. A copy is a **draft**: it has reserved nothing, it is not sleeved up
      * on a table, and it is not something the user filed away. The theory list comes too,
      * because a copy made to try something out is exactly the copy that wants the plan.
+     *
+     * `separateXGroup` comes across in the spread below with the rest of the row, and belongs
+     * with the theory list rather than with the two exceptions: it is how the reader reads a
+     * curve, and a copy opened onto a differently grouped curve than the deck it was made from
+     * would be a copy that lost something nobody chose to change.
      *
      * **Categories and tags are new rows with new ids, and the cards are remapped onto them.**
      * This is the part a "copy the cards" implementation gets wrong invisibly: a card row

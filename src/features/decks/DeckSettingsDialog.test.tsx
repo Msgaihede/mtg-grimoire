@@ -48,6 +48,7 @@ const BURN: DeckRow = {
   folderId: null,
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
+  separateXGroup: false,
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];

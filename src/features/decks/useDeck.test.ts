@@ -52,6 +52,10 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // v12's, and off for the same reason: the plain curve until the reader asks for the split.
+  // This hook never reads it — it is a `DeckPatch` field like any other and rides through
+  // `update` untouched — so it is here to satisfy the row's shape, not to be asserted on.
+  separateXGroup: false,
 };
 
 /**

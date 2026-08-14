@@ -280,7 +280,11 @@ export const TableView: Story = {
  * this story plus `Decks/SearchPanel` and `Collection/Page` all drew a fully-greyed row the
  * shipped window cannot produce. Nothing went red, because no `play` looked at the row.
  * Verified live 2026-08-11 against a cleared `data/`: 0 of 19 chips greyed for the whole of
- * the opening sync.
+ * the opening sync. **The row has carried a twentieth since the X mana chip joined it**, and
+ * that measurement is left at the number it was taken at rather than re-stated — the claim is
+ * *none greyed*, which a wider row does not change. The X chip is the one control that could
+ * not fail open on a raw cold response, because `manaX` is a count and a cold answer carries
+ * `0` where the maps carry an absent key; `facetsOrUndefined` is the whole of the guard.
  */
 export const Empty: Story = {
   args: { view: "grid" },

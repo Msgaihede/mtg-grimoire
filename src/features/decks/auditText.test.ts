@@ -261,6 +261,35 @@ describe("auditSentence", () => {
   });
 
   /**
+   * `decks.separate_x_group` (schema v12), and **the only multi-word field name the backend
+   * writes** — every other arm of the switch is a single lowercase word, so this is the first
+   * place `deck.rs`'s spelling could drift from `auditText`'s without anything going red: the
+   * default arm answers an unrecognised field with "Changed the deck", which is true of every
+   * deck edit and therefore never fails. Deriving the word from the column the way `built` and
+   * `theory` are derived gives `separateX`, which is **not** what `deck.rs` writes. This test
+   * is the pin.
+   */
+  it("names the X split by the word `deck.rs` writes, not the one the column suggests", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "xGroup", from: false, to: true })).toEqual({
+      text: "Split the X spells into their own group",
+      detail: null,
+    });
+    expect(deck({ field: "xGroup", from: true, to: false })).toEqual({
+      text: "Folded the X spells back into their mana values",
+      detail: null,
+    });
+    // The wrong-but-plausible spelling, so that a regression to it is a failing test rather
+    // than a history line quietly saying less than it knows.
+    expect(deck({ field: "separateX", from: false, to: true })).toEqual({
+      text: "Changed the deck",
+      detail: null,
+    });
+  });
+
+  /**
    * **Two different rows wear `field: "theory"`.** The copy row carries `copied` and no
    * `from`/`to` at all; the toggle carries `to` and no `copied`. Reading only the toggle
    * answers a copy as `flag(undefined)` — "Turned the theory list off" — which is a sentence

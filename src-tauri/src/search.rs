@@ -47,6 +47,13 @@ pub struct SearchRequest {
     /// Mana-value chips. 0–7 match `cmc` exactly; [`filters::MANA_VALUE_OPEN_ENDED`] means
     /// "or more". A card with no `cmc` matches none of them.
     pub mana_values: Option<Vec<u8>>,
+    /// The X chip: `Some(true)` also matches cards whose printed cost carries an `{X}`.
+    ///
+    /// **ORed with [`Self::mana_values`], not ANDed with it** — one more alternative in the
+    /// same group, so a request naming `3` and `X` returns cards that are either. X is
+    /// additive: Scryfall counts it as 0 in `cmc`, so an X card keeps whatever value chip it
+    /// already matched. See [`crate::filters::CardFilters::mana_x`].
+    pub mana_x: Option<bool>,
     pub rarity: Option<String>,
     /// Defaults to true: digital-only printings are hidden unless asked for.
     pub paper_only: Option<bool>,
@@ -106,6 +113,7 @@ impl SearchRequest {
             set_code: self.set_code.clone(),
             sets: self.sets.clone(),
             mana_values: self.mana_values.clone(),
+            mana_x: self.mana_x,
             rarity: self.rarity.clone(),
             paper_only: self.paper_only,
             playable_only: self.playable_only,
@@ -2740,18 +2748,34 @@ mod tests {
     fn seeded_costs() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
-        let rows: [(&str, &str, &str, Option<f64>, &str); 4] = [
-            ("1", "Lightning Bolt",  "lea", Some(1.0),  "R"),
-            ("2", "Wrath of God",    "lea", Some(4.0),  "W"),
-            ("3", "Emrakul",         "roe", Some(15.0), ""),
-            ("4", "Jinnie Fay",      "sld", None,       "G"),
+        // The printed cost rides along with `cmc` because the two are separate claims and the
+        // X chip reads the first while the value chips read the second — a fixture carrying
+        // only `cmc` can prove nothing about a filter that never looks at it. `Jinnie Fay`
+        // keeps a NULL in *both*, which is the column's contract on both sides.
+        // `(id, name, set_code, cmc, mana_cost, color_identity)`. Named because
+        // `clippy::type_complexity` will not take a six-element tuple written out, and a
+        // `type` definition is the remedy the lint itself asks for —
+        // `index::fixtures::Printing`'s reason, verbatim.
+        type Costed = (
+            &'static str,
+            &'static str,
+            &'static str,
+            Option<f64>,
+            Option<&'static str>,
+            &'static str,
+        );
+        let rows: [Costed; 4] = [
+            ("1", "Lightning Bolt",  "lea", Some(1.0),  Some("{R}"),           "R"),
+            ("2", "Wrath of God",    "lea", Some(4.0),  Some("{2}{W}{W}"),     "W"),
+            ("3", "Emrakul",         "roe", Some(15.0), Some("{15}"),          ""),
+            ("4", "Jinnie Fay",      "sld", None,       None,                  "G"),
         ];
-        for (id, name, set, cmc, ci) in rows {
+        for (id, name, set, cmc, cost, ci) in rows {
             conn.execute(
-                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,color_identity,
-                    legalities,is_paper,search_text,raw)
-                 VALUES (?1,?2,?3,'1','en','normal',?4,?5,'{\"modern\":\"legal\"}',1,?2,'{}')",
-                rusqlite::params![id, name, set, cmc, ci],
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,mana_cost,
+                    color_identity,legalities,is_paper,search_text,raw)
+                 VALUES (?1,?2,?3,'1','en','normal',?4,?5,?6,'{\"modern\":\"legal\"}',1,?2,'{}')",
+                rusqlite::params![id, name, set, cmc, cost, ci],
             )
             .unwrap();
         }
@@ -2823,6 +2847,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(either.total, 2);
+    }
+
+    /// The X chip against a real query, which is where the OR has to hold: `{X}{B}{B}{B}` is
+    /// **mana value 3 and variable at once** (Scryfall scores X as 0), so pressing "3" finds
+    /// it, pressing "X" finds it, and pressing both finds it exactly once.
+    ///
+    /// The last of those three is the one an `AND` term would get wrong invisibly: it would
+    /// still return the card here — it satisfies both — while dropping every ordinary
+    /// three-drop the reader also asked for. Hence the assertion on the *other* card too.
+    #[test]
+    fn the_x_chip_matches_a_variable_cost_and_ors_with_the_value_chips() {
+        let conn = seeded_costs();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,mana_cost,
+                color_identity,legalities,is_paper,search_text,raw)
+             VALUES ('5','Crux of Fate','ktk','2','en','normal',3.0,'{X}{B}{B}{B}','B',
+                     '{\"modern\":\"legal\"}',1,'Crux of Fate','{}'),
+                    ('6','Doom Blade','m10','3','en','normal',3.0,'{1}{B}{B}','B',
+                     '{\"modern\":\"legal\"}',1,'Doom Blade','{}')",
+            [],
+        )
+        .unwrap();
+        let search = |f: fn(&mut SearchRequest)| {
+            let mut req = SearchRequest {
+                limit: 50,
+                ..Default::default()
+            };
+            f(&mut req);
+            let r = run_search(&conn, &req).unwrap();
+            let mut got = names(&r).iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            got.sort();
+            (got, r.total)
+        };
+
+        let (x, total) = search(|r| r.mana_x = Some(true));
+        assert_eq!(x, ["Crux of Fate"], "the printed `{{X}}`, and only it");
+        assert_eq!(total, 1, "and the count subquery carries the same filter");
+
+        let (three, _) = search(|r| r.mana_values = Some(vec![3]));
+        assert_eq!(
+            three,
+            ["Crux of Fate", "Doom Blade"],
+            "X costs nothing towards `cmc`, so the variable card is a three-drop too"
+        );
+
+        let (both, both_total) = search(|r| {
+            r.mana_values = Some(vec![1]);
+            r.mana_x = Some(true);
+        });
+        assert_eq!(
+            both,
+            ["Crux of Fate", "Lightning Bolt"],
+            "either, not both — an AND term would have lost the one-drop"
+        );
+        assert_eq!(both_total, 2, "and returns the X card once, not twice");
+
+        // Omitted and explicitly-false are the same answer: every list that has never heard of
+        // this chip keeps the rows it had.
+        let all = search(|_| {}).1;
+        assert_eq!(search(|r| r.mana_x = Some(false)).1, all);
     }
 
     /// A card with no mana value is not a card with a mana value of zero. `NULL IN (…)`
@@ -2911,12 +2995,18 @@ mod tests {
     #[test]
     fn the_request_deserializes_the_names_the_frontend_sends() {
         let req: SearchRequest = serde_json::from_str(
-            r#"{"text":"bolt","sets":["lea","2ed"],"manaValues":[0,8],"paperOnly":true,"limit":50,"offset":0}"#,
+            r#"{"text":"bolt","sets":["lea","2ed"],"manaValues":[0,8],"manaX":true,"paperOnly":true,"limit":50,"offset":0}"#,
         )
         .unwrap();
 
         assert_eq!(req.sets.unwrap(), vec!["lea".to_owned(), "2ed".to_owned()]);
         assert_eq!(req.mana_values.unwrap(), vec![0u8, 8]);
+        assert_eq!(req.mana_x, Some(true));
+
+        // …and a payload from before the chip existed leaves it off, which is `None` and adds
+        // no predicate — the omitted-means-false half of the contract.
+        let old: SearchRequest = serde_json::from_str(r#"{"manaValues":[2]}"#).unwrap();
+        assert_eq!(old.mana_x, None);
     }
 
     /// What the set picker is built from: every set, newest first, with the number of

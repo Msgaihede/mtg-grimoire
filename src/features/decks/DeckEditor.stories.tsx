@@ -287,21 +287,47 @@ export const FourViews: Story = {
  * them, unchanged, at the end — an inactive card must never be counted into a curve the reader
  * is reading, and a pile that vanished when the grouping changed would be ten cards gone with no
  * way to get them back.
+ *
+ * **A third control appears and disappears with the first.** `Split X` gives the `{X}` spells a
+ * heading of their own, so it is drawn only under Mana value — there is nothing for it to say
+ * about a deck grouped by category or by type, and a control that persists across a grouping it
+ * has no effect on is one whose scope the reader has to remember. Unlike the two selects beside
+ * it, its state is **the deck's** (`decks.separate_x_group`, schema v12) rather than this
+ * session's: how you are looking at a deck right now is thrown away with the editor, and whether
+ * a particular deck is worth reading with its X spells apart is an answer about that deck. What
+ * it does to the curve, and the one number it deliberately leaves alone, is `Decks/DeckStats`'.
  */
 export const GroupAndSort: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByRole("region", { name: "Main deck" });
+    const splitX = () => canvas.queryByRole("button", { name: /^Split X/ });
+    await expect(splitX()).toBeNull();
 
     await userEvent.selectOptions(canvas.getByLabelText("Group by"), "manaValue");
     await expect(await canvas.findByRole("region", { name: "Mana value 1" })).toBeVisible();
     // The switched-off pile is still drawn, as itself, after the buckets.
     await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
+    // The whole sentence is the chip's accessible name as well as its tooltip: "Split X" alone
+    // names a thing rather than an action, and the name has to stand up read with no select
+    // beside it. It begins with the visible label all the same (WCAG 2.5.3).
+    const chip = canvas.getByRole("button", { name: /^Split X/ });
+    await expect(chip).toHaveAccessibleName(
+      "Split X — give cards with X in their cost a group of their own, instead of counting X " +
+        "as zero",
+    );
+    // A pressed-state control and never the `disabled` attribute, which would take it out of the
+    // tab order. *Which* way it is set is the deck's own column and therefore the seed's to say,
+    // so this asserts that the state is there to be read rather than what it currently reads.
+    await expect(chip).toHaveAttribute("aria-pressed");
+    await expect(chip).toBeEnabled();
 
     await userEvent.selectOptions(canvas.getByLabelText("Group by"), "type");
     await expect(await canvas.findByRole("region", { name: "Creature" })).toBeVisible();
     await expect(canvas.queryByRole("region", { name: "Mana value 1" })).toBeNull();
+    // Gone with the grouping it qualifies.
+    await expect(splitX()).toBeNull();
 
     await userEvent.selectOptions(canvas.getByLabelText("Sort"), "price");
     await expect(canvas.getByLabelText("Sort")).toHaveValue("price");

@@ -25,6 +25,24 @@ pub const MAX_SET_FILTER: usize = 64;
 /// The last mana-value chip is open-ended: "8" means 8 *or more*.
 pub const MANA_VALUE_OPEN_ENDED: u8 = 8;
 
+/// The `LIKE` pattern that finds a **variable** mana cost — a printed `{X}` anywhere in
+/// `cards.mana_cost`.
+///
+/// A `const` bound as a parameter rather than a fragment built inline, for two reasons and
+/// both of them are traps. The braces are the first: every predicate in this module is
+/// assembled with `format!`, and `'%{X}%'` written there is a *format placeholder named `X`*
+/// that fails the build — `'%{{X}}%'` compiles and is then two escapes nobody can read. The
+/// second is that a pattern with one home cannot drift from the [`crate::index`] bitset that
+/// has to agree with it.
+///
+/// **`{X}` only, never `{Y}` or `{Z}`.** Those two exist — a handful of un-cards print them —
+/// and they are deliberately not here, because the chip and the deck group this feeds are both
+/// *named* X: filing `Apocalypse Chime`'s siblings under a heading that names a symbol they do
+/// not have is a wrong label, not a loose one. `validation/engine.ts`'s `symbolValue` scores
+/// all three as 0, which is the answer to *what is this worth* and not to *what is this pile
+/// called*.
+pub const VARIABLE_COST_LIKE: &str = "%{X}%";
+
 /// Every filter that is a statement about a *card*, as the UI sends it.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -37,6 +55,16 @@ pub struct CardFilters {
     pub set_code: Option<String>,
     pub sets: Option<Vec<String>>,
     pub mana_values: Option<Vec<u8>>,
+    /// `Some(true)` also matches cards whose printed cost carries an `{X}`; `None` and
+    /// `Some(false)` add nothing.
+    ///
+    /// **An overlay on the mana-value chips, never a replacement for one.** Scryfall counts X
+    /// as 0 when it computes `cmc`, so `{X}{B}{B}{B}` is mana value 3 and stays mana value 3 —
+    /// this filter joins the *same* OR group the chips do, so a request naming "3" and "X"
+    /// returns that card once, from one row and one alternative, rather than twice.
+    ///
+    /// See [`VARIABLE_COST_LIKE`] for why the test is a `LIKE` over `{X}` alone.
+    pub mana_x: Option<bool>,
     pub rarity: Option<String>,
     /// Omitted means true in the search and false in the collection: a search offers cards
     /// to own, a collection lists cards that are owned.
@@ -225,6 +253,14 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // Deduplicated first: a payload that repeats a chip would otherwise generate a
     // placeholder per repeat, which is a longer statement for the same answer (carryover
     // fold: "manaValues dedupe").
+    //
+    // **The X chip is one more alternative in this same group, and that is the whole design.**
+    // It is *additive, never exclusive*: an X card keeps whatever `cmc` chip it already
+    // matched (Scryfall scores X as 0, so `{X}{B}{B}{B}` is and stays mana value 3), so a
+    // payload naming both "3" and "X" describes one row through two alternatives of one OR —
+    // one predicate, one match, no duplicate. Pushed as a separate `AND` term it would have
+    // meant "3 *and* variable", which is the intersection nobody asked for.
+    let mut alternatives: Vec<String> = Vec::new();
     if let Some(values) = f.mana_values.as_deref() {
         let mut exact: Vec<f64> = Vec::new();
         let mut open_ended = false;
@@ -240,7 +276,6 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
                 exact.push(f64::from(*v));
             }
         }
-        let mut alternatives: Vec<String> = Vec::new();
         if !exact.is_empty() {
             let holes = vec!["?"; exact.len()].join(",");
             alternatives.push(format!("{alias}.cmc IN ({holes})"));
@@ -251,9 +286,19 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         if open_ended {
             alternatives.push(format!("{alias}.cmc >= {MANA_VALUE_OPEN_ENDED}.0"));
         }
-        if !alternatives.is_empty() {
-            p.wheres.push(format!("({})", alternatives.join(" OR ")));
-        }
+    }
+    // `{alias}.mana_cost` with no `rows` fallback, unlike the set code above: a printed cost is
+    // a statement only a card row can make, and an orphaned entry has none — so it fails this
+    // exactly as it fails the format, colour and mana-value arms. `NULL LIKE ?` is NULL.
+    //
+    // Bound, not interpolated, and the pattern is [`VARIABLE_COST_LIKE`]; no `ESCAPE` clause,
+    // because that constant is ours and contains neither `%` nor `_`.
+    if f.mana_x.unwrap_or(false) {
+        alternatives.push(format!("{alias}.mana_cost LIKE ?"));
+        p.params.push(Box::new(VARIABLE_COST_LIKE));
+    }
+    if !alternatives.is_empty() {
+        p.wheres.push(format!("({})", alternatives.join(" OR ")));
     }
 
     if let Some(r) = nonblank(&f.rarity) {
@@ -373,5 +418,107 @@ mod tests {
             ..Default::default()
         });
         assert!(on.contains("c.legal_mask != 0"), "{on}");
+    }
+
+    /// The X chip is an **alternative inside the mana group**, not a term beside it — which is
+    /// the difference between "mana value 2 or variable" and "mana value 2 *and* variable",
+    /// and the second of those is empty for most of the corpus.
+    ///
+    /// Read off the SQL rather than off an answer, for the reason the mask test above is: the
+    /// two shapes differ in one character (`OR` against `AND`) and a fixture small enough to
+    /// tell them apart is a fixture that proves nothing else. The behaviour they produce is
+    /// pinned where it can be asked of a real query —
+    /// `search::tests::the_x_chip_matches_a_variable_cost_and_ors_with_the_value_chips`.
+    #[test]
+    fn the_x_test_joins_the_mana_values_own_or_group() {
+        let mut p = Predicates::default();
+        push_card_filters(
+            &mut p,
+            &CardFilters {
+                mana_values: Some(vec![2]),
+                mana_x: Some(true),
+                ..Default::default()
+            },
+            "c",
+            None,
+        );
+
+        let mana: Vec<&String> = p.wheres.iter().filter(|w| w.contains("mana_")).collect();
+        assert_eq!(mana.len(), 1, "one group, not two AND terms: {mana:?}");
+        assert_eq!(
+            mana[0], "(c.cmc IN (?) OR c.mana_cost LIKE ?)",
+            "the chip and the X test are alternatives of each other"
+        );
+        // Push order is the binding order, and `?` binds by position: the chip's value first
+        // because its fragment is first.
+        assert_eq!(p.params.len(), 2);
+
+        // No `rows` fallback on the cost, whatever alias the caller passes for its own table —
+        // a printed cost is a claim only a card row can make, so an orphan fails it.
+        let mut joined = Predicates::default();
+        push_card_filters(
+            &mut joined,
+            &CardFilters {
+                mana_x: Some(true),
+                ..Default::default()
+            },
+            "c",
+            Some("e"),
+        );
+        assert!(
+            joined.wheres.iter().any(|w| w == "(c.mana_cost LIKE ?)"),
+            "{:?}",
+            joined.wheres
+        );
+    }
+
+    /// `manaX` is omitted-means-**off**, like [`CardFilters::playable_only`] and unlike
+    /// `paper_only`: every list that has never heard of this chip must keep the rows it had.
+    /// And with the chip on alone it is still one group, so it narrows on its own rather than
+    /// needing a mana value beside it.
+    #[test]
+    fn mana_x_adds_nothing_unless_it_is_asked_for() {
+        let sql = |f: CardFilters| {
+            let mut p = Predicates::default();
+            push_card_filters(&mut p, &f, "c", None);
+            p.where_sql()
+        };
+
+        assert!(!sql(CardFilters::default()).contains("mana_cost"));
+        assert!(!sql(CardFilters {
+            mana_x: Some(false),
+            mana_values: Some(vec![2]),
+            ..Default::default()
+        })
+        .contains("mana_cost"));
+
+        let alone = sql(CardFilters {
+            mana_x: Some(true),
+            ..Default::default()
+        });
+        assert!(alone.contains("(c.mana_cost LIKE ?)"), "{alone}");
+    }
+
+    /// The pattern is a `const` and it is bound, so the braces never meet `format!` — which is
+    /// the build error this constant exists to make unreachable. `{Y}` and `{Z}` are
+    /// deliberately outside it: the chip is *named* X, and those un-cards do not have one.
+    #[test]
+    fn the_variable_cost_pattern_matches_x_and_not_its_two_siblings() {
+        assert_eq!(VARIABLE_COST_LIKE, "%{X}%");
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let matches = |cost: &str| {
+            conn.query_row(
+                "SELECT ?1 LIKE ?2",
+                rusqlite::params![cost, VARIABLE_COST_LIKE],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
+        assert!(matches("{X}{B}{B}{B}"));
+        assert!(matches("{2}{X}"));
+        assert!(!matches("{2}{W}{W}"));
+        assert!(!matches("{Y}"), "Apocalypse Chime's siblings are not X");
+        assert!(!matches("{Z}"));
     }
 }

@@ -79,8 +79,25 @@ export function filterChipState(pressed: boolean, unavailable = false): string {
   return pressed ? on : cn(on, "hover:text-text");
 }
 
-/** The mana-value chips. The last one is open-ended — `8` means "8 or more". */
+/**
+ * The mana-value chips. The last one is open-ended — `8` means "8 or more".
+ *
+ * **`X` is deliberately not in here.** It is not a mana value, and a sentinel number for it
+ * would be a lie this list then spreads to Rust's filter, to the fake and to the facet map,
+ * each of which would have to be told which number is not a number. It is a second axis over
+ * the same question instead — see {@link ManaValueChips}.
+ */
 export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+/**
+ * What the X chip is called, spelled once.
+ *
+ * A chip reading `X` beside one reading `8 or more` is a puzzle to anyone who cannot see the
+ * group it sits in, so the name says the whole thing while the chip draws the one letter that
+ * is printed on the cards. The visible text is inside the name (WCAG 2.5.3), which is what
+ * keeps the chip addressable by what is written on it.
+ */
+const MANA_X_LABEL = "Cards with X in their mana cost";
 
 /**
  * One colour chip: the printed symbol, on the printed fill.
@@ -155,18 +172,80 @@ export function ManaChip({
 }
 
 /**
- * The mana-value row, 0 through 8-or-more. Mono numerals, because a cost is data.
+ * One chip of the mana-value group — a numeral, `8+`, or `X`.
  *
- * The two facet props are **per value**, because this one component draws nine chips: a
- * plain `disabled` boolean here could only grey the row. `title` is handed the chip's own
+ * Internal, and shared by both halves of {@link ManaValueChips} deliberately: X has to be
+ * *the same chip* as its neighbours rather than one that resembles them, or the row grows a
+ * second focus outline and a second greying treatment the first time either is touched. It
+ * takes a finished `name` because the two halves spell their labels differently and neither
+ * spelling belongs to a chip.
+ */
+function ValueChip({
+  text,
+  name,
+  pressed,
+  disabled,
+  onToggle,
+}: {
+  /** What is written on the chip — `3`, `8+`, `X`. */
+  text: string;
+  /** The tooltip and the accessible name together, already composed by the caller. */
+  name: string;
+  pressed: boolean;
+  /** Drawn dim and unpressable, without leaving the tab order — see {@link ManaChip}. */
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!disabled) onToggle();
+      }}
+      aria-pressed={pressed}
+      aria-disabled={disabled || undefined}
+      aria-label={name}
+      title={name}
+      className={cn(
+        FILTER_CONTROL,
+        FILTER_FOCUS,
+        "size-9 font-mono text-xs tabular-nums",
+        filterChipState(pressed, disabled),
+      )}
+    >
+      {text}
+    </button>
+  );
+}
+
+/**
+ * The mana-value row, 0 through 8-or-more, and then X. Mono, because a cost is data.
+ *
+ * The two facet props are **per value**, because this one component draws all nine numerals:
+ * a plain `disabled` boolean there could only grey the row. `title` is handed the chip's own
  * accessible label as well as its value, so a caller composing a count onto it cannot drift
  * from what the chip actually says — "8 or more" is spelled here and nowhere else.
+ *
+ * **X is a second axis over the same question and takes its own four props**, because it is
+ * not a mana value: Scryfall's `cmc` counts `{X}` as zero, so `{X}{B}{B}{B}` is a **3** *and*
+ * an X, and the chips are OR'd exactly as 0–8 already are — a reader who picks both finds it
+ * once. It rides at the end of this group rather than beside it because it answers the same
+ * question the group asks; a chip on its own would read as a stray control.
+ *
+ * `xTitle` takes the label rather than a finished string for the reason `title` does: the
+ * sentence a greyed chip carries has to be one sentence in one voice across the whole row,
+ * and a caller composing a count onto a label it wrote itself is a caller that can drift from
+ * what the chip says.
  */
 export function ManaValueChips({
   selected,
   onToggle,
   disabled,
   title,
+  xSelected = false,
+  onToggleX,
+  xDisabled = false,
+  xTitle,
 }: {
   selected: readonly number[];
   onToggle: (value: number) => void;
@@ -174,6 +253,21 @@ export function ManaValueChips({
   disabled?: (value: number) => boolean;
   /** One chip's tooltip and accessible name, given its value and the label it would carry. */
   title?: (value: number, label: string) => string | undefined;
+  /** Whether the X chip is on. Independent of {@link selected}: both can be. */
+  xSelected?: boolean;
+  /**
+   * One press on the X chip — **and what decides the chip is drawn at all.**
+   *
+   * A chip with nothing to report is worse than a filter a row does not offer, so the two
+   * cannot come apart: there is no state where X is drawn and dead. Both filter rows wire it,
+   * so both draw it; a caller that leaves it off gets exactly the nine chips this group drew
+   * before X existed.
+   */
+  onToggleX?: () => void;
+  /** Whether X is out of reach. A plain boolean, unlike its per-value neighbour: one chip. */
+  xDisabled?: boolean;
+  /** X's tooltip and accessible name, given the label it would carry. */
+  xTitle?: (label: string) => string | undefined;
 }) {
   return (
     <div role="group" aria-label="Mana value" className="flex gap-1">
@@ -181,32 +275,27 @@ export function ManaValueChips({
         // The last chip is open-ended: past Emrakul the tail is a handful of cards
         // nobody filters by exact cost, and the backend reads it the same way.
         const open = value === MANA_VALUES[MANA_VALUES.length - 1];
-        const on = selected.includes(value);
-        const off = disabled?.(value) ?? false;
         const label = open ? `Mana value ${value} or more` : `Mana value ${value}`;
-        const name = title?.(value, label) ?? label;
         return (
-          <button
+          <ValueChip
             key={value}
-            type="button"
-            onClick={() => {
-              if (!off) onToggle(value);
-            }}
-            aria-pressed={on}
-            aria-disabled={off || undefined}
-            aria-label={name}
-            title={name}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "size-9 font-mono text-xs tabular-nums",
-              filterChipState(on, off),
-            )}
-          >
-            {open ? `${value}+` : value}
-          </button>
+            text={open ? `${value}+` : String(value)}
+            name={title?.(value, label) ?? label}
+            pressed={selected.includes(value)}
+            disabled={disabled?.(value) ?? false}
+            onToggle={() => onToggle(value)}
+          />
         );
       })}
+      {onToggleX && (
+        <ValueChip
+          text="X"
+          name={xTitle?.(MANA_X_LABEL) ?? MANA_X_LABEL}
+          pressed={xSelected}
+          disabled={xDisabled}
+          onToggle={onToggleX}
+        />
+      )}
     </div>
   );
 }

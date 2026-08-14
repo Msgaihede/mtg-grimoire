@@ -71,6 +71,12 @@ const meta = {
           "**Copies throughout, never rows.** Four Bolts are four cards in every figure here, " +
           "which is the only reading under which a curve, a price and a deck size can be talked " +
           "about together.\n\n" +
+          "**The one argument that changes a number here is `separateXGroup`**, and it changes " +
+          "exactly one: an `{X}` spell leaves its numeric bucket for a tenth, trailing X bar. It " +
+          "is the deck's own column (schema v12) and the same value `buildGroups` was handed, " +
+          "because a curve counting `{X}{B}{B}{B}` as 3 beside a column headed “Mana value X” " +
+          "would be two surfaces answering one question two ways. The average mana value is " +
+          "deliberately **not** among the numbers it moves — see {@link ManaCurveSplitX}.\n\n" +
           "Four charts and a pips row. Nothing animates, nothing is a chart library, and every " +
           "chart carries its numbers as text — the drawing is `aria-hidden` and the words " +
           "beside it are the whole accessible story. The arithmetic itself is `deckStats`, " +
@@ -140,6 +146,91 @@ export const ManaCurve: Story = {
     // wrong only a screen reader ever meets.
     await expect(canvas.getByText("1 card at mana value 5")).toBeInTheDocument();
     await expect(canvas.getByText("2 with no mana value, not counted")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The deck both `{X}` stories are measured over, so the pair is a controlled comparison: the
+ * same twelve nonlands, drawn twice, with nothing between them but the toggle.
+ *
+ * **Agadeem's Awakening is the corpus's one `{X}` printing** — `{X}{B}{B}{B}`, mana value 3,
+ * `Sorcery // Land`, and it is the front face that decides, so it is a spell rather than a land.
+ * Four copies of it, four Ragavan at 1 and four Counterspell at 2 make a curve where the whole
+ * effect of the toggle is visible in three bars.
+ *
+ * Measured over these rows: nonlands 12, `[0, 4, 4, 4, 0, 0, 0, 0, 0]` with the toggle off and
+ * `[0, 4, 4, 0, …]` plus an X bar of 4 with it on, average **2.00** either way.
+ */
+const xCurveDeck = (): DeckCard[] =>
+  allOwned([
+    deckCard(printing("znr", "90"), { quantity: 4 }),
+    deckCard(printing("mh2", "138"), { quantity: 4 }),
+    deckCard(printing("mh2", "267"), { quantity: 4 }),
+    deckCard(printing("lea", "288"), { quantity: 20 }),
+  ]);
+
+/**
+ * The default reading, and the one every curve in this app had before schema v12: an `{X}` spell
+ * is counted at the mana value it has with X at zero.
+ *
+ * That is the rules' own answer — CR 202.3b, X is zero everywhere but on the stack — so
+ * Agadeem's Awakening's four copies sit in the mana value 3 bar beside anything else that costs
+ * three. It is right, and it is also why a storm list can read as a curve full of cheap spells
+ * that cost whatever you have: {@link ManaCurveSplitX} is the same twelve cards with the toggle
+ * on.
+ *
+ * Nine bars, and the tenth is not drawn at all rather than drawn empty — `variableCost` is
+ * `null` here rather than `0`, which is the difference between "no X bar" and "an X bar with
+ * nothing in it".
+ */
+export const ManaCurveWithX: Story = {
+  args: { cards: xCurveDeck() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // All four X spells in the numeric bucket their mana value names.
+    await expect(canvas.getByText("4 cards at mana value 3")).toBeInTheDocument();
+    await expect(canvas.queryByText(/with X in their cost/)).toBeNull();
+    await expect(
+      canvas.getByText("Avg. mana value", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("2.00");
+  },
+};
+
+/**
+ * The same twelve cards with the deck's `separateXGroup` on: the `{X}` spells leave their
+ * numeric bucket for a tenth, trailing **X** bar.
+ *
+ * **The same value the deck list's grouping was built with.** `DeckEditor` reads the flag off
+ * the loaded deck once and hands it to `buildGroups` and to this strip together, because a curve
+ * counting `{X}{B}{B}{B}` as 3 beside a column headed "Mana value X" would be two surfaces
+ * answering one question about one deck two ways.
+ *
+ * **One home, never two.** The mana value 3 bar reads 0 here, so the bars still sum to the
+ * nonland count and the chart is still addable — a card in both places would look exactly like a
+ * deck with four more spells in it.
+ *
+ * **And the average does not move.** 2.00 in both stories: an X spell costs what it costs with X
+ * at zero whichever bar it is drawn in, and this toggle is a display choice about piles rather
+ * than a claim about the cardboard. It is the one thing on this strip that "X gets its own pile"
+ * must not propagate to.
+ *
+ * The bar's cells are 18px rather than the nine-bar chart's 20 — ten of them have to fit the
+ * 280px stats aside, and the panel does not widen for a bar. See `Curve` for that arithmetic.
+ */
+export const ManaCurveSplitX: Story = {
+  args: { cards: xCurveDeck(), separateXGroup: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The chart is `aria-hidden` but for one `sr-only` sentence per bar, so this sentence is the
+    // whole of what a screen reader is told — and it says "X" rather than `{X}`, because braces
+    // are not something a screen reader says. None of it is in a screenshot.
+    await expect(canvas.getByText("4 cards with X in their cost")).toBeInTheDocument();
+    // The bucket they left, drawn at zero rather than dropped: a gap in a curve is a fact.
+    await expect(canvas.getByText("0 cards at mana value 3")).toBeInTheDocument();
+    // Unmoved, which is the claim this pair of stories exists to make.
+    await expect(
+      canvas.getByText("Avg. mana value", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("2.00");
   },
 };
 

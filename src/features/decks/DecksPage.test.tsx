@@ -69,11 +69,13 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
-  // The four v8 deck columns. Every real row carries all four, so the fixture does too.
+  // The four v8 deck columns, and `separateXGroup` from v12. Every real row carries all
+  // five, so the fixture does too.
   coverKind: "card_art",
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  separateXGroup: false,
 };
 
 /** No cover, so no art and — the plan's ruling — no credit line at all. */

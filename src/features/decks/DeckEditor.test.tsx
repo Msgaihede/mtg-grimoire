@@ -109,6 +109,9 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // Schema v12, and `0` is the column's own default: a deck counts an `{X}` spell at the mana
+  // value Scryfall gives it until the reader says otherwise.
+  separateXGroup: false,
 };
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */
@@ -267,6 +270,13 @@ const group = (name: string) => screen.getByRole("region", { name });
  *  pile — because the same printing sits in two categories often enough that a name without one
  *  would be two controls a screen reader cannot tell apart. */
 const COPIES = "Copies of Lightning Bolt in Main deck";
+
+/** The X toggle's whole accessible name, which `ToggleChip` also spends as its tooltip. Written
+ *  out once because three tests address the control, and a regex over its two-word label alone
+ *  would keep passing on the day the sentence went missing — which is the half of the name that
+ *  has to stand up read out of context, with no Group by select beside it. */
+const SPLIT_X =
+  "Split X — give cards with X in their cost a group of their own, instead of counting X as zero";
 
 /**
  * jsdom lays nothing out, so the docked panel's virtualised wall measures a scroll container of
@@ -780,6 +790,61 @@ describe("DeckEditor", () => {
       "Price",
       "Type",
     ]);
+  });
+
+  /**
+   * The X toggle is a modifier of the Group by select, so it exists exactly where it has
+   * something to say.
+   *
+   * Under Categories and Type there is no curve for it to change: a control that persists
+   * across a grouping it has no effect on is one whose scope the reader has to remember. The
+   * claim is mostly about the two absences, which nothing else in this file can settle.
+   */
+  it("offers the X split only while the deck is grouped by mana value", async () => {
+    await open();
+    expect(screen.queryByRole("button", { name: SPLIT_X })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    expect(screen.getByRole("button", { name: SPLIT_X })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "type");
+    expect(screen.queryByRole("button", { name: SPLIT_X })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The switch is the deck's, not the editor's** — `decks.separate_x_group`, written through
+   * the same `update` the Built toggle writes.
+   *
+   * A `useState` here would look identical for one session and lose the reader's answer the
+   * moment they closed the deck, which is the one thing a per-deck reading preference exists to
+   * avoid. So the assertion is on the *write*: nothing about this control is local.
+   */
+  it("writes the X split onto the deck rather than holding it in the editor", async () => {
+    await open();
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+
+    await userEvent.click(screen.getByRole("button", { name: SPLIT_X }));
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { separateXGroup: true }));
+  });
+
+  /** And it is drawn from the deck the read answered with — a chip whose pressed state came from
+   *  anywhere else would disagree with the columns beside it after any other window changed the
+   *  deck. */
+  it("draws the X split pressed for a deck that carries it", async () => {
+    deckGet.mockResolvedValue(detail({ separateXGroup: true }, [bolt()]));
+
+    await open();
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+
+    const chip = screen.getByRole("button", { name: SPLIT_X });
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    // Never the `disabled` attribute, which would take it out of the tab order: the caret can
+    // land on it whichever way it is set, and a keyboard reader hears the state from
+    // `aria-pressed`.
+    expect(chip).toBeEnabled();
+    await userEvent.click(chip);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { separateXGroup: false }));
   });
 
   /** The order *inside* a heading, which the grouping does not decide. Alphabetical by default,

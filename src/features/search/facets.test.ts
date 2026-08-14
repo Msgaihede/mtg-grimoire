@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FacetResponse } from "@/lib/ipc";
-import { colorDisabled, facetsOrUndefined, facetTitle, optionDisabled } from "./facets";
+import {
+  colorDisabled,
+  countDisabled,
+  facetsOrUndefined,
+  facetTitle,
+  optionDisabled,
+} from "./facets";
 
 describe("the greying rule", () => {
   it("greys an option whose count is zero, and only that one", () => {
@@ -38,6 +44,23 @@ describe("the greying rule", () => {
   });
 
   /**
+   * The X chip's count is a *field* of the response rather than a key in a map, because X is
+   * not a mana value — so it asks the rule directly. All three arms again, because "the same
+   * rule" is a claim about behaviour and not about which function happens to call which.
+   */
+  describe("a bare count, which is how the X chip asks", () => {
+    it("greys a count of zero and nothing else", () => {
+      expect(countDisabled(0, false)).toBe(true);
+      expect(countDisabled(3, false)).toBe(false);
+    });
+
+    it("never greys the chip that is switched on, and fails open with no count", () => {
+      expect(countDisabled(0, true)).toBe(false);
+      expect(countDisabled(undefined, false)).toBe(false);
+    });
+  });
+
+  /**
    * A cold index answers `ready: false` with every map **empty** rather than zeroed, and
    * `facetsOrUndefined` is what a caller is supposed to route it through. This is the belt
    * behind that brace: read the maps directly and they still grey nothing, so the one bug
@@ -47,6 +70,7 @@ describe("the greying rule", () => {
     const cold: FacetResponse = {
       colors: {},
       manaValues: {},
+      manaX: 0,
       formats: {},
       sets: {},
       owned: { owned: 0, missing: 0 },
@@ -56,6 +80,12 @@ describe("the greying rule", () => {
     expect(optionDisabled(cold.manaValues, "7", false)).toBe(false);
     expect(optionDisabled(cold.formats, "modern", false)).toBe(false);
     expect(colorDisabled(cold.colors.W, cold.total, false)).toBe(false);
+    // **The X chip is the one control this belt does not fit**, and it is worth writing down
+    // rather than leaving to be discovered. Its count is a *number* beside the maps, so a cold
+    // response carries a plain `0` where the maps carry an absent key — and zero is the one
+    // thing the rule reads as "empty". `facetsOrUndefined` is therefore the whole of what
+    // keeps it live: the line below is the brace, and the line above it is what it prevents.
+    expect(countDisabled(cold.manaX, false)).toBe(true);
     expect(facetsOrUndefined(cold)).toBeUndefined();
   });
 
@@ -107,6 +137,7 @@ describe("facetsOrUndefined", () => {
   const ready: FacetResponse = {
     colors: { W: 1 },
     manaValues: { "0": 1 },
+    manaX: 1,
     formats: { modern: 1 },
     sets: { lea: 1 },
     owned: { owned: 1, missing: 0 },

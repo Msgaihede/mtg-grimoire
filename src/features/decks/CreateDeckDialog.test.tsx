@@ -48,6 +48,7 @@ const MADE: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  separateXGroup: false,
   updatedAt: 1786266000,
 };
 
