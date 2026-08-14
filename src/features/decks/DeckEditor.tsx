@@ -221,11 +221,21 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * to the pane through a scrim.
  *
  * **All six overlays are modal, and that is what makes the sentence above true of a keyboard
- * too.** Each is a `DeckDialog`: a full-window scrim, `aria-modal="true"` and `lib/trapTab.ts`,
- * in one component rather than in six that resemble each other — so nothing behind one can be
- * reached by Tab any more than by a pointer. Two of them used to argue the opposite in their own
- * docs while drawn as right-hand drawers; the scrim had always contradicted it.
- * `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds the six together.
+ * too**: each paints a full-window scrim, claims `aria-modal="true"` and runs `lib/trapTab.ts`,
+ * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
+ * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
+ * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds all six
+ * together, and it is a **behavioural** sweep for a reason worth reading before the next
+ * modality edit.
+ *
+ * **Four of the six are a `DeckDialog`** — Categories, Tags, History and Deck settings — where
+ * the scrim, the centring, `aria-modal`, the trap, the ✕ and the `"inner"` rung are written
+ * once. **`TheoryDiffDialog` and `ImportDeckDialog` are not**: each still carries its own copy
+ * of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of scope when the
+ * shell was written rather than exempt from it, and they are the next two to move onto it.
+ * `CreateDeckDialog` is a third such copy outside this editor. So a change to how a modal
+ * behaves here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
+ * is an edit to **four files, not one**, until those three are converted.
  */
 type Layer =
   | { kind: "check" }
@@ -1598,8 +1608,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           Each is closed by `open`, and each of the six unmounts everything behind that flag —
           so a closed one costs no query, no window listener and no state. That is what makes it
           safe to mount all six unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than six booleans. `DeckDialog` is what guarantees it: `open`
-          gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
+          `Layer` union rather than six booleans. For four of them `DeckDialog` guarantees it:
+          `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
+          The theory diff and the import dialog are not on that shell (see the `Layer` union's
+          doc) and each guarantees the same thing with an `AnimatePresence` of its own — which
+          is a second and a third copy of the rule rather than a second reading of it.
 
           **Two of them were one until 2026-08-14.** `CategoriesPanel` drew the deck's piles and
           its labels as two sections of a single right-hand drawer; they are `CategoriesDialog`

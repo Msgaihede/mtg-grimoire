@@ -177,12 +177,17 @@ export const PressingTheScrim: Story = {
 };
 
 /**
- * Closed is **nothing mounted**, not a hidden panel.
+ * Closed draws **no dialog at all** — not a scrim, not a panel, not an off-screen one.
  *
  * The body is passed as an *element*, and an element React never puts in the tree is a component
- * that never ran — so a host's queries, drafts and caret position all begin at the open. That is
+ * that never ran, so a host's queries, drafts and caret position all begin at the open. That is
  * what lets the deck editor mount every one of its dialogs unconditionally and pay for none of
  * them.
+ *
+ * **The play can only show the weaker half of that**, and says so rather than implying more: a
+ * `queryByRole` finding nothing is equally true of a panel that is merely hidden. What pins the
+ * real claim is `DeckDialog.test.tsx`'s first case, which renders a body that reports its own
+ * mount through a spy and asserts the spy was never called.
  */
 export const Closed: Story = {
   args: { open: false },

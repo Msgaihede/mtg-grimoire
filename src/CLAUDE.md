@@ -73,8 +73,14 @@ Every one of these has its measurement and its story in
   (history, categories, tags, deck settings) is therefore a
   **`src/features/decks/DeckDialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
   the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
-  because the panel outlives the flag by the length of its fade. That file is the one definition
-  of a modal in the deck surface, and a new one is built **on** it rather than beside it. Only a
+  because the panel outlives the flag by the length of its fade. **A new modal in the deck
+  surface is built _on_ that file rather than beside it** — and it is not yet the only definition
+  of one: `DeckSettingsDialog`, `CategoriesDialog`, `TagsDialog` and `DeckHistoryDialog` are on
+  the shell, while `ImportDeckDialog`, `TheoryDiffDialog` and `CreateDeckDialog` still carry
+  their own copy of the same chrome and are the three to move onto it. So a change to modality
+  here — a focus restore, a different `trapTab`, a change to when the rung is enabled — is an
+  edit to **four files until they are converted**, and `DeckEditor.test.tsx`'s Tab sweep is what
+  holds the copies to the shell's behaviour meanwhile. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
   column, whose tiles are drag sources into the deck's own category columns, and the card detail
   pane, which is how a reader flips through a card's printings — and both of those are

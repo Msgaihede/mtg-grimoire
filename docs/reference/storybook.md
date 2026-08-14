@@ -27,8 +27,9 @@ predicted the merge.
 `CategoriesDialog`/`TagsDialog`/`TheoryDiffDialog` do not carry it, so those three have stories
 and no docs page. It read `CategoriesPanel`/`TheoryDiffDialog` until 2026-08-14: that panel is
 two files now, and neither half declares it any more than the whole did. The other surfaces of
-that change went the other way — `DeckDialog`, the shell all of them are drawn in, and
-`DeckHistoryDialog`, which was `AuditDrawer`, both carry it. A new story file gets neither unless
+that change went the other way — `DeckDialog`, the shell `CategoriesDialog` and `TagsDialog` are
+drawn in (`TheoryDiffDialog` is not: it still carries its own chrome), and `DeckHistoryDialog`,
+which was `AuditDrawer`, both carry it. A new story file gets neither unless
 it says `tags: ["autodocs"]`.
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a

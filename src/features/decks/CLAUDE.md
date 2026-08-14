@@ -663,20 +663,28 @@ price | type`). An **inactive category stays its own group in all three grouping
   settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
   rungs and two `"inner"` peers open at once are not ordered at all. The anchored format check
   rides in the same union, so at most one of its **seven** registrations is ever enabled.
-- **The five that were drawers are centred modals, and the search column deliberately is not**
-  (changed 2026-08-14). History was `AuditDrawer`; the piles and the labels were two sections of
-  one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each one press
-  away instead of a press and a scroll; the shared row grammar the two of them draw with is
-  `metaRows.tsx`. All of them, and `DeckSettingsDialog`, are built on one shell,
-  `DeckDialog.tsx`. The reason is the desk row: every one of these is **consulted** — read, or
+- **The two that were drawers are centred modals, and the search column deliberately is not**
+  (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
+  them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
+  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
+  one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
+  the two of them draw with. Those three and `DeckSettingsDialog` — **four** surfaces — are built
+  on one shell, `DeckDialog.tsx`; the editor's other two full-window overlays (Import cards, the
+  theory difference) were never drawers, still carry their own copy of that chrome and are the
+  next two to move onto the shell. **Five** is only the count of *toolbar buttons*. The
+  reason for all of it is the desk row: every one of these is **consulted** — read, or
   edited and shut — and a right-hand drawer took the width it needed out of the deck for as long
   as it was up while giving the deck nothing. The card search column stayed a docked sidebar
   because it is the one surface here that is **worked out of**: its tiles are drag sources into
   the deck's own category columns beside it, so a scrim would end the drag path and cover the card
   pane a reader flips printings in. It opens **collapsed** instead, which is the same 602px
   argument answered the other way — the deck starts with the whole desk and one press on the rail
-  gets the wall back. The app-wide form of this rule is in
-  [`src/CLAUDE.md`](../../CLAUDE.md).
+  gets the wall back. **Its body is mounted on the reader's press and merely _hidden_ when the
+  editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
+  choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
+  filters and format away on a *resize* — opening the card pane at 1024 was enough. Never opened
+  is still nothing mounted, which is what keeps the search off a deck nobody searched from.
+  The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
 
 ## The quick add
 

@@ -1578,9 +1578,14 @@ describe("DeckEditor", () => {
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
    * available right now — a pointer already cannot cross one. Two of them used to let the
    * caret walk back into the editor anyway, which offered the capability to one input method and
-   * denied it to the other while the docs argued it was deliberate. All six are one component
-   * now (`DeckDialog`), so the trap is one implementation — and this sweep is what proves the
-   * six hosts really do go through it rather than resembling it.
+   * denied it to the other while the docs argued it was deliberate.
+   *
+   * **Four of the six are one component now (`DeckDialog`) and two are not**: the import dialog
+   * and the theory diff still carry their own scrim, `aria-modal` and `onKeyDown={trapTab}`,
+   * which is why this sweep is driven per surface rather than pointed at the shell. It is the
+   * only thing holding the two copies to the shell's behaviour, and it is what would go red if
+   * one of them were converted badly — or if a modality fix reached `DeckDialog.tsx` and stopped
+   * there.
    *
    * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
    * claim about what is behind it: each layer's own test file mounts it alone, where there is

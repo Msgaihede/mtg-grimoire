@@ -65,16 +65,19 @@ const TAG_READ_REFUSED =
  * were two sections of one drawer and are two independent surfaces now, and each of them mounts
  * the whole of this. So each fires the other's read — opening Categories asks for the deck's
  * tags, opening Tags asks for its categories — and that is worth having written down rather than
- * discovered from a log. It is cheap and it is not free: three local-SQLite reads either way,
- * shared through one `["decks"]`-rooted cache, so the second dialog a reader opens in a sitting
- * finds its own list already there. Splitting the hook to match the split of the drawer would
- * buy two reads back and cost the two surfaces their one definition of what a deck's piles and
- * labels are; that trade has not been worth making.
+ * discovered from a log. It is cheap and it is not free: **four** local-SQLite reads either way
+ * — the categories, the tags of the list on screen, the tags of the *other* list, and the
+ * suggestion palette — across the three key shapes below, shared through one `["decks"]`-rooted
+ * cache, so the second dialog a reader opens in a sitting finds its own lists already there.
+ * Splitting the hook to match the split of the drawer would buy three of those reads back for
+ * Categories and one for Tags, and would cost the two surfaces their one definition of what a
+ * deck's piles and labels are; that trade has not been worth making.
  *
  * `useDeck` already answers both lists as part of `deck_get`; these are the same facts read
  * through the two commands that exist so a dialog need not pull the whole card list to draw a
  * column heading. They cannot durably disagree because every write in the app invalidates the
- * one `["decks"]` root, which is a prefix of all three keys here and of the editor's detail key.
+ * one `["decks"]` root, which is a prefix of every key here — both spellings of the tag key
+ * included — and of the editor's detail key.
  *
  * **`variant` scopes the two counts on each row and nothing else.** Which categories a deck
  * has, what they are called, what order they are in and whether they are switched on are facts
@@ -84,7 +87,7 @@ const TAG_READ_REFUSED =
  * **The marketplace scopes one number and is in the categories key for it**: a category's
  * `totalPrice` is a sum at one marketplace, and the two are not conversions of each other.
  * The tag reads take no marketplace at all — a `DeckTag` carries a count and no money — which
- * is why only one of the three keys below grew a segment.
+ * is why only one of the three key shapes below grew a segment.
  *
  * A known narrowing, and it is the backend's rather than this hook's: every category and tag
  * **write** answers with the `live` variant's counts, because a rename carries no variant of

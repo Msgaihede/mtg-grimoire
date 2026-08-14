@@ -98,11 +98,16 @@ const meta = {
           "exactly two rungs, so two of them open at once would both close on one press. A " +
           "union rather than seven booleans is what makes “never two” structural; " +
           "{@link NeverTwoLayers} is that, pressed.\n\n" +
-          "**The six dialogs are one component, `DeckDialog`** (2026-08-14). Categories and " +
-          "history used to be right-hand drawers, and “in the style of Deck settings” used to " +
-          "be a resemblance between three files rather than one shell — so the scrim, the " +
+          "**Four of the six dialogs are one component, `DeckDialog`** (2026-08-14) — " +
+          "Categories, Tags, History and Deck settings. Categories and history used to be " +
+          "right-hand drawers, and “in the style of Deck settings” used to be a resemblance " +
+          "between three files rather than one shell — so the scrim, the " +
           "centring, `aria-modal`, the tab trap, the ✕ and the Escape rung are written once and " +
-          "every host passes a title, a close label and a width. **The card search column did " +
+          "every host passes a title, a close label and a width. **Import cards and the theory " +
+          "difference are not on it yet**: each still carries its own copy of that chrome, " +
+          "deliberately out of scope rather than exempt, and they should move onto the shell — " +
+          "until they do, a change to how a modal behaves in this editor is an edit to more " +
+          "than one file. **The card search column did " +
           "not follow them**, because it is worked *out of* rather than consulted: its tiles " +
           "are drag sources into the deck's own columns, and a scrim would end that path and " +
           "cover the card pane a reader flips printings in. It stays docked, and collapsed " +
