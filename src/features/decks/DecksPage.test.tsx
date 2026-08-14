@@ -8,6 +8,9 @@ import { cardImageUrl, imageOrigin } from "@/lib/images";
 import { spec } from "./validation/fixtures";
 
 const deckList = vi.hoisted(() => vi.fn());
+/** Read by `DeckSettingsDialog`, which the gallery hosts — and **only** while it is open, which
+ *  is what one of the cases below asserts. */
+const deckGet = vi.hoisted(() => vi.fn());
 const deckCreate = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
@@ -39,6 +42,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: {
     prefetchImages,
     deckList,
+    deckGet,
     deckCreate,
     deckUpdate,
     deckDelete,
@@ -202,6 +206,9 @@ const tileFor = (name: string) => screen.findByRole("button", { name: new RegExp
 
 beforeEach(() => {
   deckList.mockReset().mockResolvedValue([BURN, DRAFT, FILED]);
+  // The hosted settings dialog's own read. Empty lists: this screen's cases are about the deck
+  // row, and what the form does with cards, categories and tags is its own suite's.
+  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [], categories: [], tags: [] });
   deckCreate.mockReset().mockResolvedValue({ ...BURN, id: 9, name: "Sunday burn" });
   deckUpdate.mockReset().mockResolvedValue({ ...BURN, archived: true });
   deckDelete.mockReset().mockResolvedValue(undefined);
@@ -220,7 +227,9 @@ beforeEach(() => {
   deckLastFormat.mockReset().mockResolvedValue(null);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  deckImportResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  deckImportResolve
+    .mockReset()
+    .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
   deckImportReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
@@ -690,6 +699,89 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Restore Old Standard" }));
 
     expect(deckUpdate).toHaveBeenCalledWith(6, { archived: false });
+  });
+
+  /**
+   * **The gallery can rename a deck now, and until this it could not.** Renaming meant opening
+   * the editor and typing into its settings dialog, which is a round trip for one word.
+   *
+   * The field is `metaRows.tsx`'s `RenameField` — the one the folder rename already uses, and a
+   * third rename control would be a third place to get the caret wrong — drawn *under* the tile
+   * rather than over it: the art is how a reader knows which deck they are renaming, and a
+   * `<form>` inside the tile's own `<button>` is invalid HTML.
+   *
+   * F2 is the route, the file manager's key and the same one the folder tree already answers.
+   * The pointer's route is the tile's context menu, which is wired with the rest of them.
+   */
+  it("renames a deck in place, from the tile the caret is on", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+
+    await userEvent.keyboard("{F2}");
+
+    const field = await screen.findByLabelText("Rename Burn");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Burn");
+    // `keyboard`, never `type`: `type` focuses what it is handed and would repair the very
+    // thing this asserts. The current name arrives selected, so typing replaces it.
+    await userEvent.keyboard("Sunburn");
+    expect(field).toHaveValue("Sunburn");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunburn" });
+  });
+
+  /** Escape is the reader saying *put me back*, and the tile is where they were: the field is
+   *  drawn under the tile rather than in place of it, so the opener really is still there. */
+  it("hands the caret back to the tile when a rename is cancelled", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(tile).toHaveFocus();
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **`DeckSettingsDialog` gets a third host, and the gallery is it.**
+   *
+   * Everything a deck carries that is not a card in it — format, description, notes, cover,
+   * folder, theory — was reachable only from inside the editor. `DeckSettingsForm` owns no
+   * mutation and imports no hook that reaches the backend, which is exactly what lets a third
+   * host draw it; nothing in that file or its suite changed to allow this.
+   *
+   * Alt+Enter is Windows' own Properties key, beside F2 above: two file-manager gestures for
+   * the two things a deck has that its tile cannot show. The pointer's route is the menu.
+   */
+  it("opens a deck's settings over the gallery, without opening the editor", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+
+    await userEvent.keyboard("{Alt>}{Enter}{/Alt}");
+
+    const dialog = await screen.findByRole("dialog", { name: "Deck settings" });
+    expect(await within(dialog).findByLabelText("Name")).toHaveValue("Burn");
+    expect(deckGet).toHaveBeenCalledWith(4, "live", expect.anything());
+    // The editor is what this saves the reader: the deck is not opened.
+    expect(useAppStore.getState().openDeckId).toBeNull();
+  });
+
+  /** Closed is nothing mounted — `DeckDialog`'s guarantee, and what makes hosting this on a
+   *  wall of forty tiles free. */
+  it("reads no deck at all until the settings dialog is opened", async () => {
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(deckGet).not.toHaveBeenCalled();
   });
 
   /**

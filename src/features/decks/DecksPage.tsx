@@ -23,6 +23,7 @@ import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { CreateDeckDialog } from "./CreateDeckDialog";
+import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import {
   buildFolderTree,
   deckDraggable,
@@ -39,6 +40,7 @@ import {
   type FolderNode,
 } from "./FolderTree";
 import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
+import { RenameField } from "./metaRows";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
 import { useNewDeckFormat } from "./useNewDeckFormat";
@@ -129,6 +131,14 @@ type Panel =
   | { kind: "importDeck" }
   | { kind: "deleteDeck"; deckId: number }
   | { kind: "moveDeck"; deckId: number }
+  | { kind: "renameDeck"; deckId: number }
+  /**
+   * The hosted {@link DeckSettingsDialog}, which carries no deck id: the id outlives the flag by
+   * the length of the panel's fade, so it is held in `settingsDeckId` beside this. The *flag* is
+   * in here for the union's own reason — one layer at a time, structurally, so opening settings
+   * over a half-answered delete question replaces it rather than making two Escape peers.
+   */
+  | { kind: "deckSettings" }
   | { kind: "newFolder"; parentId: number | null }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
@@ -164,6 +174,16 @@ export function DecksPage() {
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
   const [panel, setPanel] = useState<Panel>(null);
+  /**
+   * Which deck the settings dialog is about — **kept after it closes, and that is the point**.
+   *
+   * `DeckDialog` renders its panel inside an `AnimatePresence`, so an `{open && …}` around the
+   * dialog would unmount the surface on the render that closes it and take its exit tween with
+   * it (the rule `ImportDeckDialog` is mounted by, one control along). The dialog therefore has
+   * to keep a deck id for the length of the fade, while `panel` — which is what says *open* —
+   * has already gone back to null.
+   */
+  const [settingsDeckId, setSettingsDeckId] = useState<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   /** Which drawer is open. `null` is the top level, which is also where every deck is drawn
    *  when the folder list could not be read. */
@@ -322,16 +342,20 @@ export function DecksPage() {
   /** The click-away way out: the layer goes, the caret stays where the reader put it. */
   const close = useCallback(() => setPanel(null), []);
 
-  // Every panel on this screen but the two modals. `CreateDeckDialog` and `ImportDeckDialog`
-  // register their own rungs, because each outlives `panel` by the length of its fade and a
-  // rung that came up with the *element* would still be consuming Escape while the next layer
-  // opened. Two `"inner"` peers are not ordered by this protocol at all, so the one that owns
-  // the press has to be the only one that asked for it — hence the exclusion rather than a
-  // second registration.
+  // Every panel on this screen but the three modals. `CreateDeckDialog`, `ImportDeckDialog` and
+  // `DeckSettingsDialog` register their own rungs, because each outlives `panel` by the length
+  // of its fade and a rung that came up with the *element* would still be consuming Escape
+  // while the next layer opened. Two `"inner"` peers are not ordered by this protocol at all,
+  // so the one that owns the press has to be the only one that asked for it — hence the
+  // exclusion rather than a second registration.
   useDismissOnEscape({
     layer: "inner",
     onDismiss: dismiss,
-    enabled: panel !== null && panel.kind !== "createDeck" && panel.kind !== "importDeck",
+    enabled:
+      panel !== null &&
+      panel.kind !== "createDeck" &&
+      panel.kind !== "importDeck" &&
+      panel.kind !== "deckSettings",
   });
 
   const openCreate = useCallback(() => {
@@ -341,7 +365,10 @@ export function DecksPage() {
     setPanel({ kind: "createDeck" });
   }, [decks.create]);
 
-  const open = useCallback((next: NonNullable<Panel>, opener: HTMLButtonElement) => {
+  // `null` is a real answer for the opener and not a missing argument: a layer raised from a
+  // context menu has no trigger of its own on screen, and the menu hands the caret back to
+  // whatever was right-clicked itself.
+  const open = useCallback((next: NonNullable<Panel>, opener: HTMLButtonElement | null) => {
     openerRef.current = opener;
     setPanel(next);
   }, []);
@@ -355,6 +382,43 @@ export function DecksPage() {
   const askMove = useCallback(
     (deck: DeckRow, opener: HTMLButtonElement) =>
       open({ kind: "moveDeck", deckId: deck.id }, opener),
+    [open],
+  );
+
+  /**
+   * The tile's own rename field, opened on the deck the caret is on.
+   *
+   * `decks.update.reset()` for `openCreate`'s reason — a refusal from the last attempt is not
+   * news about this one. The opener really is the tile: unlike the folder rename, this field is
+   * drawn *under* the tile rather than in place of it, so the element the caret comes back to is
+   * still mounted the whole time and `openerRef` can serve.
+   */
+  const startDeckRename = useCallback(
+    (deck: DeckRow, opener: HTMLButtonElement | null) => {
+      decks.update.reset();
+      openerRef.current = opener;
+      setPanel({ kind: "renameDeck", deckId: deck.id });
+    },
+    [decks.update],
+  );
+
+  /** The field, answered. One callback for one field, `nameFolder`'s arrangement: which deck a
+   *  name belongs to is a fact about the open `Panel`, which this component owns. */
+  const renameDeck = useCallback(
+    (name: string) => {
+      if (panel?.kind !== "renameDeck") return;
+      decks.update.mutate({ id: panel.deckId, patch: { name } }, { onSuccess: dismiss });
+    },
+    [panel, decks.update, dismiss],
+  );
+
+  /** Everything about a deck that is not a card in it, over the gallery — without opening the
+   *  editor, which is the whole point of hosting the dialog here. */
+  const openDeckSettings = useCallback(
+    (deckId: number, opener: HTMLButtonElement | null) => {
+      setSettingsDeckId(deckId);
+      open({ kind: "deckSettings" }, opener);
+    },
     [open],
   );
 
@@ -768,6 +832,9 @@ export function DecksPage() {
                   onOpen={setOpenDeckId}
                   onAskDelete={askDelete}
                   onAskMove={askMove}
+                  onStartRename={startDeckRename}
+                  onRename={renameDeck}
+                  onOpenSettings={openDeckSettings}
                   onMove={(folderId) =>
                     setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                   }
@@ -825,6 +892,9 @@ export function DecksPage() {
                       onOpen={setOpenDeckId}
                       onAskDelete={askDelete}
                       onAskMove={askMove}
+                      onStartRename={startDeckRename}
+                      onRename={renameDeck}
+                      onOpenSettings={openDeckSettings}
                       onMove={(folderId) =>
                         setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                       }
@@ -839,6 +909,23 @@ export function DecksPage() {
           )}
         </div>
       </div>
+
+      {/* **The third host of `DeckSettingsDialog`**, and the shape that file was built for:
+          `DeckSettingsForm` owns no mutation and imports no hook that reaches the backend, so
+          every value and every write arrives as a prop and a host is free to be anywhere. It
+          costs this screen nothing while it is shut — `DeckDialog` renders `children` only
+          while `open`, so a closed dialog is no `deck_get`, no folder read and no format read —
+          which is why it is mounted once out here rather than once per tile.
+          Mounted only once a deck has been named, and then for good: see {@link settingsDeckId}
+          for why the id outlives the flag. */}
+      {settingsDeckId !== null && (
+        <DeckSettingsDialog
+          deckId={settingsDeckId}
+          open={panel?.kind === "deckSettings"}
+          onDismiss={dismiss}
+          onClose={close}
+        />
+      )}
 
       <p className="text-[0.7rem] text-dim">{CREDIT}</p>
     </section>
@@ -1026,6 +1113,9 @@ function DeckTile({
   onOpen,
   onAskDelete,
   onAskMove,
+  onStartRename,
+  onRename,
+  onOpenSettings,
   onMove,
   onConfirmDelete,
   onCancelPanel,
@@ -1041,6 +1131,12 @@ function DeckTile({
   onOpen: (id: number) => void;
   onAskDelete: (deck: DeckRow, opener: HTMLButtonElement) => void;
   onAskMove: (deck: DeckRow, opener: HTMLButtonElement) => void;
+  /** F2 — and the context menu's "Rename…", which is the pointer's route to the same field. */
+  onStartRename: (deck: DeckRow, opener: HTMLButtonElement | null) => void;
+  /** The field's own Save. */
+  onRename: (name: string) => void;
+  /** Alt+Enter — and the menu's "Deck settings…". */
+  onOpenSettings: (deckId: number, opener: HTMLButtonElement | null) => void;
   onMove: (folderId: number | null) => void;
   onConfirmDelete: (deck: DeckRow) => void;
   /** Cancel: a control *in* the layer, so the caret goes back to what opened it. */
@@ -1065,6 +1161,7 @@ function DeckTile({
   const badge = deckBadge(deck);
   const confirming = panel?.kind === "deleteDeck" && panel.deckId === deck.id;
   const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
+  const renaming = panel?.kind === "renameDeck" && panel.deckId === deck.id;
 
   return (
     <li ref={ref} className="group relative">
@@ -1074,6 +1171,23 @@ function DeckTile({
       <button
         type="button"
         onClick={() => onOpen(deck.id)}
+        // The two keys a file manager gives a file, for the two things this tile could not do
+        // until now: **F2 renames** — the tree's own key, one floor along, and the keyboard's
+        // route to the field below — and **Alt+Enter opens the deck's properties**, which here
+        // is everything about a deck that is not a card in it. Both are shortcuts rather than
+        // the only way in: the tile's context menu is the pointer's route to each.
+        //
+        // `preventDefault` on the Alt+Enter arm is load-bearing: Enter on a button is an
+        // activation, so without it the settings dialog would open *and* the deck would.
+        onKeyDown={(e) => {
+          if (e.key === "F2") {
+            e.preventDefault();
+            onStartRename(deck, e.currentTarget);
+          } else if (e.key === "Enter" && e.altKey) {
+            e.preventDefault();
+            onOpenSettings(deck.id, e.currentTarget);
+          }
+        }}
         // How the caret finds its way back here from an editor: the tile the reader left
         // through is the tile they should return to, and this is the only handle that
         // survives the gallery unmounting while the editor is up.
@@ -1117,6 +1231,28 @@ function DeckTile({
         <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={deck.coverArtist}>
           Art by {deck.coverArtist}
         </p>
+      )}
+
+      {/* Renaming a deck, in the tile it belongs to.
+          **Under the tile rather than in place of it**, which is where the folder tree's field
+          stands — and the difference is what the two are standing over. A folder row is a name
+          and a count, so a field can replace it whole; a tile is the art the deck was built
+          around, and a reader renaming one deck out of forty needs to see which. It also has to
+          be a *sibling* of the button: `RenameField` is a `<form>`, and a form inside a button
+          is invalid HTML.
+          `metaRows.tsx`'s field, not a third rename control — the caret handling in there was
+          got wrong twice before it was written down once. `data-no-drag` because the tile is a
+          drag handle: without it a press on Save plus five pixels of travel files the deck. */}
+      {renaming && (
+        <div data-no-drag="">
+          <RenameField
+            label={`Rename ${deck.name}`}
+            initial={deck.name}
+            pending={decks.update.isPending}
+            onSave={onRename}
+            onCancel={onCancelPanel}
+          />
+        </div>
       )}
 
       {/* Invisible until the tile is hovered or holds the caret — a wall of art is not a wall
@@ -1523,4 +1659,3 @@ function NewDeck({
     </div>
   );
 }
-
