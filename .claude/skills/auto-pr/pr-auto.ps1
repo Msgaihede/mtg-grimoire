@@ -50,7 +50,14 @@ param(
     [ValidateSet('open', 'arm', 'status', 'sync', 'resolve', 'watch', 'fleet')]
     [string]$Action,
 
-    [int]$Pr = 0,
+    # `PrNumber`, not `Pr`, and the alias is what keeps `-Pr 64` working. PowerShell matches
+    # variable names case-insensitively and resolves them dynamically, so `$Pr` here was the
+    # same name as the `$pr` object every function in this file holds - and a callee reading
+    # `$Pr` got its caller's PR object instead of this number. Nothing about that is visible
+    # at the call site, which is why the name carries the fix rather than a `$script:` prefix
+    # at each of the seven reads. `pr-auto.test.ps1` holds the collision open.
+    [Alias('Pr')]
+    [int]$PrNumber = 0,
     [switch]$All,
     [int]$IntervalSeconds = 60,
     [int]$MaxMinutes = 0,
@@ -313,7 +320,7 @@ function Invoke-Arm {
         exit 0
     }
 
-    $pr = Resolve-Pr $Pr
+    $pr = Resolve-Pr $PrNumber
     if ($pr.autoMergeRequest) { Emit "OK    #$($pr.number) is already armed"; exit 0 }
     if (Enable-AutoMerge $pr) { exit 0 }
     exit 1
@@ -322,11 +329,11 @@ function Invoke-Arm {
 # ---------------------------------------------------------------- status
 
 function Invoke-Status {
-    $pr = Resolve-Pr $Pr
+    $pr = Resolve-Pr $PrNumber
     $state = Get-State $pr
     if ($state -eq 'UNKNOWN') {
         Start-Sleep -Seconds 5
-        $pr = Resolve-Pr $Pr
+        $pr = Resolve-Pr $PrNumber
         $state = Get-State $pr
     }
     $gate = Get-Gate $pr.number
@@ -404,11 +411,11 @@ function Invoke-Sync {
         exit $worst
     }
 
-    $pr = Resolve-Pr $Pr
+    $pr = Resolve-Pr $PrNumber
     $state = Get-State $pr
     if ($state -eq 'UNKNOWN') {
         Start-Sleep -Seconds 5
-        $pr = Resolve-Pr $Pr
+        $pr = Resolve-Pr $PrNumber
         $state = Get-State $pr
     }
 
@@ -427,7 +434,7 @@ function Invoke-Sync {
 # small is the point. The tree is verified clean first, so `git merge --abort` stays a
 # lossless escape hatch at any later moment.
 function Invoke-Resolve {
-    $pr = Resolve-Pr $Pr
+    $pr = Resolve-Pr $PrNumber
     $branch = Get-CurrentBranch
 
     if ($branch -ne $pr.headRefName) {
@@ -478,7 +485,7 @@ function Invoke-Resolve {
 # reported; CONFLICT and RED are announced and left for Claude. Exits when the PR merges,
 # which is what makes this safe to arm with `persistent: true`.
 function Invoke-Watch {
-    $pr = Resolve-Pr $Pr
+    $pr = Resolve-Pr $PrNumber
     $number = $pr.number
     Emit "WATCH #$number $($pr.headRefName) - $(Get-AutoMergeLabel $pr) - $($pr.url)"
 

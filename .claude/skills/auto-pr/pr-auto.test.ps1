@@ -82,6 +82,61 @@ Assert-Eq $false (Test-Ours (New-Pr -Branch 'worktree-thing' -Login 'app/github-
 Assert-Eq $false (Test-Ours (New-Pr -Branch 'worktree-thing' -Labels @('autorelease: pending'))) `
     'worktree branch carrying an autorelease label is not ours'
 
+Write-Host 'no script parameter is spelled like a local variable, in any casing'
+
+# PowerShell variables are case-insensitive AND its scoping is dynamic, so a function that
+# assigns a local `$pr` lends that object to every function it goes on to call - and to its
+# own later lines. The script parameter was `[int]$Pr`, and that one collision fired three
+# ways:
+#
+#   Invoke-Open   assigns $pr, calls Invoke-Status, which reads $Pr and gets the PR object
+#   Invoke-Status assigns $pr, then re-reads $Pr on the UNKNOWN re-poll five lines later
+#   Invoke-Sync   the same shape, four lines apart
+#
+#   Cannot process argument transformation on parameter 'number'. Cannot convert the
+#   "@{...number=64...}" value of type PSCustomObject to type System.Int32
+#
+# `open` hit it every time (measured on PR #64, 2026-08-14); the other two need only a PR
+# whose mergeability GitHub has not computed yet, which is every PR for its first minute.
+#
+# This is a parse rather than a call because reproducing it needs a live PR - and the bug
+# was never in one expression, it was in the *name*, so the name is what to assert on.
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $PSScriptRoot 'pr-auto.ps1'), [ref]$null, [ref]$null)
+
+$paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+
+# Only names bound *inside a function* count. A script-scope assignment to a parameter is
+# the parameter itself - `$IntervalSeconds` is clamped to 20 that way on line 71, and that
+# is the variable doing its job, not a shadow of it. Both ways of binding a name in a
+# function are a shadow: an assignment creates a local, and so does a parameter.
+$localNames = @(
+    $ast.FindAll(
+        { $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+        ForEach-Object {
+            $fn = $_
+            if ($fn.Parameters) {
+                $fn.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }
+            }
+            if ($fn.Body.ParamBlock) {
+                $fn.Body.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }
+            }
+            $fn.Body.FindAll(
+                { $args[0] -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true) |
+                ForEach-Object { $_.Left } |
+                Where-Object { $_ -is [System.Management.Automation.Language.VariableExpressionAst] } |
+                ForEach-Object { $_.VariablePath.UserPath }
+        }
+)
+
+Assert-Eq $true ($paramNames.Count -gt 0) 'the param block parsed at all'
+Assert-Eq $true ($localNames -contains 'pr') 'the scan sees the $pr locals it is here for'
+foreach ($name in $paramNames) {
+    # -contains is case-insensitive, which is exactly the comparison PowerShell itself makes
+    # when it resolves a variable name.
+    Assert-Eq $false ($localNames -contains $name) "parameter `$$name is never bound inside a function"
+}
+
 Write-Host ''
 if ($script:Failures -gt 0) {
     Write-Host "FAILED - $script:Failures assertion(s)"
