@@ -263,23 +263,23 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
 /**
  * **The editing controls, across all four views.**
  *
- * A deck card can be stepped, moved, picked up and dropped on, and every view owes the reader
- * all four — so this is a sweep rather than four tests. They come from one module
+ * A deck card can be stepped, picked up and dropped on, and every view owes the reader all
+ * three — so this is a sweep rather than four tests. They come from one module
  * (`cardControl.tsx`) precisely so that this can be one `describe.each`: four copies would be
  * four chances for one surface to quietly stop offering something, and the failure would be a
  * reader who switched view and lost the ability to remove a card.
+ *
+ * It was all *four* until 2026-08-14, when the card's own `Move…` select was removed and a pile
+ * became something a card is dragged into. The drag half of that is swept below and in
+ * `dnd.test.ts`; what no test can assert is the affordance that went, so it is written down on
+ * `DeckCardControls` instead.
  *
  * What differs between them is *placement* — the table spends them as columns, the other three
  * draw them over the card — and placement is the one thing a table and a wall of card faces
  * genuinely disagree about.
  */
 describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
-  const actions = () => ({
-    setQuantity: vi.fn(),
-    move: vi.fn(),
-    moveTargets: [COMMANDER, RAMP, MAYBE],
-    drop: vi.fn(),
-  });
+  const actions = () => ({ setQuantity: vi.fn(), drop: vi.fn() });
 
   const draw = (over: Partial<DeckCardActions> = {}) => {
     const spies = { ...actions(), ...over };
@@ -310,28 +310,22 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     );
   });
 
-  /** A native `<select>` and deliberately not a popup: it needs no rung in the editor's Escape
-   *  union, no z-index and no focus hand-back. */
-  it("moves a card to another category, and never offers it its own", async () => {
-    const user = userEvent.setup();
-    const spies = draw();
-
-    const select = screen.getByLabelText("Move Sol Ring out of Main deck");
-    expect(
-      within(select)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Move…", "Commander", "Maybeboard"]);
-
-    await user.selectOptions(select, String(MAYBE.id));
-    expect(spies.move).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "Sol Ring" }),
-      MAYBE.id,
-    );
+  /**
+   * **The move control is gone from every view, and that is asserted rather than assumed.**
+   *
+   * Removing it was a four-view change made in one module, so the failure it guards against is
+   * the mirror of the sweep above: one surface keeping a control the other three lost, which is
+   * exactly what a `<select>` left behind in a view-specific cell would be. Named by its
+   * accessible name, because that is what the removal actually took away.
+   */
+  it("offers no move control on a card", () => {
+    draw();
+    expect(screen.queryByLabelText(/^Move Sol Ring/)).toBeNull();
+    expect(screen.queryByRole("option", { name: "Move…" })).toBeNull();
   });
 
   /**
-   * The controls belong to the *slot*, not to the card: the same printing sits in two piles
+   * The control belongs to the *slot*, not to the card: the same printing sits in two piles
    * often enough that a name without the pile is two controls nothing can tell apart.
    *
    * The pile is the **card's own** `categoryName` rather than the heading above it, and the two
@@ -342,7 +336,6 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
   it("names every control by the slot it edits", () => {
     draw();
     expect(screen.getByLabelText("Copies of Serah Farron in Commander")).toBeInTheDocument();
-    expect(screen.getByLabelText("Move Serah Farron out of Commander")).toBeInTheDocument();
   });
 
   /** A press on a control is a press, never a drag — `cardDraggable` asks `closest()`, so one
@@ -1135,9 +1128,7 @@ describe.each(COLUMN_VIEWS)(
      */
     it("takes a dropped card into the sideboard in the rail", async () => {
       const drop = vi.fn();
-      draw(withSideboard, {
-        actions: { setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop },
-      });
+      draw(withSideboard, { actions: { setQuantity: vi.fn(), drop } });
 
       const target = rail()!.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${SIDE.id}"]`);
       expect(target).not.toBeNull();
@@ -1280,7 +1271,8 @@ describe("TableView", () => {
     expect(tracks[3]).toBe("minmax(0,1fr)");
     // Every other column is a fixed rem width, and together they are the budget the name is
     // measured against: 3 + 5 + 5 + 4 + 5 + 5 + 5 = 32rem read-only. An editable table spends
-    // 8rem more on the Qty column, which is where the stepper and the move control live.
+    // **3.5rem** more on the Qty column, which is what the stepper takes — it was 8rem more
+    // while the `Move…` select stood beside it, and the surplus was 72px of gutter on every row.
     const fixed = (el: HTMLElement) =>
       el.style.gridTemplateColumns
         .split(" ")
@@ -1293,10 +1285,10 @@ describe("TableView", () => {
       <TableView
         groups={GROUPS}
         marketplace={TCG}
-        actions={{ setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop: vi.fn() }}
+        actions={{ setQuantity: vi.fn(), drop: vi.fn() }}
       />,
     );
-    expect(fixed(screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement)).toBe(40);
+    expect(fixed(screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement)).toBe(35.5);
   });
 
   /**

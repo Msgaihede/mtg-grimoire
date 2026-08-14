@@ -11,12 +11,17 @@
  *
  * ## Why the editing controls live here too
  *
- * A deck card can be stepped, moved, dragged and dropped on, and **all four views owe the
- * reader all four**. Written per view that is four steppers whose "zero removes the row" rule
- * has to agree, four drag payloads that have to carry the same three fields, and four drop
- * targets that have to refuse the same drops. Written once it is one rule with four call
- * sites. The views keep what genuinely differs — where a control is *placed* — because that is
- * the whole difference between a table and a wall of card faces.
+ * A deck card can be stepped, dragged and dropped on, and **all four views owe the reader all
+ * three**. Written per view that is four steppers whose "zero removes the row" rule has to
+ * agree, four drag payloads that have to carry the same three fields, and four drop targets
+ * that have to refuse the same drops. Written once it is one rule with four call sites. The
+ * views keep what genuinely differs — where a control is *placed* — because that is the whole
+ * difference between a table and a wall of card faces.
+ *
+ * **Moving a card between piles is a drag and nothing else** (changed 2026-08-14). Every card
+ * used to carry a `Move…` `<select>` beside its stepper; it was removed whole, and a different
+ * control for it is expected later. What that costs today is stated on
+ * {@link DeckCardControls}, because it is a real cost rather than a tidy-up.
  *
  * **Everything here is opt-in.** A view given no {@link DeckCardActions} draws exactly what it
  * drew before: a labelled button and nothing else. That is what lets a story or a test mount a
@@ -29,7 +34,7 @@ import {
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import type { ImageVariant } from "@/lib/images";
-import type { DeckCard, DeckCategory } from "@/lib/ipc";
+import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import {
   cardDraggable,
@@ -141,8 +146,8 @@ export function deckCardProps(card: DeckCard) {
  * What a view can do to a card, handed down from the editor — or `undefined`, which is a view
  * with nothing but an `onSelect`.
  *
- * Every field is optional on its own, so a surface can be given the stepper without the move
- * or the drop without the drag, and none of the four views has to know which it got.
+ * Every field is optional on its own, so a surface can be given the stepper without the drop,
+ * and none of the four views has to know which it got.
  */
 export interface DeckCardActions {
   /**
@@ -156,11 +161,6 @@ export interface DeckCardActions {
    * deltas through the add path is broken on precisely the rows that most need fixing.
    */
   setQuantity?: (card: DeckCard, quantity: number) => void;
-  /** Every copy, into another category. */
-  move?: (card: DeckCard, to: number) => void;
-  /** Where a card may go. The card's own category is dropped from the list here, which is the
-   *  one exclusion no caller can get right for it. */
-  moveTargets?: readonly DeckCategory[];
   /**
    * What a drop on a group writes. `dnd.ts` decided *what* a drop means and refused the ones
    * that mean nothing; this is handed the answer.
@@ -324,13 +324,21 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
 }
 
 /**
- * The controls a card carries: how many copies, and where they go.
+ * The controls a card carries: **how many copies, and that is now all of it.**
  *
- * **Not a popup, and deliberately not the row menu it replaces.** The old menu was a custom
- * anchored layer, which made it a sixth `"inner"` peer in the editor's Escape union and gave it
- * a z-index, a focus hand-back and a click-away boundary to get right. A native `<select>` is
- * none of those things: the browser draws it in its own layer, it needs no rung, and it is
- * reachable by keyboard, by pointer and by voice without this app writing a line of it.
+ * It used to carry a second control beside the stepper — a native `Move…` `<select>` listing
+ * every other category of the deck — and that was removed whole on 2026-08-14, with a
+ * replacement expected later. Two things it was load-bearing for are worth writing down, so
+ * that whatever replaces it is measured against them rather than against a blank page:
+ *
+ * - **It was the only keyboard path to moving a card.** What is left is a drag, which a caret
+ *   cannot perform, so a reader on the keyboard can step a card to zero and add it again
+ *   elsewhere but cannot move the slot.
+ * - **It was the only way to reach an *empty* category.** `grouping.ts`'s `drawsWhenEmpty`
+ *   draws no heading for a pile of the reader's own that holds nothing, and a heading that is
+ *   not drawn is not a drop target — the select was built from the deck's `categories` rather
+ *   than from the drawn groups, which is exactly what closed that hole. The four seeded piles
+ *   are unaffected: they draw empty, so they can still be dropped into.
  *
  * `null` when there is nothing to offer, so a view can render this unconditionally and a view
  * with no actions grows no empty box.
@@ -357,12 +365,10 @@ export function DeckCardControls({
   className?: string;
 }) {
   const setQuantity = actions?.setQuantity;
-  const move = actions?.move;
-  const targets = (actions?.moveTargets ?? []).filter((c) => c.id !== card.categoryId);
-  if (!setQuantity && !(move && targets.length > 0)) return null;
+  if (!setQuantity) return null;
   const column = layout === "card-column";
 
-  const stepper = setQuantity && (
+  const stepper = (
     <QuantityStepper
       size={column ? "card" : "xs"}
       orientation={column ? "vertical" : "horizontal"}
@@ -378,68 +384,25 @@ export function DeckCardControls({
     />
   );
 
-  const mover = move && targets.length > 0 && (
-    <select
-      // Named by the **slot** and not by the card: the same printing sits in two categories
-      // often enough, and two controls called "Move Sol Ring" are two a screen reader — and
-      // a test — cannot tell apart.
-      aria-label={`Move ${card.name} out of ${card.categoryName}`}
-      // Always the placeholder: this select is a *verb*, not a field holding the card's
-      // category. Leaving the last choice selected would make it read as though the card
-      // were already there, and would make picking the same target twice a no-op.
-      //
-      // The targets under it are **deliberately not alphabetical** — one of the two exceptions
-      // `src/lib/options.ts` names. They arrive in `cat.sort_order, cat.id`, the order the
-      // reader dragged their own columns into and the order all four deck views render, so
-      // this list and the deck behind it name the piles the same way. `Move…` itself is pinned
-      // first and is not one of them.
-      value=""
-      onChange={(e) => {
-        const to = Number(e.target.value);
-        if (to) move(card, to);
-      }}
-      className={cn(
-        "h-5 max-w-24 rounded-md border border-border bg-surface px-1 text-[0.625rem] text-dim",
-        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-        // **Under the stepper, not beside it, and narrower — because this control is not in
-        // the design and the art is.** The canvas draws one 24px column in the card's right
-        // margin and nothing else; a 96px select beside it covered three-fifths of the width
-        // of a 210px card face, which was measured in the shipped window and is the reason
-        // this branch exists. Below it the cluster is 24px wide at the card's top corner where
-        // the marks already are, and the select only reaches left on the card that is open.
-        //
-        // It is kept rather than dropped because it is the **only keyboard path to moving a
-        // card** in this view — the alternative here is a drag, which a caret cannot perform.
-        column && "mt-1 max-w-20",
-        FOCUS_INSET,
-      )}
-    >
-      <option value="">Move…</option>
-      {targets.map((category) => (
-        <option key={category.id} value={String(category.id)}>
-          {category.name}
-        </option>
-      ))}
-    </select>
-  );
-
   return (
     // `data-no-drag` on the wrapper rather than on each control: `cardDraggable` asks
-    // `closest()`, so one mark covers the buttons, and `input`/`select` are excluded by tag
-    // anyway. Without it a press on `−` plus five pixels of travel is a drag of the whole card.
+    // `closest()`, so one mark covers the buttons, and `input` is excluded by tag anyway.
+    // Without it a press on `−` plus five pixels of travel is a drag of the whole card.
+    //
+    // **A wrapper around one control, and it stays a wrapper.** It is what carries
+    // `data-no-drag` and the caller's placement class, and it is where the second control goes
+    // back when a move affordance returns — `items-end` in the column layout is the card
+    // margin's right edge, which is a fact about the margin rather than about how many
+    // controls happen to be standing in it.
     <span
       data-no-drag=""
       className={cn(
         "flex gap-1",
-        // A column, so the whole cluster is one control wide at the card's corner. `items-end`
-        // rather than `items-center`, so the stepper and the select share a right edge with
-        // the card's margin and neither shifts when the other changes width.
         column ? "flex-col items-end" : "flex-wrap items-center justify-center",
         className,
       )}
     >
       {stepper}
-      {mover}
     </span>
   );
 }
