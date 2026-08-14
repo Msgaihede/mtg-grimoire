@@ -282,9 +282,13 @@ describe("buildGroups by category", () => {
  * The rule this file used to state the other way round: every category drew, empty or not,
  * because a column is a place as well as a heading. That was written when a deck had five
  * piles. A category is a card's *function* now, so a deck accumulates a dozen of them and the
- * empty ones are a wall of headings between the reader and their cards — and the affordance
- * the old rule protected is still there, because a card's "Move…" select is built from the
- * deck's `categories` rather than from these groups.
+ * empty ones are a wall of headings between the reader and their cards.
+ *
+ * The affordance the old rule protected was a card's "Move…" select, built from the deck's
+ * `categories` rather than from these groups — **and that select was removed on 2026-08-14**,
+ * so an empty pile of the reader's own is currently unreachable by drag. `grouping.ts`'s own
+ * doc carries the argument; nothing about the cases below changed, because they are about which
+ * of two independent flags decides which question.
  *
  * Every case below is about one of two independent flags being read for the other's question,
  * which is the mistake this rule is one bad line away from at all times.
