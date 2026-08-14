@@ -695,11 +695,19 @@ export const FilterAndStats: Story = {
 /**
  * Seven dismissible surfaces, one piece of state — and the reason it has to be one.
  *
- * `useDismissOnEscape` orders exactly two rungs: one capture-phase `"inner"` layer and one
- * bubble-phase `"outer"` one. Every layer this editor owns registers the `"inner"` one, so two
- * of them open at once are not ordered at all — both would consume a single press, and two focus
- * hand-backs would race for the caret. A union cannot express that state; seven booleans can,
- * and the failure is invisible to any test that opens one layer at a time.
+ * **The Escape argument that used to stand here is gone, and it was wrong in both directions.**
+ * It read "`useDismissOnEscape` orders exactly two rungs, so two `"inner"` peers open at once are
+ * not ordered at all — both would consume a single press". Two `"inner"` peers *are* ordered now:
+ * that hook keeps a module-level stack of capture-phase registrations and only the token on top
+ * acts, which is what lets a context menu open over a dialog opened over the card pane and give
+ * one press to each. And the old behaviour was not "both close" either — the capture rung checks
+ * `defaultPrevented` too, so the **first-registered** peer took the press and the newer one, the
+ * thing the reader had just opened, was starved (measured `{ first: 1, second: 0 }`, 2026-08-14).
+ *
+ * The reason for one slot survives all of that, because it never rested on Escape: seven booleans
+ * can express "Categories and History both up", which is two scrims, two `aria-modal` panels and
+ * two focus traps over one screen. A union cannot say it, and the failure is invisible to any
+ * test that opens one layer at a time.
  *
  * **Categories and Tags are the pair worth pressing in a row**, because until 2026-08-14 they
  * were one drawer called "Categories & tags" and a reader reaching for the second still reaches

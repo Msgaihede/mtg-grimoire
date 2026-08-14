@@ -2010,11 +2010,18 @@ describe("DeckEditor", () => {
   /**
    * …and the second press *replaces* the first rather than stacking on it.
    *
-   * The `Layer` union already guarantees this — there is one slot — but the guarantee is the
-   * reason the Escape ladder is safe to have, and a guarantee nothing reads is a guarantee that
-   * survives being deleted. Two `"inner"` rungs enabled at once are not ordered at all: one
-   * press would close both and two focus hand-backs would race for the caret. These two are the
-   * pair most likely to be reached for in a row, because they were one surface until now.
+   * The `Layer` union already guarantees this — there is one slot — but a guarantee nothing
+   * reads is a guarantee that survives being deleted. These two are the pair most likely to be
+   * reached for in a row, because they were one surface until 2026-08-14.
+   *
+   * **What is *not* the reason any more, because the claim was false:** this used to read "two
+   * `"inner"` rungs enabled at once are not ordered at all — one press would close both and two
+   * focus hand-backs would race for the caret". `useDismissOnEscape` keeps a module-level stack
+   * of capture-phase registrations and only the token on top acts, so two `"inner"` peers *are*
+   * ordered, by mount depth. Nor did the old hook close both: its capture rung checked
+   * `defaultPrevented` too, so the **first-registered** peer consumed the press and the newer
+   * one — the thing on top — was starved. The reason for one slot is two scrims, two
+   * `aria-modal` panels and two focus traps over one screen, which never depended on Escape.
    */
   it("replaces the categories dialog with the tags one rather than stacking them", async () => {
     await open();
