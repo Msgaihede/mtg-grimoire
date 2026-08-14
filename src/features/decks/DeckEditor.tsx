@@ -1515,9 +1515,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // window is too short for both, where {@link DECK_HEIGHT_FLOOR} says which gives way.
         <div ref={deskRef} className={cn("flex flex-1 gap-4", DECK_HEIGHT_FLOOR)}>
           <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
-            {view === "stacks" && (
-              <StackView {...viewProps} columnHeight={desk.height || undefined} />
-            )}
+            {/* No `columnHeight`: this view packs nothing any more — every pile is a flex item
+                that wraps on width, so the desk's height is not an input to its layout. `TextView`
+                below still packs and still takes it. */}
+            {view === "stacks" && <StackView {...viewProps} />}
             {view === "table" && <TableView {...viewProps} selectedCardId={selectedCardId} />}
             {view === "text" && <TextView {...viewProps} columnHeight={desk.height || undefined} />}
             {view === "grid" && <GridView {...viewProps} />}

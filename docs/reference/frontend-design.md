@@ -309,10 +309,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   on the first pass and the figure above needed a card moved into it first. The wash and
   `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
   the argument for having three.
-- **The sideboard and the maybeboard are a rail, not packed columns — and the rail is a plain flex
-  child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups` before
-  `packColumns` sees them (`splitRail`, `views/columns.ts`) and draw them in one box after the
-  packed ones, at the same inline width and `flex` basis, held right by `ml-auto`. The failure it
+- **The sideboard and the maybeboard are a rail, not part of the flow — and the rail is a plain
+  flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
+  before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
+  it, at the same inline width and `flex` basis, held right by `ml-auto`. The failure it
   prevents is a drag with no destination on screen: both piles sort last, so packed they were the
   far end of the run, and a card dragged out of the main deck had nowhere to be let go of. The
   Maybeboard earns the rail on the same three counts as the Sideboard — played beside the deck
@@ -320,9 +320,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   looked for by _position_ rather than by reading down the deck. **Nothing sorts the rail**: the
   Sideboard sits above the Maybeboard because that is the reader's own `sortOrder` (the seed's
   order), and a reader who reorders their categories gets the order they chose. It carries
-  `RAIL_ATTR` (`data-deck-rail`) and nothing else — `STACK_COLUMN_ATTR` means "a box `packColumns`
-  produced", and the rail is by construction the one box it never saw, so a sweep that counts
-  columns must not find it; the name is unprefixed because `TextView` draws the same rail, and it
+  `RAIL_ATTR` (`data-deck-rail`) and nothing else — `STACK_ATTR` (`data-deck-stack`) means "a pile
+  drawn in the flow", and the rail's piles are by construction the ones that never reach it, so a
+  sweep that counts the deck's own piles must not find them; the name is unprefixed because
+  `TextView` draws the same rail, and it
   is spelled for the *rail* rather than for the Sideboard because the Sideboard is no longer the
   only thing in it. It is rendered only when a `side` **or** `maybe` group exists, which is a real
   condition for a story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES`
@@ -616,6 +617,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   were filled — and `overflow-auto` stays rather than narrowing to `overflow-y-auto`, since one
   column zoomed past the desk's own width genuinely is wider than its box and clipping a card is
   worse than a scrollbar the reader asked for. Wrapping is what makes that the rare case.
+- **Wrapping fixed the direction and not the filling, and `StackView` gave up packing the same
+  day.** The bullet above is about a run that went sideways; what it left standing is that
+  `packColumns` fills to a **height** while the desk's scarce axis is **width**. The two are
+  independent, so the number of columns tracked the *window's height*: at 1280×800 a six-pile
+  Commander deck packed to roughly the six the desk had room for and looked correct, and on a tall
+  screen the same deck packed to **three** — three full-height columns with the right half of the
+  desk blank. The reader who reported it had found it by browser zoom, since zooming out is
+  another way to buy CSS pixels of height, and it read as "it works if you zoom in enough". A pack
+  cannot answer this: the column count would have to come from the width, at which point the
+  columns *are* the wrap. So `StackView`'s flowing half is a plain `flex flex-wrap` of one
+  `stackColumnWidth(zoom)` box per pile (`gap-x-4 gap-y-5`, the two gaps the packed layout already
+  used between and within columns), in `splitRail`'s order, and the desk's height reaches the
+  layout nowhere — `columnHeight`, `DEFAULT_COLUMN_HEIGHT` and the view's `groupHeight` are all
+  gone. **`TextView` kept the pack**, because a decklist line is 21px and a column of thirty of
+  them is the point of that view, where a 300px card makes a stack column hold two piles at most.
+  The cost is a **ragged foot**: a wrapped line is as tall as its tallest pile, so short piles
+  beside a long one leave space the pack would have used. Taken deliberately — reading order is
+  now left-to-right in `sortOrder`, and unspent width was the complaint.
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
   — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.
   `packColumns` is greedy and in the reader's own order (never reordering, never splitting a
@@ -638,11 +657,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   whose gap is `gap-4` (884 at 2×, where a column is 434), and 300 + 24 + 300 = **624px** in the
   text view, whose gap is `gap-6` and whose 300px column has no zoom to move it. `min-w-0` and
   `flex-1` cannot express it, because a flex item that may shrink to nothing never wraps at all.
-  An observer could, and is refused: **a view has no business observing its own box** —
-  `DEFAULT_COLUMN_HEIGHT`'s doc is explicit that the editor measures the scroller and passes the
-  height — and a second reading of the same box answers a frame behind the layout it is reacting
-  to, which at exactly this threshold is one frame of the scrollbar the whole change exists to
-  remove. **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build,
+  An observer could, and is refused: **a view has no business observing its own box** — a rule that
+  outlived the `DEFAULT_COLUMN_HEIGHT` whose doc used to carry it, and that `StackView` now holds
+  in both axes rather than one — and a second reading of the same box answers a frame behind the
+  layout it is reacting to, which at exactly this threshold is one frame of the scrollbar the whole
+  change exists to remove. **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build,
   a seeded 16-category deck — twelve named piles plus the four predefined), and the two
   derived thresholds came back exact:
   - **No horizontal scrollbar at any width tested.** `document.body.scrollWidth ===
