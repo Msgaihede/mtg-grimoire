@@ -7,8 +7,10 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
  *
  * **The fields themselves are `DeckSettingsForm`'s**, which `CreateDeckDialog` draws too — see
  * `Decks/Settings form` for the questions on their own, with no deck behind them, and
- * `Decks/Cover picker` for the picture column. What is storied *here* is the half that only
- * exists because the deck does: the read, the writes, and the dialog around them.
+ * `Decks/Cover picker` for the picture column. **The frame is `DeckDialog`'s**, shared with every
+ * other modal the deck builder opens — see `Decks/Dialog shell` for the scrim, the trap, the
+ * Escape rung and the ✕ with nothing inside them. What is storied *here* is the half that only
+ * exists because the deck does: the read, the writes, and the states they leave the panel in.
  *
  * **Every backend on this screen is the fake's now** — `deck_get`, `deck_update`,
  * `format_specs_list`, `deck_folder_list`, `deck_set_folder`, `deck_set_cover_image` and
@@ -243,6 +245,10 @@ export const DeckIsGone: Story = {
 /**
  * Closed is **nothing mounted**, not a hidden panel — so a dialog nobody opened asks the
  * backend for no deck, no folder tree and no format table either.
+ *
+ * That is `DeckDialog`'s guarantee rather than this file's, and it survives the extraction for a
+ * structural reason: the body is handed to the shell as an *element*, and an element React never
+ * puts in the tree is a component that never ran.
  */
 export const Closed: Story = {
   args: { open: false },
