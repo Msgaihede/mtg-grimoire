@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1552,6 +1552,54 @@ describe("the folder row's menu", () => {
   });
 
   /**
+   * **A layer the folder menu raised hands the caret back to the row the menu was opened on.**
+   *
+   * The menu focuses that row as it closes and that is *not* enough — the same fact the tile's
+   * three cases are here for. Every layer on this screen moves the caret into itself on mount
+   * (`FolderNameField`'s effect, `DeleteFolderConfirm`'s, `DeckDialog`'s panel), so the menu's
+   * hand-back is overwritten a moment later and `dismiss()` is the only thing that can put it
+   * right. It puts it on `openerRef` — so a menu row that passed no opener leaves the caret on a
+   * panel about to unmount, and this codebase's own rule says what follows: focus drops to
+   * `<body>` and the next Tab restarts from the top of the app.
+   *
+   * A menu row has no element of its own to offer, which is why the row writes itself into
+   * `menuOpenerRef` as the menu opens — the deck tile's arrangement, sharing the deck tile's ref.
+   *
+   * `document.activeElement`, never `toHaveFocus` on something the test pressed: nothing here
+   * clicks the row, so the assertion is about where the caret *landed* rather than where a
+   * `user.click` put it.
+   */
+  it("hands the caret back to the row when a menu-raised subfolder field is dropped", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    const row = await rowFor("Commander, 2 decks");
+    await rightClick(row);
+    await userEvent.click(screen.getByRole("menuitem", { name: "New subfolder…" }));
+    await screen.findByLabelText("New folder name");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(row);
+    expect(deckFolderCreate).not.toHaveBeenCalled();
+  });
+
+  it("hands the caret back to the row when a menu-raised folder delete is dropped", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    const row = await rowFor("Legends, 1 deck");
+    await rightClick(row);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    await screen.findByRole("dialog", { name: /delete legends/i });
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(row);
+    expect(deckFolderDelete).not.toHaveBeenCalled();
+  });
+
+  /**
    * **The row's inline field is not part of the row's menu, and the boundary is the button.**
    *
    * A "New folder in …" field is drawn inside this row's `<li>`, as a sibling of the box the row
@@ -1572,9 +1620,16 @@ describe("the folder row's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "New subfolder…" }));
     await screen.findByLabelText("New folder name");
 
-    screen
-      .getByRole("button", { name: "Create folder" })
-      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    // **Inside `act`, and that is the whole of what makes this able to fail.** A raw
+    // `dispatchEvent` is not flushed synchronously, so a `queryByRole` straight after it finds
+    // nothing whether or not a menu was opened — the negative would pass against the very
+    // wiring it is here to forbid. `act` returns only once React has committed, so the query
+    // below is asked of a tree that has already drawn whatever the press produced.
+    act(() => {
+      screen
+        .getByRole("button", { name: "Create folder" })
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
 
     expect(screen.queryByRole("menu")).toBeNull();
     // …and the field is still there to be typed into, rather than replaced by a menu about the

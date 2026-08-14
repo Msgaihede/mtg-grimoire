@@ -261,6 +261,13 @@ const face = (over: Partial<CardFace>): CardFace => ({
 beforeEach(() => {
   cardDetail.mockReset();
   cardPrintings.mockReset();
+  // **Cleared per test, or every assertion about them is an assertion about the whole file.**
+  // These two are module mocks rather than the `vi.fn()`s above, so nothing resets them between
+  // cases: a `toHaveBeenCalledWith` would then be satisfied by a call some *earlier* test made,
+  // and a menu wired to the wrong element would pass by inheriting the right one's evidence.
+  // Found by breaking exactly that wiring and watching the suite stay green.
+  vi.mocked(copyText).mockClear();
+  vi.mocked(openExternal).mockClear();
   // Nobody has chosen one, which is what a fresh install reads — and what every test here but
   // the two feed ones is about.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
