@@ -60,6 +60,16 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
   };
 }
 
+/**
+ * What a row says when the card is already in the pile it names.
+ *
+ * Two rows can carry it — the card's own category under `Move to`, and a zone row on the card
+ * that fills it — and both are the same statement, so it is one string. Not a *refusal* in
+ * `validation/`'s sense: nothing is wrong with the card, there is simply nothing for the press
+ * to write.
+ */
+const ALREADY_HERE = "already here";
+
 /** Everything the deck's own rows need that is not the card. Built once per surface, never
  *  once per row. */
 export interface DeckCardMenuDeps {
@@ -149,7 +159,7 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
           id: `move-${category.id}`,
           label: category.name,
           disabled: true,
-          reason: "already here",
+          reason: ALREADY_HERE,
           onSelect: () => {},
         };
       }
@@ -177,6 +187,11 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
  * `moveCard` into that category, so with no category there is nothing to move into, and an item
  * that exists only to be refused is worse than one that is not there (`categoryMenu.tsx` drops
  * its two rows on the same argument).
+ *
+ * A card that is **already in** the zone is greyed with `ALREADY_HERE`, exactly as its own pile
+ * is under `Move to`, and for the same reason: the write would be a move from a category to
+ * itself. It is the one refusal here that is not `validation/`'s, because it is not a question
+ * about the card — the reigning commander is by definition an eligible one.
  */
 function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const { spec } = deps;
@@ -190,7 +205,9 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
         "set-commander",
         "Set as commander",
         Crown,
-        commanderIneligibility(card, spec.commanderRule, spec),
+        card.categoryId === commander.id
+          ? ALREADY_HERE
+          : commanderIneligibility(card, spec.commanderRule, spec),
         () => deps.moveTo(card, commander.id),
       ),
     );
@@ -199,8 +216,12 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const companion = deps.categories.find((c) => c.kind === "companion");
   if (spec.allowsCompanion && companion !== undefined) {
     items.push(
-      zoneItem("set-companion", "Set as companion", UserRound, companionRefusal(card, deps), () =>
-        deps.moveTo(card, companion.id),
+      zoneItem(
+        "set-companion",
+        "Set as companion",
+        UserRound,
+        card.categoryId === companion.id ? ALREADY_HERE : companionRefusal(card, deps),
+        () => deps.moveTo(card, companion.id),
       ),
     );
   }

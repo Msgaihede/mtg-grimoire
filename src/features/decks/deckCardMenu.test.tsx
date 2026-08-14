@@ -226,6 +226,28 @@ describe("buildDeckCardMenu", () => {
     expect(moveTo).toHaveBeenCalledWith(jegantha, 4);
   });
 
+  /**
+   * The reigning commander gets a greyed row rather than a live one — the write would be a move
+   * from a category to itself, which is the same nothing `Move to`'s own pile is greyed for.
+   * Worth its own case because the reason is *not* `commanderIneligibility`'s: the card in the
+   * command zone is by definition an eligible one, so an eligibility test alone would offer it.
+   */
+  it("greys the zone row on the card that is already in it", () => {
+    const atraxa = card({
+      name: "Atraxa, Praetors' Voice",
+      categoryKind: "commander",
+      typeLine: "Legendary Creature — Phyrexian Angel Horror",
+      power: "4",
+      toughness: "4",
+      quantity: 1,
+    });
+    // `fixtures.ts` files a `commander` card under its own category id, which is this deck's.
+    const items = buildDeckCardMenu(atraxa, deps({ spec: spec("commander") }));
+    const row = find(items, "Set as commander") as MenuAction;
+    expect(row.disabled).toBe(true);
+    expect(row.reason).toBe("already here");
+  });
+
   /** A deck whose seeded zone has been lost cannot be written to, so nothing offers it: an
    *  item that exists only to be refused is worse than one that is not there. */
   it("draws no commander row when the deck has no command zone to move into", () => {
