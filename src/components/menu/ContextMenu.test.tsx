@@ -626,6 +626,74 @@ describe("ContextMenu", () => {
    * which Escape already does. So a field is a **mode**: while the caret is in one, every key this
    * handler owns belongs to the field. Half-yielding would be a rule nobody can learn.
    */
+  /**
+   * The keyboard's only route to a field, and the reason it is a caret **stop** rather than the
+   * caret's destination.
+   *
+   * A field a lazy body draws is not a `menuitem`, so it was never on the caret walk; it was
+   * reachable only as a panel's one tab stop, which Tab closing the menu took away. A reader who
+   * opened the menu with `menuKey` — the entry point that exists for exactly that reader — could
+   * see "New tag…" and never put a caret in it.
+   *
+   * Landing *on* the field instead would have swapped the problem for its mirror: every caret key
+   * yields once the caret is inside one, so the rows above it become the unreachable half. The
+   * real consumer's panel draws its existing tags first and the new-tag field last, which is what
+   * this fixture models — so ArrowRight lands on the tags and ArrowDown walks down into the field.
+   */
+  it("walks the caret from a panel's rows into the field it also holds", async () => {
+    const user = userEvent.setup();
+    function Content() {
+      return (
+        <>
+          <MenuRows
+            items={[{ kind: "action", id: "burn", label: "Existing tag", onSelect: vi.fn() }]}
+          />
+          <input aria-label="New tag" defaultValue="" />
+        </>
+      );
+    }
+    open([{ kind: "lazy", id: "tag", label: "Tag card", Content }]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    await screen.findByRole("menu");
+
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    // The rows first, in document order -- not the field, which would strand them.
+    expect(screen.getByRole("menuitem", { name: "Existing tag" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByLabelText("New tag")).toHaveFocus();
+
+    // And it is a caret from here on: typing goes in rather than firing the row above.
+    await user.keyboard("burn");
+    expect(screen.getByLabelText("New tag")).toHaveValue("burn");
+  });
+
+  /**
+   * The narrowing: a checkbox is not a text field, and a checkbox list is the most natural drawing
+   * of the very body this work exists for. The arrows do nothing to one, so a menu that yielded
+   * them would strand the caret with only Escape and Tab as ways out.
+   */
+  it("keeps the caret keys for a checkbox in a lazy body", async () => {
+    const user = userEvent.setup();
+    function Content() {
+      return (
+        <>
+          <MenuRows items={[{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]} />
+          <input type="checkbox" aria-label="Foil only" />
+        </>
+      );
+    }
+    open([{ kind: "lazy", id: "filter", label: "Filter", Content }]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    await user.click(screen.getByLabelText("Foil only"));
+
+    // The menu still owns the arrows here, so the caret gets back to the rows.
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "First" })).toHaveFocus();
+  });
+
   it("does not move the menu's caret out of a field on ArrowDown", async () => {
     const user = userEvent.setup();
     tagField();
@@ -701,14 +769,24 @@ describe("ContextMenu", () => {
    * test above asserts `toHaveFocus` on this same element; this one asserts the negative, and the
    * two together are the contrast.
    *
-   * **Where the caret finally lands is deliberately not asserted, because jsdom cannot show it.**
-   * user-event resolves Tab's destination from the DOM as it stood when the keydown was
-   * dispatched — menu rows included — and then focuses that node, which the close has since
-   * detached, so focus falls to `body`. A real browser computes its default action from the live
-   * DOM *after* the handlers run, where the opener is focused and the menu is gone. The control
-   * below proves the `body` landing is about the menu rather than about user-event: with nothing
-   * in the way, the same `user.tab()` reaches the next button. The real landing spot belongs to
-   * the live pass.
+   * **Where the caret finally lands is unpinnable here by construction, not merely awkward.**
+   * user-event's `Tab` behaviour calls `getTabDestination(target, …)` *after* dispatch and against
+   * the live DOM — so the destination is fresh; what is frozen is the **anchor**, which is the
+   * keydown target, the row the caret was on. The close detaches that row, `getTabDestination`
+   * fails to find its anchor in the document, steps to index 0, and returns `prunedElements[0]`,
+   * which is hard-coded `document.body`. The consequence is stronger than "jsdom is awkward":
+   * because the anchor is the keydown target and can never be anything else, **`opener?.focus()`
+   * cannot influence the destination under any DOM arrangement a test could build.** No
+   * rearrangement of this test would pin it; only the shipped window can, where the browser's own
+   * default action runs against the live DOM with the opener focused and the menu gone.
+   *
+   * The control below is the modest claim it looks like and no more: with nothing in the way the
+   * same `user.tab()` reaches the next button, so tabbing works at all. It does **not** isolate the
+   * unmount as the cause of the `body` landing — nothing here can.
+   *
+   * What this test *does* pin, beyond the contrast, is the deliberate absence of `preventDefault`:
+   * user-event skips the behaviour entirely on a default-prevented event, so adding one would
+   * leave focus on `target` and the assertion below would fail.
    */
   it("closes on Tab and does not hand the caret back the way Escape does", async () => {
     const user = userEvent.setup();

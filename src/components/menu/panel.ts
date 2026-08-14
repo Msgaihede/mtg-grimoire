@@ -40,8 +40,62 @@ export const ROW_SELECTOR = "[data-menu-row]";
 export const ROW_BUTTON_SELECTOR = "[data-menu-row-button]";
 /** A row's own control, and never one nested inside its submenu — hence the `:scope >`. */
 export const OWN_ROW_BUTTON_SELECTOR = ":scope > [data-menu-row-button]";
-/** Everything the caret may land on. `menuitemradio` is a row too; a separator never is. */
-const CARET_SELECTOR = '[role="menuitem"],[role="menuitemradio"]';
+/**
+ * A control the caret keys **edit**, as against every other kind of `<input>`.
+ *
+ * Deny-list rather than allow-list, and the HTML spec is what makes that the safe direction: an
+ * `<input>` with no `type`, or with one the browser does not recognise, is in the Text state (the
+ * missing- and invalid-value default). So anything unknown or future is treated as text, which is
+ * the failure worth having — wrongly yielding a key is a nuisance, wrongly keeping one breaks
+ * editing.
+ *
+ * The ten denied states are the ones whose value is not text a reader types. `checkbox` is the
+ * case that motivated narrowing this: a checkbox list is the most natural drawing of the very
+ * body this work exists for, and the arrows mean nothing there, so a menu that yielded them would
+ * strand the caret on a checkbox with only Escape and Tab as ways out.
+ *
+ * **Two of the ten are a knowing trade.** `radio` and `range` *do* use the arrows natively —
+ * moving within a group, nudging a value — so denying them means those keys stay the menu's and a
+ * bare slider in a panel cannot be adjusted from the keyboard. That is accepted because neither
+ * belongs in a menu as a bare input: `MenuRadio` is this module's own answer for a choice, and it
+ * is already on the caret walk below. A body that really needs a slider should keep the keys
+ * itself — see `ContextMenu`'s note on `stopPropagation`.
+ */
+const TEXT_ENTRY_SELECTOR =
+  "textarea, [contenteditable=''], [contenteditable='true'], " +
+  "input:not([type='button']):not([type='checkbox']):not([type='color']):not([type='file'])" +
+  ":not([type='hidden']):not([type='image']):not([type='radio']):not([type='range'])" +
+  ":not([type='reset']):not([type='submit'])";
+
+/**
+ * Whether a press belongs to a caret rather than to the menu.
+ *
+ * `closest`, so a key struck with the caret inside a `contenteditable`'s `<strong>` is still a key
+ * struck in a field. Deliberately **narrower** than `useContextMenu`'s `isTextField`, which
+ * governs the right-click carve-out and matches every `<input>`: whether a right-click on a
+ * checkbox should get the browser's menu or the app's is a separate question with a separate
+ * answer, and widening one predicate to serve both would have decided it by accident.
+ */
+export function isTextEntry(node: EventTarget | null): boolean {
+  return node instanceof Element && node.closest(TEXT_ENTRY_SELECTOR) !== null;
+}
+
+/**
+ * Everything the caret may land on. `menuitemradio` is a row too; a separator never is.
+ *
+ * **A text-entry control is a caret stop**, and that is the only route a keyboard has to one: a
+ * field a lazy body draws is not a `menuitem`, and `Tab` — which used to reach it, since rows are
+ * `tabIndex={-1}` and a field was a panel's only tab stop — closes the menu now. Without this a
+ * reader who opened the menu with `menuKey`, the reader that entry point exists for, could see
+ * "New tag…" and never put a caret in it.
+ *
+ * It is a stop *in document order* rather than a preferred one, which is what keeps the rows
+ * reachable too. The deck editor's tag panel draws its existing tags first and the new-tag field
+ * last, so ArrowRight lands on the tags and ArrowDown walks down into the field — both reachable,
+ * in the order they are read. Focusing the field on entry instead would have made the rows above
+ * it unreachable, since every caret key yields once the caret is inside one.
+ */
+const CARET_SELECTOR = `[role="menuitem"],[role="menuitemradio"],${TEXT_ENTRY_SELECTOR}`;
 
 /** The panel at `depth`, as a selector — used to find a submenu that has just been opened. */
 export const panelAtDepth = (depth: number): string => `[data-menu-depth="${depth}"]`;
@@ -218,7 +272,12 @@ export function moveCaret(panel: HTMLElement, move: CaretMove): void {
   rows[to]?.focus();
 }
 
-/** The caret into a panel that has just opened: its first row, or the panel itself if it has none. */
+/**
+ * The caret into a panel that has just opened: its first stop, or the panel itself if it has none.
+ *
+ * "First" in document order, never "the most interesting" — see {@link CARET_SELECTOR} for why a
+ * panel holding both rows and a field must land on whichever comes first rather than on the field.
+ */
 export function focusInto(panel: HTMLElement): void {
   const rows = menuRowsIn(panel);
   if (rows.length > 0) rows[0].focus();

@@ -25,13 +25,13 @@ import {
   ROW_SELECTOR,
   depthOf,
   focusInto,
+  isTextEntry,
   moveCaret,
   panelAtDepth,
   panelOf,
   placeMenu,
   rowButtonOf,
 } from "./panel";
-import { isTextField } from "./useContextMenu";
 import type { MenuAction, MenuItem, MenuPosition, MenuRadio } from "./types";
 
 /**
@@ -478,6 +478,15 @@ export function ContextMenu({
     // first is what makes "the next thing after the opener" true rather than "the first thing in
     // the document", which is where the caret lands if the menu simply unmounts under it.
     //
+    // **Shift+Tab takes this branch too, deliberately.** It is the same sentence backwards — "I am
+    // done here, move on" — and the un-prevented press then walks backwards from the opener, which
+    // is where a reader reversing out of the menu expects to arrive.
+    //
+    // **A body that wants Tab can keep it today, with no change to any contract.** React
+    // dispatches child-first, so a field that handles its own `keydown` and calls
+    // `stopPropagation()` never reaches this line — which is the escape hatch for a lazy body with
+    // two fields to move between, or a slider that wants the arrow keys back.
+    //
     // **A half-typed field is discarded, and that is the house rule rather than a shrug.**
     // `FolderTree`'s rename field says it in as many words — clicking or tabbing away discards a
     // half-typed name, as every other popup in this app discards its half-made decision — and it
@@ -497,15 +506,22 @@ export function ContextMenu({
     // — the deck editor's "Tag card ▸ New tag…" drew the first input any panel has ever held.
     //
     // All of them yield, including `ArrowUp`/`ArrowDown`, which have no caret meaning in a
-    // single-line input and could defensibly have stayed the menu's. They do not, because the two
-    // failure modes are not comparable: keeping them takes focus out of the field mid-word and the
-    // next characters land on a row, while yielding them costs a reader one Escape to get back to
-    // the menu. A rule that yields some keys and not others is also one nobody can learn.
+    // single-line input and could defensibly have stayed the menu's. They do not, and the reason
+    // is sharper than "the caret moves somewhere unhelpful": **there is no type-ahead here, so a
+    // caret knocked onto a row does not swallow the next characters — it fires them.** Space and
+    // Enter on a focused `ActionRow` are its `onClick`. A reader typing "new tag" into a field the
+    // caret has silently left runs whatever row it landed on, which for this menu is a write to
+    // their deck. Yielding costs one Escape to get back to the rows; that is not a comparison.
     //
     // Escape is untouched by this and must stay so — it is `useDismissOnEscape` on `window`, not
-    // this handler — which is what makes the yield safe: the way out of the field still works.
-    // `isTextField` is the same predicate that decides a right-click belongs to the browser.
-    if (isTextField(e.target)) return;
+    // this handler, and the `switch` below has no `Escape` case for the yield to have taken.
+    // That is what makes the yield safe: the way out of the field still works.
+    //
+    // `isTextEntry` and **not** `useContextMenu`'s `isTextField`, which matches every `<input>`:
+    // a checkbox or a radio yielding all six keys would strand the caret on a control the arrows
+    // do nothing to. Whether a *right-click* on a checkbox should get the browser's menu is a
+    // separate question, so it keeps its own separate predicate.
+    if (isTextEntry(e.target)) return;
     const active = document.activeElement as HTMLElement | null;
     // Which panel the press belongs to is a question about where the caret is, not about where
     // the listener is: a submenu is a DOM descendant of this element, so its presses arrive here.
@@ -570,8 +586,13 @@ export function ContextMenu({
     // tag name deleted by a nudge of the mouse while the reader is looking at the keyboard. So
     // while the caret is in a field anywhere in this cascade, the pointer rearranges nothing.
     // The caret leaving the field is what turns hover back on, and that is a deliberate act.
+    //
+    // **It suppresses hover-*opening* too, including of a submenu in the field's own panel**, and
+    // that is the deliberate half of a blunt rule rather than an oversight: a reader mid-word is
+    // not asking for a panel, and every such row is still one click away. `isTextEntry` for the
+    // reason the key guard above gives — a checkbox must not disable hover for the whole cascade.
     const caret = document.activeElement;
-    if (isTextField(caret) && panelRef.current?.contains(caret)) return;
+    if (isTextEntry(caret) && panelRef.current?.contains(caret)) return;
 
     const row = (e.target as Element).closest<HTMLElement>(ROW_SELECTOR);
     const panel = row && panelOf(row);
@@ -605,6 +626,11 @@ export function ContextMenu({
       // guard for the same reason, and `useIsPresent` is read *inside* the presence because that
       // is the only place the answer changes.
       aria-hidden={present ? undefined : true}
+      // `inert` is the half `aria-hidden` cannot do: it takes the fading panel out of the **focus**
+      // order as well as out of the accessibility tree. That mattered less when every row was
+      // `tabIndex={-1}` and nothing inside was a tab stop — and Tab is now the first key that can
+      // walk a caret into a panel on its way out, since a lazy body's field is a real one.
+      inert={!present || undefined}
       data-menu-panel=""
       data-menu-depth="0"
       // Pixels, so a class cannot carry them: this is a measurement, and Tailwind emits no rule
