@@ -82,11 +82,12 @@ const meta = {
           "printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — `.storybook/fake/seeds.ts:620` " +
           "names the same two), which is **43 → 41**; the search view sends `playableOnly` and " +
           "three paper printings are legal in none of Scryfall's formats, which is **41 → 38** " +
-          "({@link Unplayable} is that chip in one row); and the page opens **collapsed**, one " +
+          "({@link Unplayable} is that step in one row); and the page opens **collapsed**, one " +
           "row per card, where five of the survivors are further printings of a card already in " +
           "the list (four Lightning Bolts, two Sol Rings, two Ancestral Recalls) — **38 → 33**. " +
-          "So `33 cards` is what every play below waits for; pressing Unplayable gets 36 and " +
-          "All printings asks for the whole 41 ({@link CollapsedPrintings}). Measured " +
+          "So `33 cards` is what every play below waits for; picking `Any card` in the format " +
+          "select gets 36 and All printings asks for the whole 41 " +
+          "({@link CollapsedPrintings}). Measured " +
           '2026-08-10 by calling `readHandlers(seed("starter")).search_cards` with the page\'s ' +
           "own request, and re-measured 2026-08-14 after the playable filter landed — the two " +
           "middle steps did not exist for the first measurement.\n\n" +
@@ -192,14 +193,14 @@ export const CollapsedPrintings: Story = {
 };
 
 /**
- * The cards the search hides, and the chip that asks for them back.
+ * The cards the search hides, and the row of the format select that asks for them back.
  *
- * **Off is the default, and off means hidden** — which is the whole of what makes this chip
- * worth a story, because a filter that is on before the reader touches anything is otherwise
- * invisible. `playableOnly` narrows to `cards.legal_mask != 0`: legal or restricted in at
- * least one of Scryfall's 23 formats. Three of the fixture's 41 paper printings fail it — the
+ * **The page opens on `Any format`, and that row means hidden** — which is the whole of what
+ * makes this worth a story, because a filter that is on before the reader touches anything is
+ * otherwise invisible. `playableOnly` narrows to `cards.legal_mask != 0`: legal or restricted in
+ * at least one of Scryfall's 23 formats. Three of the fixture's 41 paper printings fail it — the
  * `astx` art card, `Kozilek, Compleated` (a Mystery Booster 2 playtest card) and `Little Girl`
- * (Unhinged) — so the caption steps 33 → 36 on one press.
+ * (Unhinged) — so the caption steps 33 → 36 when the select moves one row up to `Any card`.
  *
  * The art card is the case that says why the default is what it is. It is named
  * `Prismatic Ending // Prismatic Ending`, which is the card's name **twice**, and bm25 rewards
@@ -207,9 +208,12 @@ export const CollapsedPrintings: Story = {
  * `search::non_card_rank` demoted them. This filter is the other half of that fix: ranking
  * decides what comes first, and this decides whether it is there at all.
  *
- * It is drawn beside All printings rather than among the filters because both say what there
- * is to look *through* rather than what to look for — so neither is counted by Reset all, and
- * neither is cleared by it.
+ * It was an `Unplayable` chip beside All printings until 2026-08-14, on the argument that both
+ * said what there is to look *through* rather than what to look for. It is a row of the format
+ * select now: that select was already answering "legal in at least one format", so the two
+ * controls were moving one axis in opposite directions and could between them reach "Modern,
+ * and also the art cards" — a filter contradicting itself. As a row of the select it is counted
+ * by Reset all and cleared by it, which the chip was not.
  */
 export const Unplayable: Story = {
   args: { view: "table" },
@@ -217,13 +221,16 @@ export const Unplayable: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("33 cards");
 
-    const chip = canvas.getByRole("button", { name: /^Unplayable/ });
-    await expect(chip).toHaveAttribute("aria-pressed", "false");
+    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
+    await expect(format).toHaveValue("");
 
-    await userEvent.click(chip);
+    await userEvent.selectOptions(format, "any-card");
 
     await canvas.findByText("36 cards");
-    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    await expect(format).toHaveValue("any-card");
+    // The widest row is where the select was moved to, so the word on the closed control is the
+    // one thing saying this wall has art cards in it.
+    await expect(format.selectedOptions[0]).toHaveTextContent("Any card");
 
     // **Named rather than counted, and reached by a search rather than by scrolling.** The
     // table is virtualised and jsdom lays nothing out, so which rows are in the DOM is an
@@ -239,10 +246,10 @@ export const Unplayable: Story = {
     await expect(canvas.getByText("Prismatic Ending // Prismatic Ending")).toBeInTheDocument();
 
     // And the other direction, which is the sharper half: the corpus holds **no** ordinary
-    // printing of Prismatic Ending, so switching the chip off leaves this search with nothing
-    // — and the page says so as a statement about the filters rather than about the database,
-    // because the search box is on (`summaryOf`'s `unfiltered` arm).
-    await userEvent.click(chip);
+    // printing of Prismatic Ending, so dropping back to `Any format` leaves this search with
+    // nothing — and the page says so as a statement about the filters rather than about the
+    // database, because the search box is on (`summaryOf`'s `unfiltered` arm).
+    await userEvent.selectOptions(format, "");
     await waitFor(async () => {
       await expect(canvas.getByText("No cards match these filters.")).toBeInTheDocument();
     });

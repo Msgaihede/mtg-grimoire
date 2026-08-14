@@ -183,6 +183,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   since a card can be either, both or neither. Nothing derives it: the backend flattens
   `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
   struct is a `bool`).
+- **The rule break's edge is the fourth separation, and on the stacked card it is drawn by _two_
+  elements** (fixed 2026-08-14). `CardStack`'s data line is a sibling of the face, not a band
+  inside it: `-mx-px` puts its own border exactly where the card's is, and being `relative` and
+  later in the document it paints **over** it. So the card's `border-destructive` was interrupted
+  by 28px of `border-border` down both edges, starting exactly at the seam where the foot joins
+  the face — the one place a reader looks to decide whether they are seeing one object or two,
+  which is the whole job of a mark that changes the card's own edge. The fix is that both elements
+  read the same `ruleBreakText` expression, and the bar draws `border-x` only: its bottom border
+  sat 1px _above_ the card's rather than on top of it, so leaving it would have given a red card a
+  2px foot under a 1px everything-else. Verified in Storybook over CDP
+  (`Decks/CardStack` → `RuleBreakAndGameChanger`, headless Edge, the card focused open): the face
+  computes 1px `oklch(0.704 0.191 22.216)` on all four sides and the bar the same colour at
+  `0px | 1px | 0px | 1px`. **The general rule this is an instance of**: anything positioned over a
+  card's border is part of that border, and a new bordered sibling under the face has to carry the
+  card's colour or it re-opens this.
 - **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
   tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
   overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once
@@ -201,6 +216,34 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cardDraggable` being registered on the tile's outer wrapper. No keyboard handler is owed —
   a corner duplicates what the caption already states and opens what the button opens, and a
   second tab stop per tile would be forty extra presses across a wall to reach nothing new.
+- **The printing count is the deck editor's quantity tag now, and it dropped its `×`**
+  (2026-08-14). It was `×N` in the wall's own `bg-bg/85` chip; it is `components/CountTag` — the
+  filled banner cut off at a slant that the deck stack has drawn copies-in-a-pile with since
+  2026-08-13 — in the neutral grey, because a printing count has no tag to take a colour from.
+  One object for both statements: a mark the eye finds before it reads the card only works if the
+  two are the same shape, and a number laid on a card had been drawn two ways in one app. The
+  `×` went with the chip — a banner in a corner already says "this many", and the sign was a
+  second glyph in a 22px box. **A count laid _beside_ a card keeps its `×`**: `OwnedBadge` in the
+  caption and the search table's `×132 printings` cell are inline text, where the sign is what
+  tells a count from a set number. `CardGrid`'s `topLeft` is consequently the one corner with no
+  backing under it — a chip behind a banner frames a frame — while `badge` (bottom-left) keeps
+  the wall's felt, so the wall still owns the *corner* and owns nothing about the paint.
+  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/tagColors.ts` to `CountTag`'s
+  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no tags at all, so
+  the neutral fill is a fact about the mark rather than about that palette.
+  **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  1280×800, against the real 116 703-card corpus): a tile's corner computed `background-color:
+rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.02 85)`,
+  `clip-path: polygon(0px 0px, 100% 0px, calc(100% - 10px) 100%, 0px 100%)`,
+  `aria-hidden="true"`, and text `2` / `4` with **no `×`**. It measures **25 × 22** inset **4px**
+  top and left of a **170 × 238** tile, overflowing neither edge, and its wrapper computed
+  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own tags on
+  the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
+  `z-index: 1` — the two surfaces are one box, which is the claim the whole change rests on and
+  the only one a screenshot could not settle. **The name coverage did not move**: 25px plus the
+  4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
+  always lost. **One arm was not driven** — the *coloured* tag, since the deck to hand carried no
+  tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
@@ -844,17 +887,66 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     order the query produced — `list_sets` newest-first, `format_specs_list` by a seeded
     `sort_order`, deck categories by the reader's own drag — and each of those is still the
     right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
-  - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
-    `Custom…` a table-header sort leaves behind, `Auto (by what it does)`, `Top level`.
+  - **A pinned row stays pinned, outside the sort**: `Any card`, `Any format`, `Any set`, the
+    disabled `Custom…` a table-header sort leaves behind, `Auto (by what it does)`, `Top level`.
     `CategoriesDialog`'s `are deleted with it` is pinned **last** — the destructive answer is
-    not allowed to become the default by alphabet. (A sixth, the deck card's permanent `Move…`
+    not allowed to become the default by alphabet. (A seventh, the deck card's permanent `Move…`
     verb, went with that select on 2026-08-14.)
+  - **The search's format select pins _two_ rows, and their order is a ladder rather than an
+    alphabet** (2026-08-14): `Any card`, then `Any format`, then the sorted formats — widest to
+    narrowest. `Any card` is what the `Unplayable` chip beside this select became; the bullet
+    below this block says why the two controls became one.
   - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
     Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
     reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesDialog`
     and rendered in that order by all four deck views, so an alphabetical dropdown would
     disagree with the columns beside it. Both carry a comment at the site saying so, because
     the next sweep for unsorted selects will otherwise "fix" them.
+
+- **The search's `Unplayable` chip is a row of its format select now** (2026-08-14) — one control
+  where there were two, `FilterBar.tsx` plus `useCardSearch.ts`'s `ANY_CARD` and `formatParams`.
+  The chip sent `playableOnly: undefined` and the select sent a `legalities` key, and the two were
+  moving one axis in opposite directions: `Any format` already means "legal in at least one of
+  Scryfall's 23 formats", so the chip's only reachable effect was to widen *that* row. Pressed
+  with a format picked it did nothing at all — a card legal in Modern is legal somewhere — and
+  the state it appeared to promise, "Modern **and** the art cards", is a filter contradicting
+  itself. Three rows say the whole thing once, widest first: `Any card`, `Any format`, then one
+  named format.
+  - **The default did not move.** `Any format` is where the select opens and what the search has
+    always sent (`playableOnly: true`), so no wall changed shape — see the search stories'
+    43 → 41 → 38 → 33 arithmetic, which is unchanged.
+  - **`playableOnly` rides with a named format too**, which is what makes the rows nest rather
+    than overlap. It narrows nothing there, and sending it means one expression answers all three
+    rows with no fourth combination to reach. `formatParams` is the only place that branch is
+    written, and both the page's payload and the facet request spread it — two copies are how a
+    wall of cards and the counts greying the chips beside it come to describe different corpora.
+  - **Two behaviours reversed with the merge, both deliberately.** The row is now **counted by
+    Reset all and cleared by it**; the chip was neither, on the argument that it said what there
+    is to look *through* rather than what to look for. That argument belonged to the chip, and a
+    select the reset can only half-clear is worse than either. `allPrintings` keeps it and is
+    the only control on the row that still does.
+  - **`unfiltered` deliberately does *not* count it**, which is the one place the two numbers
+    disagree about the same value. That flag captions an empty wall — "waiting for the sync"
+    against "your search missed" — and `Any card`'s result set is a **superset** of `Any format`'s,
+    so an empty answer to it still proves the database is empty. `formatIsReaderSet` carries the
+    arm.
+  - **The sentinel is `"any-card"`, and the hyphen is the fence.** It shares a namespace with
+    Scryfall's `legalities` keys and with `format_specs.key`, and neither has ever carried one —
+    they are single lowercase words (`standardbrawl`, `paupercommander`, `oldschool`). Equality
+    against the value is therefore enough, and no flag has to travel beside it.
+  - **A `<select>` whose value matches no option now falls back to the *widest* row.** React
+    never assigns `select.value`; `react-dom` walks the options setting `selected` and on no match
+    picks the first that is not disabled — which used to be `Any format` and is now `Any card`.
+    That is the deck panel's seeded-format case (a Brawl or Oathbreaker key `FORMATS` does not
+    carry), and it fails further than it did: the control would read "every card" over a filtered
+    wall rather than merely the wrong filter. The hook seeding `formats` with the caller's key is
+    still the whole fix.
+  - **Neither pinned row carries a `title`, and the labels stay two words for a measured reason.**
+    A `title` on an `<option>` is not drawn by Windows' native dropdown, so the sentence explaining
+    that "any card" means art cards, tokens and emblems could only ever be read by a screen
+    reader. And a `<select>` is as wide as its widest option, on a row that has to survive the
+    deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
+    label would be paid for in that column at every width.
 
 ## Vendored components and tokens
 

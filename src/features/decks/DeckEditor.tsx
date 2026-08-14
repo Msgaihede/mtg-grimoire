@@ -61,13 +61,32 @@ import { TextView } from "./views/TextView";
 const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
 const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
-/** A header/toolbar control that is not a chip: a select, a field, a plain press. 32px, so the
- *  two rows read as rows rather than as a pile of differently sized boxes. The property list is
- *  written out because a colour utility and a transform one compile to the same CSS longhand,
- *  so tailwind-merge would keep one and silently drop the other; the format select is
- *  `disabled` when the specs have not answered and must not appear to depress. */
+/**
+ * A header/toolbar control that is not a chip: a select, a field, a plain press.
+ *
+ * **36px, and the number is `FILTER_CONTROL`'s rather than one of this file's own.** It was 32
+ * for the same stated reason it is 36 now — "so the two rows read as rows rather than as a pile
+ * of differently sized boxes" — but the rows it was measured against have both grown a chip
+ * since: `Built` sits in the header and `Split X` in the toolbar, and `ToggleChip` is
+ * `FILTER_CONTROL`, which is 36. So a height meant to unify was drawing the plain presses four
+ * pixels shorter than the chips beside them, in both rows, and shorter again than the `h-9` back
+ * button at the head of the first one. Every other filter row in the app (search, collection,
+ * wishlist) is already 36; this is the deck editor joining them rather than a size invented here.
+ *
+ * **`text-xs` stays, and that is a width decision with a measurement behind it.** `FILTER_CONTROL`
+ * carries `text-sm`, but the six controls drawn with this string are the header's widest block —
+ * measured at **692px** at max-content — and 14px glyphs put it near **760**, which is more than
+ * the 1017px content box a 1280×800 window leaves once the sidebar, the shell padding and the
+ * editor's own scrollbar are taken off. The row is `flex-wrap`, so it does not overflow; it wraps,
+ * and a wrapped header costs 44px of deck height at the app's own default window size — the
+ * regression {@link NAME_FLOOR} exists to keep out. Height is the axis that had room.
+ *
+ * The property list is written out because a colour utility and a transform one compile to the
+ * same CSS longhand, so tailwind-merge would keep one and silently drop the other; the format
+ * select is `disabled` when the specs have not answered and must not appear to depress.
+ */
 const CONTROL =
-  "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
+  "h-9 rounded-md border border-border bg-surface px-2.5 text-xs text-dim " +
   "transition-[color,background-color,border-color,opacity,transform,scale] " +
   "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
   "disabled:active:scale-100 motion-reduce:transition-none";
@@ -135,8 +154,16 @@ const DESK_GAP = 16;
  *
  * **So the editor scrolls, and that is the trade this whole arrangement is.** Three things want
  * the column's height — the deck, the price strip and the band — and at 1280×800 they come to
- * **847px** in a **702px** editor (710 when this was measured, less the 8px the ribbon gained on
- * 2026-08-14). Rather than cut one of them, the section is
+ * **886px** in a **702px** editor (710 when the editor was first measured, less the 8px the
+ * ribbon gained on 2026-08-14). The pair was re-measured later that day, in the shipped window
+ * on a 14-card Commander deck: **886** with the ribbon's `py-1.5` and 36px chrome, **866** with
+ * both backed out in the page, so the two together cost **20px** — 12 of padding and 4 on each
+ * of the two rows, the header's second line included, because at 1280 that line *is* the
+ * controls. **The deck's own share did not move**: both numbers are far past 702, so the floor
+ * below governs the deck and the 20px comes off the tail of the stats band, which was already
+ * one scroll down. (847 is the figure that stood here before that pass, taken on an earlier
+ * sitting and not on this deck — the pair above is the like-for-like one.) Rather than cut one
+ * of them, the section is
  * `overflow-y-auto`: the deck holds 384, the band draws whole, and the last ~145px of it is one
  * scroll away. At 1920×1080 nothing scrolls and the deck takes the surplus (**519px**). A band
  * that shrank instead was measured at **92px** with 229px of charts inside it, which is a
@@ -1105,7 +1132,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // scroller inside, and a wheel spent there is spent there first.
       className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+      {/**
+       * The deck's own ribbon, and the `py-1.5` on it is load-bearing rather than spacing.
+       *
+       * This row is the **first child of the page scroller** — the `section` above is
+       * `overflow-y-auto` — and the name field's focus ring is `outline-2 outline-offset-2`,
+       * so it stands **4px proud of the field on every side**. With no padding here the field
+       * is vertically centred in a row whose tallest child is the 36px back button, which puts
+       * the top of that ring outside the scroller's padding box: a scroll container clips
+       * there, and what is left of it runs into the shell's mana line above. Six pixels is the
+       * ring's four and two to spare, top and bottom.
+       *
+       * **Vertical only.** Horizontal padding here would indent the back button and the deck's
+       * actions past the toolbar row beneath them and past the deck itself, and the ring has
+       * room on that axis already — `gap-x-3` is 12px either side of the field's box, which is
+       * three times what the ring asks for.
+       */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 py-1.5">
         <button
           type="button"
           onClick={() => setOpenDeckId(null)}
@@ -1222,7 +1265,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                         onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
                         className={cn(
-                          "h-7 px-2.5 text-xs",
+                          // 36px like every other press in this ribbon — the back button, the
+                          // `Built` chip and {@link CONTROL}. At 28px this segmented pair was
+                          // the shortest thing in the row by eight pixels and read as a
+                          // secondary control, which is the opposite of what it is: it says
+                          // which of the deck's two lists is on screen.
+                          "h-9 px-2.5 text-xs",
                           "transition-colors duration-150 motion-reduce:transition-none",
                           variant === id
                             ? "bg-accent font-medium text-accent-fg"
@@ -1388,7 +1436,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   onClick={() => setView(id)}
                   aria-pressed={view === id}
                   className={cn(
-                    "h-8 border-r border-border px-3 text-xs last:border-r-0",
+                    "h-9 border-r border-border px-3 text-xs last:border-r-0",
                     "transition-colors duration-150 motion-reduce:transition-none",
                     view === id
                       ? "bg-accent font-medium text-accent-fg"
@@ -1470,7 +1518,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               placeholder="Filter this deck…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className={cn("h-8 w-44 rounded-md border border-border bg-bg px-2.5 text-xs", FOCUS)}
+              className={cn("h-9 w-44 rounded-md border border-border bg-bg px-2.5 text-xs", FOCUS)}
             />
 
             {/* The deck's own labels, as filters. Nothing at all for a deck with no tags — an
@@ -1494,7 +1542,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       className={cn(
                         FILTER_CONTROL,
                         FILTER_FOCUS,
-                        "h-8 px-2.5 text-xs",
+                        // `FILTER_CONTROL`'s own 36px, which the `h-8` here used to override
+                        // back down to the toolbar's old height. Only the type size is still
+                        // overridden: a deck's tags are a row of arbitrary user strings, and
+                        // 14px of them is a line that pushes the filter field off the end.
+                        "px-2.5 text-xs",
                         filterChipState(on),
                       )}
                     >

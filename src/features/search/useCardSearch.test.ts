@@ -15,7 +15,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { COLD_POLL_MS } from "./useCardFacets";
 import {
   activeFilterCount,
+  ANY_CARD,
   cycleTriState,
+  formatParams,
   FORMATS,
   toggleColor,
   toggleIn,
@@ -92,6 +94,46 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...none, oracleId: "o-bolt" })).toBe(1);
     expect(activeFilterCount({ ...none, oracleId: "o-bolt", text: "bolt" })).toBe(2);
   });
+
+  /**
+   * The one row of the format select that *widens*, and it counts anyway.
+   *
+   * This number captions Reset all, which asks "how much would pressing this change" rather
+   * than "how narrow is this search" — and reset puts the select back on `Any format`, so a
+   * reader sitting on `Any card` has exactly one thing that press would clear. The old
+   * `Unplayable` chip counted zero here and was right to: it survived Reset all. This does not
+   * survive it, so a zero would caption a button that changes the wall.
+   */
+  it("counts Any card, which is the row that widens", () => {
+    expect(activeFilterCount({ ...none, format: ANY_CARD })).toBe(1);
+    // And it is the same one kind as any other value of that select — one control, one count,
+    // whichever of its rows is showing.
+    expect(activeFilterCount({ ...none, format: "modern" })).toBe(1);
+  });
+});
+
+/**
+ * One select, two request fields — the mapping the whole merge turns on.
+ *
+ * Three rows and only three reachable payloads: a state meaning "Modern, and also the art
+ * cards" is what the old chip-beside-the-select could reach and what this cannot. `playableOnly`
+ * rides with a named format for exactly that reason rather than out of caution — a card legal in
+ * Modern is legal somewhere, so it narrows nothing there and one expression covers all three.
+ */
+describe("formatParams", () => {
+  it("asks for the whole corpus on Any card", () => {
+    // **Absent, not `false`.** `playableOnly` is omitted-means-false, so this is the request
+    // every other caller of `search_cards` sends; spelling it out would make the payload lie.
+    expect(formatParams(ANY_CARD)).toEqual({});
+  });
+
+  it("hides the printings no format allows on Any format", () => {
+    expect(formatParams("")).toEqual({ format: undefined, playableOnly: true });
+  });
+
+  it("sends playableOnly with a named format too", () => {
+    expect(formatParams("modern")).toEqual({ format: "modern", playableOnly: true });
+  });
 });
 
 /**
@@ -158,12 +200,12 @@ describe("the corpus useCardSearch searches over", () => {
     facetCards.mockReset().mockResolvedValue(READY);
   });
 
-  it("hides the cards no format allows until the chip is pressed", async () => {
+  it("opens on Any format, which hides the cards no format allows", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     await waitFor(() => expect(facetCards).toHaveBeenCalled());
 
-    expect(result.current.unplayable).toBe(false);
+    expect(result.current.format).toBe("");
     expect(lastSearchRequest().playableOnly).toBe(true);
     // Omitted, and that *is* the value it wants — the neighbour with the opposite default.
     expect(lastSearchRequest().paperOnly).toBeUndefined();
@@ -171,32 +213,76 @@ describe("the corpus useCardSearch searches over", () => {
     // or a mana value that only art cards satisfy.
     expect(lastFacetRequest().playableOnly).toBe(true);
 
-    act(() => result.current.toggleUnplayable());
+    act(() => result.current.setFormat(ANY_CARD));
 
     await waitFor(() => expect(lastSearchRequest().playableOnly).toBeUndefined());
     await waitFor(() => expect(lastFacetRequest().playableOnly).toBeUndefined());
-    expect(result.current.unplayable).toBe(true);
+    // And `Any card` is not a `legalities` key the backend is asked to match — the sentinel
+    // stays on this side of the boundary. It reaching Rust would be a search for a format that
+    // does not exist, which answers no rows at all and looks exactly like an empty database.
+    expect(lastSearchRequest().format).toBeUndefined();
+    expect(lastFacetRequest().format).toBeUndefined();
   });
 
   /**
-   * `allPrintings`' rules, because it is `allPrintings`' kind of control: both say what there
-   * is to look *through* rather than what to look for. Reset all clears the latter, and a
-   * badge that counted this one would promise to change something Reset all does not touch.
+   * A named format keeps `playableOnly` on, which is what makes the three rows nest rather than
+   * overlap. There is no "Modern, and also the art cards" to reach any more — the old
+   * `Unplayable` chip beside this select could reach it, and it was a filter contradicting
+   * itself.
    */
-  it("is not counted by Reset all, and survives it", async () => {
+  it("keeps playableOnly on under a named format", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => {
-      result.current.toggleUnplayable();
-      result.current.setFormat("modern");
-    });
+    act(() => result.current.setFormat(ANY_CARD));
+    await waitFor(() => expect(lastSearchRequest().playableOnly).toBeUndefined());
+
+    act(() => result.current.setFormat("modern"));
+
+    await waitFor(() => expect(lastSearchRequest().format).toBe("modern"));
+    expect(lastSearchRequest().playableOnly).toBe(true);
+  });
+
+  /**
+   * **Both halves reverse what the `Unplayable` chip did, and deliberately.** The chip was
+   * filed with `allPrintings` — a statement about the corpus rather than a filter — so Reset all
+   * neither counted it nor cleared it. As a row of the format select it is the filter that
+   * select has always been: one control cannot be half-cleared by the button that captions
+   * itself with how much it clears.
+   */
+  it("counts Any card on the Reset all badge, and clears it", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setFormat(ANY_CARD));
     await waitFor(() => expect(result.current.activeCount).toBe(1));
 
     act(() => result.current.resetAll());
 
     await waitFor(() => expect(result.current.activeCount).toBe(0));
-    expect(result.current.unplayable).toBe(true);
+    expect(result.current.format).toBe("");
+    await waitFor(() => expect(lastSearchRequest().playableOnly).toBe(true));
+  });
+
+  /**
+   * `Any card` is the one row of this select that *widens*, so an empty answer to it is still an
+   * empty database rather than a search that missed — and the caption the page draws over an
+   * empty wall turns on exactly that. It is not "the reader asked something", however plainly
+   * the reader picked it.
+   */
+  it("still reads as unfiltered on Any card", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.unfiltered).toBe(true);
+
+    act(() => result.current.setFormat(ANY_CARD));
+    await waitFor(() => expect(lastSearchRequest().playableOnly).toBeUndefined());
+    expect(result.current.unfiltered).toBe(true);
+
+    // The contrast: a named format is the reader asking, and an empty answer to *that* is a
+    // search that missed.
+    act(() => result.current.setFormat("modern"));
+    await waitFor(() => expect(result.current.unfiltered).toBe(false));
   });
 });
 
@@ -573,16 +659,19 @@ describe("the pending card search", () => {
     act(() => useAppStore.getState().requestAllPrintings(BOLT));
 
     await waitFor(() => expect(result.current.oracleId).toBe("o-bolt"));
-    expect(result.current.format).toBe("");
+    // {@link ANY_CARD}, not `""` — a Modern filter would hide the Vintage-only printings and
+    // `Any format` would hide the art series, so the widest row of the select is what "show me
+    // everything that is this card" needs. It is what `unplayable=true` used to say on its own
+    // before that flag folded into this one select.
+    expect(result.current.format).toBe(ANY_CARD);
     expect(result.current.colors).toEqual([]);
     expect(result.current.sets).toEqual([]);
     expect(result.current.manaValues).toEqual([]);
     expect(result.current.manaX).toBe(false);
     expect(result.current.owned).toBeUndefined();
-    // "Show me everything that is this card": without these two, a Modern filter hides the
-    // Vintage-only printings and playable-only hides the art series.
+    // The other half of "show me everything that is this card": without it, a collapsed view
+    // answers with the single row the reader is opening up rather than every printing.
     expect(result.current.allPrintings).toBe(true);
-    expect(result.current.unplayable).toBe(true);
   });
 
   /**
@@ -598,7 +687,7 @@ describe("the pending card search", () => {
 
     act(() => {
       result.current.toggleAllPrintings();
-      result.current.toggleUnplayable();
+      result.current.setFormat(ANY_CARD);
     });
     await waitFor(() => expect(lastSearchRequest().playableOnly).toBeUndefined());
     const asked = searchCards.mock.calls.length;
@@ -668,7 +757,7 @@ describe("the pending card search", () => {
 
     await waitFor(() => expect(result.current.oracleId).toBe("o-bolt"));
     expect(result.current.oracleName).toBe("Lightning Bolt");
-    expect(result.current.format).toBe("");
+    expect(result.current.format).toBe(ANY_CARD);
     expect(useAppStore.getState().pendingCardSearch).toBeNull();
   });
 
@@ -679,7 +768,13 @@ describe("the pending card search", () => {
 
     // `activeCount` is what the Reset all badge prints, and it is the whole of what the reader
     // has to press to get their search back.
-    expect(result.current.activeCount).toBe(1);
+    //
+    // **Two, not one, since `main` merged the Unplayable chip into the format select.** The card
+    // is one; `Any card` is the other, because "View all printings" now makes its widest-row
+    // statement through `format` rather than through a chip that was deliberately uncounted. By
+    // this number's own rule — *how much would pressing Reset all change* — both are things it
+    // would clear, so two is the honest answer and one would be the badge lying about the button.
+    expect(result.current.activeCount).toBe(2);
     // Something *was* asked of the database, so an empty answer is "this card is not in there"
     // rather than "wait for the sync".
     expect(result.current.unfiltered).toBe(false);

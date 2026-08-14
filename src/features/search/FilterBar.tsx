@@ -14,7 +14,7 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
-import type { CardSearch } from "./useCardSearch";
+import { ANY_CARD, type CardSearch } from "./useCardSearch";
 
 /**
  * Every filter the search view offers, in one row.
@@ -64,15 +64,19 @@ export function FilterBar({
    * offered. That extra key is not decoration: **a `<select>` whose `value` matches no
    * `<option>` does not draw blank — it silently reports the first one.** React never assigns
    * `select.value` for a controlled select; `react-dom` walks the options setting `selected`,
-   * and on no match it selects the first row that is not disabled — which here is the pinned
-   * `Any format`. So the control would read `Any format` while the filter it names goes on
-   * narrowing the results underneath, which is a control that lies about the list beside it.
-   * The options therefore have to come from whoever owns the value, and a constant imported
-   * here could only ever be right for the callers that never set one.
+   * and on no match it selects the first row that is not disabled — which since the `Unplayable`
+   * chip was merged in is the pinned `Any card`, the **widest** row this control has. So the
+   * control would read "every card, art cards included" while the filter it names goes on
+   * narrowing the results underneath, which is a control that lies about the list beside it —
+   * and it lies further than it used to, because the row it now falls back to is not merely a
+   * different filter but the opposite end of the one it is on. The options therefore have to
+   * come from whoever owns the value, and a constant imported here could only ever be right for
+   * the callers that never set one.
    *
    * The seeded key is a format like every other once it arrives: it sorts into the alphabet by
-   * its label, greys by its own facet count, and is pinned by nothing. `Any format` is the only
-   * row that stays outside the sort, because it is the only row that is not a format.
+   * its label, greys by its own facet count, and is pinned by nothing. `Any card` and `Any
+   * format` are the two rows that stay outside the sort, because they are the two rows that are
+   * not formats.
    *
    * Alphabetical because a reader hunting for "Modern" hunts under M. `FORMATS`' own order is
    * roughly how the formats rank, which is knowledge this control never shows and which no two
@@ -204,13 +208,29 @@ export function FilterBar({
           FILTER_CONTROL,
           FILTER_FOCUS,
           "bg-surface px-2",
+          // Accent means "this is not where the control opens", which is a wider claim than
+          // "a filter is on" — `Any card` is a *widening* and lights the same way, because the
+          // reader needs to see that the wall in front of them has art cards and tokens in it.
+          // `Any format` is the default and the only value that reads as untouched.
           search.format ? "border-accent text-accent" : "border-border text-dim",
         )}
       >
-        {/* Pinned above the sorted list rather than sorted into it: it is the answer "no
-            filter" and not a format, so it belongs where a reader reaches for it blind —
-            first — whatever the alphabet and the facets do to the formats below, and however
-            many of them the search hands over. */}
+        {/* **Two pinned rows above the sorted list, widest first — and they are what used to be
+            a select and an `Unplayable` chip.** Neither is a format: one is "no format filter at
+            all" and the other "no format filter, and no format required either", so both belong
+            where a reader reaches for them blind — first — whatever the alphabet and the facets
+            do to the formats below, and however many of them the search hands over.
+
+            They read as a ladder rather than as an alphabet: every card, every card that is
+            legal *somewhere*, then one named format. `Any format` is the default and the middle
+            rung, which is the shape a reader can predict without being told.
+
+            Neither carries a `title`. A `title` on an `<option>` is not drawn by Windows' native
+            dropdown, so the sentence explaining that "any card" means art cards, tokens and
+            emblems could only be read by a screen reader — and the labels stay this short on
+            purpose: a `<select>` is as wide as its widest option, and this row has to survive
+            the deck editor's docked panel at its 206px floor. */}
+        <option value={ANY_CARD}>Any card</option>
         <option value="">Any format</option>
         {formatOptions.map((f) => (
           // The one place a real `disabled` is right: `<option disabled>` is native, and a
@@ -260,28 +280,12 @@ export function FilterBar({
         onClick={search.toggleAllPrintings}
       />
 
-      {/* Its neighbour's other half, and it rides here for the same reason: both say what
-          there is to look *through* rather than what to look for, so both sit past the reset
-          and both survive it.
-
-          One title in both states rather than two, exactly as the Owned chip does it — the
-          sentence names what the chip's word names, which reads correctly whether the reader
-          is about to press it or is already inside it. It leads with the visible label
-          because the `title` is the accessible name too (WCAG 2.5.3), and it says which
-          cards it means: "unplayable" is otherwise easy to read as "banned in my format",
-          which is a different and much larger set of cards.
-
-          **It says "legal nowhere" rather than "legal in no format" deliberately.** The word
-          `format` names the select five controls to the left, and an accessible name carrying
-          it makes `getByLabelText(/format/i)` — which four tests in `SearchPage.test.tsx` use
-          to reach that select — match two controls instead of one. Two names on one row
-          sharing the word that identifies one of them is worth avoiding for a reader too. */}
-      <ToggleChip
-        label="Unplayable"
-        pressed={search.unplayable}
-        title="Unplayable — art cards, tokens and other printings that are legal nowhere"
-        onClick={search.toggleUnplayable}
-      />
+      {/* An `Unplayable` chip used to ride here, beside All printings, on the argument that
+          both said what there is to look *through* rather than what to look for. It is the
+          format select's `Any card` row now: the chip and that select were moving the same axis
+          in opposite directions, and the one state only the pair could reach — "Modern, and
+          also the art cards" — was a filter contradicting itself. One control, three rows, and
+          the row is counted and cleared by Reset all like the filter it always was. */}
 
       {layoutToggle && <ViewToggle />}
     </div>

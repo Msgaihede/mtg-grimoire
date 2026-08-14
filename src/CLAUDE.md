@@ -44,6 +44,17 @@ Every one of these has its measurement and its story in
   this), differing only in the room each has. One gold (`text-pie-gold`) everywhere, never the
   destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns the whole
   chip off, crown included, for a frame that names these somewhere else.
+- **A count laid _on_ a card is `components/CountTag`, and it draws the number with no `×`.** One
+  object for two statements — the deck stack's copies in a pile and the search wall's printings a
+  collapsed tile stands for — because a mark the eye finds before it reads the card only works if
+  both are the same shape. Filled and cut off at a slant, since a square chip on art reads as
+  something to press; **grey unless something colours it**, so gold stays a thing a deck _tag_
+  means. It is `aria-hidden` for `FoilOverlay`'s reason, so its `title` is the whole of what a
+  pointer gets and the words belong to whatever names the card. **A count laid _beside_ a card
+  keeps its `×`** — `OwnedBadge` in a caption, the search table's `×132 printings` — where the
+  sign is what tells a count from a set number. A surface hosting one supplies the corner and
+  nothing else: `CardGrid`'s `topLeft` is the one corner with no `bg-bg/85` backing under it,
+  because a chip behind a banner frames a frame.
 - **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
   `pointer-events-none` is a tooltip that can never be shown — and nothing goes red.** A hit
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is
@@ -215,9 +226,16 @@ Every one of these has its measurement and its story in
   `Intl.Collator` pinned to `"en"`; a faceted control passes grouping levels so its greyed rows
   sink below its pickable ones (`SetCombobox` also floats the picked ones to the top, because
   the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
-  is not the bug when a picker reads wrong. Pinned rows (`Any format`, `Custom…`,
+  is not the bug when a picker reads wrong. Pinned rows (`Any card`, `Any format`, `Custom…`,
   `Auto (by what it does)`, `Top level`) stay outside the sort, and `CategoriesDialog`'s
-  `are deleted with it` stays pinned **last**. **Exactly two exemptions**: a grade scale (card
+  `are deleted with it` stays pinned **last**. **The search's format select pins two of them, as
+  a ladder rather than an alphabet** — `Any card`, `Any format`, then the formats — because
+  `Any card` is what the `Unplayable` chip became on 2026-08-14: that chip and this select were
+  moving one axis in opposite directions, and only the pair could reach "Modern **and** the art
+  cards". `useCardSearch.ts`'s `formatParams` is the only place the row → (`format`,
+  `playableOnly`) branch is written; the row is counted and cleared by Reset all, and deliberately
+  not counted by `unfiltered`. See
+  [frontend-design.md](../docs/reference/frontend-design.md). **Exactly two exemptions**: a grade scale (card
   condition, Near Mint → Damaged) and an order the reader arranged themselves (deck categories).
   Both carry a comment at the site; see
   [frontend-design.md](../docs/reference/frontend-design.md).

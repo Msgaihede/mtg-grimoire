@@ -45,14 +45,15 @@ export const TAG_COLORS: readonly { token: string; label: string; css: string; f
 export const DEFAULT_TAG_COLOR = TAG_COLORS[0];
 
 /**
- * What a mark in a tag's colour wears when the card carries **no tag at all**.
- *
- * The colourless deep, and grey is the whole point: a filled mark has to be *some* colour, and
- * if the untagged one were gold then gold would stop being something a tag says. Not
- * {@link DEFAULT_TAG_COLOR}, which answers a different question — that is the colour of a tag
- * whose token this build cannot read, and such a tag is still a tag.
+ * **`UNTAGGED_COLOR` used to live here and has moved to `components/CountTag.tsx`**, where it is
+ * `NEUTRAL_COUNT_PAINT`. It said what a mark in a tag's colour wears when the card carries no tag
+ * at all — the colourless deep, grey being the whole point, since a filled mark has to be *some*
+ * colour and an untagged one in gold would stop gold meaning "there is a tag here". That reason
+ * survives unchanged; what changed is that the search wall draws the same mark over cards that
+ * have no tags at all, so the neutral fill is a fact about the mark rather than about this
+ * palette. It was never {@link DEFAULT_TAG_COLOR}, which answers a different question — the
+ * colour of a tag whose token this build cannot read, and such a tag is still a tag.
  */
-export const UNTAGGED_COLOR = { css: "var(--color-pie-c)", fg: "var(--color-accent-fg)" } as const;
 
 /** One tag's colour as CSS. Total: every string is answered, including `null`. */
 export function tagColorCss(token: string | null): string {

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
@@ -1058,6 +1058,32 @@ describe("CardStack marks", () => {
     expect(first.className).toContain("border-destructive");
     expect(second.className).toContain("border-border");
     expect(second.className).not.toContain("border-destructive");
+  });
+
+  /**
+   * **That edge is drawn by two elements, and the seam is where it used to break.** The data
+   * line is `relative` and later in the document than the face, so its own border paints over
+   * the card's for the length of its box; left at `border-border` it put a grey stripe back
+   * through the left and right edges of a red card exactly where the foot joins the face, which
+   * is the one place the single-object illusion is looked at. The bar's own bottom border is
+   * gone with it — it sat 1px *above* the card's rather than on top of it, so the two stacked
+   * into a 2px foot under a 1px everything else the moment the colour made them visible.
+   *
+   * The class strings rather than computed styles, for the reason every assertion in this file
+   * reads them: jsdom has no Tailwind, so a colour utility resolves to nothing at all.
+   */
+  it("carries the rule break's edge through the data line as well", () => {
+    withIssue();
+    const [first, second] = screen.getAllByRole("listitem");
+    // The bar, found by what only it says — the printing, which is a fact about the object
+    // rather than a mark over the art.
+    const foot = (li: HTMLElement) => within(li).getByText("LEA · 161").parentElement;
+
+    expect(foot(first)?.className).toContain("border-destructive");
+    expect(foot(second)?.className).toContain("border-border");
+    expect(foot(second)?.className).not.toContain("border-destructive");
+    // Sides only: the card's own border is the bottom edge, in whichever colour it is.
+    expect(foot(first)?.className).toContain("border-x");
   });
 
   /** A warning is a fact worth a look, not a rule the reader broke — `ruleBreak`'s rule,

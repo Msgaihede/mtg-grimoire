@@ -268,13 +268,13 @@ export const Cleared: Story = {
  * are castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
  * ignore a press. Standard goes with them in the format select — and **falls to the bottom of
  * it**, which is the second rule this row reads plainly: everything still pickable is listed
- * above everything that is not, each half alphabetical by the word on screen, under a pinned
- * "Any format". `FORMATS` writes Standard *first*; that order is a fact about the keys and
- * reaches the screen nowhere.
+ * above everything that is not, each half alphabetical by the word on screen, under the two
+ * pinned rows "Any card" and "Any format". `FORMATS` writes Standard *first*; that order is a
+ * fact about the keys and reaches the screen nowhere.
  *
  * 38 rather than the corpus' 41 paper printings, because `playableOnly` is on: the art card,
- * `Kozilek, Compleated` and `Little Girl` are legal in no format and the search view hides
- * them unless the Unplayable chip is pressed.
+ * `Kozilek, Compleated` and `Little Girl` are legal in no format, and every row of that select
+ * but its first — "Any card" — hides them.
  *
  * **The colour chips all stay live, and that is the interesting half.** `colors` is *subset*
  * semantics, so pressing White with Red already on asks for "castable in RW" — a **superset**,
@@ -335,7 +335,11 @@ export const SomeUnavailable: Story = {
     // format this search has nothing legal in belongs under the six that would return cards.
     // Asserted as the whole sequence, because an ordering bug that swapped two rows past each
     // other satisfies every assertion about one row's position.
+    // The two pinned rows lead, widest first — they are the ladder out of the alphabet below
+    // them, and `Any card` is the row that can widen a search this narrow rather than merely
+    // unnarrow it.
     await expect([...format.options].map((o) => o.value)).toEqual([
+      "any-card",
       "",
       "commander",
       "legacy",
@@ -401,8 +405,9 @@ export const MostlyUnavailable: Story = {
 
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     const live = [...format.options].filter((o) => !o.disabled).map((o) => o.value);
-    // "Any format" is never greyed — it is how a format filter is taken off.
-    await expect(live).toEqual(["", "vintage"]);
+    // Neither pinned row is ever greyed: "Any format" is how a format filter is taken off, and
+    // "any-card" is the one row that can *widen* a search greyed into a corner.
+    await expect(live).toEqual(["any-card", "", "vintage"]);
 
     // The escape, and the whole reason this row is allowed to look like this. Presence is no
     // longer the claim — the button is on every row — so the claim is that it is *pressable*.
