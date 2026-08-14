@@ -1390,6 +1390,39 @@ describe("the card menu", () => {
     expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 
+  /**
+   * **Where the caret goes when a tile's menu closes** — the half "a menu opened" cannot see.
+   *
+   * `menu()`/`menuKey()` hand the panel the element their handler is attached to, which here is
+   * the tile's wrapper rather than the art button inside it, and the panel focuses that element
+   * back when Escape closes and before every row it runs. **`focus()` on a node with no
+   * `tabIndex` is a no-op**, so a wrapper without one leaves the caret on a panel that is
+   * unmounting, drops it on `<body>`, and the next Tab restarts from the top of the app.
+   *
+   * The assertion is on the **opener** and not merely on "something inside the tile": the opener
+   * is what `focus()` is called on, so a caret that landed on the art button would be a
+   * different bug wearing this one's clothes. One wall here, three in the app — the collection's
+   * and the deck editor's docked panel are the same component with the same two props.
+   */
+  it("gives the caret back to the tile when the menu closes", async () => {
+    useAppStore.setState({ searchView: "grid" });
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+    // The tile is two boxes out from the art: the button sits in the `relative` box that holds
+    // the corner marks, and the wrapper around that is what carries the menu handlers.
+    const tile = art.parentElement?.parentElement as HTMLElement;
+
+    art.focus();
+    fireEvent.keyDown(art, { key: "F10", shiftKey: true });
+    await screen.findByRole("menu");
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(tile);
+  });
+
   it("opens on a tile of the art wall, about that tile's card", async () => {
     useAppStore.setState({ searchView: "grid" });
     const user = userEvent.setup();

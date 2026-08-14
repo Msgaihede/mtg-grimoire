@@ -602,10 +602,27 @@ function Tile<T extends GridCard>({
       // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that
       // was given none attaches nothing at all.
       onContextMenu={cardMenu?.(card)}
-      // Shift+F10 and the ContextMenu key, on the same box and about the same card. No tab stop
-      // is added for it: the art is already a button, so the tile is reachable and the press
-      // arrives here by bubbling from whatever inside it holds the caret.
+      // Shift+F10 and the ContextMenu key, on the same box and about the same card. The press
+      // arrives here by bubbling from whatever inside the tile holds the caret, which is the
+      // art button.
       onKeyDown={cardMenuKey?.(card)}
+      // **The other half of the menu, and it is not the same thing as a tab stop.**
+      //
+      // `menu()`/`menuKey()` hand the panel *the element their handler is attached to* as the
+      // `opener`, and `ContextMenu` focuses it back twice: when Escape closes, and before every
+      // row it runs. **`focus()` on a node with no `tabindex` is a no-op**, so this box being
+      // reachable through the button inside it is not enough — without this the hand-back lands
+      // nowhere, the panel unmounts with the caret still in it, focus drops to `<body>` and the
+      // next Tab restarts from the top of the app. It is the same failure `deckCardMenuProps`
+      // writes down for a deck card's `<li>`, reached here by a different route.
+      //
+      // **`-1` and never `0`**: a wall of forty cards must not grow forty presses on the way to
+      // anything, and the art button is already the stop. `-1` is a place the caret can be
+      // *put*, never one Tab travels through — the arrangement every other menu opener in this
+      // app carries. Unconditional, because a tile that offers no menu is not a tile a caret is
+      // ever handed back to, and a `tabIndex` that came and went with a prop would be the kind
+      // of difference between two walls that nothing on screen explains.
+      tabIndex={-1}
       style={{ width }}
       className="group flex shrink-0 flex-col gap-1"
     >
