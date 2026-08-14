@@ -299,6 +299,43 @@ price | type`). An **inactive category stays its own group in all three grouping
   224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
   `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
   pixel short.
+- **The docked panel's format filter opens on the open deck's format, and it is a _default_ rather
+  than a constraint.** `DeckEditor` derives `DeckSearchPanel`'s `defaultFormat` from the loaded row
+  and that row's `FormatSpec`, and `useCardSearch` seeds its `format` state from it, so the first
+  request the panel makes is already the filtered one rather than a wall of illegal cards replaced
+  a round trip later. The reader may move it to any format or back to `Any format`, the panel adds
+  whatever is pressed, and an illegal card is `validation/engine.ts`'s `RULE BREAK` on the card in
+  the deck — **nothing about legality moved into the search**, and a wall that refused to offer a
+  card would be this editor answering a rules question in the one place with no business answering
+  it.
+  **The fence is `FormatSpec.hasLegalityData`, and it is deliberately not a list of the keys that
+  have it off.** `filters.rs`' `push_card_filters` answers a format key `legalities::LEGALITY_KEYS`
+  does not carry with the literal SQL `0` — no rows, no error, and nothing on screen to tell it
+  from a search that genuinely missed — and `casual` (which is `DEFAULT_FORMAT`, what every deck
+  starts as) and `limited` are exactly that: `format_specs` rows with no legality key behind them.
+  So a deck whose spec has no legality data, and a deck whose key left the seed at all
+  (`formatSpecFor` answers `null`, because `decks.format_key` is not a foreign key), pass **no**
+  default and the filter opens on `Any format`. Naming those keys here instead would be a second
+  copy of a cell the seed already carries, in a table that grows by migration.
+  **The default re-seeds when the deck's format changes, and survives `resetAll` only until it
+  does.** The hook compares against the default it last *applied* rather than against `format`,
+  which is what makes all three halves true at once: the header's `Deck format` select re-points
+  the panel beside it, a default that **arrives late** still lands (`useFormatSpecs` is a query, so
+  on the first deck opened in a session the panel mounts before the seed has answered), and
+  `resetAll` clears the filter to `""` without the deck's format bouncing back a beat after the
+  reader cleared it. **An unlisted key is folded into the picker the way `pickerFormats`' `keep`
+  is**, and for the same reason: the deck's own picker offers `format_specs` rows while this filter
+  offers `FORMATS`, so a Brawl or an Oathbreaker deck's key is one no `<option>` holds — and a
+  `<select>` whose `value` matches no option does not draw blank, it silently reports the first one,
+  putting `Any format` over a filtered wall. **It counts as a filter and does not count as the
+  reader having asked**: `activeFilterCount` includes it, so the panel opens showing `Reset all 1`
+  and what is narrowing the wall is always visible and clearable, while `unfiltered` — which
+  captions the empty result area and is the difference between "the database is still syncing" and
+  "your search missed" — counts only a format that **differs from the default**. That is "the
+  reader set it" in every case but one, and the exception is written at `formatIsReaderSet`: a
+  reader who clears the filter and then picks the deck's own format back off the select reads as
+  having asked nothing, so an empty answer there is captioned "waiting for the sync". Remembering
+  the press instead would buy a caption in a case that also needs the database to be empty.
 - **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
   switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
   one holding cards and `live` is the column that fills as the reader acquires them. Reading

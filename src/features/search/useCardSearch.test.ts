@@ -15,9 +15,11 @@ import { COLD_POLL_MS } from "./useCardFacets";
 import {
   activeFilterCount,
   cycleTriState,
+  FORMATS,
   toggleColor,
   toggleIn,
   useCardSearch,
+  type FormatFilterOption,
 } from "./useCardSearch";
 
 describe("toggleIn", () => {
@@ -266,6 +268,223 @@ describe("the X mana chip", () => {
     // because the key *is* the search — a filter that survived the reset would show here as a
     // search that is not the one this view starts in.
     expect(result.current.searchKey).toBe(fresh);
+  });
+});
+
+/**
+ * The format the panel opens on — a *default*, and default is the whole of what it is.
+ *
+ * The deck editor's docked panel opens on the format of the deck beside it, so a Commander
+ * builder is not shown a wall of cards they cannot play. Everything below is about that being a
+ * **starting position** rather than a lock: the reader may move it anywhere including back to
+ * `Any format`, Reset all really clears it, and a deck the panel is not looking at any more
+ * never gets to put its own answer back over the reader's.
+ *
+ * `SearchPage` passes nothing, and the first case here is that one: with no option the hook must
+ * behave exactly as it did before this parameter existed. (`FilterBar.stories.tsx` is the other
+ * caller that passes nothing; `DeckSearchPanel` is the one that passes a default.
+ * `CollectionFilterBar` mounts none of this — it imports `FORMATS` and draws its own select.)
+ */
+describe("the default format filter", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  const COMMANDER: FormatFilterOption = { value: "commander", label: "Commander" };
+  /**
+   * A key the deck picker offers and this filter's own list does not. The picker draws every
+   * enabled `format_specs` row against `FORMATS`' seven, so a default this list cannot draw is
+   * the ordinary case rather than the exotic one — and a `<select>` holding a value none of
+   * its options carry does not show it, it silently reports the first one. The panel would then
+   * read `Any format` over a filtered wall of cards.
+   */
+  const OATHBREAKER: FormatFilterOption = { value: "oathbreaker", label: "Oathbreaker" };
+
+  /**
+   * The hook as the deck editor really drives it: the default arrives as a prop, changes when
+   * another deck is opened, and starts at `null` — which is what `useFormatSpecs`, being a
+   * query, hands its caller for the first render or two of a session.
+   */
+  const renderWithDeck = (initial: FormatFilterOption | null) =>
+    renderHook(
+      ({ deck }: { deck: FormatFilterOption | null }) => useCardSearch({ defaultFormat: deck }),
+      { wrapper, initialProps: { deck: initial } },
+    );
+
+  const searchRequestAt = (i: number) => searchCards.mock.calls[i][0] as SearchRequest;
+
+  /** The `SearchPage` case: called with no argument, this is the hook it has always been. */
+  it("opens on Any format and offers exactly FORMATS when nobody passes one", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.format).toBe("");
+    expect(result.current.formats).toEqual(FORMATS);
+    // Absent rather than `""`, exactly as before: a blank string is not a filter, and sending
+    // one would make the payload lie about intent.
+    expect(searchRequestAt(0).format).toBeUndefined();
+    expect(result.current.activeCount).toBe(0);
+    expect(result.current.unfiltered).toBe(true);
+  });
+
+  /**
+   * **The first request, not the last.** A default applied after mount would send the whole
+   * corpus first and answer it — a wall of cards the deck cannot play, replaced a round trip
+   * later — which is the thing seeding `useState` rather than correcting it afterwards exists
+   * to prevent, and only reading call zero can see it.
+   */
+  it("opens on the format it was given, and the first request already carries it", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultFormat: COMMANDER }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.format).toBe("commander");
+    expect(searchRequestAt(0).format).toBe("commander");
+  });
+
+  /**
+   * The deck's own format select re-points the panel beside it — **including over a format the
+   * reader had picked by hand**, because the panel is now looking at a different deck and the
+   * hand-picked filter belonged to the old one.
+   *
+   * The assertion that matters is the list of requests: the state is adjusted during render, so
+   * no commit and therefore no query ever holds the stale filter. An effect would pass the two
+   * lines above it and fail this one.
+   */
+  it("re-points at the deck's format when the deck changes, over a reader's own pick", async () => {
+    const { result, rerender } = renderWithDeck(COMMANDER);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setFormat("modern"));
+    await waitFor(() => expect(lastSearchRequest().format).toBe("modern"));
+    const before = searchCards.mock.calls.length;
+
+    rerender({ deck: OATHBREAKER });
+
+    // Synchronously, with no intervening paint.
+    expect(result.current.format).toBe("oathbreaker");
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(before));
+    expect(searchCards.mock.calls.slice(before).map((c) => (c[0] as SearchRequest).format)).toEqual(
+      ["oathbreaker"],
+    );
+  });
+
+  /**
+   * The late seed. `useFormatSpecs` is a query, so the first deck opened in a session mounts
+   * this panel before the deck's format is known — the seed on `useState` cannot catch that
+   * one, and without the render-phase guard the panel would sit on `Any format` for the life
+   * of the deck.
+   */
+  it("applies a default that arrives late", async () => {
+    const { result, rerender } = renderWithDeck(null);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.format).toBe("");
+
+    rerender({ deck: COMMANDER });
+
+    expect(result.current.format).toBe("commander");
+    await waitFor(() => expect(lastSearchRequest().format).toBe("commander"));
+  });
+
+  /**
+   * The other half of the guard, and the case that decides whether this is a default or a lock.
+   * The rerender passes a **fresh object with the same fields**, which is what every caller
+   * does on every render: the guard compares the two strings, so nothing here has changed and
+   * the reader's own pick is untouched.
+   */
+  it("leaves a reader's own pick alone while the deck's format holds", async () => {
+    const { result, rerender } = renderWithDeck(COMMANDER);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setFormat("modern"));
+    rerender({ deck: { ...COMMANDER } });
+
+    expect(result.current.format).toBe("modern");
+    await waitFor(() => expect(lastSearchRequest().format).toBe("modern"));
+  });
+
+  /**
+   * The default going the other way, which is the arm the deck editor reaches by the reader
+   * changing the open deck's format to `casual`: the fence stops handing one down, and the
+   * filter has to follow it back to `Any format` rather than going on narrowing by a format the
+   * deck is not in any more. The same render-phase guard does it — `""` is a default like any
+   * other — and the request is what proves it, since a stale key would still be narrowing the
+   * search. Driven from the unlisted key so the picker's own row is watched back out too.
+   */
+  it("clears the filter when the deck's format stops offering a default", async () => {
+    const { result, rerender } = renderWithDeck(OATHBREAKER);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.format).toBe("oathbreaker");
+
+    rerender({ deck: null });
+
+    expect(result.current.format).toBe("");
+    await waitFor(() => expect(lastSearchRequest().format).toBeUndefined());
+    // And the picker goes back to the seven it had before, rather than keeping a row for a
+    // default nobody is passing any more.
+    expect(result.current.formats).toEqual(FORMATS);
+  });
+
+  /** A default the list already carries is not added twice, and one it does not is added. */
+  it("offers a format only the deck picker has, and never doubles one it already had", async () => {
+    const { result, rerender } = renderWithDeck(COMMANDER);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.formats).toEqual(FORMATS);
+
+    rerender({ deck: OATHBREAKER });
+
+    expect(result.current.formats).toHaveLength(FORMATS.length + 1);
+    expect(result.current.formats[result.current.formats.length - 1]).toEqual(OATHBREAKER);
+    // Every one of the seven is still there — this appends, it never replaces.
+    for (const f of FORMATS) expect(result.current.formats).toContainEqual(f);
+  });
+
+  /**
+   * **The asymmetry, which is the point of this test.** `unfiltered` asks "did the reader ask
+   * anything of the database", so a default nobody chose is nothing — otherwise a deck editor
+   * opened over a database that has not synced yet would caption its empty wall "try another
+   * word", and there is no other word, there are no cards. `activeCount` captions Reset all and
+   * asks "how much would pressing this change", and pressing it really would clear the format.
+   */
+  it("counts a default nobody chose as no filter, while Reset all still offers to clear it", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultFormat: COMMANDER }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.unfiltered).toBe(true);
+    expect(result.current.activeCount).toBe(1);
+
+    act(() => result.current.setFormat("modern"));
+    expect(result.current.unfiltered).toBe(false);
+
+    act(() => result.current.resetAll());
+    expect(result.current.unfiltered).toBe(true);
+    expect(result.current.activeCount).toBe(0);
+    await waitFor(() => expect(lastSearchRequest().format).toBeUndefined());
+  });
+
+  /**
+   * Reset all means "no filters", not "back to the deck's" — and it has to **stick**, or the
+   * button would be the one control on that row unable to clear what it captions. The guard
+   * compares against the applied default rather than against `format`, which reset does not
+   * touch, so only the deck really changing brings one back.
+   */
+  it("clears to Any format on Reset all, and only a new deck brings a default back", async () => {
+    const { result, rerender } = renderWithDeck(COMMANDER);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.resetAll());
+    expect(result.current.format).toBe("");
+
+    // The deck has not changed, so nothing may put its format back — not on this render, and
+    // not on the fresh object every re-render of the editor builds.
+    rerender({ deck: { ...COMMANDER } });
+    expect(result.current.format).toBe("");
+    await waitFor(() => expect(lastSearchRequest().format).toBeUndefined());
+
+    rerender({ deck: OATHBREAKER });
+    expect(result.current.format).toBe("oathbreaker");
   });
 });
 

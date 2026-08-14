@@ -32,6 +32,17 @@ export const FORMATS = [
 ] as const;
 
 /**
+ * One row of the format filter — the `legalities` key the backend filters by, and the word the
+ * picker draws it as. Named for the *filter* rather than for a format, because
+ * `useFormatSpecs.ts` already exports a `FormatOption` of `{ key, name }` for the deck's own
+ * picker and the two are not the same shape.
+ */
+export interface FormatFilterOption {
+  value: string;
+  label: string;
+}
+
+/**
  * Which direction one press on each column asks for first.
  *
  * Descending on price, because "highest first" is what clicking a money column means, and
@@ -195,14 +206,65 @@ export function needsNextPage(lastRenderedIndex: number, loadedCount: number): b
  * The query is never disabled: an empty box with no filters is a browse of the whole
  * database sorted by name, which is what a card app should open on, and it is also the
  * one request whose empty answer proves the database itself is empty (see `unfiltered`).
+ *
+ * The one option is a **default** for the format filter, and default is the whole of what it
+ * is: the reader can always move it, including to a format the deck they are building is not
+ * legal in, and `Any format` never leaves the list. `SearchPage` passes nothing and gets
+ * exactly the hook it always had.
  */
-export function useCardSearch() {
+export function useCardSearch(
+  options: {
+    /**
+     * The format the filter opens on, or `null`/absent for "Any format" — the caller's own
+     * answer, which the deck editor derives from the open deck.
+     *
+     * The **caller's**, because only the caller knows whether the key it is holding is one the
+     * database can answer: a key with no `legalities` behind it comes back as no rows at all,
+     * which is indistinguishable on screen from a search that genuinely matched nothing, and
+     * telling those keys apart takes the `format_specs` row the caller already has in hand. A
+     * hook cannot make that judgement about a key it was handed, so it does not try; it seeds
+     * what it is given, and the caller is the fence. `DeckEditor`'s `searchFormatDefault` is
+     * where that fence is written down.
+     */
+    defaultFormat?: FormatFilterOption | null;
+  } = {},
+) {
+  // Read once, and as a string rather than as the object: every caller builds that object
+  // inline, so it is a new identity on every render and nothing may depend on it.
+  const defaultFormatValue = options.defaultFormat?.value ?? "";
   // Which marketplace's prices this list is quoting. It is an input to the query rather than
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
-  const [format, setFormat] = useState("");
+  // Seeded from the caller's default rather than from `""`, so the first request the panel
+  // makes is already the filtered one — an empty seed corrected afterwards would send the
+  // unfiltered search first and answer it, which is a wall of illegal cards and a second round
+  // trip to replace it.
+  const [format, setFormat] = useState(defaultFormatValue);
+  /**
+   * The default this filter is currently *sitting on*, so a changed default can be told from a
+   * reader who happens to have picked the same key.
+   *
+   * React's adjust-state-during-render pattern, and deliberately **not** a `useEffect`. An
+   * effect runs after the paint, so the panel would draw one frame of the previous deck's
+   * filter and — worse — fire a whole request for it, which against a 116 k-row corpus is a
+   * visible wall of the wrong cards. Setting state during render re-runs this component before
+   * anything is committed, so the old filter never reaches the DOM or the query.
+   *
+   * It is also what applies a default that **arrives late**: `useFormatSpecs` is a query, so on
+   * the first deck opened in a session this panel mounts before the seed has answered and the
+   * default is `null` for a render or two. The seed above cannot catch that one; this does.
+   *
+   * Compared against the *applied* default rather than against `format`, which is what makes
+   * `resetAll` stick: reset clears `format` and touches nothing here, so the default comes back
+   * only when the **deck's** format changes, never a beat after the reader cleared it.
+   */
+  const [appliedDefaultFormat, setAppliedDefaultFormat] = useState(defaultFormatValue);
+  if (defaultFormatValue !== appliedDefaultFormat) {
+    setAppliedDefaultFormat(defaultFormatValue);
+    setFormat(defaultFormatValue);
+  }
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
@@ -360,11 +422,58 @@ export function useCardSearch() {
   };
   const facets = useCardFacets(facetReq);
 
+  const defaultFormatLabel = options.defaultFormat?.label;
+  /**
+   * The rows the format picker offers, which is {@link FORMATS} plus — when it is not already
+   * one of them — the default itself.
+   *
+   * It has to be able to carry a key `FORMATS` does not list because the deck picker offers
+   * every enabled `format_specs` row against this list's seven: a Brawl or an Oathbreaker deck
+   * would otherwise open on a filter whose value no option holds, and a `<select>` given a
+   * value none of its `<option>`s carry does not show it — it silently reports the first one,
+   * so the panel would say `Any format` over a filtered wall of cards.
+   *
+   * **Depends on the two string fields and never on the object.** Every caller builds
+   * `defaultFormat` inline, so the object is a fresh identity each render and a dependency on
+   * it would rebuild this array — and therefore the picker's own memo below it — on every
+   * keystroke in the search box. The option is rebuilt from the two strings for the same
+   * reason, rather than closed over.
+   */
+  const formats = useMemo<readonly FormatFilterOption[]>(() => {
+    // The **value** decides, because the value is what `format` above was seeded from: a row
+    // fenced out for want of a label would leave the filter set to a key the picker cannot
+    // draw, which is precisely the case this memo exists to prevent. A row is still a value
+    // *and* a word, so a default carrying no word falls back to its key rather than putting a
+    // blank line in the picker. Nothing reaches that fallback today — the one caller that sets
+    // a default reads `spec.displayName` — and the two lines must not be able to disagree.
+    if (!defaultFormatValue) return FORMATS;
+    if (FORMATS.some((f) => f.value === defaultFormatValue)) return FORMATS;
+    return [
+      ...FORMATS,
+      { value: defaultFormatValue, label: defaultFormatLabel || defaultFormatValue },
+    ];
+  }, [defaultFormatValue, defaultFormatLabel]);
+
+  // **"Not the default", which is very nearly but not quite "the reader set it".** The name
+  // says the intent and the comparison is what the state can answer: a format equal to the
+  // default reads as unset however it got there. So a reader who presses Reset all on a
+  // Commander deck's panel and then picks Commander back off the select counts as having asked
+  // nothing, and an empty answer would be captioned "waiting for the sync" rather than "your
+  // search missed". Telling those two apart would take remembering the press, which buys a
+  // caption in a case that also needs the database to be empty.
+  const formatIsReaderSet = format !== "" && format !== defaultFormatValue;
+
   return {
     text,
     setText,
     format,
     setFormat,
+    /**
+     * The rows the format picker draws, in the order the *keys* rank — which is a fact about
+     * the formats and not the order anybody sees. Every picker sorts this through `sortOptions`
+     * exactly as it sorted {@link FORMATS}, which is what it is when no default was passed.
+     */
+    formats,
     colors,
     toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
     sets,
@@ -407,7 +516,18 @@ export function useCardSearch() {
      */
     unplayable,
     toggleUnplayable: () => setUnplayable((on) => !on),
-    /** How many kinds of filter are on — the number on the Reset all badge. */
+    /**
+     * How many kinds of filter are on — the number on the Reset all badge.
+     *
+     * **Counts a default format, and the asymmetry with `unfiltered` below is deliberate.**
+     * The two answer different questions about the same state. `unfiltered` asks *did the
+     * reader ask anything of the database*, and a default nobody chose is not the reader
+     * asking. This number captions **Reset all** and asks *how much would pressing this
+     * change* — and a format filter that is on really is one thing it would clear. So a
+     * Commander deck's panel opens reading `Reset all 1`, and pressing it goes to `Any
+     * format`, which is the honest escape hatch rather than a badge lying about what the
+     * button does.
+     */
     activeCount: activeFilterCount({ text, format, colors, sets, manaValues, manaX, owned }),
     /**
      * The columns this list is ordered by, first one deciding. Empty is the view's own
@@ -422,7 +542,15 @@ export function useCardSearch() {
           firstDir: SEARCH_FIRST_DIR[key as SearchSortKey] ?? "asc",
         }),
       ),
-    /** Clear every filter at once, including the search box. */
+    /**
+     * Clear every filter at once, including the search box.
+     *
+     * `format` goes to `""` and **not back to the deck's**: Reset all means "no filters", and a
+     * button that put a filter back would be the one control on this row that cannot clear what
+     * it captions. The clear also sticks — the re-seed guard above compares against
+     * `appliedDefaultFormat`, which this does not touch, so the default returns when the deck's
+     * format changes and never a render later on its own.
+     */
     resetAll: () => {
       setText("");
       setFormat("");
@@ -470,10 +598,17 @@ export function useCardSearch() {
      * Nothing was asked of the database at all. An empty answer to *this* is an empty
      * database, not a search that missed — the difference between "wait for the sync"
      * and "try another word".
+     *
+     * A format the *caller* defaulted is not the reader asking, which is why this reads
+     * `formatIsReaderSet` rather than `format`: a deck editor's panel over a database that has
+     * not synced yet would otherwise caption its empty wall "try another word", and there is no
+     * other word — there are no cards. That test is "the format differs from the default", with
+     * the one consequence written at its definition above. With no default the two expressions
+     * are identical, which is why `SearchPage` cannot notice the difference.
      */
     unfiltered:
       !debouncedText &&
-      !format &&
+      !formatIsReaderSet &&
       !colorsParam &&
       !setsParam &&
       !manaParam &&

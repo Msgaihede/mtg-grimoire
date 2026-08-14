@@ -276,6 +276,27 @@ async function open() {
  *  nothing else — the count and the price are text beside it, not part of what it is called. */
 const group = (name: string) => screen.getByRole("region", { name });
 
+/**
+ * Wait until `format_specs` has answered.
+ *
+ * The seed is a query, so on the first deck of a session the editor mounts before it lands and
+ * the docked panel's format default is `null` for a render or two — which looks exactly like a
+ * deck the fence deliberately left unfiltered. Anything asserting on that default has to be past
+ * this line or it is testing a query in flight.
+ *
+ * **The sentinel has to be a `PICKER` format the deck under test is _not_ on**: `pickerFormats`
+ * folds a deck's own format into the header's list whether or not anything has loaded, so that
+ * option is there from the first paint and waiting for it would gate on nothing. `Gladiator` is
+ * the default because every deck fixture here is on something else; the one test whose deck *is*
+ * Gladiator passes another of `PICKER`'s four.
+ */
+const seeded = (sentinel = "Gladiator") =>
+  waitFor(() =>
+    expect(
+      within(screen.getByLabelText("Deck format")).getByRole("option", { name: sentinel }),
+    ).toBeInTheDocument(),
+  );
+
 /** What the stepper on the fixture's Bolt is called. Named by the **slot** — the card and the
  *  pile — because the same printing sits in two categories often enough that a name without one
  *  would be two controls a screen reader cannot tell apart. */
@@ -1293,6 +1314,88 @@ describe("DeckEditor", () => {
     expect(
       await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * The editor draws **two** format controls and they ask different questions about the same
+   * word: the header's `Deck format` says what the deck *is* and writes it, and the panel's
+   * `Format` narrows what the search *offers* and writes nothing. Both are read in each of the
+   * three tests below, so a rename that collapsed the two names into one fails here rather than
+   * passing by matching whichever control the query happened to reach first.
+   */
+  it("opens the docked panel's format filter on the deck's own format", async () => {
+    await open();
+    await seeded();
+
+    expect(screen.getByLabelText("Format")).toHaveValue("modern");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
+  });
+
+  /**
+   * **The fence, and the case it exists for.** `casual` is what every deck is born in, and it is
+   * one of the two `format_specs` rows seeded `has_legality_data = 0` — `legalities` carries no
+   * key for it, so `filters.rs` looks it up in `legalities::bit()`, finds nothing and pushes the
+   * literal SQL `0`. That is *no rows*, deliberately, so an unknown format cannot quietly answer
+   * with the whole corpus — which means a panel defaulted to `casual` would draw an empty wall
+   * with nothing on screen saying why, on the commonest deck there is.
+   *
+   * The deck is still Casual and the header still says so: what the fence decides is only what
+   * the *filter* opens on, and `Any format` is a working panel the reader can narrow themselves.
+   */
+  it("opens on Any format for a deck whose format has no legality data", async () => {
+    deckGet.mockResolvedValue(detail({ formatKey: "casual", formatName: "Casual" }, [bolt()]));
+    await open();
+    await seeded();
+
+    expect(screen.getByLabelText("Format")).toHaveValue("");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("casual");
+  });
+
+  /**
+   * The other `null` spec, and it answers the same way. `historic` here is a key **this
+   * fixture's `PICKER` does not carry**, standing in for one the seed has lost: `decks.format_key`
+   * is deliberately not a foreign key, so a deck whose format left the seed is a state that can
+   * exist and must still open. (The real seed does carry `historic`, and a Historic deck in the
+   * shipped app opens on Historic — what is being driven here is `formatSpecFor` answering
+   * `null`, whatever made it do so.) There is no `hasLegalityData` cell to read then — and
+   * inferring one from the key would be this file guessing at what the database can answer — so
+   * the panel opens unfiltered rather than on a filter nothing behind it has heard of.
+   */
+  it("opens on Any format for a deck whose format the seed does not carry", async () => {
+    deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
+    await open();
+    await seeded();
+
+    expect(screen.getByLabelText("Format")).toHaveValue("");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("historic");
+  });
+
+  /**
+   * **A format the filter row's own list has never carried, driven the whole way** — editor to
+   * panel to `FilterBar`. `gladiator` is a seeded `format_specs` row with legality data behind
+   * it and is not one of `FORMATS`' seven, which is the ordinary case for a deck: the deck picker
+   * offers every enabled row and this filter offers seven keys.
+   *
+   * So the select can only read `Gladiator` because the hook folded the default into its own
+   * option list. Without that the value would match no option, React would select the first row
+   * that is not disabled, and the panel would say `Any format` over a wall already narrowed to
+   * Gladiator. Both assertions are made for that reason: `value` reads back `""` under the bug
+   * and the option's text is the whole of what the reader sees.
+   *
+   * The sentinel is `Commander` here rather than the helper's `Gladiator`, because this deck's
+   * own format is folded into the header's list before the seed lands.
+   */
+  it("draws a deck format the filter row's own list has never carried", async () => {
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "gladiator", formatName: "Gladiator" }, [bolt()]),
+    );
+    await open();
+    await seeded("Commander");
+
+    const filter = screen.getByLabelText("Format") as HTMLSelectElement;
+    expect(filter).toHaveValue("gladiator");
+    expect(filter.selectedOptions[0]).toHaveTextContent("Gladiator");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("gladiator");
   });
 
   /**

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY, DeckSearchPanel } from "./DeckSearchPanel";
 import { useDeck } from "./useDeck";
 
@@ -25,8 +26,24 @@ import { useDeck } from "./useDeck";
  * an editor) that reached for `categories[0]` before then held an id naming nothing — and once
  * the read landed, `categories[0]` on a deck with no user pile of its own is the seeded
  * **Commander** category, which is where every plain add used to go.
+ *
+ * **`defaultFormat` is an arg here and is deliberately *not* derived from the deck this wrapper
+ * already reads.** Deriving it is `DeckEditor`'s job and it carries a fence this panel never
+ * sees: a format with no legality data behind it has to arrive as `null`, because `filters.rs`
+ * answers an unrecognised legality key with no rows at all and the wall would be empty with
+ * nothing on screen to say why. A wrapper deriving it here would be a second, unfenced copy of
+ * that rule, agreeing with the editor's until the day one of them changed. {@link DeckFormat}
+ * passes the format the deck it is opened on actually has, so the story is not a fiction either.
  */
-function Panel({ deckId, roomy = true }: { deckId: number; roomy?: boolean }) {
+function Panel({
+  deckId,
+  roomy = true,
+  defaultFormat = null,
+}: {
+  deckId: number;
+  roomy?: boolean;
+  defaultFormat?: FormatFilterOption | null;
+}) {
   const deck = useDeck(deckId);
   const [picked, setPicked] = useState<number>(AUTO_CATEGORY);
   return (
@@ -35,6 +52,7 @@ function Panel({ deckId, roomy = true }: { deckId: number; roomy?: boolean }) {
       categories={deck.categories}
       targetCategoryId={picked}
       onTargetCategoryChange={setPicked}
+      defaultFormat={defaultFormat}
       roomy={roomy}
     />
   );
@@ -77,6 +95,11 @@ const meta = {
           "every Add button is named for the card *and* that category's name, because where " +
           "the card is going is the one thing about the press that is not visible on the " +
           "tile.\n\n" +
+          "**The format filter opens on the open deck's format** ({@link DeckFormat}), because " +
+          "a deck is built out of what is legal in it. It is a *default* and not a " +
+          "constraint — the select is live, `Any format` stays first in it, and a card the " +
+          "format does not allow is the validation panel's `RULE BREAK` to draw rather than " +
+          "something this search hides.\n\n" +
           "**A fixture of the editor, not a dismissible layer.** Escape pressed in here belongs " +
           "to the card detail pane; the way to put the panel away is the disclosure it names " +
           "itself by ({@link Collapsed}), and the one state where that control refuses is " +
@@ -157,6 +180,49 @@ export const Docked: Story = {
         }),
       ).toBeInTheDocument();
     });
+  },
+};
+
+/**
+ * Opened on the format of the deck being edited.
+ *
+ * Deck 1 is **Modern Goodstuff**, so the filter row's Format select starts on Modern and the
+ * wall beside the deck is cards that deck may legally hold rather than the whole corpus. A deck
+ * is built out of what is legal in it, which is where a search run from inside it should start;
+ * {@link Docked} above is the same panel with no deck format behind it, and is what every other
+ * surface mounting this search gets.
+ *
+ * **A default and not a constraint**, which is the half worth driving. The select is live: the
+ * reader may move it to any format including one this deck is not legal in, and `Any format` is
+ * one press from the whole database again. A card the deck's format does not allow is
+ * `validation/engine.ts`'s `RULE BREAK` to draw once the card is in the deck — a search that
+ * would not show it in the first place would be this panel enforcing a rule it does not own, and
+ * would make a deliberate trip out of the format (a sideboard, a proxy, a deck about to be
+ * re-formatted) impossible rather than merely marked.
+ */
+export const DeckFormat: Story = {
+  args: { defaultFormat: { value: "modern", label: "Modern" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = canvas.getByRole("region", { name: "Add cards" });
+    const format = within(panel).getByLabelText("Format") as HTMLSelectElement;
+
+    // The value is what the request carries; the option's own text is the whole of what the
+    // reader can see. A select holding a key none of its options carries reports the first one
+    // instead — `Any format` — so `value` reads back `""` and the line below catches it, while
+    // only the line after that says which word the reader is actually looking at.
+    await expect(format).toHaveValue("modern");
+    await expect(format.selectedOptions[0]).toHaveTextContent("Modern");
+
+    // Moved to a format this deck is not in, which is the thing that has to keep working.
+    await userEvent.selectOptions(format, "legacy");
+    await expect(format).toHaveValue("legacy");
+
+    // And all the way back out. `Any format` is pinned above the sorted list and is never
+    // greyed, so the way to the whole corpus is one press from wherever the reader has got to —
+    // which is what makes the deck's format a starting point rather than a pen.
+    await userEvent.selectOptions(format, "");
+    await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
   },
 };
 
