@@ -376,7 +376,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   them, and 847 is the figure they replace — an earlier sitting, a different deck), so the deck
   holds a `min-h-96` floor
   (**384px** = one whole stack card and its group heading) and the band's last ~145px is one
-  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**604px**);
+  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**604px**).
+  **That floor is on the view box rather than on the desk row since the bullet below on the views
+  having no height, and under the table it is still on the row** — the reason is written there,
+  and it is the difference between a floor and a ceiling. The figures in this paragraph are the
+  band's arithmetic and are untouched by the move; what has changed is that a deck taller than
+  702 now pushes the band down the page instead of being cut to fit above it;
   **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the
   row's arithmetic did not count — the same 16px correction, for the same reason, as the drop from
   224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
@@ -600,6 +605,34 @@ price | type`). An **inactive category stays its own group in all three grouping
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
   the pre-warm reports success and every tile then fetches cold anyway.
+- **The deck's views are given no height, and the page is the only thing in this editor that
+  scrolls** (changed 2026-08-14, later the same day than the two bullets below). Stacks, Grid and
+  Text grow to hold their content: piles overflow **down**, the box expands, the desk row expands
+  with it and `DeckEditor`'s `overflow-y-auto` page takes the scroll. What that replaced was a
+  view drawn as a `flex-1` item of a `min-h-0` desk with `overflow-auto` on it — so a deck with
+  more piles than the window was tall was letterboxed inside the deck builder with the editor's
+  own scrollbar an inch away, two scrollbars moving different things and nothing on screen saying
+  which. `overflow-x-auto` survives on all three for the one case the wrapping bullets below
+  reserve, and costs nothing: it implies `overflow-y: auto`, which can never find anything to
+  scroll in a box with no height of its own.
+  **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
+  `VirtualTable` mounts the rows in view and holds a spacer open for the rest; a scrollport is
+  what it *is*, and given no height it draws its own scrollbar **and** the page's. So the desk row
+  keeps `DECK_HEIGHT_FLOOR` under that one view and the view box keeps `min-h-0 overflow-auto` —
+  the arrangement all four used to share.
+  **`min-h-96` moved from the desk row to the view box, and that is the load-bearing half.** A
+  flex item's automatic minimum size is what stops it being squeezed below its content, and a
+  `min-height` number *replaces* that `auto` — so on the row it was a ceiling as well as a floor:
+  measured live, 2 783px of piles in a desk box of 384, with the price strip and the stats band
+  laid out over the deck rather than under it and the sticky search panel clamped to a 384px
+  containing block. On the view it floors without capping. **jsdom has no layout engine, so
+  nothing in the suite can see any of this.**
+  Two things leaned on the old bounded desk and moved with it: the docked panel is
+  `sticky top-0 self-start` at a **measured** height (the scroller's visible height less whatever
+  of the desk still sits below its top — CSS has no unit for that), and the price strip goes
+  `sticky bottom-0` for the length of a drag, so the remove tray drawn on it stays at the foot of
+  the window instead of at the foot of a 7 000px deck. Every figure, at 1280×800 and 1024×600:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **`Stacks` and `Text` wrap downward — neither view grows sideways any more**
   (changed 2026-08-14). Both lay a deck out in fixed-width boxes —
   `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
@@ -609,10 +642,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   hold even one column — nor did the 208 it dropped from, nor the 224 before that. That floor
   governs how the desk row is *divided*; it has never said anything about what happens inside
   the view's share of it. The row is a `flex-wrap` container now, so a box that will not fit goes
-  **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
-  rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
-  wider than its box, and clipping a card is worse than a scrollbar the reader asked for. Wrapping
-  is what makes that the rare case instead of the ordinary one. **Driven 2026-08-14** on a seeded
+  **below** the line and the reader scrolls down, which the desk already did. **An `overflow` on
+  the X axis stays** — one column zoomed past the desk's own width really is wider than its box,
+  and clipping a card is worse than a scrollbar the reader asked for. Wrapping
+  is what makes that the rare case instead of the ordinary one. (It was `overflow-auto` here and
+  is `overflow-x-auto` since the bullet above: the *vertical* half of that class was the letterbox,
+  and this reasoning is about the horizontal half, which is untouched.) **Driven 2026-08-14** on a seeded
   16-category deck: no X scrollbar at 1024, 1280 or 1920, the two wrap thresholds exact, and the
   rare case contained to the view rather than the page — every figure in
   [frontend-design.md](../../../docs/reference/frontend-design.md).

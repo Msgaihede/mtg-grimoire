@@ -581,6 +581,83 @@ describe("DeckEditor", () => {
     expect(controls.className).not.toContain("shrink-0");
   });
 
+  /**
+   * **The deck grows; only the page scrolls — and only the virtualised table is given a height.**
+   *
+   * jsdom lays nothing out, so no test here can see the failure this pins: a deck with more piles
+   * than the window is tall, letterboxed in a box of the desk's height with the editor's own
+   * scrollbar an inch away. It was measured in the shipped window at 1280×800 on a 132-card,
+   * 17-pile deck — 7 123px of piles, `scrollHeight - clientHeight` of 0 in the view, 702 visible
+   * against 7 635 of page — and every figure is in
+   * [frontend-design.md](../../../docs/reference/frontend-design.md).
+   *
+   * What a test *can* see is the four class decisions that produce it, each of which was the
+   * whole of a bug on its own:
+   *
+   * * the view box carrying `overflow` or `min-h-0` is the letterbox — `min-h-0` more than the
+   *   overflow, because it is the line that says "this box may be squeezed below its content";
+   * * the same `min-h-0` and `overflow-auto` are exactly what the table *must* keep, because a
+   *   virtualiser holds a spacer open for the rows it has not mounted and a scrollport is what it
+   *   is. Given no height it drew its own scrollbar **and** the page's;
+   * * `min-h-96` on the **desk row** is a ceiling as well as a floor — a `min-height` number
+   *   replaces a flex item's `auto` automatic minimum size — which is why it sits on the view box
+   *   for the three walls and stays on the row only under the table;
+   * * and `tailwind-merge` has to resolve that pair the table's way, since `min-h-96` and
+   *   `min-h-0` are one group and a floor under a scrollport is a floor under a scrollbar.
+   */
+  it("gives the deck's walls no height and the virtualised table one", async () => {
+    await open();
+
+    const deskOf = () => {
+      const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
+      return { row: dock.parentElement!, view: dock.parentElement!.firstElementChild! };
+    };
+
+    // Stacks is where the editor opens, and the two boxes say opposite things about height.
+    const stacks = deskOf();
+    expect(stacks.view.className).toContain("min-h-96");
+    expect(stacks.view.className).not.toContain("min-h-0");
+    expect(stacks.view.className).not.toContain("overflow");
+    expect(stacks.row.className).not.toContain("min-h-");
+
+    for (const label of ["Text", "Grid"]) {
+      await userEvent.click(screen.getByRole("button", { name: label }));
+      const wall = deskOf();
+      expect(wall.view.className, label).toContain("min-h-96");
+      expect(wall.view.className, label).not.toContain("overflow");
+      expect(wall.row.className, label).not.toContain("min-h-");
+    }
+
+    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+    const table = deskOf();
+    // The squeezable box, back where it was — and `min-h-96` merged away rather than fighting it.
+    expect(table.view.className).toContain("min-h-0");
+    expect(table.view.className).toContain("overflow-auto");
+    expect(table.view.className).not.toContain("min-h-96");
+    // …and the row is what holds it to the page's leftover height.
+    expect(table.row.className).toContain("min-h-96");
+  });
+
+  /**
+   * **The docked panel is pinned, not stretched** — the other half of the deck growing.
+   *
+   * A sibling of a 7 000px desk row is drawn 7 000px tall unless it opts out, which takes its
+   * search field off the top of the window and mounts tiles for a wall nobody can see at once.
+   * `sticky top-0` and `self-start` are the opt-out; the height is measured, because `100%` here
+   * is the deck's height and a viewport unit is wrong by the app chrome above the scroller — and
+   * a measured height is exactly what jsdom cannot check, so the classes are what this pins.
+   * Driven at six scroll positions in the shipped window: 489px at rest, 702 once scrolled past
+   * the header, bottom edge flush with the scrollport at every one.
+   */
+  it("pins the search panel's dock rather than stretching it down the deck", async () => {
+    await open();
+
+    const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
+    expect(dock.className).toContain("sticky");
+    expect(dock.className).toContain("top-0");
+    expect(dock.className).toContain("self-start");
+  });
+
   /** The way back, and the only thing that closes the editor. */
   it("returns to the gallery from the back control", async () => {
     await open();
