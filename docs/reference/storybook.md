@@ -2,26 +2,36 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **369 stories across 48 story files, 47 docs
+`npm run storybook` · `npm run build-storybook`. **374 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **with `main`
-merged in**: 416 entries, 369 `story`, 47 `docs`, 49 distinct `importPath`s. That branch adds
-**six** stories to four existing files (`CardArt` 2, `SearchPage` 2, `CardGrid` 1, `OwnedBadge`
-1), counted off the diff against `origin/main`, and no story *file* — the file count moved
-because `main` gained one.
+**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **with the
+printings-rework `main` merged in**: 421 entries, 374 `story`, 47 `docs`, 49 distinct
+`importPath`s. That branch adds **six** stories to four existing files (`CardArt` 2,
+`SearchPage` 2, `CardGrid` 1, `OwnedBadge` 1) and no story *file*.
 
-**Two branches measured this line honestly on the same day and both were wrong by the time they
-merged.** The game-changer branch read 363/47/46 against one `main` and 369/48/47 against the
-next; the unplayable-cards branch read 359/47/46 and stated a story-file count that was already
-stale, because a third branch had landed a story file it could not see. Neither was careless —
-each rebuilt and read the index, which is the rule.
+The sixteen over the 358 measured 2026-08-12 come from five branches that never saw each other's
+stories: five are `Card/DetailPane`'s, when the printings list gained a group-by selector (a
+story per mode that renders differently, plus one that drives the select) and the card art gained
+a foil view; five are `Components/CardZoomIndicator`'s, **the one new story _file_ in the set**,
+which is why the file and docs-page counts moved when they had held for four measurements; one is
+`Search/Page`'s `Unplayable`; and six are the game changer's. The 358 were themselves five over
+`main`'s 353 — `Settings/MarketplacePanel` went from three stories to eight when Card Kingdom and
+Mana Pool became selectable and a feed gained a state to draw.
 
-**So the rule needs its second half: the delta and the total are two measurements, and they do
-not reconcile by arithmetic.** 359 plus this branch's six is 365; the merged tree reads 369.
-Do not carry a number forward with your own delta added, and do not treat the gap as a bug to
-hunt — rebuild and read the index **on the tree you are actually shipping**, which is the merge
-commit rather than either parent.
+**On 2026-08-14 two branches wrote `416 entries, 369 story, 47 docs, 49 importPath` into this
+paragraph within an hour of each other.** Both had rebuilt. Both were right about their own tree.
+They were different trees — one carried the crown's six stories, the other the printings
+rework's five — and because the *headline sentence* matched to the character, git merged that
+line clean and only the paragraph under it conflicted. **A story count can be stale without
+being different from the number you are merging into.** The merged tree is 374.
+
+**So the rule has a second half: the delta and the total are two measurements, and they do not
+reconcile by arithmetic.** 369 plus this branch's six is 375; the tree reads 374. Do not carry a
+number forward with your own delta added, and do not go hunting for the missing one — rebuild and
+read the index **on the tree you are actually shipping**, which is the merge commit and not
+either parent. That branch alone re-measured four times (363 → 369 → 374, plus a 364 in between)
+and every intermediate number was stale before CI finished.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and

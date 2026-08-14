@@ -18,6 +18,14 @@
 //!
 //! Nothing here reads `raw`: `artist` has had a column of its own since schema v3, which
 //! was the last thing this module took out of that blob.
+//!
+//! **One setting lives here too** — [`K_PRINTING_GROUP_BY`], how the pane groups the list
+//! [`card_printings`] answers. It is in this module rather than a module of its own because it
+//! is a fact about *this list*: nothing else in the crate reads it, and the command that
+//! answers the rows it groups is three functions up. It is shaped exactly like
+//! [`crate::marketplace`]'s — one `app_meta` row, a read that can never fail, a write that
+//! validates — and for the same two reasons, which are written out on [`stored_group_by`] and
+//! [`store_group_by`].
 
 use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, AppState};
@@ -375,6 +383,119 @@ pub async fn card_printings(
     })
     .await
     .map_err(|e| format!("printings could not be read: {e}"))?
+}
+
+// ---------------------------------------------------------------------------------------
+// How the pane groups that list — one `app_meta` row
+// ---------------------------------------------------------------------------------------
+
+/// Every way the card pane groups its printings list, in the order the picker offers them.
+///
+/// The mirror of the `PrintingGroupBy` union in `src/features/card/printings.ts`, and
+/// deliberately a flat list of strings rather than an enum with headings and orderings: what a
+/// mode *means* — which key the rows bucket on, what a group's heading reads, how the buckets
+/// are ordered against each other — is domain logic, and this module's own header is the rule
+/// that puts domain logic in TypeScript. The only question Rust has to answer about a mode is
+/// whether it is one of these.
+pub const PRINTING_GROUP_BY_MODES: [&str; 4] = ["artist", "released", "price", "set"];
+
+/// What the pane groups by when nobody has chosen.
+///
+/// `artist` because it is the closest thing to what the list already did: the pane folded a
+/// card's printings by art identity long before there was a picker
+/// (`printings.ts`'s `groupByIllustration`), so a reader who never opens the selector gets the
+/// list they had rather than a new one on the first launch after an update.
+pub const DEFAULT_PRINTING_GROUP_BY: &str = "artist";
+
+/// The `app_meta` key.
+///
+/// `app_meta` is the *application's* key/value table (schema v6), deliberately not `sync_meta`
+/// — a row in that one the sync did not write makes every later timing claim a fiction. **No
+/// migration**: this is a key in a table that has existed since v6, and a preference that
+/// needed a schema step would be a preference that could fail a launch.
+pub const K_PRINTING_GROUP_BY: &str = "printing_group_by";
+
+/// Is this a grouping this build knows?
+pub fn is_known_group_by(mode: &str) -> bool {
+    PRINTING_GROUP_BY_MODES.contains(&mode)
+}
+
+/// The stored grouping, or [`DEFAULT_PRINTING_GROUP_BY`].
+///
+/// Three cases collapse into the fallback and it matters that they do: no row at all (a fresh
+/// install, and the common one), an unreadable row (`get_app_meta` swallows the error), and a
+/// row holding a mode this build does not recognise — what a *newer* build pointed at the same
+/// `mtg.db` leaves behind, or what a hand-edit leaves behind.
+///
+/// None of the three is worth failing over, and the reason is what the pane *is*: a reader
+/// opened it to look at a card. A stale preference may cost them the grouping they picked; it
+/// must never cost them the printings list.
+pub fn stored_group_by(conn: &Connection) -> String {
+    crate::update::get_app_meta(conn, K_PRINTING_GROUP_BY)
+        .filter(|mode| is_known_group_by(mode))
+        .unwrap_or_else(|| DEFAULT_PRINTING_GROUP_BY.to_owned())
+}
+
+/// Write the setting, refusing a mode this build does not know.
+///
+/// The refusal is the whole point of the function, and it is the exact complement of
+/// [`stored_group_by`]'s silence: that one discards an unrecognised value without a word, so
+/// without this a typo'd mode would look like it saved, survive a restart in the table, and
+/// read back as `artist` forever with nothing anywhere to say why.
+pub fn store_group_by(conn: &Connection, mode: &str) -> Result<(), String> {
+    if !is_known_group_by(mode) {
+        return Err(format!(
+            "\"{mode}\" is not a way this app groups printings. Expected one of: {}.",
+            PRINTING_GROUP_BY_MODES.join(", ")
+        ));
+    }
+    crate::update::set_app_meta(conn, K_PRINTING_GROUP_BY, mode)
+        .map_err(|e| format!("could not save the printing grouping: {e}"))
+}
+
+/// How the card pane groups its printings, as a raw stored mode.
+///
+/// A `String` and not a narrowed value, for [`stored_group_by`]'s reason: the row may have been
+/// written by a build that offered a mode this one has never heard of, and narrowing it is the
+/// frontend's job (`isPrintingGroupBy`, `src/features/card/printings.ts`) on the other side of
+/// a wire that carries strings anyway.
+///
+/// Read-only connection on the blocking pool, exactly as [`card_printings`] runs — the two are
+/// read together when the pane opens, and a preference that queued behind an ~80 s ingest on
+/// the write connection would hold the whole pane behind it. The `Result` is `spawn_blocking`'s
+/// join and nothing else; the read itself has no failure mode left, because every way it could
+/// go wrong is already a reason to answer the default.
+#[tauri::command]
+pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || stored_group_by(&lock_db_read(&state)))
+        .await
+        .map_err(|e| format!("the printing grouping could not be read: {e}"))
+}
+
+/// Choose how the pane groups printings. Rejects a mode this build does not know, and answers
+/// [`crate::collection::BUSY`] if a sync holds the write connection — the bound every write
+/// command in this crate takes.
+///
+/// **The lock comes first and the mode is checked inside it**, which is
+/// [`crate::marketplace::set_marketplace`]'s order and not an accident: a bad mode sent while a
+/// sync holds the connection answers BUSY, because nothing has looked at the mode yet. Getting
+/// that backwards would mean the same call answered two different sentences depending on
+/// whether an ingest happened to be running.
+#[tauri::command]
+pub async fn set_printing_group_by(
+    state: tauri::State<'_, Arc<AppState>>,
+    mode: String,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+            Some(conn) => store_group_by(&conn, &mode),
+            None => Err(crate::collection::BUSY.to_owned()),
+        }
+    })
+    .await
+    .map_err(|e| format!("the printing grouping could not be saved: {e}"))?
 }
 
 #[cfg(test)]
@@ -984,5 +1105,118 @@ mod tests {
             serde_json::to_value(PrintingsResponse::default()).unwrap(),
             serde_json::json!({"items": [], "total": 0})
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The grouping setting
+    // -----------------------------------------------------------------------------------
+
+    /// The schema and nothing else. The setting lives in `app_meta`, which no card row is
+    /// involved in, so seeding printings here would only make the failures harder to read.
+    fn meta_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    /// The setting outlives the process, so the only thing that matters about it is that what
+    /// went in comes back out — for every mode the picker offers, not just the default.
+    #[test]
+    fn every_grouping_mode_round_trips() {
+        let conn = meta_db();
+        for mode in PRINTING_GROUP_BY_MODES {
+            store_group_by(&conn, mode).unwrap();
+            assert_eq!(stored_group_by(&conn), mode);
+        }
+    }
+
+    /// A database nobody has told groups by artist — which is what the pane's list was folded
+    /// by before the selector existed.
+    #[test]
+    fn a_missing_grouping_row_reads_as_the_default() {
+        let conn = meta_db();
+        assert_eq!(
+            crate::update::get_app_meta(&conn, K_PRINTING_GROUP_BY),
+            None
+        );
+        assert_eq!(stored_group_by(&conn), "artist");
+    }
+
+    /// A newer build's mode must not brick an older one pointed at the same `mtg.db`, and
+    /// neither must a hand-edited row. Written past `store_group_by` deliberately — this is the
+    /// row a *different* build left behind, which no validation of ours was ever in a position
+    /// to refuse.
+    #[test]
+    fn a_grouping_this_build_does_not_know_reads_as_the_default_rather_than_failing() {
+        let conn = meta_db();
+        for junk in ["rarity", "", "Artist", "artist ", "null", "released_at"] {
+            crate::update::set_app_meta(&conn, K_PRINTING_GROUP_BY, junk).unwrap();
+            assert_eq!(
+                stored_group_by(&conn),
+                "artist",
+                "an unrecognised `{junk}` must read as the default, not fail the pane"
+            );
+        }
+    }
+
+    /// The refusal, and the half of it that is easy to forget: a rejected write must leave the
+    /// previous choice alone. `stored_group_by` discards junk silently, so a write that
+    /// half-landed would look like a save and read back as `artist` forever.
+    #[test]
+    fn an_unknown_grouping_is_refused_and_leaves_the_stored_one_intact() {
+        let conn = meta_db();
+        store_group_by(&conn, "price").unwrap();
+
+        let err = store_group_by(&conn, "rarity").unwrap_err();
+        assert!(err.contains("rarity"), "{err}");
+        assert!(
+            err.contains("released"),
+            "the message lists what is valid: {err}"
+        );
+
+        assert_eq!(stored_group_by(&conn), "price");
+        assert_eq!(
+            crate::update::get_app_meta(&conn, K_PRINTING_GROUP_BY).as_deref(),
+            Some("price"),
+            "nothing was written to `app_meta`"
+        );
+    }
+
+    /// Case and whitespace are not forgiven on the way in either — the mode is a key the
+    /// frontend matches verbatim, so "close enough" would store something no lookup finds and
+    /// `stored_group_by` would then throw away.
+    #[test]
+    fn a_near_miss_grouping_is_still_a_refusal() {
+        let conn = meta_db();
+        for near in ["Artist", " artist", "artist\n", "set_code"] {
+            assert!(
+                store_group_by(&conn, near).is_err(),
+                "`{near}` must not be stored"
+            );
+        }
+        assert_eq!(stored_group_by(&conn), DEFAULT_PRINTING_GROUP_BY);
+    }
+
+    /// The default has to be a member of the list it falls back into, or `stored_group_by`
+    /// would return a value `set_printing_group_by` refuses to write.
+    #[test]
+    fn the_default_grouping_is_one_of_the_known_modes() {
+        assert!(is_known_group_by(DEFAULT_PRINTING_GROUP_BY));
+        let conn = meta_db();
+        store_group_by(&conn, DEFAULT_PRINTING_GROUP_BY).unwrap();
+        assert_eq!(stored_group_by(&conn), DEFAULT_PRINTING_GROUP_BY);
+    }
+
+    /// The grouping and the marketplace are two rows of one table, and each has to survive the
+    /// other being written — an `app_meta` write that used the wrong key, or a read that
+    /// matched on none, would look exactly like the default until someone changed both.
+    #[test]
+    fn the_grouping_row_and_the_marketplace_row_do_not_collide() {
+        let conn = meta_db();
+        store_group_by(&conn, "set").unwrap();
+        crate::marketplace::store(&conn, "cardmarket").unwrap();
+
+        assert_eq!(stored_group_by(&conn), "set");
+        assert_eq!(crate::marketplace::stored(&conn), "cardmarket");
     }
 }
