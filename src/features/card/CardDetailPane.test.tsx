@@ -152,7 +152,22 @@ vi.mock("@/lib/ipc", async (original) => ({
     ) => deckSwapPrinting(deckId, from, to, categoryId, variant),
   },
 }));
+/**
+ * The two doors the card menu opens, mocked because this file is about **which card** they are
+ * asked about rather than what they do. Both really answer a promise, which is what the menu's
+ * `run` hands to a `catch` — a `vi.fn()` answering `undefined` would be a fake the code under
+ * test could not have been written against.
+ */
+vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(() => Promise.resolve()) }));
+vi.mock("@/lib/externalLinks", async (original) => ({
+  ...(await original<typeof import("@/lib/externalLinks")>()),
+  openExternal: vi.fn(() => Promise.resolve()),
+}));
 import { CardDetailPane } from "./CardDetailPane";
+import { CardToDeckProvider } from "./cardMenu";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { copyText } from "@/lib/clipboard";
+import { openExternal } from "@/lib/externalLinks";
 import { useAppStore } from "@/lib/store";
 
 function wrap(cardId: string, onClose = vi.fn()) {
@@ -162,6 +177,41 @@ function wrap(cardId: string, onClose = vi.fn()) {
       <CardDetailPane cardId={cardId} onClose={onClose} />
     </QueryClientProvider>,
   );
+}
+
+/**
+ * The pane under the two providers `App.tsx` mounts above it, in that order.
+ *
+ * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
+ * is above it, so a pane rendered bare would open nothing and pass every assertion below by
+ * never being asked. `CardToDeckProvider` is **outside** it because the menu panel is a
+ * *sibling* of the menu provider's children — a provider mounted inside would be above every
+ * view and above none of the menu's rows.
+ */
+function wrapWithMenu(cardId: string, onClose = vi.fn()) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <CardToDeckProvider>
+        <ContextMenuProvider>
+          <CardDetailPane cardId={cardId} onClose={onClose} />
+        </ContextMenuProvider>
+      </CardToDeckProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * A right-click, and nothing awaited.
+ *
+ * A real `MouseEvent` rather than `fireEvent.contextMenu`, because the handler reads
+ * `clientX`/`clientY` to place the panel — and `bubbles`, because the handler is on the row or
+ * on the pane, never on the glyph the pointer happened to be over.
+ */
+function rightClick(element: HTMLElement): void {
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
 /**
@@ -1262,5 +1312,173 @@ describe("the printings list, opened from a deck row", () => {
     // And the deck that is not there claims nothing: no mark, and no offers to rewrite it.
     expect(screen.queryByText("In deck")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Use this printing/ })).not.toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * The card menu
+ * ------------------------------------------------------------------------------------------ */
+
+/**
+ * A printing of the same card that the pane is **not** open on — the one fixture the whole of
+ * this section turns on.
+ *
+ * A `Printing` carries a set, a collector number and a finish list and **no name and no oracle
+ * id**: it is a printing *of the card the pane is showing*, so both of those come from that
+ * `CardDetail`. A row adapter that read only the row would still draw a menu, and "Copy card
+ * name" would copy `undefined` — which is why every case below right-clicks *this* row rather
+ * than the one the pane is on.
+ */
+const FOURTH: Printing = printing({
+  id: "p2",
+  setCode: "4ed",
+  setName: "Fourth Edition",
+  collectorNumber: "209",
+  releasedAt: "1995-04-01",
+});
+
+/** The row for a printing the pane is not showing — its own `<li>`, which is where the menu is. */
+function rowFor(setCode: string, collectorNumber: string): HTMLElement {
+  const button = screen.getByRole("button", { name: `Show ${setCode} · ${collectorNumber}` });
+  const row = button.closest("li");
+  if (row === null) throw new Error(`no row around ${setCode} ${collectorNumber}`);
+  return row;
+}
+
+describe("the card menu", () => {
+  beforeEach(() => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page([printing(), FOURTH]));
+  });
+
+  it("names the card the pane is open on, not the printing row", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    rightClick(rowFor("4ED", "209"));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Copy card name" }));
+
+    // A `Printing` carries no name. This is the one adapter that has to read the `CardDetail`
+    // too, and getting it wrong copies `undefined` with the menu still looking correct.
+    await waitFor(() =>
+      expect(vi.mocked(copyText)).toHaveBeenCalledWith("Delver of Secrets // Insectile Aberration"),
+    );
+    expect(vi.mocked(copyText)).not.toHaveBeenCalledWith(undefined);
+  });
+
+  it("links the printing that was right-clicked, not the one the pane is showing", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    rightClick(rowFor("4ED", "209"));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Open on" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Scryfall" }));
+
+    // The row's set and collector number — the pane is open on `isd/51`, which is the answer a
+    // row adapter that read the card for *everything* would have given.
+    expect(vi.mocked(openExternal)).toHaveBeenCalledWith("https://scryfall.com/card/4ed/209");
+  });
+
+  /**
+   * The other half of the same fact: the oracle id is the **card's**, and a `Printing` has none.
+   * A row adapter that sent `null` would draw "View all printings" greyed out with the menu's
+   * own sentence beside it — *this printing has left the card database* — over a card that is
+   * perfectly healthy, and nothing about the menu would look wrong.
+   */
+  it("offers the printings row a live View all printings, from the card's oracle id", async () => {
+    wrapWithMenu("p1");
+    await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    rightClick(rowFor("4ED", "209"));
+    await screen.findByRole("menu");
+
+    expect(screen.getByRole("menuitem", { name: "View all printings" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("does not show a printing when the row is right-clicked", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    rightClick(rowFor("4ED", "209"));
+    await screen.findByRole("menu");
+    // The pane has not moved onto the printing the reader was only asking about.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+
+    // …and the same row really does move it when it is *pressed*, which is what makes the
+    // assertion above able to fail.
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Show 4ED · 209" }));
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+  });
+
+  it("opens the open card's own menu from a right-click on its art", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    const art = await screen.findByAltText("Delver of Secrets");
+
+    rightClick(art);
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Open on" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Scryfall" }));
+
+    // The pane's own printing, `isd/51` — not the printing of whichever row happens to be first.
+    expect(vi.mocked(openExternal)).toHaveBeenCalledWith("https://scryfall.com/card/isd/51");
+  });
+
+  /**
+   * The keyboard's door to the same rows. The pane takes the caret as it opens, so Shift+F10
+   * with nothing else focused is a press on the pane — and the card the pane is showing is what
+   * it has to answer about.
+   */
+  it("opens the open card's menu on Shift+F10, with the caret on the pane", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    await screen.findByAltText("Delver of Secrets");
+    await waitFor(() =>
+      expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus(),
+    );
+
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+
+    expect(await screen.findByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+  });
+
+  it("opens a printings row's menu on Shift+F10, from the row's own handle", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    const handle = await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    act(() => handle.focus());
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Open on" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Scryfall" }));
+
+    // The row's printing, so the press really did open *that* row's menu rather than the pane's.
+    expect(vi.mocked(openExternal)).toHaveBeenCalledWith("https://scryfall.com/card/4ed/209");
+  });
+
+  /**
+   * The row's own key handling is **composed with** the menu's, never replaced by it: the set
+   * button is the row's keyboard handle, so a press that opened the menu and stopped the row
+   * from being shown would be a menu bought with the affordance it was added beside.
+   */
+  it("still shows the printing on Enter after the menu key is wired to the same handle", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    const handle = await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    act(() => handle.focus());
+    await user.keyboard("{Enter}");
+
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
   });
 });
