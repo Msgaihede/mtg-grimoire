@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import type { CardSummary, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { readDragData } from "./dnd";
@@ -149,6 +150,16 @@ const MAIN = category();
 const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 1 });
 const MAYBE = category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 });
 
+/**
+ * A deck's format as the editor hands it down — the `legalities` key the backend filters by,
+ * and the word the picker draws it as.
+ *
+ * One of `FORMATS`' seven on purpose. Folding an *unlisted* key into the option list is
+ * `useCardSearch`'s and `FilterBar`'s to be right about, and a fixture reaching for one here
+ * would make this file's claims fail for their reasons rather than for this panel's.
+ */
+const COMMANDER: FormatFilterOption = { value: "commander", label: "Commander" };
+
 /** What the editor hands down for a deck with the seeded piles and nothing of the reader's
  *  own yet. */
 const SEEDED: DeckCategory[] = [MAIN, SIDE, MAYBE];
@@ -163,6 +174,7 @@ interface Props {
   categories: DeckCategory[];
   targetCategoryId: number;
   roomy: boolean;
+  defaultFormat?: FormatFilterOption | null;
 }
 
 function Harness({
@@ -183,12 +195,16 @@ function panel({
   categories = SEEDED,
   targetCategoryId = MAIN.id,
   roomy = true,
+  // `null` rather than an omission, because `null` is what the editor actually sends for a deck
+  // it has no format to seed the search with — the annotation is what keeps the other cases
+  // assignable.
+  defaultFormat = null as FormatFilterOption | null,
   onTargetCategoryChange = vi.fn(),
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  let props: Props = { categories, targetCategoryId, roomy };
+  let props: Props = { categories, targetCategoryId, roomy, defaultFormat };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
       <Harness {...p} onTargetCategoryChange={onTargetCategoryChange} />
@@ -220,6 +236,16 @@ const categoryOptions = (): string[] => {
   return [...select.options].map((o) => o.textContent ?? "");
 };
 
+/**
+ * The filter row's Format select, reached by its label the way "Add to" is above.
+ *
+ * `FilterBar`'s own, drawn inside this panel and named by an `sr-only` "Format" — the row's
+ * other controls are deliberately worded to keep clear of that word (`FilterBar.tsx`'s
+ * "Unplayable" says "legal nowhere" for exactly this reason), so the exact string matches one
+ * control here.
+ */
+const formatSelect = (): HTMLSelectElement => screen.getByLabelText("Format") as HTMLSelectElement;
+
 describe("DeckSearchPanel", () => {
   /** The search view's own parts, in a column: not a second search implementation. */
   it("renders the search filters and the results as a wall of art", async () => {
@@ -241,6 +267,67 @@ describe("DeckSearchPanel", () => {
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
     expect(screen.queryByRole("button", { name: "Table view" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * No default is `Any format`, which is the search every other surface mounting this hook
+   * gets: `SearchPage` and the collection row pass no default at all, and a panel handed none
+   * has to be the browse this app has always opened on. It is also the editor's own answer
+   * while the format seed is still loading and for a deck with no legality data to filter by,
+   * so this is a live state rather than only a test's.
+   */
+  it("opens on Any format when it is handed no default", async () => {
+    panel();
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    expect(formatSelect()).toHaveValue("");
+  });
+
+  /**
+   * A deck is built out of the cards it may legally hold, so the wall beside it starts there
+   * rather than at the whole corpus.
+   *
+   * The label as well as the value, because the value is what the *request* carries and the
+   * label is the whole of what the reader can see: a select holding a key no option draws is
+   * blank on screen and correct in every assertion about `value`.
+   */
+  it("opens on the deck's own format when it is handed one", async () => {
+    panel({ defaultFormat: COMMANDER });
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const select = formatSelect();
+    expect(select).toHaveValue(COMMANDER.value);
+    expect(select.selectedOptions[0]).toHaveTextContent(COMMANDER.label);
+  });
+
+  /**
+   * **A default and not a constraint** — the request's second sentence, and the half a seeded
+   * filter is easiest to get wrong.
+   *
+   * The reader may move the select anywhere, including to a format this deck is not legal in,
+   * and the search that comes back is the one they asked for. A card the deck's format does not
+   * allow is `validation/engine.ts`'s `RULE BREAK` to draw once it is in the deck; a search
+   * that would not show it in the first place would be this panel enforcing a rule it does not
+   * own. `Any format` is one press further, which is the way back to the whole corpus.
+   */
+  it("lets the reader move the select off the deck's format, and keeps searching", async () => {
+    panel({ defaultFormat: COMMANDER });
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    await userEvent.selectOptions(formatSelect(), "modern");
+
+    expect(formatSelect()).toHaveValue("modern");
+    await waitFor(() =>
+      expect(searchCards).toHaveBeenCalledWith(expect.objectContaining({ format: "modern" })),
+    );
+    expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(formatSelect(), "");
+
+    expect(formatSelect()).toHaveValue("");
+    await waitFor(() =>
+      expect(searchCards).toHaveBeenCalledWith(expect.objectContaining({ format: undefined })),
+    );
   });
 
   /**

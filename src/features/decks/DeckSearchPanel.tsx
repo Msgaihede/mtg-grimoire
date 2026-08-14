@@ -6,7 +6,7 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
-import { useCardSearch } from "@/features/search/useCardSearch";
+import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
@@ -135,6 +135,28 @@ export interface DeckSearchPanelProps {
   targetCategoryId: number;
   onTargetCategoryChange: (categoryId: number) => void;
   /**
+   * The format the filter row's Format select **opens** on — the open deck's, handed down
+   * rather than read here, for the reason {@link DeckSearchPanelProps.categories} is: the
+   * editor already holds the deck row and the `format_specs` row beside it, and a second
+   * component reading the open deck's format beside the one that already has it is how a panel
+   * starts filtering for a format the editor is not showing.
+   *
+   * **A default, never a constraint.** It seeds `useCardSearch`'s `format` state and reaches
+   * nothing else: `Any format` stays first in the list, the reader may move the select to any
+   * format including one this deck is not legal in, and the card they then press Add on is
+   * added. A card the format does not allow is `validation/engine.ts`'s `RULE BREAK` to draw —
+   * a search that refused to show it would be this panel enforcing a rule the engine owns, and
+   * would make a deliberate trip out of the format (a sideboard, a proxy, a deck about to be
+   * re-formatted) impossible rather than merely marked.
+   *
+   * `null` and absent both mean **Any format**, and that is a working panel rather than a
+   * degraded one. It has to be: the editor's answer is `null` while the format seed is still
+   * loading, and `null` again for a deck whose format has no legality data to filter by at all
+   * — a key `search_cards` does not recognise draws an empty wall with nothing on screen to
+   * explain it.
+   */
+  defaultFormat?: FormatFilterOption | null;
+  /**
    * Whether the editor has room to draw this open — measured, not guessed (see
    * `DeckEditor`'s `DECK_FLOOR`).
    *
@@ -168,6 +190,7 @@ export function DeckSearchPanel({
   categories,
   targetCategoryId,
   onTargetCategoryChange,
+  defaultFormat,
   roomy = true,
 }: DeckSearchPanelProps) {
   /** What the *reader* last chose. What is drawn is this and `roomy` together. */
@@ -193,7 +216,10 @@ export function DeckSearchPanel({
     ? null
     : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
-  const search = useCardSearch();
+  // The deck's format seeds the Format select and nothing else — the hook owns what a default
+  // does to filter state, this panel owns only handing it the deck's answer. See
+  // {@link DeckSearchPanelProps.defaultFormat} for why that is a seed rather than a fence.
+  const search = useCardSearch({ defaultFormat });
   const { query, rows, searchKey } = search;
 
   const selectedCardId = useAppStore((s) => s.selectedCardId);
