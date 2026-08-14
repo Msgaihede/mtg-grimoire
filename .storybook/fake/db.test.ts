@@ -393,9 +393,11 @@ describe("the playable filter", () => {
   it("is off unless asked for, and then hides the printings no format allows", () => {
     const db = makeDb();
     const seen = (req: Record<string, unknown>) =>
-      (readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
-        items: { name: string }[];
-      }).items.map((i) => i.name);
+      (
+        readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
+          items: { name: string }[];
+        }
+      ).items.map((i) => i.name);
 
     // The three really are in the corpus and really are unplayable, so the assertion below is
     // about the filter rather than about a fixture that never had them.
@@ -1222,9 +1224,9 @@ describe("one printing's image URL", () => {
     // The distinction the app depends on: `png` is a caller mistake and gets a rejection,
     // where a missing picture is an answer. In the crate the same check is what keeps an
     // unchecked string out of a `json_extract` path.
-    expect(() => readHandlers(makeDb()).card_image_uri({ cardId: BOLT.id, variant: "png" })).toThrow(
-      /unknown image variant: png/,
-    );
+    expect(() =>
+      readHandlers(makeDb()).card_image_uri({ cardId: BOLT.id, variant: "png" }),
+    ).toThrow(/unknown image variant: png/);
   });
 
   it("answers null for every card under the imageUrisMissing fault", () => {
@@ -2380,9 +2382,9 @@ describe("the deck row itself", () => {
   it("refuses an unknown deck, an unknown variant and a blank mode, and stores the rest", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const w = writeHandlers(db);
-    expect(() =>
-      w.deck_set_view_state({ deckId: 99, viewState: { variant: "theory" } }),
-    ).toThrow(/not there any more/);
+    expect(() => w.deck_set_view_state({ deckId: 99, viewState: { variant: "theory" } })).toThrow(
+      /not there any more/,
+    );
     expect(() =>
       w.deck_set_view_state({
         deckId: 1,
