@@ -228,7 +228,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
   **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
   build at 1280×800**, driven over `scripts/cdp.mjs` against the deck "test (copy)" (Commander, 11
-  cards, 9 categories, 6 stack columns). Every `StackGroup` `<section>` computed
+  cards, 9 categories, 6 stack columns). **That column count is the fixture as it stood on the day
+  and is no longer what this deck draws**: its empty Companion is not drawn at all now and its
+  Maybeboard rides the rail rather than the pack, while its empty `Enchantment` pile has started
+  drawing — see `grouping.ts`'s `drawsWhenEmpty` and `columns.ts`'s `splitRail`. Nothing measured
+  below depends on it; every reading here is per-`<section>` and holds wherever the section is
+  drawn. Every `StackGroup` `<section>` computed
   `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)`: the box survives and the line does
   not, so `border-transparent` is measured rather than argued, and the 2px `stackColumnWidth`
   spends on it is still being spent. The inactive Maybeboard computed
