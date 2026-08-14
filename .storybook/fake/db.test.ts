@@ -672,6 +672,17 @@ describe("a row whose card is gone", () => {
     expect(page.items[0].unitPrice).toBeNull();
     expect(page.items[0].setCode).toBe("lea");
     expect(page.items[0].lang).toBe("en");
+    // **`oracleId` null means exactly one thing here: this entry is orphaned.** It is read off
+    // `cards.oracle_id` and never denormalised onto the entry, and no live row is null (0 of
+    // 116 590) — so it is the fact the card menu's "View all printings" reads to tell "this
+    // printing has left the card database" from "the reader's copy is fine".
+    expect(page.items[0].oracleId).toBeNull();
+  });
+
+  it("answers the oracle card behind a healthy row, which is what greys nothing", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
+    const page = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } });
+    expect(page.items[0].oracleId).toBe(BOLT.oracleId);
   });
 
   it("survives a colour filter and fails a rarity one — SQL's NULLs, not a rule of thumb", () => {
