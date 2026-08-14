@@ -14,7 +14,7 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
-import { FORMATS, type CardSearch } from "./useCardSearch";
+import type { CardSearch } from "./useCardSearch";
 
 /**
  * Every filter the search view offers, in one row.
@@ -57,6 +57,23 @@ export function FilterBar({
    * The formats in the order the dropdown draws them: **pickable first, greyed last, each
    * half alphabetical by the word on screen.**
    *
+   * **The list is the search's own (`search.formats`) rather than the shared `FORMATS`, and it
+   * can be longer than that array.** The hook answers with those keys plus its caller's default
+   * format whenever that one is not among them — the deck editor's docked panel opens on the
+   * format of the deck being edited, and a deck can be in a format this picker has never
+   * offered. That extra key is not decoration: **a `<select>` whose `value` matches no
+   * `<option>` does not draw blank — it silently reports the first one.** React never assigns
+   * `select.value` for a controlled select; `react-dom` walks the options setting `selected`,
+   * and on no match it selects the first row that is not disabled — which here is the pinned
+   * `Any format`. So the control would read `Any format` while the filter it names goes on
+   * narrowing the results underneath, which is a control that lies about the list beside it.
+   * The options therefore have to come from whoever owns the value, and a constant imported
+   * here could only ever be right for the callers that never set one.
+   *
+   * The seeded key is a format like every other once it arrives: it sorts into the alphabet by
+   * its label, greys by its own facet count, and is pinned by nothing. `Any format` is the only
+   * row that stays outside the sort, because it is the only row that is not a format.
+   *
    * Alphabetical because a reader hunting for "Modern" hunts under M. `FORMATS`' own order is
    * roughly how the formats rank, which is knowledge this control never shows and which no two
    * players would write down the same way — so it stays a fact about the keys and stops being
@@ -69,7 +86,7 @@ export function FilterBar({
    * as the attribute — because the two are the same question and `optionDisabled`'s "a
    * selected option is never greyed" arm is exactly where they must not disagree: the format
    * the reader picked stays in the pickable half however its own count reads, so the way out
-   * of a dead end never sinks below six rows the reader cannot use.
+   * of a dead end never sinks below the rows the reader cannot use.
    *
    * With no facets at all `optionDisabled` is false for every key, so both halves collapse
    * into one plain alphabetical list without a branch for it.
@@ -77,14 +94,14 @@ export function FilterBar({
   const formatOptions = useMemo(
     () =>
       sortOptions(
-        FORMATS.map((f) => ({
+        search.formats.map((f) => ({
           ...f,
           disabled: optionDisabled(facets?.formats, f.value, search.format === f.value),
         })),
         (f) => f.label,
         (f) => [f.disabled ? 1 : 0],
       ),
-    [facets?.formats, search.format],
+    [facets?.formats, search.format, search.formats],
   );
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -165,7 +182,8 @@ export function FilterBar({
       >
         {/* Pinned above the sorted list rather than sorted into it: it is the answer "no
             filter" and not a format, so it belongs where a reader reaches for it blind —
-            first — whatever the alphabet and the facets do to the seven below. */}
+            first — whatever the alphabet and the facets do to the formats below, and however
+            many of them the search hands over. */}
         <option value="">Any format</option>
         {formatOptions.map((f) => (
           // The one place a real `disabled` is right: `<option disabled>` is native, and a
@@ -198,8 +216,11 @@ export function FilterBar({
         onClick={search.toggleOwned}
       />
 
-      {/* Nothing is drawn until there is something to clear — the rule lives in the
-          control, so every view that offers a reset offers the same one. */}
+      {/* Always drawn, greyed when there is nothing to clear — the rule lives in the control,
+          so every view that offers a reset offers the same one. This row is the reason it is
+          that way round: the search box above is `flex-1`, so a Reset that appeared on the
+          first press would take its width out of the box and slide all nine colour chips left
+          under the finger that just pressed one. */}
       <ResetAll count={search.activeCount} onReset={search.resetAll} />
 
       {/* A view mode rather than a filter, so it sits past the reset with the layout pair

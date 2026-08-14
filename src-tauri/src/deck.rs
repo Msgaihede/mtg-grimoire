@@ -56,6 +56,21 @@ const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// an omitted `formatKey` means here exactly what it means in SQL.
 pub const DEFAULT_FORMAT: &str = "casual";
 
+/// The `app_meta` key holding the format the last created deck was made in — what the New deck
+/// dialog opens on, so a reader who builds Pioneer decks stops re-picking Pioneer.
+///
+/// `app_meta` is the *application's* key/value table (schema v6), deliberately not `sync_meta`
+/// — a row in that one the sync did not write makes every later timing claim a fiction. **No
+/// migration**: this is a key in a table that has existed since v6, and a preference that
+/// needed a schema step would be a preference that could fail a launch. Nothing here is
+/// dropped by `schema::swap_staging` either, so the row survives every refresh of the corpus.
+///
+/// The third key of its kind, after [`crate::marketplace::K_MARKETPLACE`] and
+/// [`crate::card::K_PRINTING_GROUP_BY`] — and the one that is *not* written by a setter. It is
+/// a side effect of [`create_deck`], because the preference being remembered is "what the
+/// reader last did", not "what the reader chose in a settings panel".
+pub const K_LAST_DECK_FORMAT: &str = "last_deck_format";
+
 /// What [`add_card`] says when it is handed neither a category id nor a name to find or make
 /// one by. The two are alternatives, not a pair — an explicit id is a drop onto a named
 /// column, a name is the add path's "file it where this card belongs" (TypeScript's
@@ -571,6 +586,16 @@ pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, S
 ///   `NOT NULL DEFAULT 0`, so a bound NULL would fail the write outright — and spelling a
 ///   `coalesce(?n, 0)` to avoid that would put the patch's convention into a statement that
 ///   deliberately does not use it. `unwrap_or(false)` says the same thing without the echo.
+/// * **The format is remembered in [`K_LAST_DECK_FORMAT`], here and not at the call sites.**
+///   Three things about that line are invisible from it. It writes the **validated** key, so a
+///   blank `formatKey` is remembered as [`DEFAULT_FORMAT`] — what the deck actually is, not what
+///   the caller failed to say. Its error is **deliberately dropped**: a remembered preference
+///   must never cost the reader their deck, which is the exact contrast with the
+///   [`crate::deck_audit::record`] two lines below it, `?`-propagated because a deck's history
+///   is part of the deck. And it sits **inside the transaction**, so a create that is refused or
+///   rolled back remembers nothing. Here rather than at the two call sites because both — the
+///   gallery's create dialog, and `useDeckImport`'s import-into-a-new-deck, which is a
+///   `deck_create` followed by `deck_import_commit` — come through this function.
 ///
 /// `cover_kind` is absent from the column list on purpose and takes its DDL default,
 /// [`COVER_CARD_ART`]; [`DeckInput`] says why the other word cannot be reached from here.
@@ -616,8 +641,28 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
         &json!({ "field": "name", "from": null, "to": name }),
         0,
     )?;
+    // What the New deck dialog will open on next time. The **validated** key, so a blank
+    // `formatKey` is remembered as `DEFAULT_FORMAT` rather than as an empty string; inside the
+    // transaction, so a create that rolls back remembers nothing; and the error deliberately
+    // dropped, unlike the `?` two lines above — losing a preference is not worth losing a deck
+    // over. See this function's doc.
+    let _ = crate::update::set_app_meta(&tx, K_LAST_DECK_FORMAT, format_key);
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
+}
+
+/// The format the last deck was created in, exactly as [`create_deck`] recorded it — or `None`
+/// when no deck has ever been made here.
+///
+/// **Not validated against `format_specs`, and deliberately not defaulted.** Rust supplies the
+/// fact ("this is the key the last created deck carried"); TypeScript draws the conclusions —
+/// whether the picker still offers that format, and what to open on instead. That is the
+/// crate's own boundary, and it is why this answers an `Option` rather than falling back the way
+/// [`crate::marketplace::stored`] does: the fallback the dialog wants is Commander, which is a
+/// display decision, while the fallback SQL would supply is [`DEFAULT_FORMAT`], which is the
+/// column's default and not anybody's preference. Neither belongs in this answer.
+pub fn last_deck_format(conn: &Connection) -> Option<String> {
+    crate::update::get_app_meta(conn, K_LAST_DECK_FORMAT)
 }
 
 /// One `decks` row as it was before an edit — every column [`DeckPatch`] can reach, read
@@ -2854,6 +2899,25 @@ pub async fn format_specs_list(
     .map_err(|e| format!("the format list could not be read: {e}"))?
 }
 
+/// The format the last created deck was in, for the New deck dialog to open on. **Read-only.**
+///
+/// `null` means no deck has ever been created here — a fresh install, or a database whose
+/// `app_meta` row predates this key. The caller decides what to show for that, and for a key
+/// the picker no longer offers; see [`last_deck_format`]. The `Result` is `spawn_blocking`'s
+/// join and nothing else, because the read itself has no failure mode: `get_app_meta` reads an
+/// unreadable row as `None`.
+#[tauri::command]
+pub async fn deck_last_format(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        last_deck_format(&crate::sync::lock_db_read(&state))
+    })
+    .await
+    .map_err(|e| format!("the last deck format could not be read: {e}"))
+}
+
 /// The one click: everything this deck is short of, onto the wishlist.
 #[tauri::command]
 pub async fn deck_missing_to_wishlist(
@@ -4194,6 +4258,90 @@ mod tests {
             (renamed.format_key.as_str(), renamed.format_name.as_deref()),
             ("modern", Some("Modern"))
         );
+    }
+
+    /// A database nobody has made a deck in has no answer, and saying so is the point: the
+    /// dialog's fallback is Commander, which is a display decision this function must not make
+    /// (and `DEFAULT_FORMAT`, the one SQL would supply, is not it).
+    #[test]
+    fn a_database_with_no_decks_in_it_remembers_no_format() {
+        let conn = seeded();
+        assert_eq!(last_deck_format(&conn), None);
+    }
+
+    /// The whole feature: the New deck dialog opens on the format the reader last built in, and
+    /// the *last* one wins rather than the first.
+    #[test]
+    fn a_create_remembers_its_format_and_the_next_one_overwrites_it() {
+        let conn = seeded();
+
+        create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert_eq!(last_deck_format(&conn).as_deref(), Some("modern"));
+
+        create_deck(&conn, &input("Bolt Tribal", "commander")).unwrap();
+        assert_eq!(last_deck_format(&conn).as_deref(), Some("commander"));
+    }
+
+    /// The **validated** key is what is remembered, not the input. A blank `formatKey` makes a
+    /// `casual` deck (`decks.format_key`'s DDL default, through `valid_format`), so remembering
+    /// the empty string would open the next dialog on nothing at all.
+    #[test]
+    fn a_blank_format_is_remembered_as_the_one_the_deck_actually_got() {
+        let conn = seeded();
+
+        let deck = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Burn".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(deck.format_key, DEFAULT_FORMAT);
+        assert_eq!(last_deck_format(&conn).as_deref(), Some(DEFAULT_FORMAT));
+    }
+
+    /// The write is inside the transaction, and this is what pins it there: a create that is
+    /// refused leaves the previous answer standing rather than half-recording an intention. Both
+    /// refusals, because one is raised before the transaction opens (`valid_format`) and one
+    /// before that (`valid_name`) — and a future reordering must not make either land.
+    #[test]
+    fn a_refused_create_remembers_nothing() {
+        let conn = seeded();
+        create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        create_deck(&conn, &input("Kitchen", "kitchen-table")).unwrap_err();
+        create_deck(&conn, &input("   ", "commander")).unwrap_err();
+
+        assert_eq!(
+            last_deck_format(&conn).as_deref(),
+            Some("modern"),
+            "a refused create must leave the last real one's format standing"
+        );
+        assert_eq!(count(&conn, "decks"), 1);
+    }
+
+    /// Three preferences share `app_meta` now, and each has to survive the others being written.
+    /// `card.rs`'s `the_grouping_row_and_the_marketplace_row_do_not_collide` makes the same claim
+    /// about the two that were there first; this one is here because [`K_LAST_DECK_FORMAT`] is
+    /// the odd key out — it is written from this module, as a *side effect* of a create rather
+    /// than by a setter of its own, so nothing in `card.rs` or `marketplace.rs` is in a position
+    /// to notice it. A write that reached for the wrong key, or one that replaced the table's
+    /// contents instead of upserting a row into it, would read as the reader's printing grouping
+    /// and marketplace quietly reverting to their defaults the first time they made a deck —
+    /// two settings on two other screens, so nothing near the create would say so.
+    #[test]
+    fn a_create_leaves_the_other_app_meta_rows_standing() {
+        let conn = seeded();
+        crate::card::store_group_by(&conn, "set").unwrap();
+        crate::marketplace::store(&conn, "cardmarket").unwrap();
+
+        create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        assert_eq!(last_deck_format(&conn).as_deref(), Some("modern"));
+        assert_eq!(crate::card::stored_group_by(&conn), "set");
+        assert_eq!(crate::marketplace::stored(&conn), "cardmarket");
     }
 
     /// A new deck is born with the four predefined categories, because a deck that exists but

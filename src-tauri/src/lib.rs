@@ -263,6 +263,7 @@ pub fn run() {
             deck::deck_set_view_state,
             deck::deck_list,
             deck::deck_get,
+            deck::deck_last_format,
             deck::deck_add_card,
             deck::deck_set_card_quantity,
             deck::deck_move_card,

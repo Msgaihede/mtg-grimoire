@@ -67,8 +67,16 @@ export const Default: Story = {
     await expect(canvas.getByLabelText("Folder")).toHaveValue("");
     // The caption beside the label, not the option inside the select — both say the words, and
     // only one of them is the deck's own state.
+    //
+    // **`waitFor`, because this dialog is a `motion` surface**: its first painted frame carries
+    // its `initial`, so `toBeVisible` is false for everything inside it until the next frame —
+    // the rule `src/CLAUDE.md` states and the reason an assertion about content in a newly
+    // opened overlay cannot be a bare `expect`. It passed as one for exactly as long as nothing
+    // else was awaiting on the way in; the oracle-tag reads a deck now makes were enough to
+    // move it a frame, and jest-dom prints the failing element with `maxDepth: 0`, so it
+    // reported an empty `<p>` and looked for all the world like missing data.
     const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
-    await expect(caption.getByText("Top level")).toBeVisible();
+    await waitFor(() => expect(caption.getByText("Top level")).toBeVisible());
   },
 };
 

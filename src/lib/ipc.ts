@@ -2289,6 +2289,30 @@ export const ipc = {
   deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
   /**
+   * The format the last deck made on this install was given — or `null` where no deck has ever
+   * been made.
+   *
+   * **One `app_meta` row, written by `deck_create` and by nothing else.** That is what makes it
+   * true of *every* way of making a deck rather than of one dialog's: the gallery's New deck
+   * panel and the import dialog's into-a-new-deck arm both go through that command, so neither
+   * has to remember to record anything and no third route can be added that forgets to. It
+   * moves on a **create** and not on a re-format: the question it answers is what a reader
+   * *starts* a deck on, which is a different fact from what their decks currently are.
+   *
+   * A bare `string` rather than a narrowed format key — the same shape, for the same reason, as
+   * {@link getMarketplace} and {@link printingGroupBy} above. This is the **stored fact,
+   * unvalidated**: `decks.format_key` is deliberately not a foreign key and `format_specs` is
+   * re-seeded by migrations, so a key this build no longer offers really can come back out of
+   * the row, and a row a newer build wrote must reach this side as the string it is. The
+   * narrowing belongs to the module that owns the vocabulary, and here that vocabulary is
+   * `format_specs` and that module is `@/features/decks/useNewDeckFormat` — whose
+   * `newDeckFormat` tests the key against the picker and falls back rather than refusing.
+   *
+   * `null` is an answer and not a failure: it is the same sentence as "this reader has never
+   * made a deck", which is precisely the case the default exists for.
+   */
+  deckLastFormat: () => invoke<string | null>("deck_last_format"),
+  /**
    * Make a deck — **the whole deck, in one INSERT**, with its four predefined categories and
    * its one birth row of history in the same transaction. Every field of {@link DeckInput}
    * travels in this one call rather than as a create followed by a patch and a filing, which

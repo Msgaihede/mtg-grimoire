@@ -269,14 +269,12 @@ describe("two stories with different seeds, mounted together", () => {
       await expect(starter.getByRole("list", { name: "Your decks" })).toBeInTheDocument();
     });
     await waitFor(async () => {
-      await expect(
-        empty.getByText(/A deck is a list you build for a format\./),
-      ).toBeInTheDocument();
+      await expect(empty.getByText("No decks")).toBeInTheDocument();
     });
     // …and neither has the other's. Read after both positives have landed, on a DOM that has
     // already committed both stories.
     await expect(empty.queryByRole("list", { name: "Your decks" })).toBeNull();
-    await expect(starter.queryByText(/A deck is a list you build for a format\./)).toBeNull();
+    await expect(starter.queryByText("No decks")).toBeNull();
   });
 
   it("answers each one's mount-effect poll out of its own world", async () => {

@@ -32,8 +32,9 @@ const AT_MIN_WIDTH = "w-[776px]";
  * drift from the app while every story here stayed green. The hook is cheap: it queries the
  * seeded fake backend, and the 43-printing corpus answers at once.
  *
- * **The preset is applied from an effect, once.** `useCardSearch` takes no initial state, so
- * "two colours are on" can only be reached by pressing what a reader would press. An effect
+ * **The preset is applied from an effect, once.** The only initial state `useCardSearch` takes
+ * is a default *format*, which this wrapper does not pass — so every filter a story here opens
+ * on, that one included, is reached by pressing what a reader would press. An effect
  * rather than a `play`, because a `play` does not run on the docs page — Storybook renders the
  * stories there without autoplay — so a docs page built on plays would show six identical
  * untouched rows. The guard is a ref rather than a dependency array: the dependency would be
@@ -120,9 +121,11 @@ type Story = StoryObj<typeof meta>;
 /**
  * Nothing on: the row a reader opens the app to.
  *
- * Six grey controls and a splash of colour, with **no Reset all** — the rule lives in the
- * control (`FilterChips.tsx:222` returns `null` at zero) rather than in this row, so every view
- * that offers a reset offers the same one.
+ * Six grey controls and a splash of colour, with a **greyed Reset all** already holding its
+ * place at the end of them — the rule lives in the control rather than in this row, so every
+ * view that offers a reset offers the same one. It is drawn here and dead because the search
+ * box is `flex-1`: a Reset that arrived on the first press would take its width out of the box
+ * and slide every chip in this row left, under the finger that just pressed one.
  *
  * The two `<label>`s are `sr-only`, and the assertions below are the only way to see them: a
  * search box with a placeholder and no label is a field a screen reader announces as "search",
@@ -136,7 +139,10 @@ export const Default: Story = {
       "Search cards…",
     );
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
-    await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   },
 };
 
@@ -169,29 +175,25 @@ export const ActiveFilters: Story = {
  * The Owned chip is last on the row, and last for a reason — everything left of it describes
  * cardboard, and it describes the reader's relationship to it.
  *
- * **One thing this story found rather than showed:** the Reset all button's accessible name is
- * `"Reset all6"`, with no separator between the label and the badge. Measured 2026-08-09 with
- * `computeAccessibleName` from `dom-accessibility-api`, which is the resolver Testing Library's
- * `name` option uses. The badge is an inline `<span>` and the accname algorithm inserts nothing
- * between inline boxes. It is a defect in `FilterChips.ResetAll` and not in this row, so it is
- * reported rather than patched here — this task edits no component source.
+ * **One thing this story found rather than showed, and it has since been fixed:** the Reset all
+ * button's accessible name was `"Reset all6"`, with no separator between the label and the
+ * badge — measured 2026-08-09 with `computeAccessibleName` from `dom-accessibility-api`, the
+ * resolver Testing Library's `name` option uses. The badge is an inline `<span>` and the accname
+ * algorithm inserts nothing between inline boxes. Reported rather than patched at the time
+ * because that task edited no component source; patched when the button became always-drawn,
+ * which would have made the sentence `"Reset all0"` on every quiet row in the app. The badge is
+ * `aria-hidden` now and the count is spelled into the button's own name.
  */
 export const AllFiltersActive: Story = {
   args: { preset: everything },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // `findBy`, because the preset lands in an effect: the first query on this page has to wait
-    // for the render it caused.
-    //
-    // **Matched on a prefix and asserted on the text, because the accessible name is
-    // `"Reset all6"`** — measured 2026-08-09 by running `computeAccessibleName` from
-    // `dom-accessibility-api` (the resolver Testing Library's `name` option uses) over
-    // `<ResetAll count={6} />`. The badge is a `<span>`, `display: inline` gets no separator
-    // from the accname algorithm, and the JSX text before it ends without one — so a screen
-    // reader is read "Reset all6". It is a real (small) defect in `FilterChips.ResetAll` rather
-    // than a fact about this story, and it is left to be *reported* rather than worked around:
-    // no component source is edited by this task.
-    const reset = await canvas.findByRole("button", { name: /^Reset all/ });
+    // for the render it caused — **and it waits on the count in the name.** The button is drawn
+    // from the first render now, so a bare `/^Reset all/` would resolve against the row *before*
+    // the preset and every assertion below would read a state this story is not about. The badge
+    // is drawn rather than spoken; the visible label still leads the name (WCAG 2.5.3).
+    const reset = await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
     await expect(reset).toHaveTextContent("6");
     // Three chips pressed against a badge reading 6: this is the whole of "kinds, not values",
     // and it is invisible in a screenshot of a row full of gold.
@@ -227,9 +229,15 @@ export const Cleared: Story = {
   args: { preset: everything },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(await canvas.findByRole("button", { name: /^Reset all/ }));
+    // Waited on the count, not on the button: the button is drawn before the preset lands, and
+    // pressing it then would clear nothing and prove nothing.
+    const reset = await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
+    await userEvent.click(reset);
 
-    await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    // The button is still under the cursor that pressed it, greyed rather than gone — which is
+    // the whole of why it is drawn at zero. Nothing on the row moved.
+    await expect(reset).toHaveAttribute("aria-disabled", "true");
+    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
     await expect(canvas.getByLabelText("Search cards")).toHaveValue("");
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
     // Prefix matches throughout: every chip's accessible name now ends in the count the fake's
@@ -353,11 +361,12 @@ export const SomeUnavailable: Story = {
  * chip greys even though it returns something.
  *
  * The last assertion is the one that keeps this from being a trap. When a search greys most
- * of the row, `Reset all` is the escape, and it is drawn because the text filter is on. A
- * greyed row with no reset is the failure mode the "a selected option is never greyed" rule
- * exists to prevent, and it is what an *unfiltered* empty corpus would produce — which is why
- * `facets::compute` answers a corpus of zero rows `ready: false` rather than counting it
- * honestly.
+ * of the row, `Reset all` is the escape, and it is **live** because the text filter is on —
+ * which is the assertion, now that the button is drawn on every row whether or not it can do
+ * anything. A greyed row whose reset is also greyed is the failure mode the "a selected option
+ * is never greyed" rule exists to prevent, and it is what an *unfiltered* empty corpus would
+ * produce — which is why `facets::compute` answers a corpus of zero rows `ready: false` rather
+ * than counting it honestly.
  */
 export const MostlyUnavailable: Story = {
   args: { preset: (search) => search.setText("lotus") },
@@ -395,8 +404,11 @@ export const MostlyUnavailable: Story = {
     // "Any format" is never greyed — it is how a format filter is taken off.
     await expect(live).toEqual(["", "vintage"]);
 
-    // The escape, and the whole reason this row is allowed to look like this.
-    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+    // The escape, and the whole reason this row is allowed to look like this. Presence is no
+    // longer the claim — the button is on every row — so the claim is that it is *pressable*.
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   },
 };
 
@@ -424,8 +436,11 @@ export const IndexCold: Story = {
   parameters: { fake: { fault: "indexCold" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // The preset lands in an effect, so the first query waits for the render it caused.
-    await canvas.findByRole("button", { name: /^Reset all/ });
+    // The preset lands in an effect, so the first query waits for the render it caused —
+    // **on the count in the name, not on the button.** The button itself is drawn from the
+    // first render now, so `/^Reset all/` would resolve against the row *before* the preset
+    // and every assertion below would read a state this story is not about.
+    await canvas.findByRole("button", { name: "Reset all — 1 filter active" });
 
     const chips = canvas.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
     await expect(chips.length).toBeGreaterThan(0);
@@ -474,6 +489,9 @@ export const DockedPanel: Story = {
     // …and the rest of the row is still there, which is the other half of the claim: this prop
     // drops one control and nothing else.
     await expect(canvas.getByRole("group", { name: "Color identity" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: /^Reset all/ })).toHaveTextContent("6");
+    // On the count, because the button no longer appears with the preset — it is already there.
+    await expect(
+      await canvas.findByRole("button", { name: "Reset all — 6 filters active" }),
+    ).toHaveTextContent("6");
   },
 };

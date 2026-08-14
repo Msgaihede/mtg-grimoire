@@ -213,11 +213,12 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The three deck **reads**.
+   * The four deck **reads**.
    *
-   * `format_specs_list` is the odd one out and is pinned for it: it takes only the managed
-   * state, so an argument object here would be a deserialization error rather than a type
-   * error — `prewarm_collection`'s trap, in the module that added ten commands beside it.
+   * `format_specs_list` and `deck_last_format` are the odd ones out and are pinned for it: each
+   * takes only the managed state, so an argument object here would be a deserialization error
+   * rather than a type error — `prewarm_collection`'s trap, in the module that added ten
+   * commands beside it.
    */
   it("sends every deck read under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
@@ -240,6 +241,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue([]);
     await ipc.formatSpecs();
     expect(invoke).toHaveBeenCalledWith("format_specs_list");
+
+    // No assertion on what comes back. The mirror is `invoke(...) as Promise<string | null>`
+    // and does nothing to the answer, so reading back a value this line just mocked would test
+    // the mock. What can really drift is the name and the arity — the two things below.
+    invoke.mockResolvedValue("commander");
+    await ipc.deckLastFormat();
+    expect(invoke).toHaveBeenCalledWith("deck_last_format");
   });
 
   /**

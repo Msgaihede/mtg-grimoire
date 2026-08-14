@@ -169,14 +169,34 @@ describe("the X chip", () => {
 });
 
 describe("ResetAll", () => {
-  /** A control that spends most of its life disabled teaches the reader to stop looking
-   *  at it, so it is absent rather than dimmed. */
-  it("keeps out of the way until there is something to reset", () => {
+  /**
+   * It holds its place with nothing to clear, because the alternative moves the row: both
+   * filter bars put a `flex-1` search box left of the chips, so a button that appeared on the
+   * first press would take its width out of that box and slide every chip to its right left,
+   * under the finger that just pressed one.
+   */
+  it("holds its place, greyed, when there is nothing to reset", () => {
     const { rerender } = render(<ResetAll count={0} onReset={vi.fn()} />);
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    const reset = screen.getByRole("button", { name: /^Reset all/ });
+    expect(reset).toHaveAttribute("aria-disabled", "true");
 
     rerender(<ResetAll count={2} onReset={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /reset all/i })).toHaveTextContent("2");
+    expect(screen.getByRole("button", { name: /^Reset all/ })).not.toHaveAttribute("aria-disabled");
+  });
+
+  /** `aria-disabled`, never the attribute — the button is still focusable, and still ignores
+   *  the press. */
+  it("stays reachable and does nothing when it is greyed", async () => {
+    const onReset = vi.fn();
+    render(<ResetAll count={0} onReset={onReset} />);
+
+    const reset = screen.getByRole("button", { name: /^Reset all/ });
+    reset.focus();
+    expect(reset).toHaveFocus();
+
+    await userEvent.click(reset);
+
+    expect(onReset).not.toHaveBeenCalled();
   });
 
   it("counts kinds of filter, not values, and clears them", async () => {
@@ -186,5 +206,24 @@ describe("ResetAll", () => {
     await userEvent.click(screen.getByRole("button", { name: /reset all/i }));
 
     expect(onReset).toHaveBeenCalled();
+  });
+
+  /**
+   * The badge is drawn and not spoken: left in the accessible name it arrives with no
+   * separator before it — `"Reset all6"`, measured 2026-08-09 — which drawn-always would be
+   * `"Reset all0"` on every quiet row in the app. The count is said in words instead, after
+   * the visible label (WCAG 2.5.3).
+   */
+  it("says the count in words and draws it as a badge", () => {
+    const { rerender } = render(<ResetAll count={0} onReset={vi.fn()} />);
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 0 filters active");
+    expect(screen.getByRole("button")).toHaveTextContent("0");
+
+    rerender(<ResetAll count={1} onReset={vi.fn()} />);
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 1 filter active");
+
+    rerender(<ResetAll count={2} onReset={vi.fn()} />);
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 2 filters active");
+    expect(screen.getByRole("button")).toHaveTextContent("2");
   });
 });

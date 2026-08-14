@@ -169,7 +169,16 @@ const onImported = vi.fn();
  * The trigger is real because Escape's contract is "hand the caret back to whatever opened
  * this", and there is nothing to hand it back to without a button still on screen.
  */
-function Harness({ target = { kind: "new" } as ImportTarget }: { target?: ImportTarget }) {
+function Harness({
+  target = { kind: "new" } as ImportTarget,
+  /** What the host resolved for a `new` target — the gallery's `useNewDeckFormat()`. Left
+   *  `undefined` by default, which is the editor's mount of this dialog: it imports into a deck
+   *  that already has a format, so it passes nothing and the prop's own fallback applies. */
+  defaultFormatKey,
+}: {
+  target?: ImportTarget;
+  defaultFormatKey?: string;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <div>
@@ -178,6 +187,7 @@ function Harness({ target = { kind: "new" } as ImportTarget }: { target?: Import
       </button>
       <ImportDeckDialog
         target={target}
+        defaultFormatKey={defaultFormatKey}
         open={open}
         onDismiss={() => {
           onDismiss();
@@ -583,6 +593,42 @@ describe("the import deck dialog", () => {
 
     await waitFor(() => expect(go).toBeDisabled());
     expect(screen.getByText('line 1 · "1 Definitely Not A Card"')).toBeInTheDocument();
+  });
+
+  /**
+   * **A list pasted into a new deck starts on the format its host resolved** — the one the
+   * reader last created a deck in — because making a deck out of a decklist is the same act as
+   * making one from the gallery's dialog, and the two must not disagree about where it starts.
+   *
+   * The value is seeded at mount, so the `waitFor` below is the format *list* arriving rather
+   * than the value changing.
+   */
+  it("starts a new deck on the format the host resolved", async () => {
+    wrap(<Harness defaultFormatKey="commander" />);
+
+    const format = await screen.findByLabelText("Format");
+    await waitFor(() =>
+      expect(
+        within(format)
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toEqual(["Casual", "Commander", "Modern"]),
+    );
+    expect(format).toHaveValue("commander");
+  });
+
+  /**
+   * **And the prop is optional because one of its two hosts has nothing to say here.** The
+   * editor imports into a deck that already carries a format, so it passes nothing — and what a
+   * host that says nothing gets is `DEFAULT_FORMAT`, which is what this select started on
+   * before the prop existed.
+   */
+  it("falls back to Casual when the host passes no default", async () => {
+    wrap(<Harness />);
+
+    const format = await screen.findByLabelText("Format");
+    await waitFor(() => expect(within(format).getAllByRole("option")).toHaveLength(3));
+    expect(format).toHaveValue("casual");
   });
 
   it("offers Merge and Replace only when importing into a deck", async () => {
