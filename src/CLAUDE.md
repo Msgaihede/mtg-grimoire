@@ -157,6 +157,14 @@ Every one of these has its measurement and its story in
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.
+- **The chrome is set one step above the content, and the sidebar's width is not part of that
+  step.** Ribbon 56px, nav entry 44px, view title and app mark 20px Cinzel, nav labels and both
+  ribbon buttons 16px, status line 14px, chrome icons 20px. The **mana line stays 2px** (a
+  signature that grows with its frame is a border) and the **sidebar stays `w-52`/208px** —
+  `main` is what a wider column takes width from, and `DeckEditor`'s docked search panel has
+  **10px** of headroom at the app's own 1280px window, so widening the sidebar is a change to
+  `DECK_FLOOR`'s arithmetic first. Both, with every figure:
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **The ribbon's status line is one permanently mounted `role="status"`** — a live region that
   first appears with its sentence already inside announces nothing — and the number inside it is
   `aria-hidden`.

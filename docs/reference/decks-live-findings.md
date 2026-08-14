@@ -248,6 +248,12 @@ jsdom measures every element at zero.**
   1920×1080 the editor overflows by **0** and the deck takes the surplus (**612px**). All four
   views agree to the pixel (Stacks, Table, Text, Grid: desk 384, band 230, band top 688,
   `body.scrollWidth` 1265 — no horizontal scroll at any of them).
+  **Every "the window leaves" figure in this bullet was taken against a 48px ribbon and is 8px
+  large for the current build**: the shell was enlarged on 2026-08-14 and the ribbon is 56px, so
+  the 1280×800 editor is **702px**, the 1920×1080 surplus **604px** and the band top **680**.
+  The numbers that measure the column's own contents — 847, 384, 230, 92/229 — did not move,
+  and neither did anything horizontal: the sidebar stayed 208px precisely so the `DECK_FLOOR`
+  bullet below would keep holding.
 - **`DECK_FLOOR` had to drop 208 → 192, and the pass is the only thing that could have found
   it.** A page scroller is a second scrollbar, and the row pays for it: at 1280 with a card pane
   docked the desk measured **602** against the **617** in `DECK_FLOOR`'s own table, leaving the

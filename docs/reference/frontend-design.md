@@ -18,6 +18,41 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
 - Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- **The shell's scale is one step above the content's, and the sidebar's _width_ is not part of
+  it** (2026-08-14). The ribbon is **56px** (was 48), a nav entry **44px** (was 36), the view
+  title and app mark **20px** Cinzel (was 18), nav labels and both ribbon buttons **16px** (was
+  14), the status line **14px** (was 12), and every icon in the chrome **20px** (was 16). Two
+  things deliberately did not move. **The mana line stays 2px** — it is the signature, and a
+  signature that grows with its frame is a border. **The sidebar stays `w-52` (208px)**, because
+  `main` is what a wider column takes the width out of and `DeckEditor` is measured against
+  `main` to the pixel: at 1280×800 with a card pane docked the desk row is 602px, the docked
+  search panel plus its `gap-4` want 400, and `DECK_FLOOR` (192) leaves **10px** of headroom —
+  so anything past 208 rails that panel at the app's own default window, the exact failure
+  `DECK_FLOOR`'s 224 → 208 → 192 drops exist to prevent. Widening the sidebar is a change to the
+  deck editor's arithmetic first. The 8px the ribbon gained comes off the editor's height
+  instead, which only costs it 8px more of a scroll it already had.
+  **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build, against
+  the real 116,703-card corpus). At 1280×800: nav **208×800**, an entry **183×44** at 16px with
+  a 20×20 icon, the ribbon row **1072×56** at `top: 0`, the title and mark **20px** Cinzel, the
+  status line **14px** reading `116,703 cards · data from 2026-08-13`, Refresh **151×42** with a
+  20×20 icon, the mana line **1072×2**, and `main` **1072×742** at `top: 58` — so the editor
+  column is **702px**, which is the 710 figure less the ribbon's 8. `documentElement.scrollWidth`
+  **1280**: nothing scrolls sideways.
+  **The 1024px floor holds with everything on the row at once.** At 1024×768 the row is
+  **816×56** — the same 816 as before, because the sidebar did not move — and probing the worst
+  case by cloning a real button into it (an `Update to 0.3.0` at **171px**) beside the longest
+  sentence (`Downloading update 0.3.0 · 12 / 40 MB`, **248px**) left `row.scrollWidth` at 816,
+  `body.scrollWidth` at 1024, and **neither the title nor the status line clipped**. Refresh's
+  right edge is 1004, which is the row's own 20px padding.
+  **The deck editor's docked panel survives, which was the thing to check.** At 1280×800 with a
+  card pane docked (384px) the search panel stayed **`aria-expanded=true` and not disabled**, and
+  `body.scrollWidth` was **1265** — the same figure the 2026-08-13 pass recorded. At 1024 with the
+  pane open it rails, which is what `DECK_FLOOR`'s table has always said it does.
+  **A trap this pass walked into**: `setDeviceMetricsOverride` survives the socket that set it,
+  so a `size 1024 768` earlier in the run had the *next* check reading a railed panel at what
+  looked like 1280 — a regression that was not one. Read `innerWidth` in the same expression as
+  anything width-dependent; the harness contract says to end a run with an explicit `size 1280 800`
+  and this is the failure that rule is about.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats

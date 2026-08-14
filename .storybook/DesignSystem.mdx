@@ -87,15 +87,17 @@ for that line; the check under it is whether the bundled face is the one actuall
 <TypeSpecimen
   role="Display · font-heading · 18px floor"
   sample="Kamigawa: Neon Dynasty"
-  sampleClass="font-heading text-lg leading-none"
-  check='600 18px "Cinzel"'
+  sampleClass="font-heading text-xl leading-none"
+  check='600 20px "Cinzel"'
 >
   Cinzel, weights 500 and 600 (<code>--font-heading</code>, <code>src/index.css</code> line 31).
   View titles, the first-run hero, section headers — <strong>only</strong>. Never body text and
   never below 18px, which is the whole of its brief. The sample is the ribbon's own size, spelled{" "}
-  <code>font-heading text-lg</code> in <code>src/components/Ribbon.tsx</code> at line 76. The
-  first-run hero is the one place it goes larger, at <code>text-2xl</code> in the file{" "}
-  <code>src/components/SyncProgress.tsx</code> at line 160 — and the wordmark above it is this
+  <code>font-heading text-xl</code> in <code>src/components/Ribbon.tsx</code> at line 120 —{" "}
+  <strong>20px since the shell was enlarged on 2026-08-14</strong>, which moves the app's one
+  display line further from the 18px floor rather than nearer it. The first-run hero is the one
+  place it goes larger, at <code>text-2xl</code> in the file{" "}
+  <code>src/components/SyncProgress.tsx</code> at line 172 — and the wordmark above it is this
   sample's own size with letterspacing, which is the app saying its name in full in the one place
   there is room for it.
 </TypeSpecimen>
