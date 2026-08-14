@@ -279,11 +279,16 @@ describe("SearchPage", () => {
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
     await userEvent.click(screen.getByRole("button", { name: "All printings" }));
-    // Nothing to reset: a view mode is not a filter, so no Reset all appears.
-    expect(screen.queryByRole("button", { name: /reset/i })).not.toBeInTheDocument();
+    // Nothing to reset: a view mode is not a filter, so Reset all stays greyed. It is drawn
+    // from the first render — a button that appeared here would slide the whole row — so the
+    // claim is that it is dead, not that it is absent.
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     await userEvent.type(screen.getByPlaceholderText("Search cards…"), "bolt");
-    const reset = await screen.findByRole("button", { name: /reset/i });
+    const reset = await screen.findByRole("button", { name: "Reset all — 1 filter active" });
     await userEvent.click(reset);
 
     expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
@@ -474,7 +479,10 @@ describe("SearchPage", () => {
       expect(req.sets).toBeUndefined();
       expect(req.manaValues).toBeUndefined();
     });
-    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
+    // Greyed where it stands rather than gone: the button holds its width so that pressing it
+    // does not slide the row it sits in out from under the cursor that pressed it.
+    expect(reset).toHaveAttribute("aria-disabled", "true");
+    expect(reset).toHaveTextContent("0");
   });
 
   it("renders every nullable column without inventing a value", async () => {
@@ -920,13 +928,13 @@ describe("SearchPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Owned" }));
 
-    const reset = await screen.findByRole("button", { name: /reset all/i });
+    const reset = await screen.findByRole("button", { name: "Reset all — 1 filter active" });
     expect(reset).toHaveTextContent("1");
 
     await userEvent.click(reset);
 
     await waitFor(() => expect(lastRequest().owned).toBeUndefined());
-    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
+    expect(reset).toHaveAttribute("aria-disabled", "true");
   });
 
   it("keeps the loaded rows when a later page fails, and offers a retry", async () => {

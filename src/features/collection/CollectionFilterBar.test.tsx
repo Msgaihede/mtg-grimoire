@@ -212,11 +212,15 @@ describe("CollectionFilterBar", () => {
     ).toBeDisabled();
   });
 
-  /** Nothing to reset, nothing to say — an always-visible Reset is a control that is
-   *  disabled most of the time, which reads as broken. */
-  it("hides Reset all until something is filtered", () => {
+  /** Drawn from the first render and greyed until there is something to clear: a Reset that
+   *  arrived on the first press would take its width out of the `flex-1` search box above and
+   *  slide the row that is being pressed. */
+  it("draws Reset all greyed until something is filtered", () => {
     render(<CollectionFilterBar collection={collection()} />);
 
-    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 });
