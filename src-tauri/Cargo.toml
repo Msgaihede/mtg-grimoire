@@ -27,6 +27,15 @@ tauri-plugin-opener = "2"
 # nothing else; the other four dialog verbs (save, message, ask, confirm) are not permitted.
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
+# The other half of the Tauri MCP server in `.mcp.json`. That package is only ever a *client*:
+# it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
+# listens and `driver_session` answers `connected: false` forever. Registered under
+# `#[cfg(debug_assertions)]` in `lib.rs` — a release build compiles the crate and never opens
+# the port. It stays a plain dependency rather than an optional one on purpose: `tauri-build`
+# discovers a plugin's ACL permissions through the dependency graph, so dropping it from the
+# release profile would leave `capabilities/default.json`'s `mcp-bridge:` entries unresolvable
+# and fail the build that needs them least.
+tauri-plugin-mcp-bridge = "0.12"
 rusqlite = { version = "0.40", features = ["bundled"] }
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }

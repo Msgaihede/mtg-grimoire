@@ -270,7 +270,19 @@ export function ManaValueChips({
   xTitle?: (label: string) => string | undefined;
 }) {
   return (
-    <div role="group" aria-label="Mana value" className="flex gap-1">
+    // **`flex-wrap`, and it is load-bearing in exactly one place.** This row is ten `size-9`
+    // chips with `gap-1` between them — 10 × 36 + 9 × 4 = **396px**, measured — and the widest
+    // surface that draws it is not a filter bar across the window but the deck editor's **docked
+    // search panel, 384px** (`PANEL_WIDTH_PX`), whose content box is ~371. Unwrapped, the group is
+    // a flex item that cannot shrink below its own min-content, so it hung **25px** out of the
+    // panel; the editor is `overflow-y-auto`, which computes `overflow-x` to `auto`, so those 25px
+    // became a horizontal scrollbar across the whole deck builder — at every window width, since
+    // the panel's width never changes. Measured in the shipped window 2026-08-14: editor
+    // `scrollWidth` 1042 against `clientWidth` 1017 at 1280×800, and 2322 against 2297 at
+    // 2560×1400. **The X chip is what tipped it**: nine numerals came to 356 and fitted.
+    // Wrapping makes the group's min-content one chip, so it shrinks and breaks onto a second
+    // line in the panel and is unchanged in the two full-width filter bars, where it already fitted.
+    <div role="group" aria-label="Mana value" className="flex flex-wrap gap-1">
       {MANA_VALUES.map((value) => {
         // The last chip is open-ended: past Emrakul the tail is a handful of cards
         // nobody filters by exact cost, and the backend reads it the same way.

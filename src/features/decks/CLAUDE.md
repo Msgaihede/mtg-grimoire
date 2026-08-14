@@ -565,15 +565,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
   the pre-warm reports success and every tile then fetches cold anyway.
-- **`Stacks` and `Text` wrap their columns downward — neither view grows sideways any more**
-  (changed 2026-08-14). Both pack a deck's groups into fixed-width columns —
+- **`Stacks` and `Text` wrap downward — neither view grows sideways any more**
+  (changed 2026-08-14). Both lay a deck out in fixed-width boxes —
   `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
   next column _to the right_, so a fifteen-category deck ran off the edge and put an X scrollbar
   across the whole desk. That is the one thing the 1024px floor forbids, reached by the one route
   `DECK_FLOOR` never measured: **192** is the width the deck side is _guaranteed_, and it does not
   hold even one column — nor did the 208 it dropped from, nor the 224 before that. That floor
-  governs how the desk row is *divided*; it has never said anything about what the pack does inside
-  the view's share of it. The packed row is a `flex-wrap` container now, so a column that will not fit goes
+  governs how the desk row is *divided*; it has never said anything about what happens inside
+  the view's share of it. The row is a `flex-wrap` container now, so a box that will not fit goes
   **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
   rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
   wider than its box, and clipping a card is worse than a scrollbar the reader asked for. Wrapping
@@ -581,6 +581,31 @@ price | type`). An **inactive category stays its own group in all three grouping
   16-category deck: no X scrollbar at 1024, 1280 or 1920, the two wrap thresholds exact, and the
   rare case contained to the view rather than the page — every figure in
   [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **`Stacks` does not pack at all any more: every pile is a flex item of one wrapping box**
+  (changed 2026-08-14, later the same day). Wrapping fixed the *sideways* run and left the other
+  half of the same bug standing, because `packColumns` fills a column to a **height** and knows
+  nothing about the desk's **width**. So a tall window packed a six-pile deck into three tall
+  columns and left half the desk blank beside them, while the same deck in a shorter window spread
+  across all six and looked right — which is why it read to the reader as a zoom bug. `StackView`
+  now maps `splitRail`'s `flow` straight into `flex flex-wrap gap-x-4 gap-y-5` items of
+  `stackColumnWidth(zoom)` each, left to right in the reader's order, wrapping down. **The count of
+  boxes is `flow.length` and nothing else** — no zoom, no desk height — and CSS decides how many sit
+  on a line. `columnHeight` is gone from this view's props and `DeckEditor` no longer passes it;
+  `DEFAULT_COLUMN_HEIGHT` and the view's `groupHeight` went with it. **`packColumns` is untouched
+  and `TextView` still uses it**: a decklist line is 21px, so a column there holds thirty and
+  filling one is what makes that view readable — the two views differ because a card is 300px tall
+  and a line of text is not. **The price is a ragged foot**: a line is as tall as its tallest pile,
+  so a 40-card Creature stack beside three one-card piles leaves space under the short ones that
+  the pack would have filled. That was the trade taken deliberately — reading order is now
+  left-to-right in the order the reader sorted, which is what a `sortOrder` is *for*, and unspent
+  width was the complaint.
+- **`STACK_ATTR` (`data-deck-stack`) marks one pile in the flow**, and it replaced
+  `STACK_COLUMN_ATTR` (`data-stack-column`), which meant "a box `packColumns` produced". It sits on
+  `StackGroup`'s own `<section>` — there is no wrapper box left — beside the inline
+  `width`/`flex: 0 0 Npx` it draws at. **The rail's piles carry neither**, and the `flex` half is
+  why that is load-bearing rather than tidy: the rail is `flex-col`, so a basis on a child there
+  would be read down the main axis and become a *height*. It pairs with `RAIL_ATTR`
+  (`data-deck-rail`) — the two boxes a pile can be in, named the same way.
 - **The rail costs a column of flow, and at the app's own window that is the column.** Measured
   live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
   16px gap leave **362 — room for exactly one**. The same deck that used to show ~2.7 columns
@@ -602,9 +627,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   Maybeboard is there for the same three reasons the Sideboard is** — it is played _beside_ the deck
   rather than in it, it is routinely big because it is where the cuts and the candidates accumulate,
   and it is the other pile a reader looks for by _position_, which for a category seeded last means
-  the far end of a long run. **`packColumns` keeps its whole contract** — greedy, in the reader's
-  order, never reordering, never splitting a group, an over-tall group taking its own column — and
-  is simply handed fewer groups. The rail is drawn for an **empty** pile too: an empty pile is where
+  the far end of a long run. **The split changed neither view's contract** — `TextView`'s
+  `packColumns` is still greedy, in the reader's order, never reordering, never splitting a group,
+  an over-tall group taking its own column, and `StackView` still maps `flow` straight through in
+  that same order; both are simply handed fewer groups. The rail is drawn for an **empty** pile too: an empty pile is where
   the next card of that kind goes, and a rail that appeared with the first card would move the
   layout under the reader's hand. **No group with either kind is no rail at all** — and which groups
   carry the kind is `buildGroups`' answer, never a view's. Under `Group by` mana value or type the
@@ -623,9 +649,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   own `flex-wrap` drops the rail onto the next line — `ml-auto` is what keeps it on the right when
   it lands there, and a no-op at every other width. `min-w-0`/`flex-1` cannot say this, because a
   flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
-  **this view has no business observing its own box** (`DEFAULT_COLUMN_HEIGHT`'s doc: the editor
-  measures the scroller and passes the height), and a second reading of the same box answers a frame
-  behind the layout it is reacting to. The widths, and the law behind all three of these bullets:
+  **this view has no business observing its own box** — the rule that outlived
+  `DEFAULT_COLUMN_HEIGHT`, and is now stronger rather than weaker: the view takes no measurement of
+  the desk at all, in either axis. A second reading of the same box answers a frame behind the
+  layout it is reacting to. The widths, and the law behind all three of these bullets:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The rail is a plain flex child and nothing about it is sticky**, which is the one thing to read
   before reinstating anything. It was briefly `sticky right-0` over an opaque `bg-bg` at
@@ -634,8 +661,8 @@ price | type`). An **inactive category stays its own group in all three grouping
   downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
   shadow draws a permanent divider across a layout in which nothing moves. `ml-auto` is the whole
   mechanism that is left. The rail therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
-  `STACK_COLUMN_ATTR` means "a box `packColumns` produced", and the rail is by construction the one
-  box it never saw, so a sweep counting columns goes on counting what the packer decided. The
+  `STACK_ATTR` means "a pile drawn in the flow", and the rail's piles are by construction the ones
+  that never reach it, so a sweep counting the deck's own piles goes on counting those. The
   constant is spelled for the *rail* rather than for the Sideboard, because the Sideboard is no
   longer the only thing in it. `views.test.tsx` asserts
   those four absences alongside the classes, because reinstating a sticky rail is a two-word edit

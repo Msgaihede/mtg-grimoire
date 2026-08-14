@@ -6,6 +6,9 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "mcp-bridge:allow-report-ipc-event",
+    "mcp-bridge:allow-request-script-injection",
+    "mcp-bridge:allow-script-result"
   ]
 }

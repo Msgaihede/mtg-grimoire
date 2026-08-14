@@ -198,7 +198,7 @@ pub fn run() {
         update::await_predecessor(&exe, update::predecessor_pid(args));
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First, before every other plugin: this one has to decide whether the process
         // lives at all, and by the time another plugin has initialised, a second instance
         // has already opened `mtg.db` and the image cache directory that the first one
@@ -215,7 +215,35 @@ pub fn run() {
         // page (`DeleteConfirm`, the settings dialog), which is a deliberate choice and not an
         // oversight: a native message box cannot be styled, tested over CDP, or read by the
         // story runner.
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
+    // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
+    //
+    // It opens a WebSocket server inside this process; `@hypothesi/tauri-mcp-server` in
+    // `.mcp.json` is the client that dials it. That is what lets an agent drive the real
+    // window — read the DOM, invoke commands, watch IPC go past — the way `scripts/cdp.mjs`
+    // drives the page over CDP. The two are complementary, not rivals: CDP sees the webview,
+    // this sees the webview *and* the Rust side of every `invoke`.
+    //
+    // **`127.0.0.1`, never the plugin's own `0.0.0.0` default.** The bridge evaluates
+    // arbitrary JavaScript in the webview on request and authenticates nothing — and since
+    // `withGlobalTauri` puts `window.__TAURI__` in reach of that script, every command in the
+    // handler below is one `invoke` away from anyone who can open the socket. The plugin's
+    // default is for driving a phone across your LAN; this app is a single local user, so it
+    // takes the narrow bind for the same reason `capabilities/default.json` takes
+    // `dialog:allow-open` over `dialog:default`.
+    //
+    // Port 9223 (the plugin counts upward from it if it is busy), deliberately clear of the
+    // three ports this repo hardcodes: 1420 Vite, 6006 Storybook, 9222 CDP.
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build(),
+    );
+
+    builder
         // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
         // (that is Electron): registering the scheme here is what privileges it, and the
         // CSP in tauri.conf.json is what lets the page load from it. On Windows the origin
@@ -620,6 +648,57 @@ mod tests {
         assert!(
             !dev.contains('*'),
             "no wildcard sources belong in devCsp: {dev}"
+        );
+    }
+
+    /// Same argument as the CSP test above, for the same reason: the MCP bridge's blast
+    /// radius is set entirely in **configuration**, so nothing else can fail when it is
+    /// widened. It evaluates arbitrary JavaScript in the window, and `withGlobalTauri` puts
+    /// every command in the handler within one `invoke` of that script — which is the point,
+    /// and is why the permission list is the narrow one and not `mcp-bridge:default`.
+    ///
+    /// `:default` grants all thirteen of the plugin's commands. The webview invokes three;
+    /// the other ten are dispatched in Rust by the plugin's own `websocket.rs` and never
+    /// cross the IPC boundary, so the ACL is not even in their path.
+    /// `docs/reference/tauri-mcp-bridge.md` has the working out. The likely way this
+    /// regresses is someone debugging a bridge problem by reaching for `:default` — which
+    /// would fix nothing, because a command the ACL never sees cannot be denied by it.
+    #[test]
+    fn the_mcp_bridge_gets_three_permissions_and_never_its_default() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let granted: Vec<&str> = caps["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .collect();
+
+        let bridge: Vec<&str> = granted
+            .iter()
+            .copied()
+            .filter(|p| p.starts_with("mcp-bridge:"))
+            .collect();
+        assert_eq!(
+            bridge,
+            [
+                "mcp-bridge:allow-report-ipc-event",
+                "mcp-bridge:allow-request-script-injection",
+                "mcp-bridge:allow-script-result",
+            ],
+            "the bridge's permission set changed"
+        );
+
+        // `bridge.js` reaches the IPC through `window.__TAURI__` and there is no other route.
+        // Dropping this does not fail a build or a launch: the bridge still connects, and
+        // then IPC monitoring, script injection and every `execute_js` return value go quiet
+        // — which is the failure mode nobody reports because everything still answers.
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            conf["app"]["withGlobalTauri"],
+            serde_json::Value::Bool(true),
+            "the MCP bridge needs window.__TAURI__ exposed"
         );
     }
 }

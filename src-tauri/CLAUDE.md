@@ -319,6 +319,28 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   `tauri_plugin_fs::init()` is never called (the three registrations are single-instance, opener
   and dialog) and **no `fs:` permission is granted anywhere**, so the ACL would deny them even if
   it were. Adding a plugin means adding its narrowest permission, never its `:default`.
+- **`tauri-plugin-mcp-bridge` gets three of its thirteen commands, and which three is a fact
+  about the plugin's own source rather than a preference.** `mcp-bridge:default` grants all
+  thirteen; the webview only ever invokes **`report_ipc_event`** and
+  **`request_script_injection`** (`bridge.js:145`, `:658`) and **`script_result`**, the
+  callback baked into the wrapper `execute_js` evals, which is how a script hands its value
+  back (`commands/execute_js.rs:249`) — drop that one and every `webview_execute_js` returns
+  nothing, which is the tool an agent leans on most. The other ten are dispatched **in Rust**
+  by the plugin's `websocket.rs`, never over IPC, so the ACL is not in their path and granting
+  them buys nothing. `ipc_execute_command` reaching one of *this app's* commands needs no entry
+  either: Tauri v2's ACL gates `core:` and `plugin:` commands, and an app's own
+  `#[tauri::command]` is always callable.
+- **The bridge binds `127.0.0.1`, against the plugin's own `0.0.0.0` default.** It executes
+  arbitrary JavaScript and any command in the handler on request and authenticates nothing;
+  the upstream default exists for driving a phone across your LAN, and keeping it here would
+  offer that to whatever network the machine is on. Same reasoning as `dialog:allow-open`.
+- **`withGlobalTauri: true` is what the bridge needs, and it is not debug-only.** `bridge.js`
+  reaches the IPC through `window.__TAURI__`, so without it IPC monitoring, script injection
+  and `execute_js`'s result callback all go dark — but `tauri.conf.json` has no debug/release
+  split, so a release build carries the global too even though the plugin is `cfg`'d out of it.
+  What keeps that honest is the CSP: `script-src 'self'`, no remote origin, and no
+  `dangerouslySetInnerHTML` anywhere in `src/`, so no foreign script runs in the page to find
+  it. Adding any one of those three back is what would make a dev-only config worth its cost.
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
   load-bearing; re-enabling it kills all in-app drag-and-drop on Windows.
