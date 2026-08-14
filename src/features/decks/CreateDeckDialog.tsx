@@ -16,7 +16,16 @@ import { useDeckFolders } from "./useDeckFolders";
 import { pickerFormats, useFormatSpecs, type FormatOption } from "./useFormatSpecs";
 import type { Decks } from "./useDecks";
 
-/** Every answer a deck is born with, before the reader has changed any of them. */
+/**
+ * Every answer a deck is born with, before the reader has changed any of them — **except its
+ * format**.
+ *
+ * `formatKey` is {@link DEFAULT_FORMAT} so the constant is honest read on its own: it is
+ * `decks.format_key`'s own DDL default, and a deck that has been given no format really is
+ * Casual. But it is the *fallback* rather than the answer — {@link Panel} always overwrites it
+ * with the `defaultFormatKey` its host resolved, which is the format the reader last created a
+ * deck in. Nothing in this file leaves the value as it is written here.
+ */
 const BLANK: DeckSettingsValue = {
   name: "",
   formatKey: DEFAULT_FORMAT,
@@ -36,8 +45,12 @@ const BLANK: DeckSettingsValue = {
  * one-row list instead, which is what both of them do: the settings dialog folds the deck's own
  * format in through `pickerFormats`' `keep`, and this one falls back to here.
  *
- * Casual because it is what this dialog would create — `decks.format_key`'s own DDL default and
- * {@link DEFAULT_FORMAT}, which is also what {@link BLANK} starts on.
+ * Casual because in that window it really is what this dialog would create. The value and the
+ * one row it offers are kept in step by `newDeckFormat`'s last arm: with no specs in hand the
+ * picker is empty, so the resolved `defaultFormatKey` falls all the way through to
+ * {@link DEFAULT_FORMAT} — `decks.format_key`'s own DDL default — and the select's only option
+ * is the value it is holding. Once the table has answered, both halves move together: the list
+ * is the seed's and the value is the format the reader last built for.
  */
 const CASUAL_ONLY: readonly FormatOption[] = [{ key: DEFAULT_FORMAT, name: "Casual" }];
 
@@ -72,6 +85,18 @@ export interface CreateDeckDialogProps {
    * would be two answers, and the one on screen would be the one that never fired.
    */
   create: Decks["create"];
+  /**
+   * The format the draft starts on — the one the reader last created a deck in, else Commander.
+   *
+   * **Required, and resolved by the host rather than here.** The gallery is mounted long before
+   * this dialog is opened, so its answer is a real value by the time {@link Panel} mounts and
+   * can be read straight into the draft's initial state. A read of this component's own would
+   * arrive a beat *after* the first paint, which means overwriting a select the reader may
+   * already have used — and no `useEffect` can tell "the answer landed" from "the reader has
+   * not touched it yet". Making it required is what keeps that guarantee: a host that has not
+   * thought about the question cannot quietly get Casual.
+   */
+  defaultFormatKey: string;
   /**
    * **A mount, not a class**, exactly as `TheoryDiffDialog`'s is: everything with state — the
    * half-typed name, the picked format, the chosen cover, the caret — lives one component down,
@@ -135,6 +160,7 @@ export interface CreateDeckDialogProps {
  */
 export function CreateDeckDialog({
   create,
+  defaultFormatKey,
   open,
   onCreated,
   onDismiss,
@@ -151,6 +177,7 @@ export function CreateDeckDialog({
         <Panel
           key="create-deck"
           create={create}
+          defaultFormatKey={defaultFormatKey}
           onCreated={onCreated}
           onDismiss={onDismiss}
           onClose={onClose}
@@ -207,8 +234,27 @@ export function CreateDeckDialog({
  * feedback, and a printing whose artist genuinely cannot be found is still drawn as nothing.
  * The credit arrives **with** the picture and never before it.
  */
-function Panel({ create, onCreated, onDismiss, onClose }: Omit<CreateDeckDialogProps, "open">) {
-  const [value, setValue] = useState<DeckSettingsValue>(BLANK);
+function Panel({
+  create,
+  defaultFormatKey,
+  onCreated,
+  onDismiss,
+  onClose,
+}: Omit<CreateDeckDialogProps, "open">) {
+  /**
+   * The draft, seeded with the format the host resolved.
+   *
+   * **A lazy initializer, and mount-only by construction.** There is no effect anywhere here
+   * that could land on top of a format the reader has already picked — the question is asked
+   * once, when the panel mounts, and the answer is theirs from that moment. That is safe
+   * *because* {@link CreateDeckDialog} renders this only while it is open: closing unmounts the
+   * whole draft, so every reopen asks again and gets the freshly invalidated answer rather than
+   * a value cached from the last deck the reader started and abandoned.
+   */
+  const [value, setValue] = useState<DeckSettingsValue>(() => ({
+    ...BLANK,
+    formatKey: defaultFormatKey,
+  }));
   /**
    * The printing whose art the new deck wears. Not part of {@link DeckSettingsValue} — that is
    * the shape both hosts share, and the settings dialog's cover is a write rather than a field.

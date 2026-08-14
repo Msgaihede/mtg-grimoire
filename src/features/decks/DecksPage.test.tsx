@@ -19,6 +19,10 @@ const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+/** The one `app_meta` row behind "what does a new deck start on" — read by this screen and
+ *  handed to both surfaces that make a deck. `null` here means no deck has been created on this
+ *  install, which is the ordinary gallery's state as far as this preference is concerned. */
+const deckLastFormat = vi.hoisted(() => vi.fn());
 // The import dialog's three commands and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet". Mounted only while the dialog is open, but the
 // whole `ipc` object is replaced here, so a command left out is a `TypeError` rather than a
@@ -46,6 +50,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderMove,
     deckFolderDelete,
     formatSpecs,
+    deckLastFormat,
     deckImportResolve,
     deckImportCommit,
     deckImportReadFile,
@@ -210,6 +215,9 @@ beforeEach(() => {
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
+  // Nobody has made a deck yet, so there is no remembered format: the two create surfaces get
+  // Commander, which is what `newDeckFormat` answers for a reader with no history.
+  deckLastFormat.mockReset().mockResolvedValue(null);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
   deckImportResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
@@ -239,16 +247,19 @@ describe("DecksPage", () => {
   });
 
   /**
-   * An empty screen is an invitation to act: it says what the thing is and offers the one
-   * action that makes one. Not "No decks found", which blames the reader for a table nobody
-   * has put anything in yet.
+   * An empty wall says it is empty, and the way out of it is where it always is.
+   *
+   * It used to be a paragraph about what a deck is and what the app would do with one. The
+   * affordance was never those words — "New deck" sits in the heading row above on every visit,
+   * empty wall or not — so the sentence was an explanation carried by the one screen least able
+   * to act on it. Both halves are the claim: the placeholder, and the control still beside it.
    */
-  it("says what a deck is and offers to make one when there are none", async () => {
+  it("says the wall is empty and still offers to make a deck", async () => {
     deckList.mockResolvedValue([]);
 
     wrap(<DecksPage />);
 
-    expect(await screen.findByText(/a deck is a list you build for a format/i)).toBeInTheDocument();
+    expect(await screen.findByText("No decks")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New deck" })).toBeInTheDocument();
   });
 
@@ -479,7 +490,43 @@ describe("DecksPage", () => {
       .map((o) => o.textContent);
 
     expect(options).toEqual(["Casual", "Commander", "Modern", "Standard"]);
-    expect(format).toHaveValue("casual");
+    // Commander, not Casual: nothing has been created on this install, so there is no remembered
+    // format and `newDeckFormat` answers with what a first deck starts on. The value's own rule
+    // is the test below.
+    await waitFor(() => expect(format).toHaveValue("commander"));
+  });
+
+  /**
+   * **A new deck starts on the format the reader last created a deck in.**
+   *
+   * The wiring this pins is the one thing neither dialog's own suite can see: the gallery
+   * resolves the answer — it is mounted long before the button is pressed, which is what lets
+   * the dialog seed its draft at mount rather than overwrite it a beat later — and hands the
+   * same value to both surfaces that make a deck.
+   */
+  it("opens the create form on the format the last deck was created in", async () => {
+    deckLastFormat.mockResolvedValue("modern");
+    wrap(<DecksPage />);
+    // The wall first: the draft is seeded **at mount**, so this claim is only about the wiring
+    // if the screen has finished reading before the dialog is opened — which is the state a
+    // reader presses the button in, the gallery having been up since the app started.
+    await screen.findByRole("list", { name: "Your decks" });
+    await userEvent.click(screen.getByRole("button", { name: "New deck" }));
+
+    const format = await screen.findByLabelText("Format");
+    await waitFor(() => expect(format).toHaveValue("modern"));
+  });
+
+  /** The other door into a new deck, and it starts in the same place: a pasted list makes a deck
+   *  too, so the two cannot disagree about what format that deck is. */
+  it("opens the import dialog on the same remembered format", async () => {
+    deckLastFormat.mockResolvedValue("modern");
+    wrap(<DecksPage />);
+    await screen.findByRole("list", { name: "Your decks" });
+    await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
+
+    const format = await screen.findByLabelText("Format");
+    await waitFor(() => expect(format).toHaveValue("modern"));
   });
 
   /** Creating a deck is creating it *and* going to it — nobody makes a deck to look at a tile. */
@@ -548,7 +595,8 @@ describe("DecksPage", () => {
    *  follows, through the same handler. */
   it("opens the new deck in the editor after an import", async () => {
     wrap(<DecksPage />);
-    await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
+    await screen.findByRole("list", { name: "Your decks" });
+    await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
     await userEvent.click(screen.getByLabelText("Decklist"));
@@ -556,8 +604,11 @@ describe("DecksPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     await userEvent.click(await screen.findByRole("button", { name: "Import" }));
 
+    // Commander rather than Casual, and untouched by the reader: nothing has been created on
+    // this install, so the gallery's remembered format is what a first deck starts on — and it
+    // reaches the import dialog exactly as it reaches the create one.
     await waitFor(() =>
-      expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "casual" }),
+      expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "commander" }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
   });
