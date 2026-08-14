@@ -37,6 +37,18 @@ Every one of these has its measurement and its story in
   and therefore to a test in the obvious place**; assert element _identity_.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place.
+- **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
+  finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
+  printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph
+  without its ribbon — one fact drawn three ways (the stack's banner, the other deck views' `GC`,
+  this), differing only in the room each has. One gold (`text-pie-gold`) everywhere, never the
+  destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns the whole
+  chip off, crown included, for a frame that names these somewhere else.
+- **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
+  `pointer-events-none` is a tooltip that can never be shown — and nothing goes red.** A hit
+  target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is
+  `pointer-events-auto` against its wrapper's `none` for exactly this reason; it is inside the
+  enclosing button, so a click on it still opens the card.
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
   credited** (Scryfall's image policy). A `grid`/`thumb`/`display` image carries the printed
   credit itself and needs nothing. Never distort, blur, recolour or watermark a card image, and
@@ -53,8 +65,13 @@ Every one of these has its measurement and its story in
   _registration_ order. Every new dismissible layer follows this or it will close something it
   did not open. A layer that Escape dismissed hands focus back to whatever opened it; an
   outside-click deliberately does not.
-- **An anchored popup near the right of a row is pinned to its trigger's _right_ edge** —
-  nothing clips these popups, so one that overflows scrolls the whole app sideways.
+- **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
+  — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
+  left. Nothing clips these popups, so one that overflows scrolls the whole app sideways; and
+  the corner it is pinned by has to be the corner it grows from, or the panel reads as unrelated
+  to the control that produced it. Mirroring one anchor onto another popup is wrong in both
+  directions — see the two comboboxes in
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **Money is drawn with `formatPrice(value, currency)` and the currency comes from
   `useMarketplace()`** — never a bare `Intl.NumberFormat`. **The marketplace is a query
   parameter and Rust answers one price per row**, so a cell renders the number it was given and
@@ -90,11 +107,33 @@ Every one of these has its measurement and its story in
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
+- **Ctrl+wheel zooms the card sections and nothing else.** One `cardZoom` in `useAppStore`, stepped
+  along the ten-stop ladder in `src/lib/cardZoom.ts` (0.5×–2×) and attached per card section through
+  `useCardZoomGesture` — `CardGrid`'s scroller, `StackView`'s and `GridView`'s roots. The shell, the
+  tables and the card pane never scale. Three rules carry it, each with a live failure behind it in
+  [frontend-design.md](../docs/reference/frontend-design.md): the gesture needs a **native**
+  `addEventListener` with `{ passive: false }` (React's `onWheel` is passive, so `preventDefault`
+  does nothing and WebView2 zooms the whole window on top of you); the zoom rescales **geometry**
+  and is never a `transform: scale()`; and **a scaled budget holding unscaled chrome floors rather
+  than scales** — `max(base, scaled(base, zoom))`, which is why `CardGrid`'s caption, `CardStack`'s
+  34px reveal and `GridView`'s gutter all grow without shrinking. Session-only by design: no
+  persistence, matching `searchView`/`collectionView`.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns are
   data; only `renderRow` and `extraHeight` stay callbacks. **A header sorts by what its column
   shows**, Shift builds a multi-key sort, and `aria-sort` goes on **every** sorted column. A
   column's own description belongs on the `columnheader`, not on the button inside it —
   name-from-content does not reach into a descendant's `aria-label`.
+- **Every option list — `<select>` or hand-rolled listbox — is drawn through `sortOptions` in
+  `src/lib/options.ts`.** Alphabetical by the **display label**, never the key, through one
+  `Intl.Collator` pinned to `"en"`; a faceted control passes grouping levels so its greyed rows
+  sink below its pickable ones (`SetCombobox` also floats the picked ones to the top, because
+  the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
+  is not the bug when a picker reads wrong. Pinned rows (`Any format`, `Custom…`,
+  `Auto (by card type)`, `Move…`, `Top level`) stay outside the sort, and `CategoriesPanel`'s
+  `are deleted with it` stays pinned **last**. **Exactly two exemptions**: a grade scale (card
+  condition, Near Mint → Damaged) and an order the reader arranged themselves (deck categories).
+  Both carry a comment at the site; see
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.

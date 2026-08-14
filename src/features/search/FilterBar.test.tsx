@@ -81,6 +81,42 @@ describe("FilterBar", () => {
     expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
   });
 
+  /**
+   * The chip is off by default and off means *hidden*, which is the one thing about it a
+   * reader cannot see. So the tooltip — which is the accessible name too — has to name the
+   * cards rather than restate the label: "unplayable" reads to a player as "banned in my
+   * format", which is a different and much larger set of cards.
+   */
+  it("offers the printings no format allows, switched off", async () => {
+    const toggleUnplayable = vi.fn();
+    render(<FilterBar search={search({ unplayable: false, toggleUnplayable })} />);
+
+    const chip = screen.getByRole("button", { name: /^Unplayable/ });
+    expect(chip).toHaveTextContent("Unplayable");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(chip).toHaveAccessibleName(
+      "Unplayable — art cards, tokens and other printings that are legal nowhere",
+    );
+    // And it does **not** carry the word `format`, which names the select five controls to
+    // its left: `SearchPage.test.tsx` reaches that select by `getByLabelText(/format/i)`, and
+    // a second accessible name containing it makes four tests there ambiguous rather than
+    // wrong — the failure that reads as somebody else's regression.
+    expect(chip).not.toHaveAccessibleName(/format/i);
+
+    await userEvent.click(chip);
+
+    expect(toggleUnplayable).toHaveBeenCalled();
+  });
+
+  it("shows the unplayable printings as on once they are", () => {
+    render(<FilterBar search={search({ unplayable: true })} />);
+
+    expect(screen.getByRole("button", { name: /^Unplayable/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("counts what Reset all would clear, and clears it", async () => {
     const resetAll = vi.fn();
     render(<FilterBar search={search({ activeCount: 3, colors: ["W"], resetAll })} />);
@@ -255,5 +291,144 @@ describe("FilterBar, greyed by its facets", () => {
     expect(
       screen.getByRole("button", { name: "Missing — 37 printings" }),
     ).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+describe("FilterBar, its format options in order", () => {
+  /** Every `<option>` the select draws, in document order. The **sequence** is the behaviour
+   *  under test, so each of these asserts the whole list: two formats swapped past each other
+   *  pass any assertion about one row's presence, and did. */
+  const formatOrder = () => screen.getAllByRole("option").map((o) => o.textContent);
+
+  /**
+   * A reader hunting for "Modern" hunts under M. `FORMATS` is authored in the order the formats
+   * rank, which is knowledge a `<select>` never shows, so with nothing greyed the dropdown has
+   * to read as one plain alphabet — and with no facets in hand `optionDisabled` answers false
+   * for every key, which is the path that has to fall out of the grouping rather than be a
+   * special case somebody has to remember.
+   */
+  it("reads alphabetically while the index is still building", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Standard",
+      "Vintage",
+    ]);
+  });
+
+  /**
+   * The whole point of the sinking: what can be picked is what is seen first. A format nothing
+   * in this search is legal in is kept rather than dropped — it says the search has nothing
+   * there, and a list that shed rows as the facets landed would jump under the cursor — but it
+   * has no business sitting between two formats that would return cards.
+   */
+  it("floats the pickable formats above the greyed ones, each half alphabetical", () => {
+    render(
+      <FilterBar
+        search={search({
+          facets: facets({
+            formats: {
+              standard: 5,
+              pioneer: 0,
+              modern: 5,
+              legacy: 0,
+              vintage: 5,
+              pauper: 0,
+              commander: 5,
+            },
+          }),
+        })}
+      />,
+    );
+
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Commander",
+      "Modern",
+      "Standard",
+      "Vintage",
+      "Legacy",
+      "Pauper",
+      "Pioneer",
+    ]);
+    // The split is the greying itself and not a second reading of the counts that could drift
+    // from it — one `optionDisabled` answer decides both the half and the attribute.
+    expect(screen.getByRole("option", { name: "Vintage" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Legacy" })).toBeDisabled();
+  });
+
+  /**
+   * `optionDisabled`'s "a selected option is never greyed" rule, reaching the ordering.
+   * A picked format can be at zero — a search narrowed after the fact empties it — and it is
+   * the one row the reader needs, because changing it is how they get their cards back.
+   * Sinking it would file that row below every row they cannot use.
+   */
+  it("keeps the selected format above the greyed ones even at zero", () => {
+    render(
+      <FilterBar
+        search={search({
+          format: "vintage",
+          facets: facets({
+            formats: {
+              standard: 5,
+              pioneer: 0,
+              modern: 0,
+              legacy: 0,
+              vintage: 0,
+              pauper: 0,
+              commander: 0,
+            },
+          }),
+        })}
+      />,
+    );
+
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Standard",
+      "Vintage",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+    ]);
+    expect(screen.getByRole("option", { name: "Vintage" })).not.toBeDisabled();
+  });
+
+  /**
+   * The dead end — a search so narrow that every format greys at once, which one card and a
+   * text filter is enough to reach. "Any format" is pinned outside the sorted list, so it is
+   * first and pickable here exactly as it is everywhere else: it is the answer "no filter"
+   * rather than a format, and it is how a reader who has filtered themselves into nothing
+   * gets out.
+   */
+  it("pins Any format first even when nothing at all is legal", () => {
+    render(
+      <FilterBar
+        search={search({
+          facets: facets({ formats: Object.fromEntries(FORMATS.map((f) => [f.value, 0])) }),
+        })}
+      />,
+    );
+
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Standard",
+      "Vintage",
+    ]);
+    expect(screen.getByRole("option", { name: "Any format" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Commander" })).toBeDisabled();
   });
 });

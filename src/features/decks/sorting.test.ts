@@ -163,7 +163,14 @@ describe("sortCards", () => {
     }
   });
 
-  /** The toolbar's select is built from this list, so the four are named once. */
+  /**
+   * The toolbar's select is built from this list, so the four are named once — membership and
+   * the label each order is offered by, which is what this pins.
+   *
+   * **Not the order the reader sees.** `DeckEditor` puts this array through `sortOptions`
+   * before drawing it, so a fifth order appended here lands under its own letter rather than
+   * at the end of the dropdown; the picker's own sequence is pinned in `DeckEditor.test.tsx`.
+   */
   it("offers exactly the four orders the toolbar shows", () => {
     expect(SORT_OPTIONS.map((o) => o.value)).toEqual(["alphabetical", "manaCost", "price", "type"]);
     expect(SORT_OPTIONS.map((o) => o.label)).toEqual([

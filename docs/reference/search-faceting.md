@@ -8,6 +8,17 @@ never greyed — that is the way out of a dead end — and every failure fails *
 not-greyed means "we don't know", greyed means "this is empty", and only one of those is safe
 to guess.
 
+**Greying decides the order as well as the paint.** A greyed option sinks below every
+pickable one, and each half is alphabetical by the words on screen — `sortOptions` in
+`src/lib/options.ts`, which every option list in the app is drawn through. It sinks rather
+than disappearing for the reason the picker greys rather than filters in the first place:
+dropping a row would make the list jump under the cursor on every keystroke, and the count
+behind it ("nothing in this search") is an answer worth showing. Two properties make this
+safe rather than jumpy, and both are the backend's doing — `facets::compute` skips the
+dimension it is counting, so **picking a format does not reorder the format list and picking
+a set does not reorder the set list**. A control never re-sorts under the press that is
+using it.
+
 - **`CardIndex` is an in-memory index over the corpus, in the shape a search engine uses**,
   and it exists because faceting needs a count per option per dimension on every keystroke.
   The three SQL shapes were measured 2026-08-11 (see the build note under `legal_mask`): a
@@ -24,6 +35,31 @@ to guess.
   0.78 MB / 0.12 ms). **986 and 1 047 are both right and mean different things** — 986 paper
   sets against 1 047 codes over every printing, because `set_ord` covers the whole corpus and
   a digital-only set still needs an ordinal (`index/mod.rs`). The picker's counts use 1 047.
+- **Two dimensions are in every base and are not facets: `paper` and `playable`.** Neither is
+  offered as a control on the row, so neither excludes its own filter — they narrow the base a
+  count is taken over, including its own dimension's. **Their defaults are opposites**, which is
+  the whole of what a reader has to keep straight: `paperOnly` is omitted-means-**true** (every
+  caller wants it), while `playableOnly` is omitted-means-**false** and is sent explicitly by the
+  search view alone (`useCardSearch`), because a collection and a wishlist list what the user owns
+  and wants and an art card in a binder is still in the binder. `playable` is
+  `cards.legal_mask != 0` — legal or restricted in at least one of the 23 keys — set per row at
+  build time from the stored integer rather than folded out of `CardIndex::formats`, so it stays
+  right for a bit this build has no name for. It cannot move a **format** count in either
+  direction: every `formats[k]` is a subset of it.
+- **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`npm run tauri dev`,
+  a **debug** build, live 116 703-printing corpus): of **107 346** paper printings, **9 032** are
+  legal in no format — 8.4% — leaving **98 314** the search offers by default. Both figures are
+  `facet_cards`' own exact `total`, which is printings and is not capped, read through the app's
+  `ipc` module in the page. The shape of what it removes, on `lightning bolt`: **3 cards → 7**
+  when the chip is pressed, and the four that arrive are three Mystery Booster playtest cards
+  (`cmb2 67`, `mb2 596`, `unk rz34` — each printed with *TEST CARD — Not for constructed play*)
+  and the `astx 76` art card. `Toralf's Disciple` (`mb2 261`) is in **both** answers: it is an
+  ordinary reprint that happens to share a set with the playtest cards, which is the case a
+  set-based or layout-based filter would have got wrong. The facets moved with it — mana chip 5
+  was greyed on that search with the chip off and live with it on, which is the counts describing
+  the same corpus the page does. Same numbers in the deck editor's docked panel, whose row is
+  **371px** and gains no line from the chip (6 lines, 212px, with it and with it hidden); the
+  search row at the 1024px floor is 4 lines and 124px either way.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it
@@ -83,7 +119,12 @@ Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing
   search", opacity 0.45); a `standard` format filter greys **26 of the 50 set rows on screen**
   out of 384–592 of the 1 047 codes the picker knows. (1 047 against the 986 quoted in
   `index/mod.rs`: that one is the **paper** corpus the index is built over, this one is every
-  code `list_sets` returns.) A facet pass costs **4.4–47.6 ms** end to end through `invoke` on
+  code `list_sets` returns.) **The "50 set rows on screen" is the cap as it stood that day and
+  not the cap now**: the picker's first page is 100, with a `Show 50 more` step
+  (`MAX_OPTIONS`/`MORE_STEP` in `SetCombobox.tsx`), and greyed rows now sink to the bottom of
+  the list — so a re-measure would count a different 26 in a different place. The 384–592 and
+  the 1 047 are untouched by either change; they are facts about the corpus, not about the
+  page. A facet pass costs **4.4–47.6 ms** end to end through `invoke` on
   a **debug** build (medians of five; worst is a colour dimension at 47.6 ms) and
   **4.7–6.0 ms** on a **release** one — so the design's 57 ms budget is cleared with the
   pessimistic figure. Name the build: the ~8× between those two lines is the whole reason

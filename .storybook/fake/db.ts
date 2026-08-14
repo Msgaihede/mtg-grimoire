@@ -83,10 +83,13 @@
  *    {@link foldRank} keeps a whole name ahead of a front face, which is the half that decides
  *    which printing a name lands on.
  *
- * Deliberately *not* on that list: `everUncommon`, `power`/`toughness`, `priceUsd` and
- * `isPaper` are **read off their columns**. They are facts the generator took from the full
- * 116 k-row corpus, and re-deriving any of them over a 43-row fixture would answer a question
- * about the fixture while looking like an answer about the card.
+ * Deliberately *not* on that list: `everUncommon`, `gameChanger`, `power`/`toughness`,
+ * `priceUsd` and `isPaper` are **read off their columns**. They are facts the generator took
+ * from the full 116 k-row corpus, and re-deriving any of them over a 43-row fixture would
+ * answer a question about the fixture while looking like an answer about the card.
+ * `gameChanger` is the one most tempting to re-derive — a list of names is short enough to
+ * type — and a hand-typed list is exactly how a fake starts disagreeing with the Commander
+ * Format Panel's.
  *
  * Nothing here is `async`: these are synchronous functions, and the fake `invoke` in
  * `core.ts` is what makes a command a promise. That keeps `db.test.ts` free of `await` on
@@ -96,6 +99,11 @@ import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
 import { CURRENT_VERSION, NEXT_VERSION, release } from "./fixtures";
+import {
+  DEFAULT_PRINTING_GROUP_BY,
+  PRINTING_GROUP_BY_OPTIONS,
+  isPrintingGroupBy,
+} from "@/features/card/printings";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -505,6 +513,16 @@ export interface FakeDb {
    */
   marketplace: string | null;
   /**
+   * `app_meta.printing_group_by` — how the card pane groups its printings list.
+   *
+   * A **stored string** and `null` for the row not being there, for {@link FakeDb.marketplace}'s
+   * reason and it is the same reason twice: a fresh install has never written it, and a value
+   * written by a different build may name a grouping this one has never heard of. Both read as
+   * `artist`, and only a *write* refuses — so storing it narrowed would put the two states this
+   * setting actually has out of a story's reach.
+   */
+  printingGroupBy: string | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -591,6 +609,18 @@ export interface FakeOracleTagMeta {
 }
 
 /**
+ * `card::PRINTING_GROUP_BY_MODES` — every way the card pane groups its printings, in the order
+ * the picker offers them and the order the backend's refusal names them in.
+ *
+ * Derived from `PRINTING_GROUP_BY_OPTIONS` rather than re-listed, for the reason
+ * `isMarketplaceId` is imported one setting over: the modes are a *list*, the Rust validates
+ * against a copy of that list, and a third copy living in the fake would be the one nothing
+ * ever checks — it would keep passing its own tests while telling stories about a mode the app
+ * had dropped.
+ */
+const PRINTING_GROUP_BY_MODES: readonly string[] = PRINTING_GROUP_BY_OPTIONS.map((o) => o.value);
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -663,6 +693,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
+    // The same, one row over: `printing_group_by` answers `artist` for a card pane nobody has
+    // told, which is the grouping every story that says nothing about it is standing in.
+    printingGroupBy: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -1370,6 +1403,19 @@ function matchesCardFilters(
   if (f.paperOnly ?? true) {
     if (!card?.isPaper) return false;
   }
+
+  // Omitted means **false**, which is the one place two neighbouring `…Only` flags disagree
+  // about their default — see `filters::CardFilters::playable_only`. The real predicate is
+  // `legal_mask != 0`, and the mask is `legalities` folded to one integer over the same two
+  // playable values the format filter above accepts, so asking the blob directly is the same
+  // question: is this card legal or restricted *anywhere*. An orphan fails it, as it fails
+  // format, because `NULL != 0` is NULL.
+  if (f.playableOnly ?? false) {
+    const legalities = parseJson(card?.legalities ?? null);
+    if (typeof legalities !== "object" || legalities === null) return false;
+    const values = Object.values(legalities as Record<string, unknown>);
+    if (!values.some((v) => v === "legal" || v === "restricted")) return false;
+  }
   return true;
 }
 
@@ -1496,6 +1542,12 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary 
     layout: c.layout,
     oracleId: c.oracleId,
     finishes: c.finishes,
+    // The column, read straight through and never re-derived from a list of names — an
+    // **oracle**-level fact, so every printing agrees and {@link collapseToCards} inherits
+    // the representative's like `rarity`, with no aggregate needed to make a group agree
+    // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
+    // from `cards`, so it can never be the orphan that field's `null` is for.
+    gameChanger: c.gameChanger,
     ownedQuantity: ownedOfPrinting(db, c.id),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
@@ -1519,7 +1571,8 @@ function collapseKey(c: FakeCard): string {
 }
 
 /**
- * `search.rs`'s collapsed page: one row per card, represented by the **newest** printing.
+ * `search.rs`'s collapsed page: one row per card, represented by the **cheapest printing of the
+ * newest release** among the printings that matched.
  *
  * Three things here are the parts a fake most easily gets wrong, so each is the real rule:
  *
@@ -1541,15 +1594,50 @@ function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): Ca
   }
 
   return [...groups.values()].map((group) => {
-    // `released_at DESC, id DESC` — the real pick, ties to the greatest id.
-    const rep = [...group].sort((a, b) => cmp(b.releasedAt, a.releasedAt) || cmp(b.id, a.id))[0];
+    // One price per printing, at the marketplace the request named, **priced once per printing
+    // and then read from this map** — by the representative below and by the span beneath it,
+    // so the row cannot pick its printing at one marketplace and quote its range at another.
+    //
+    // Priced up front rather than inside the comparator, and that is a cost rather than a
+    // tidiness point: on a feed marketplace `priceColumnAt` is up to three linear `find`s over
+    // every `marketplacePrices` row, and a comparator calls it O(n log n) times per group
+    // instead of n. Sorting the `large` seed's 686 groups through it is the fake's slowest path
+    // there is.
+    const prices = new Map<string, number | null>(
+      group.map((c) => [c.id, priceColumnAt(db, c, mp)]),
+    );
+    const priceOf = (c: FakeCard): number | null => prices.get(c.id) ?? null;
+    // `released_at DESC, price ASC NULLS LAST, id DESC` — the real pick, in three keys.
+    //
+    // * **The date first**, because the row stands for the card as it is printed *now*: a
+    //   cheaper old printing must not pull the row back to it.
+    // * **Then the price**, which is what makes the row the cheapest way into that latest
+    //   release. Every printing sharing the newest date is weighed together **whatever set it
+    //   is in**, and the missing set key is deliberate rather than an omission: promo sets are
+    //   `p`-prefixed (`pkhm` beside `khm`), so a `set_code DESC` tie-break would hand every
+    //   same-day tie to the promo printing — measured dearer far more often than not, which is
+    //   the one thing a rule called "cheapest" must never do.
+    // * **A `null` sorts last, never first.** It means "this marketplace does not quote this
+    //   printing", not "free", so it loses to every priced printing of the same date and only
+    //   represents the card when nothing of that date is priced at all.
+    // * `id` last, so the pick is total and stable — unchanged.
+    const rep = [...group].sort((a, b) => {
+      const byDate = cmp(b.releasedAt, a.releasedAt);
+      if (byDate !== 0) return byDate;
+      const pa = priceOf(a);
+      const pb = priceOf(b);
+      if (pa !== pb) {
+        if (pa === null) return 1;
+        if (pb === null) return -1;
+        return pa - pb;
+      }
+      return cmp(b.id, a.id);
+    })[0];
     // **The span covers the printings this marketplace prices**, and no others. Not one span
     // converted: a group whose only priced printing is etched has a TCGplayer span and no
     // Cardmarket one at all, and a group a feed has never listed has none there — the hole
     // showing up as an absent range rather than as a narrower one.
-    const priced = group
-      .map((c) => priceColumnAt(db, c, mp))
-      .filter((p): p is number => p !== null);
+    const priced = [...prices.values()].filter((p): p is number => p !== null);
     return {
       ...toCardSummary(db, rep, mp),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
@@ -2957,6 +3045,10 @@ export function readHandlers(db: FakeDb) {
        * `paperOnly: false` because the base has already applied the request's own paper
        * decision — putting the default back here would drop the digital printings a
        * `paperOnly: false` search asked for.
+       *
+       * `playableOnly` needs no such line, and the asymmetry is its default rather than an
+       * oversight: it is off unless asked for, so an option's own filter object cannot put
+       * back a narrowing the base already made. The base is where the request's value lives.
        */
       const countWith = (rows: FakeCard[], f: CardFilters) =>
         rows.filter((c) => matchesCardFilters(c, { ...f, paperOnly: false }, null)).length;
@@ -3446,6 +3538,25 @@ export function readHandlers(db: FakeDb) {
       db.marketplace !== null && isMarketplaceId(db.marketplace)
         ? db.marketplace
         : DEFAULT_MARKETPLACE,
+
+    /**
+     * `card::printing_group_by` — the stored grouping, or the default.
+     *
+     * The second `app_meta` setting and the same shape as the one above it, deliberately: both
+     * ways to the default are here, because they are the two the command exists to absorb — the
+     * row has never been written, or it holds a mode this build does not recognise.
+     *
+     * What is different is what the fallback protects. A marketplace falling back costs a
+     * reader the prices they wanted; this one costs them a grouping, on **the surface they
+     * opened to look at a card**. A stale row must never be the reason a printings list refuses
+     * to draw, which is why the read narrows and shrugs where the write refuses in words.
+     *
+     * A read, so it answers through a sync like every other one here — the write below does not.
+     */
+    printing_group_by: (): string =>
+      db.printingGroupBy !== null && isPrintingGroupBy(db.printingGroupBy)
+        ? db.printingGroupBy
+        : DEFAULT_PRINTING_GROUP_BY,
 
     /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
@@ -5652,6 +5763,33 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.marketplace = args.id;
+    },
+
+    /**
+     * `card::set_printing_group_by` — choose how the card pane groups its printings, and refuse
+     * anything else.
+     *
+     * **The refusal is the half a fake is easiest to get wrong by leaving out**, and the one
+     * this file's job description is about: the read side falls back on a mode it does not
+     * know, so a fake that accepted any string would let a story save `"rarity"`, read back
+     * `"artist"`, and look like it worked — the exact bug the backend's validation exists to
+     * make impossible. `card::store_group_by`'s sentence, verbatim.
+     *
+     * It honours `busy` like every other ordinary write here — the command takes the write
+     * connection through `db::lock_for`, not `sync::lock_db`. **The lock comes first and the
+     * mode is checked inside it**, which is the Rust's own order and `set_marketplace`'s: a bad
+     * mode sent while a sync holds the connection answers BUSY, because nothing has looked at
+     * the mode yet.
+     */
+    set_printing_group_by: (args: { mode: string }): void => {
+      refuseIfBusy(db);
+      if (!isPrintingGroupBy(args.mode)) {
+        throw refuse(
+          `"${args.mode}" is not a way this app groups printings. ` +
+            `Expected one of: ${PRINTING_GROUP_BY_MODES.join(", ")}.`,
+        );
+      }
+      db.printingGroupBy = args.mode;
     },
 
     /**

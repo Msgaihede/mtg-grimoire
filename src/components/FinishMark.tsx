@@ -19,6 +19,12 @@ const GLYPH = { foil: Sparkles, etched: Gem } as const;
  *
  * Nonfoil draws nothing at all — it is the finish a price is assumed to be, which is the rule
  * the letter table stated before this component replaced it.
+ *
+ * **The `<title>` below is only shown where the caller is a hit target.** It was written for a
+ * pointer and, over card art, no pointer could reach it for months: `FoilOverlay`'s chip
+ * inherited the overlay's `pointer-events: none`, and a tooltip is shown by the element the
+ * pointer *hits*. A mark placed inside anything `pointer-events-none` is a mark with no
+ * tooltip, silently.
  */
 export function FinishMark({ finish, className }: { finish: Finish; className?: string }) {
   if (finish === "nonfoil") return null;

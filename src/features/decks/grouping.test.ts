@@ -584,7 +584,14 @@ describe("buildGroups by a derived key", () => {
     expect(group.totalPrice).toBeNull();
   });
 
-  /** The toolbar's "Group by" select is built from this list. */
+  /**
+   * The toolbar's "Group by" select is built from this list, and what this pins is its
+   * *membership* and the label each mode is offered by — three groupings, named once.
+   *
+   * **Not the order the reader sees**, which is `DeckEditor`'s: it puts this array through
+   * `sortOptions` before drawing it, so the sequence here is free to read in whatever order
+   * explains the modes. `DeckEditor.test.tsx` is where the picker's own order is pinned.
+   */
   it("offers exactly the three groupings the toolbar shows", () => {
     expect(GROUP_BY_OPTIONS.map((o) => o.value)).toEqual(["category", "manaValue", "type"]);
     expect(GROUP_BY_OPTIONS.map((o) => o.label)).toEqual(["Categories", "Mana value", "Type"]);

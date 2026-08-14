@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import {
   dropTargetForElements,
@@ -16,6 +15,7 @@ import {
 import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
+import { sortOptions } from "@/lib/options";
 import { pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
@@ -30,10 +30,11 @@ import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
 import { buildGroups, GROUP_BY_OPTIONS, type GroupBy } from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
+import { QuickAdd } from "./QuickAdd";
 import { SORT_OPTIONS, type SortBy } from "./sorting";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
-import { useFormatSpecs } from "./useFormatSpecs";
+import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateDeck } from "./validation/engine";
 import { violationsByCard } from "./violations";
@@ -41,6 +42,17 @@ import { GridView } from "./views/GridView";
 import { StackView } from "./views/StackView";
 import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
+
+/**
+ * The toolbar's two option lists, as the toolbar draws them: alphabetically by label.
+ *
+ * Sorted here rather than trusted from `grouping.ts` and `sorting.ts`, whose arrays are named
+ * in domain order and happen to read alphabetically today — which is exactly how an ordering
+ * drifts the day somebody appends a fourth grouping or a fifth sort. Module level, so the sort
+ * is paid once per session rather than once per render of the largest component in the app.
+ */
+const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
+const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
 /** A header/toolbar control that is not a chip: a select, a field, a plain press. 32px, so the
  *  two rows read as rows rather than as a pile of differently sized boxes. The property list is
@@ -147,14 +159,17 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * `check` is the format check anchored to its chip; the other five are **full-window overlays**
  * on `LAYER.overlay` — which is one rung and not five for exactly this reason (see `layers.ts`).
  *
- * **There is a seventh `"inner"` peer on this screen, and it is not in this union**: the set
- * filter inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`). It is
- * a whole layer of somebody else's, so the union cannot model it — what keeps it apart is
- * **focus and click mechanics, not structure**. Opening it takes the caret out of whichever of
- * these is up, and every one of them closes on focus-out or on a press outside its own root;
- * opening any of these takes the caret out of the combobox, which closes on focus-out and on a
- * mousedown outside its root. Pinned both ways by `DeckEditor.test.tsx`'s "never has the set
- * filter and one of the editor's own layers open at once".
+ * **Two more `"inner"` peers sit on this screen and neither is in this union**: the set filter
+ * inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`), and the quick
+ * add's suggestion list (`QuickAdd.tsx`, in the toolbar above). Both are whole layers of
+ * somebody else's, so the union cannot model them — what keeps them apart is **focus and click
+ * mechanics, not structure**. Opening either takes the caret out of whichever of these is up,
+ * and every one of them closes on focus-out or on a press outside its own root; opening any of
+ * these takes the caret out of that combobox, which closes on focus-out and on a mousedown
+ * outside its root. The quick add narrows it further by registering **only while its list is
+ * actually up** (`enabled: listOpen`), so a field the reader is merely typing in owns no press
+ * at all. Pinned both ways by `DeckEditor.test.tsx`'s "never has the set filter and one of the
+ * editor's own layers open at once".
  *
  * **The card pane docked beside this view carries two more, and they are peers of these**: its
  * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
@@ -236,9 +251,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
   const [statsOpen, setStatsOpen] = useState(true);
   const [layer, setLayer] = useState<Layer>(null);
-  /** What the quick-add field is holding, and what the last press could not find. */
-  const [quickText, setQuickText] = useState("");
-  const [quickMiss, setQuickMiss] = useState<string | null>(null);
 
   /**
    * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
@@ -694,14 +706,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [deck.update, dropDraft, row]);
 
   /** The picker, plus the deck's own format when the seed no longer offers it — a select that
-   *  cannot show its own value would silently re-format the deck on the first other change. */
-  const formats = useMemo(() => {
-    const picker = specs
-      .filter((s) => s.enabledInPicker)
-      .map((s) => ({ key: s.key, name: s.displayName }));
-    if (!row || picker.some((f) => f.key === row.formatKey)) return picker;
-    return [{ key: row.formatKey, name: row.formatName ?? row.formatKey }, ...picker];
-  }, [specs, row]);
+   *  cannot show its own value would silently re-format the deck on the first other change.
+   *  Both halves are `pickerFormats`', including that the deck's own row is *folded into* the
+   *  alphabet rather than pinned in front of it. */
+  const formats = useMemo(
+    () =>
+      pickerFormats(specs, row && { key: row.formatKey, name: row.formatName ?? row.formatKey }),
+    [specs, row],
+  );
 
   /**
    * How many rows the two lists disagree about — a **row** count, which is what "cards differ"
@@ -792,46 +804,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     targetCategoryId === AUTO_CATEGORY
       ? null
       : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
-
-  /**
-   * The quick add: a name, and the card it turns out to be.
-   *
-   * One search, `collapse: true` and `limit: 1` — the newest printing of the best match, which
-   * is the same printing the docked panel's wall offers first for the same query. It is a
-   * **shortcut over that wall**, not a second way of choosing a printing: a reader who cares
-   * which one they get has the panel open beside them.
-   *
-   * A miss is said in words rather than swallowed. The field keeps what was typed on a miss and
-   * is cleared on a hit, because the two are different next actions: correct it, or type the
-   * next card.
-   */
-  const quickAdd = useMutation({
-    mutationFn: (text: string) => ipc.searchCards({ text, collapse: true, limit: 1, offset: 0 }),
-    onSuccess: (found, text) => {
-      const card = found.items[0];
-      if (!card) {
-        setQuickMiss(text);
-        return;
-      }
-      setQuickMiss(null);
-      setQuickText("");
-      // The search answered a whole `CardSummary`, so the type line is already in hand and the
-      // auto arm costs nothing extra — which is the point of filing from a *found* card rather
-      // than from a typed name.
-      addTo(card.id, targetCategoryId, card.typeLine);
-    },
-  });
-  const quickAddFailure = quickAdd.isError ? ipcError(quickAdd.error) : null;
-  const submitQuickAdd = () => {
-    const text = quickText.trim();
-    // No `targetCategoryId === 0` guard any more: zero is `AUTO_CATEGORY` now, which is a
-    // perfectly good destination. The guard existed because zero meant "the deck has not loaded
-    // yet", and a load that has not happened is now covered by the field being in an editor that
-    // only mounts for an open deck.
-    if (!text) return;
-    setQuickMiss(null);
-    quickAdd.mutate(text);
-  };
 
   const viewProps = {
     groups,
@@ -1094,39 +1066,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               select of the same categories two inches away. */}
           <div className="flex items-center gap-1.5">
             <span className="text-[0.6875rem] text-dim">Quick add</span>
-            <input
-              type="text"
-              // Named for where the card will land, and under `Auto` that is per card — so the
-              // name says only what it can promise. "Quick add a card to Auto (by card type)"
-              // would be a control named after a setting rather than after what pressing it does.
-              aria-label={
-                targetName === null ? "Quick add a card" : `Quick add a card to ${targetName}`
-              }
-              placeholder="Sol Ring…"
-              value={quickText}
-              onChange={(e) => setQuickText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                e.preventDefault();
-                submitQuickAdd();
-              }}
-              className={cn(
-                "h-8 w-52 rounded-md border border-border bg-bg px-2.5 text-[0.8125rem]",
-                FOCUS,
-              )}
+            {/* The field, its suggestions and its status line are one control and live in one
+                component. What stays here is the *decision* — which pile an add lands in, and
+                the write that puts it there — because that is the editor's, and because the
+                search answered a whole `CardSummary`: the type line is already in hand, so the
+                auto arm costs nothing extra, which is the point of filing from a *found* card
+                rather than from a typed name. */}
+            <QuickAdd
+              targetName={targetName}
+              onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
             />
-            {/* One live region, mounted for as long as the toolbar is: a region that appears
-                together with its text announces nothing, because there was no change to
-                notice. */}
-            <p role="status" className="min-w-0 text-[0.6875rem] text-dim">
-              {quickAddFailure
-                ? `Could not search — ${quickAddFailure}`
-                : quickAdd.isPending
-                  ? "Looking…"
-                  : quickMiss !== null
-                    ? `No card found for “${quickMiss}”.`
-                    : ""}
-            </p>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1167,7 +1116,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               onChange={(e) => setGroupBy(e.target.value as GroupBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
-              {GROUP_BY_OPTIONS.map((option) => (
+              {GROUP_BY_PICKER.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -1185,7 +1134,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               onChange={(e) => setSortBy(e.target.value as SortBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
-              {SORT_OPTIONS.map((option) => (
+              {SORT_BY_PICKER.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>

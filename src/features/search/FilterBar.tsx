@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
@@ -8,6 +9,7 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
+import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { colorDisabled, facetTitle, optionDisabled } from "./facets";
@@ -51,6 +53,39 @@ export function FilterBar({
    * a failed query and the first render all arrive as.
    */
   const facets = search.facets;
+  /**
+   * The formats in the order the dropdown draws them: **pickable first, greyed last, each
+   * half alphabetical by the word on screen.**
+   *
+   * Alphabetical because a reader hunting for "Modern" hunts under M. `FORMATS`' own order is
+   * roughly how the formats rank, which is knowledge this control never shows and which no two
+   * players would write down the same way — so it stays a fact about the keys and stops being
+   * a layout. The greyed half sinks rather than disappearing: a format nothing in this search
+   * is legal in is still worth offering (it says the search has nothing there), and dropping it
+   * would make the list jump under the cursor each time the facets land, which is the same
+   * reason `SetCombobox` greys instead of filtering.
+   *
+   * Each option's disabled state is decided once and spent twice — as the grouping level and
+   * as the attribute — because the two are the same question and `optionDisabled`'s "a
+   * selected option is never greyed" arm is exactly where they must not disagree: the format
+   * the reader picked stays in the pickable half however its own count reads, so the way out
+   * of a dead end never sinks below six rows the reader cannot use.
+   *
+   * With no facets at all `optionDisabled` is false for every key, so both halves collapse
+   * into one plain alphabetical list without a branch for it.
+   */
+  const formatOptions = useMemo(
+    () =>
+      sortOptions(
+        FORMATS.map((f) => ({
+          ...f,
+          disabled: optionDisabled(facets?.formats, f.value, search.format === f.value),
+        })),
+        (f) => f.label,
+        (f) => [f.disabled ? 1 : 0],
+      ),
+    [facets?.formats, search.format],
+  );
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <label htmlFor="card-search-text" className="sr-only">
@@ -119,17 +154,16 @@ export function FilterBar({
           search.format ? "border-accent text-accent" : "border-border text-dim",
         )}
       >
+        {/* Pinned above the sorted list rather than sorted into it: it is the answer "no
+            filter" and not a format, so it belongs where a reader reaches for it blind —
+            first — whatever the alphabet and the facets do to the seven below. */}
         <option value="">Any format</option>
-        {FORMATS.map((f) => (
+        {formatOptions.map((f) => (
           // The one place a real `disabled` is right: `<option disabled>` is native, and a
           // listbox option is not a tab stop there is anything to lose. No count rides here
           // — a `title` on an `<option>` is not drawn by Windows' native dropdown, so it
           // would be a sentence nobody can read.
-          <option
-            key={f.value}
-            value={f.value}
-            disabled={optionDisabled(facets?.formats, f.value, search.format === f.value)}
-          >
+          <option key={f.value} value={f.value} disabled={f.disabled}>
             {f.label}
           </option>
         ))}
@@ -167,6 +201,29 @@ export function FilterBar({
         label="All printings"
         pressed={search.allPrintings}
         onClick={search.toggleAllPrintings}
+      />
+
+      {/* Its neighbour's other half, and it rides here for the same reason: both say what
+          there is to look *through* rather than what to look for, so both sit past the reset
+          and both survive it.
+
+          One title in both states rather than two, exactly as the Owned chip does it — the
+          sentence names what the chip's word names, which reads correctly whether the reader
+          is about to press it or is already inside it. It leads with the visible label
+          because the `title` is the accessible name too (WCAG 2.5.3), and it says which
+          cards it means: "unplayable" is otherwise easy to read as "banned in my format",
+          which is a different and much larger set of cards.
+
+          **It says "legal nowhere" rather than "legal in no format" deliberately.** The word
+          `format` names the select five controls to the left, and an accessible name carrying
+          it makes `getByLabelText(/format/i)` — which four tests in `SearchPage.test.tsx` use
+          to reach that select — match two controls instead of one. Two names on one row
+          sharing the word that identifies one of them is worth avoiding for a reader too. */}
+      <ToggleChip
+        label="Unplayable"
+        pressed={search.unplayable}
+        title="Unplayable — art cards, tokens and other printings that are legal nowhere"
+        onClick={search.toggleUnplayable}
       />
 
       {layoutToggle && <ViewToggle />}

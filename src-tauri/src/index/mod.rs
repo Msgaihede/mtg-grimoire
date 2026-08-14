@@ -57,6 +57,17 @@ pub struct CardIndex {
     pub mana: [BitSet; Self::MANA_BUCKETS],
     /// One per [`crate::legalities::LEGALITY_KEYS`] entry, same order.
     pub formats: Vec<BitSet>,
+    /// Printings with a **non-zero** `legal_mask` — playable in at least one format.
+    ///
+    /// Not a facet dimension and not offered as one: it is
+    /// [`crate::filters::CardFilters::playable_only`]'s bitset, mirroring that filter's
+    /// `legal_mask != 0` so it can ride every facet base the way `paper` does.
+    ///
+    /// Set per row rather than folded out of [`Self::formats`] afterwards, because the SQL it
+    /// has to agree with tests the stored integer and not the 23 bits this build knows how to
+    /// name. The two are the same set today — [`crate::legalities::legal_mask`] only ever sets
+    /// bits it has a key for — and only one of them stays right if that ever stops being true.
+    pub playable: BitSet,
     /// Set ordinal per doc, indexing [`CardIndex::set_codes`]. `u16` because 986 codes is
     /// three orders of magnitude inside its range and this array is one per printing.
     pub set_ord: Vec<u16>,
@@ -143,6 +154,7 @@ impl CardIndex {
             formats: (0..crate::legalities::LEGALITY_KEYS.len())
                 .map(|_| BitSet::new(capacity))
                 .collect(),
+            playable: BitSet::new(capacity),
             set_ord: vec![0; capacity],
             set_codes: Vec::new(),
             owned: BitSet::new(capacity),
@@ -218,6 +230,11 @@ impl CardIndex {
             }
 
             let mask = mask.unwrap_or(0) as u64;
+            // The whole integer, before it is picked apart into bits — `legal_mask != 0`, the
+            // predicate `push_card_filters` emits for `playable_only`.
+            if mask != 0 {
+                ix.playable.set(doc);
+            }
             for (k, set) in ix.formats.iter_mut().enumerate() {
                 if mask & (1u64 << k) != 0 {
                     set.set(doc);
@@ -519,6 +536,48 @@ mod tests {
         let rav = ix.set_codes.iter().position(|c| c == "rav").unwrap();
         assert_eq!(counts[lea], 2);
         assert_eq!(counts[rav], 1);
+    }
+
+    /// `playable` is the whole mask asked one question — "is any bit set" — and it has to
+    /// answer it for a bit this build cannot *name*, because the SQL it mirrors
+    /// (`legal_mask != 0`) tests the stored integer rather than the 23 keys
+    /// [`crate::legalities::LEGALITY_KEYS`] holds. Folding [`CardIndex::formats`] together
+    /// instead would pass every assertion here but the last one, and would grey a card out of
+    /// a search that returns it the day Scryfall's list outruns ours.
+    #[test]
+    fn playable_holds_the_printings_with_any_legality_bit_at_all() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                legal_mask,raw)
+             VALUES ('5','Lightning Bolt Art Card','astx','76','en','art_series',1,0,'{}'),
+                    ('6','Unnamed Format','fut','1','en','normal',1,?1,'{}')",
+            [1i64 << 63],
+        )
+        .unwrap();
+
+        let ix = CardIndex::build(&conn).unwrap();
+        assert!(
+            ix.playable.contains(doc(&conn, "1")),
+            "Bolt is modern-legal"
+        );
+        assert!(
+            !ix.playable.contains(doc(&conn, "3")),
+            "Sol Ring masks to 0"
+        );
+        assert!(
+            !ix.playable.contains(doc(&conn, "5")),
+            "an art card is legal nowhere"
+        );
+        assert!(
+            ix.playable.contains(doc(&conn, "6")),
+            "a bit with no key is still a bit, and `legal_mask != 0` returns the row"
+        );
+        assert_eq!(
+            ix.playable.and_count(&ix.paper),
+            3,
+            "Bolt, Helix and the bit"
+        );
     }
 
     #[test]

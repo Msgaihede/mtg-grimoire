@@ -23,6 +23,15 @@
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`/`OracleTagStatus`    — `src-tauri/src/oracle_tags.rs`
  *
+ * **Two settings carry no struct at all.** Each is one `app_meta` row answered as a bare
+ * string: `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`). Both are the same shape,
+ * and it is the shape a stored preference has to have — the read falls back on its default for
+ * a row that is missing *or* holds a value this build does not recognise, and only the *write*
+ * refuses. So each is typed `string` here rather than as its union: the narrowing belongs to
+ * the module that owns the union (`@/lib/marketplace`, `@/features/card/printings`), and a row
+ * a newer build wrote must reach this side as the string it is.
+ *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
  * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
  * `totalPrice` / `value`, already in that marketplace's money — or, where a *card* rather than
@@ -88,6 +97,16 @@ export interface SearchRequest {
   rarity?: string;
   /** Omitted means true: digital-only printings are hidden unless asked for. */
   paperOnly?: boolean;
+  /**
+   * `true` narrows to printings that are legal or restricted in **at least one** format —
+   * `cards.legal_mask != 0`, which is what hides art series, tokens, emblems, memorabilia
+   * and the acorn half of the un-sets.
+   *
+   * **Omitted means false**, the opposite of {@link paperOnly}: absent is what this command
+   * has always answered, so nothing changes for a caller that has not heard of it. The
+   * search view sends `true` unless its Unplayable chip is pressed.
+   */
+  playableOnly?: boolean;
   /**
    * `true` narrows to printings the collection has an entry for, `false` to those it does
    * not.
@@ -172,6 +191,25 @@ export interface CardSummary {
    * priced through a `usd` key its blob does not have.
    */
   finishes: string | null;
+  /**
+   * One of the cards the Commander bracket system counts as a **game changer** — a crown on
+   * the tile and in the table's Name cell, beside the foil and etched marks.
+   *
+   * Mirrors `CardSummary::game_changer` in `src-tauri/src/search.rs`, which is `bool` and not
+   * `Option<bool>`: `cards.game_changer` is nullable, a NULL there means *not on the list*, and
+   * the backend reads it as an `Option` and flattens it rather than handing this side a third
+   * state every crown would have to fence.
+   *
+   * So this is a plain `boolean`, exactly like {@link ImportMatch.gameChanger} and **unlike**
+   * {@link DeckCard.gameChanger}, which is `boolean | null`. That difference is real rather than
+   * mirror drift: a deck row survives its printing leaving `cards`, and an orphan knows nothing
+   * about itself. A search row can never be one — a row that came back from `cards` is a card
+   * that is there.
+   *
+   * An **oracle-level** fact, not a property of the cardboard: every printing of a card agrees,
+   * so a collapsed row takes it from the representative printing and needs no aggregate.
+   */
+  gameChanger: boolean;
   /**
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
@@ -428,6 +466,10 @@ export interface CardFilters {
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;
+  /** Omitted means **false** everywhere — see {@link SearchRequest.playableOnly}, which is
+   *  the only place anything sends it. A collection lists what the user owns, and an art
+   *  card in a binder is still in the binder. */
+  playableOnly?: boolean;
 }
 
 /**
@@ -1466,6 +1508,10 @@ export interface ImportMatch {
    * means *not on the list*, so the backend flattens it here rather than handing this side a
    * third state to fence. A resolved line always names a card that exists, which is the state
    * `DeckCard`'s `null` is reserved for.
+   *
+   * One of **three** fields in this file with this name, and the split is two-to-one:
+   * {@link CardSummary.gameChanger} is flattened for the same reason this one is — a search row
+   * is a card that is there — and `DeckCard`'s is the only nullable one.
    */
   gameChanger: boolean;
   /** Printed at uncommon on **any** printing of this oracle card — what makes a Pauper Commander
@@ -2451,6 +2497,24 @@ export const ipc = {
   getMarketplace: () => invoke<string>("get_marketplace"),
   /** Choose one. Rejects an id the backend does not know, so `app_meta` cannot collect junk. */
   setMarketplace: (id: MarketplaceId) => invoke<void>("set_marketplace", { id }),
+  /**
+   * How the card pane groups its printings list — `artist` | `released` | `price` | `set`,
+   * stored so the choice survives a restart.
+   *
+   * A raw string rather than a `PrintingGroupBy`, for {@link getMarketplace}'s reason and it is
+   * the same reason: the value came out of `app_meta` and may have been written by a build that
+   * offered a mode this one does not, so narrowing it is `isPrintingGroupBy`'s job in
+   * `@/features/card/printings` on this side of the wire. The backend answers `artist` for a
+   * missing row **and for an unrecognised one** — a stale preference costs the reader their
+   * grouping, never the pane.
+   */
+  printingGroupBy: () => invoke<string>("printing_group_by"),
+  /**
+   * Choose one. Rejects a mode the backend does not know, so `app_meta` cannot collect junk —
+   * which matters more here than it looks, because the read side discards an unknown mode in
+   * silence and an unchecked write would read back as `artist` forever.
+   */
+  setPrintingGroupBy: (mode: string) => invoke<void>("set_printing_group_by", { mode }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.

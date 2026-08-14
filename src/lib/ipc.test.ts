@@ -722,6 +722,30 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: false });
   });
 
+  /**
+   * The printings list's grouping — the **other** setting that carries no struct at all, and
+   * the pair a copy of the marketplace one gets wrong.
+   *
+   * `set_marketplace` spells its single argument `id` and `set_printing_group_by` spells its
+   * own `mode`; Tauri matches by name, so the wrapper copied from the neighbour two lines up
+   * is a runtime deserialization error with no type error anywhere. And `printing_group_by`
+   * takes none at all — `prewarm_collection`'s trap, in the module that added the pair.
+   */
+  it("sends the printings grouping under `mode` and reads it back with no arguments", async () => {
+    invoke.mockResolvedValue("set");
+
+    const mode = await ipc.printingGroupBy();
+
+    expect(invoke).toHaveBeenCalledWith("printing_group_by");
+    // A bare string, not a narrowed union: the row may have been written by a build that
+    // offered a mode this one does not, and it has to reach `isPrintingGroupBy` as what it is.
+    expect(mode).toBe("set");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setPrintingGroupBy("price");
+    expect(invoke).toHaveBeenCalledWith("set_printing_group_by", { mode: "price" });
+  });
+
   it("reads the error log with a limit and clears it with nothing", async () => {
     invoke.mockResolvedValue([]);
     await ipc.errorLogList(50);

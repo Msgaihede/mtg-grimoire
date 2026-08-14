@@ -119,6 +119,15 @@ fn base(
     } else {
         ix.all.clone()
     };
+    // `playableOnly` is not a facet either, so it is in every base too — including the format
+    // dimension's, where it is free: every `formats[k]` is a subset of `playable`, so a format
+    // count cannot move when a filter that only ever removes non-playable printings is applied.
+    // **Its default is the opposite of `paperOnly`'s** (`false`, not `true`), because the
+    // search view is the only caller that sends it — see
+    // [`crate::filters::CardFilters::playable_only`].
+    if req.playable_only.unwrap_or(false) {
+        b = b.and(&ix.playable);
+    }
     if let Some(t) = text {
         b = b.and(t);
     }
@@ -730,6 +739,44 @@ mod tests {
         assert_eq!(cleared.total, 3);
     }
 
+    /// `playableOnly` is the search view's default and is not a facet, so it narrows every
+    /// base — and its own default is the **opposite** of `paperOnly`'s, which is the half a
+    /// reader would get wrong.
+    ///
+    /// The format counts are the assertion that matters: every `formats[k]` is a subset of
+    /// `playable`, so applying this filter to their base must move nothing. A count that did
+    /// move would mean the two disagree about what a legality is, and the format select would
+    /// then grey an option the search returns rows for.
+    #[test]
+    fn playable_only_narrows_every_base_and_leaves_the_format_counts_alone() {
+        let conn = seeded();
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let off = compute(&ix, &req(|_| {}), None);
+        assert_eq!(off.total, 3, "the default counts Sol Ring, mask 0 and all");
+
+        let on = compute(&ix, &req(|r| r.playable_only = Some(true)), None);
+        assert_eq!(on.total, 2, "Bolt and Helix; Sol Ring's mask is 0");
+        assert_eq!(
+            on.sets.get("lea").copied(),
+            Some(1),
+            "lea keeps Bolt and loses Sol Ring"
+        );
+        assert_eq!(
+            on.mana_values.get("1").copied(),
+            Some(1),
+            "both cost 1, and only one of them is playable"
+        );
+        assert_eq!(
+            on.formats.get("modern").copied(),
+            off.formats.get("modern").copied(),
+            "a format count cannot move: formats[k] is already inside playable"
+        );
+
+        let explicit_off = compute(&ix, &req(|r| r.playable_only = Some(false)), None);
+        assert_eq!(explicit_off.total, 3, "false is the same as absent");
+    }
+
     /// The digital printing is behind `paperOnly`, which defaults on and is not a facet.
     #[test]
     fn the_paper_default_applies_to_every_base() {
@@ -901,6 +948,7 @@ mod tests {
             formats: (0..crate::legalities::LEGALITY_KEYS.len())
                 .map(|_| BitSet::new(cap))
                 .collect(),
+            playable: BitSet::new(cap),
             set_ord: vec![0; cap],
             set_codes: (0..1047).map(|i| format!("s{i}")).collect(),
             owned: BitSet::new(cap),
@@ -926,6 +974,10 @@ mod tests {
             for k in 0..ix.formats.len() {
                 if !(d as usize + k).is_multiple_of(3) {
                     ix.formats[k].set(d);
+                    // The union of the format sets, which is what a non-zero mask is. Every
+                    // doc here lands in it — 23 keys against a modulus of 3 — so the timing
+                    // below measures the AND rather than a bitset that is mostly empty.
+                    ix.playable.set(d);
                 }
             }
             if d % 100 == 0 {

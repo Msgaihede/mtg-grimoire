@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FlipHorizontal2, X } from "lucide-react";
+import { FlipHorizontal2, Gem, Sparkles, X } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
@@ -10,7 +10,7 @@ import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dn
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
-import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
+import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -20,20 +20,51 @@ import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { faceCount, groupByIllustration, legalityChips } from "./printings";
+import {
+  buildPrintingGroups,
+  faceCount,
+  isPrintingGroupBy,
+  legalityChips,
+  PRINTING_GROUP_BY_OPTIONS,
+  type PrintingGroupBy,
+} from "./printings";
 import {
   PrintingPreview,
   PREVIEW_FRAME_ATTR,
   usePrintingDwell,
   type DwellRowProps,
 } from "./PrintingPreview";
+import { usePrintingGroupBy } from "./usePrintingGroupBy";
 
 /**
  * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
  * control's edge, never a ring (see `FilterBar`'s `FOCUS` — outline is focus, border and
  * ring are state).
+ *
+ * Byte-identical to `FilterChips`' exported `FILTER_FOCUS`, which is what the deck editor's
+ * selects carry — so the grouping control below reads as the same control as the deck's own
+ * without this file growing a second focus recipe to keep in step with the first.
  */
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+
+/**
+ * A header control that is not a chip — here, the one `<select>` in this pane.
+ *
+ * **Copied from `DeckEditor.tsx`'s `CONTROL`**, which is not exported, because the printings
+ * list's `Group by` is meant to be the *same* control as the deck editor's `Group by` two
+ * inches to its left: same height, same border, same press. A lookalike built from whatever
+ * classes fitted would be a second grouping control in one window that behaved almost like the
+ * first. If that constant is ever exported, this should become an import of it.
+ *
+ * The property list is written out for the reason it is written out there: a colour utility and
+ * a transform one compile to the same CSS longhand, so tailwind-merge would keep one and
+ * silently drop the other.
+ */
+const CONTROL =
+  "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
+  "transition-[color,background-color,border-color,opacity,transform,scale] " +
+  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "disabled:active:scale-100 motion-reduce:transition-none";
 
 /**
  * The colour of a legality chip.
@@ -89,13 +120,17 @@ function deckControlFor(row: PaneDeckContext | null): HTMLElement | null {
 }
 
 /**
- * What a printings row needs to offer "Use this printing", or `null` on a pane that was not
- * opened from a deck row.
+ * What a printings row needs to *be* a swap, or `null` on a pane that was not opened from a
+ * deck row.
  *
- * One object rather than five props threaded through two components, and it is the *whole*
- * condition: a row draws the action if and only if this is here. Spec §2 scopes the swap to
- * decks — the collection's printing identity carries finish and condition, and a swap there
- * would invent facts the same way a drop onto it would.
+ * One object rather than five props, and it is the *whole* condition: a row's click rewrites
+ * the deck slot if and only if this is here (and this row is not already the printing in it).
+ * Spec §2 scopes the swap to decks — the collection's printing identity carries finish and
+ * condition, and a swap there would invent facts the same way a drop onto it would.
+ *
+ * It used to be threaded through a second component, `DeckLine`, which drew a "Use this
+ * printing" button on a line of its own under each row. The button is gone and the row is the
+ * press; see {@link PrintingRow} for what that buys and what it costs.
  */
 interface SwapOffer {
   /** The deck slot the pane was opened from — the swap's `deck`, `category` and `from`. */
@@ -215,6 +250,13 @@ function Body({
   // TCGplayer at the top and euros halfway down, and it is not choosing between fields either.
   // It is in both query keys below, so switching refetches like every other priced surface.
   const { marketplace } = useMarketplace();
+  // How the printings list below is grouped. Read *here* rather than inside `Printings`, which
+  // would be the obvious place: this body is keyed on the card, so it is thrown away and rebuilt
+  // on every row the reader clicks, and the preference has to survive that. It does, because the
+  // answer is a query rather than component state — see {@link usePrintingGroupBy}, where the
+  // remount is exactly the case the cache is there for. The hook is called at the same level as
+  // `useMarketplace` for the same reason: both are settings the whole pane is drawn under.
+  const printingGroupBy = usePrintingGroupBy();
   const [face, setFace] = useState(0);
   const [shown, setShown] = useState(cardId);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -267,11 +309,14 @@ function Body({
   // 2026-08-06: every Escape out of the pane dropped focus to `<body>` under `tauri dev`.
   // Nothing is skipped in production, where the effect runs once and the caret is outside.
   //
-  // And **never `<body>`**, which is the state a swap leaves behind: the button that was
-  // pressed disabled itself for the write, so the browser blurred it with no `relatedTarget` at
-  // all, and this pane was then re-keyed onto the printing the swap chose. Recording `<body>`
-  // as an opener makes the next Escape a hand-back to nowhere — `close` has the answer for that
-  // case, and it is a better one than any element this effect could record.
+  // And **never `<body>`**, which is the state a swap leaves behind: a successful swap re-keys
+  // this pane onto the printing it chose, so the row the reader pressed — and the control inside
+  // it that held the caret — is unmounted with the body that drew it, and the browser drops
+  // focus to `<body>` with no `relatedTarget` at all. (It used to be the *button* that caused
+  // this, by disabling itself for the write; that button is gone and the re-key does it on its
+  // own, which is why the guard outlived it.) Recording `<body>` as an opener makes the next
+  // Escape a hand-back to nowhere — `close` has the answer for that case, and it is a better one
+  // than any element this effect could record.
   useEffect(() => {
     const passed = handover;
     // Consumed or discarded, never left lying: a note for a pane that never mounted would be
@@ -347,10 +392,13 @@ function Body({
   const startSwap = swap.mutate;
   const usePrinting = useCallback(
     (toCardId: string) => {
-      // One swap at a time. The buttons disable themselves on the press, so this is the press
-      // that arrives before that paint — and it is not a double-click guard alone: every row's
-      // button sends the *same* `from` printing, and the write in flight is in the middle of
-      // moving it, so a second press would be refused for a row that no longer exists.
+      // One swap at a time, and this is the *second* fence rather than the first: a row that
+      // would swap goes `aria-disabled` while any write is in flight and refuses the press in
+      // its own handler (see {@link PrintingRow}, and `src/CLAUDE.md` for why it is never the
+      // `disabled` attribute). This one covers the press that arrives before that paint, and it
+      // is not a double-click guard alone: every row sends the *same* `from` printing, and the
+      // write in flight is in the middle of moving it, so a second press would be refused for a
+      // row that no longer exists.
       if (!deckRow || swapping) return;
       startSwap(
         { fromCardId: deckRow.cardId, toCardId, categoryId: deckRow.categoryId },
@@ -385,15 +433,21 @@ function Body({
     [deckRow, swapping, startSwap, openCardFromDeck],
   );
 
-  // **The caret, one step after the refusal took it back.**
+  // **The caret, one step after a refusal, for the reader it stranded.**
   //
-  // A refused swap is usually a deck that has been deleted: the button re-enables itself and
-  // takes the caret (see `DeckLine`), then the `onError` re-read lands, `deckGone` turns true,
-  // and every button in the list — including the one now holding the caret — is unmounted. That
-  // drops it to `<body>` with the refusal still on screen, which is the same stranding the
-  // hand-back exists to prevent, one commit later. The pane is where that sentence lives, so
-  // the pane takes the caret: Escape still closes what the reader is reading, and Tab carries
-  // on from here rather than from the top of the app.
+  // A refused swap is usually a deck that has been deleted, and this used to be the common path:
+  // the pressed button re-enabled itself and took the caret back, the `onError` re-read landed,
+  // `deckGone` turned true, and every "Use this printing" button in the list — including the one
+  // holding the caret — was unmounted, dropping it to `<body>` with the refusal still on screen.
+  // **A row that stays a row through all of that no longer strands anyone**: the press is now the
+  // row's own name button, which is drawn whether the deck is there or not (only its label
+  // changes), so nothing the reader was standing on is unmounted by the refusal.
+  //
+  // It stays because the *guard* is the point, not the path that used to trip it. Anything that
+  // replaces the rows while a refusal is on screen — a printings refetch, a card leaving `cards`
+  // — lands the caret on `<body>` in front of a sentence nobody can navigate away from except by
+  // Tabbing from the top of the app. The pane is where that sentence lives, so the pane takes
+  // the caret.
   //
   // Only out of `<body>`, like every other hand-back in this file — a reader who has moved on
   // owns where they are — and only where there is a refusal to read.
@@ -498,6 +552,8 @@ function Body({
             error={printings.isError ? ipcError(printings.error) : null}
             swap={offer}
             marketplace={marketplace}
+            mode={printingGroupBy.mode}
+            onModeChange={printingGroupBy.setMode}
           />
           {/* Not decoration and not optional: Scryfall requires the artist and the source
               to be identifiable in the same interface that shows the art. The artist is
@@ -519,6 +575,40 @@ function artistOf(card: CardDetail, face: number): string | null {
 }
 
 /**
+ * The finish this printing can be **shown as** on demand, or `null` — which is every printing
+ * where the question does not arise.
+ *
+ * **There is no foil photograph to fetch.** Scryfall publishes one image per printing and it is
+ * the plain one; what the toggle turns on is `FoilOverlay` — this app's own sheen and chip, laid
+ * over the same art (`CardArt`, where every number in that gradient was chosen at the window).
+ * So this is a **view**, offered because a reader choosing between forty printings wants to know
+ * what the shiny one looks like, and it says nothing whatever about which finish they own: that
+ * question is answered by a collection entry's own `finish` and by nothing on this screen.
+ *
+ * A printing offers the view only when it exists in a plain finish *and* a shiny one, because
+ * those are the two ends the toggle moves between. The two exclusions are deliberate and each
+ * is somebody else's job:
+ *
+ * * a **foil-only** printing already wears the treatment permanently, through
+ *   `soleFinish` — that is a statement about what the object *is* (12 366 printings exist only
+ *   in foil, and Scryfall's photography of them is byte-identical to a nonfoil one), and
+ *   turning it off would un-say a fact;
+ * * a **nonfoil-only** printing has nothing to show.
+ *
+ * `foil` wins over `etched` where a printing has both, because foil is the far commoner of the
+ * two and the one a reader means by "what does it look like shiny". Nothing here weakens
+ * `soleFinish`, which answers only where there is exactly one non-plain finish and is what the
+ * marking on every other card surface in the app is drawn from.
+ */
+function foilViewFinish(finishesJson: string | null): Finish | null {
+  const finishes = parseFinishes(finishesJson);
+  if (!finishes.includes("nonfoil")) return null;
+  if (finishes.includes("foil")) return "foil";
+  if (finishes.includes("etched")) return "etched";
+  return null;
+}
+
+/**
  * The card, as big as the pane allows.
  *
  * The direction doc's one absolute: on a screen that has card art, the art is the loudest
@@ -531,6 +621,26 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
   const [broken, setBroken] = useState<string | null>(null);
   const shown = card.faces[face];
   const other = card.faces[face === 0 ? 1 : 0];
+
+  /**
+   * Whether the reader has asked to see this printing shiny.
+   *
+   * **Reset by a key rather than by an effect**, and the key is not this component's: `Body` is
+   * mounted as `<Body key={cardId}>`, so browsing to another printing throws this whole subtree
+   * away and builds a new one with the toggle off. That matters because the answer to "is there
+   * a foil to show?" is per printing — a stale `true` carried onto a printing with no foil would
+   * be a pressed toggle with nothing under it — and an effect watching `card.id` would paint one
+   * frame of the previous printing's sheen over the new card's art before it corrected itself,
+   * which is the same reason the face reset in `Body` is a render-time write and not an effect.
+   */
+  const [foilView, setFoilView] = useState(false);
+  const foilable = foilViewFinish(card.finishes);
+  // What the overlay is asked for. `soleFinish` is the statement — this printing *is* foil — and
+  // the toggle is the only thing that ever adds to it; the two cannot both answer, because
+  // `soleFinish` speaks only for a printing with one finish and `foilable` only for one with at
+  // least two.
+  const marked = foilView && foilable ? foilable : soleFinish(card.finishes);
+  const FoilGlyph = foilable === "etched" ? Gem : Sparkles;
 
   return (
     <div className="space-y-2">
@@ -575,22 +685,67 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
             className="w-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
           />
         )}
-        <FoilOverlay finish={soleFinish(card.finishes)} />
+        <FoilOverlay finish={marked} />
       </span>
-      {sides === 2 && (
-        <button
-          type="button"
-          onClick={onFlip}
-          className={cn(
-            "flex w-full items-center justify-center gap-1.5 rounded-md border border-border",
-            "py-1.5 text-xs text-dim transition-colors duration-150 hover:text-text",
-            "motion-reduce:transition-none",
-            FOCUS,
+      {/* The two ways of looking at the card, on one line under it.
+          **A row rather than two stacked bars**, because a double-faced card that also has a
+          foil printing would otherwise put 60px of button under a picture the direction doc
+          calls the loudest thing on the screen. Each takes half by `flex-1`, which is also what
+          keeps a lone flip button the full-width bar it has always been — so the common case is
+          unchanged and the pair is the special one. `min-w-0` and a truncating label because
+          the flip button names a *card face*, and half of a 352px column is not enough for
+          "Hanweir, the Writhing Township". */}
+      {(sides === 2 || foilable) && (
+        <div className="flex gap-2">
+          {sides === 2 && (
+            <button
+              type="button"
+              onClick={onFlip}
+              className={cn(
+                "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md",
+                "border border-border py-1.5 text-xs text-dim transition-colors duration-150",
+                "hover:text-text motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              <FlipHorizontal2 className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">Flip to {other?.name || "the other face"}</span>
+            </button>
           )}
-        >
-          <FlipHorizontal2 className="size-3.5" aria-hidden="true" />
-          Flip to {other?.name || "the other face"}
-        </button>
+          {foilable && (
+            <button
+              type="button"
+              // A **toggle**, so the state is `aria-pressed` and not two buttons swapping places
+              // — a reader who tabbed onto it is told both what it does and whether it is on.
+              // The visible words change with it as well, because they *are* the accessible name
+              // here and a name that no longer contains the visible label is a control voice
+              // control can no longer press (WCAG 2.5.3, the rule `DeckStats`' send button set).
+              aria-pressed={foilView}
+              onClick={() => setFoilView((on) => !on)}
+              className={cn(
+                "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md",
+                "border border-border py-1.5 text-xs text-dim transition-colors duration-150",
+                "hover:text-text motion-reduce:transition-none",
+                "aria-pressed:border-accent/40 aria-pressed:text-text",
+                FOCUS,
+              )}
+            >
+              {/* The glyph `FinishMark` draws for this finish, imported straight from lucide
+                  rather than through that component — deliberately. `FinishMark` is a
+                  `role="img"` carrying the finish as its accessible name, and a labelled image
+                  inside a button *joins* the button's name: this control would be called
+                  "Foil View as foil". It is the trap `FoilOverlay` documents from the wall's
+                  tiles, one surface over. The two glyphs stay the same two so the button and the
+                  finish marks on the printings rows below agree about what foil looks like. */}
+              <FoilGlyph className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">
+                {foilView
+                  ? `View as ${FINISH_LABEL.nonfoil.toLowerCase()}`
+                  : `View as ${FINISH_LABEL[foilable].toLowerCase()}`}
+              </span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -731,19 +886,26 @@ function Legalities({ card }: { card: CardDetail }) {
 }
 
 /**
- * Every printing of this card, grouped by the artwork it carries.
+ * Every printing of this card, grouped the way the reader asked for.
  *
- * Grouped by illustration rather than listed flat because "which art is this?" is the
- * question a printings list is asked — and the group's heading is its *illustrator*,
- * which is a name the reader can check against the card, rather than "Artwork 2", which
- * is a number invented here.
+ * **Artist is still the default**, and for the reason grouping existed at all: "which art is
+ * this?" is the question a printings list is asked, and a group whose heading is an
+ * *illustrator* is a name the reader can check against the card — where "Artwork 2" would be a
+ * number invented here. What changed is that it is no longer the only answer. A reader hunting
+ * the cheapest copy, or the one from a set they remember, was reading a list ordered by a fact
+ * they were not asking about, and the ordering rules for all four modes are `printings.ts`'s —
+ * this component draws groups and does not decide them.
+ *
+ * `price` is deliberately a mode with **no groups**: a cheapest-first list has nothing to head
+ * its runs with that is not a price already printed on the row, so it renders flat and the
+ * summary line below drops its second half rather than counting something invisible.
  *
  * It is also the fastest way in the app to record "I have the Alpha one": every row adds
  * its own printing, which is why the whole card is passed rather than only its id — a wish
  * and an entry both need the name and the oracle id, and neither is on a `Printing`.
  *
  * And, when the card was opened from a deck row, the fastest way to *change* which printing a
- * deck is built from: see {@link SwapOffer}.
+ * deck is built from: see {@link SwapOffer} and {@link PrintingRow}.
  */
 function Printings({
   card,
@@ -753,6 +915,8 @@ function Printings({
   error,
   swap,
   marketplace,
+  mode,
+  onModeChange,
 }: {
   card: CardDetail;
   items: Printing[];
@@ -762,36 +926,86 @@ function Printings({
   swap: SwapOffer | null;
   /** Which marketplace each row's per-finish prices are quoted from. */
   marketplace: Marketplace;
+  /** How the list is grouped. Owned one component up, because it outlives this card — see
+   *  {@link usePrintingGroupBy}. */
+  mode: PrintingGroupBy;
+  onModeChange: (mode: PrintingGroupBy) => void;
 }) {
   const headingId = useId();
   // One dwell timer for the whole list — see {@link usePrintingDwell} for why it cannot be one
   // per row. Called before the early return below, because a hook is.
   const dwell = usePrintingDwell();
   const dropPreview = dwell.cancel;
+  // Sorted and bucketed on every render of a pane that re-renders on every hover in this list
+  // (the dwell is state), over up to 400 rows — so it is memoised on exactly the two things it
+  // reads. Both hooks sit above the early return, because hooks do.
+  const groups = useMemo(() => buildPrintingGroups(items, mode), [items, mode]);
   // A refetch that replaces the rows takes any picture with it. The preview is measured against
   // the row it hangs off, and a row that has left the document measures 0×0 — an invisible
   // layer, at the top of the pane, that Escape still has to be spent on. Nothing tells a hover
   // that its element was unmounted, so the list says so: this is the only place that knows the
   // rows changed. (`items` keeps its identity across a refetch that changed nothing — query
   // structural sharing — so this is not an effect that runs on every render.)
+  //
+  // **`mode` is in here for the same reason one step further on.** A new mode leaves every row
+  // mounted and moves them: the element the picture is measured against is still in the
+  // document, still the right size, and now under a *different* printing than the pointer that
+  // asked for it was resting on. A preview that survived the re-order would be a picture of one
+  // card hanging off another's row — worse than the detached case, because it looks correct.
   useEffect(() => {
     dropPreview();
-  }, [items, dropPreview]);
+  }, [items, mode, dropPreview]);
   // A card with no `oracleId` never asked for printings, so it has no list to fail at
   // loading: nothing to say, and no empty section to say it in. (Nor does a card whose
   // printings all left `cards` — same shape, same silence.)
   if (!loading && !error && items.length === 0) return null;
 
-  const groups = groupByIllustration(items);
+  // What the groups *are*, in this mode's own word — `null` in `price`, which makes none.
+  const noun = PRINTING_GROUP_BY_OPTIONS.find((option) => option.value === mode)?.noun ?? null;
   return (
     // The rule separates "this card" from "every card like it", which is the pane's one
     // real division. Set in the same hairline as the credit line below it rather than a
     // heavier rule: three sections, two hairlines, no boxes. The heading is rendered while
     // the list is still loading so the pane does not reflow around it when it arrives.
     <section aria-labelledby={headingId} className="space-y-2 border-t border-border pt-3">
-      <h3 id={headingId} className="text-xs uppercase tracking-wide text-dim">
-        Printings
-      </h3>
+      {/* The heading and the control that reorders what it names, on one line — 32px of select
+          against a 12px heading, so the row is the select's height and the words sit in it.
+          `min-w-0 truncate` on the heading is the fence this pane needs everywhere: at 384px
+          wide there is no width to give back, so the fixed thing is the control and the elastic
+          one is the word. */}
+      <div className="flex items-center gap-2">
+        <h3
+          id={headingId}
+          className="min-w-0 flex-1 truncate text-xs uppercase tracking-wide text-dim"
+        >
+          Printings
+        </h3>
+        <select
+          // **Labelled for a screen reader alone.** Every other `Group by` in the app carries a
+          // visible `<label>` beside it (the deck editor's toolbar, two inches away, is the one
+          // this control is copied from) — but that toolbar has a whole window's width and this
+          // pane has 352px of content column already spent on the heading. The words would come
+          // out of the only other thing on the line. The name says what it groups, not just
+          // "Group by", because a reader listing this pane's controls hears it next to the
+          // marketplace and the deck's own grouping.
+          aria-label="Group printings by"
+          value={mode}
+          onChange={(event) => {
+            // The same predicate that narrows the stored row narrows the event, so there is no
+            // cast here and no second idea of what a mode is. A `<select>` cannot emit anything
+            // else, which is exactly why this costs nothing to be right about.
+            const chosen = event.target.value;
+            if (isPrintingGroupBy(chosen)) onModeChange(chosen);
+          }}
+          className={cn(CONTROL, FOCUS, "shrink-0 text-text")}
+        >
+          {PRINTING_GROUP_BY_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
       {loading && <p className="text-xs text-dim">Loading printings…</p>}
       {error && (
         <p className="text-xs text-destructive">
@@ -800,24 +1014,40 @@ function Printings({
       )}
       {/* A count line, so it is set in the data face. `items.length` is capped at 400 and
           `total` is not — saying only the first would report a Forest as having 400
-          printings when it has 862. */}
+          printings when it has 862.
+
+          **The second half follows the mode**, because it is a gloss on the grouping the reader
+          is looking at: "5 artists" under Artist, "3 release dates" under Released, "4 sets"
+          under Set. It is dropped whole in `price` mode rather than reworded — there is one
+          group there and it has no heading, so "1 price" would be a count of a thing that is
+          not on screen. */}
       {items.length > 0 && (
         <p className="font-mono text-[0.7rem] tabular-nums text-dim">
           {items.length < total
             ? `${items.length} of ${total} printings`
             : `${total} printing${total === 1 ? "" : "s"}`}
-          {" · "}
-          {groups.length} artwork{groups.length === 1 ? "" : "s"}
+          {noun && (
+            <>
+              {" · "}
+              {groups.length} {groups.length === 1 ? noun.one : noun.many}
+            </>
+          )}
         </p>
       )}
-      {groups.map((group, i) => (
-        <div key={group.illustrationId ?? `ungrouped-${i}`} className="space-y-0.5">
-          <p className="flex items-baseline gap-1.5 pt-1 text-[0.7rem] text-dim">
-            <span className="min-w-0 truncate">
-              {group.printings[0].artist ?? "Artist unknown"}
-            </span>
-            <span className="font-mono tabular-nums">· {group.printings.length}</span>
-          </p>
+      {groups.map((group) => (
+        // The key is the group's own — `printings.ts` makes it, because only the thing that
+        // decided what a group *is* can say what tells two of them apart (an illustration id, a
+        // date, a set code, or the one bucket a flat list has).
+        <div key={group.key} className="space-y-0.5">
+          {/* No heading element at all when there is none — not an empty one, and not a
+              placeholder word. A flat list with a blank line above it would read as a group
+              whose name failed to load. */}
+          {group.heading !== null && (
+            <p className="flex items-baseline gap-1.5 pt-1 text-[0.7rem] text-dim">
+              <span className="min-w-0 truncate">{group.heading}</span>
+              <span className="font-mono tabular-nums">· {group.printings.length}</span>
+            </p>
+          )}
           <ul className="space-y-0.5">
             {group.printings.map((p) => (
               <PrintingRow
@@ -841,6 +1071,34 @@ function Printings({
   );
 }
 
+/**
+ * One printing, and what pressing it means.
+ *
+ * ## In a deck, the row *is* the swap
+ *
+ * A pane opened from a deck row used to draw a second line under every printing carrying a "Use
+ * this printing" button (`DeckLine`, deleted with this change). Its argument was width: the pane
+ * is 384px, the facts line already spends it on rarity, set, number, year, language, a price per
+ * finish and the quick-add, and a button on that line would have taken its space out of the set
+ * name — which is what the reader is choosing a printing *by*. That was a good argument for a
+ * button and it is not an argument for a button existing: the row itself is 352px wide, already
+ * clickable and already the thing the reader is pointing at. So the click is the swap.
+ *
+ * **What it costs, stated plainly: in a deck context there is no longer any way to look at a
+ * printing in the pane without committing to it.** Clicking a row rewrites the deck slot, and
+ * the write follows into the printing it chose (`usePrinting` re-opens the pane on it), so
+ * "let me see this one first" is gone from this list for as long as the pane has a deck row
+ * behind it. That is the deliberate trade. It is bearable because the two are almost always the
+ * same act — a list opened *from* a deck row is being read in order to pick one (spec §2) — and
+ * because the reader can still see any printing without committing by hovering it, which is what
+ * {@link usePrintingDwell}'s picture is for, and can undo a swap by pressing the row they came
+ * from.
+ *
+ * Six behaviours had to survive the button's deletion, and each one has its own note below: the
+ * deck's own printing still says so, a refusal still lands beside the row that was refused, an
+ * in-flight write still makes every other row inert, the accessible name still says what the
+ * press does, the drag still starts from the row, and the quick-add still owns its own press.
+ */
 function PrintingRow({
   printing,
   card,
@@ -888,15 +1146,66 @@ function PrintingRow({
     });
   }, [printingId, cardName, cardTypeLine]);
 
+  /**
+   * The printing this deck already holds in the slot the pane was opened on.
+   *
+   * `gone` is in here as well as in {@link swaps}, and `DeckLine` had it in exactly the same
+   * two places: **a deck that has been deleted offers nothing and claims nothing.** "This deck
+   * uses this printing" is not true of a deck that is not there, and forty rows offering to
+   * rewrite it are forty wrong offers whose only way of finding out is to be pressed. What
+   * survives a deletion is the refusal that usually *taught* the pane about it, which is why
+   * `gone` does not take the whole offer down with it (see {@link SwapOffer}).
+   */
+  const heldByDeck = swap !== null && !swap.gone && swap.row.cardId === printing.id;
+  /** Whether a press here rewrites the deck slot. */
+  const swaps = swap !== null && !swap.gone && !heldByDeck;
+  /** A swap — any swap, on any row — is in flight. */
+  const busy = swap !== null && swap.pendingId !== null;
+  /** …and it is this row's. */
+  const pending = swap !== null && swap.pendingId === printing.id;
+  const refused = swap?.refused?.printingId === printing.id ? swap.refused.reason : null;
+  /**
+   * Out of reach while a write runs. Every row that would swap, not only the pressed one: they
+   * all send the same `from` printing and the write in flight is in the middle of moving it.
+   *
+   * **`aria-disabled` and a guard, never the `disabled` attribute** (`src/CLAUDE.md`) — and here
+   * that rule pays for itself twice over rather than merely being obeyed. `DeckLine`'s button
+   * *was* `disabled`, so pressing it dropped it out of the tab order mid-press and the browser
+   * blurred it to `<body>` with no `relatedTarget`; the whole of `DeckLine`'s focus hand-back
+   * effect existed to put the caret back afterwards. A control that never leaves the tab order
+   * needs no such repair, so that effect is **deleted with the button rather than carried over**:
+   * there is nothing left for it to fix.
+   */
+  const inert = swaps && busy;
+
+  /**
+   * What a press on this row does — one function, because the row and the button inside it are
+   * two ways into one destination and always have been (the button has no handler of its own;
+   * its click bubbles here).
+   */
+  const press = () => {
+    if (swap && swaps) {
+      // The paint says so and this says so again: a press that lands between the state and the
+      // frame must not queue a second write. `usePrinting` has the third fence.
+      if (busy) return;
+      // Swap **and follow**: `usePrinting`'s `onSuccess` re-opens the pane on the printing the
+      // deck now holds, so calling `viewPrinting` as well would be two navigations for one
+      // press — the second of them to a card the first has already moved past.
+      swap.onUse(printing.id);
+      return;
+    }
+    if (!current) viewPrinting(printing.id);
+  };
+
   return (
     <li
       ref={rowRef}
       {...dwell}
       // The mouse's way into the printing: a click anywhere on the row that is not one of its
-      // own controls shows this printing in the pane. The keyboard's way in is the set-code
-      // button below. The split is the reason: a `role="button"` on the row would make the
-      // controls inside it presentational.
-      onClick={current ? undefined : () => viewPrinting(printing.id)}
+      // own controls does whatever this row does — show it, or put it in the deck. The
+      // keyboard's way in is the set-code button below. The split is the reason: a
+      // `role="button"` on the row would make the controls inside it presentational.
+      onClick={press}
       className={cn(
         "group rounded-md px-2 py-1 text-xs",
         // The one printing this pane is about. A gold hairline down its edge rather than a
@@ -923,15 +1232,57 @@ function PrintingRow({
         ) : (
           <button
             type="button"
-            // The row's keyboard handle: show this printing. The click bubbles to the row,
-            // which does the same thing — one destination, two ways in.
-            aria-label={`Show ${printing.setCode.toUpperCase()} · ${printing.collectorNumber}`}
+            // The row's keyboard handle. The click bubbles to the row, which does the same
+            // thing — one destination, two ways in — so **the name has to change with what
+            // that thing is**. In a deck context the press rewrites a deck; a button still
+            // called "Show SLD · 913" would be describing the version of this list that had a
+            // separate button, and a reader who could not see the row would find out what it
+            // really did by pressing it.
+            //
+            // The swapping register is `DeckLine`'s, kept word for word: forty rows, one
+            // sentence, and the set with the collector number is what tells them apart — plus
+            // the category, because the same printing can sit in the main deck and the
+            // sideboard and the slot being rewritten is the one the pane was opened on. That
+            // name is the context's own rather than a lookup: the pane is a sibling of the deck
+            // editor and has no category list to translate an id through (`PaneDeckContext`).
+            // A row moved to another category under an open pane, or a rename of the category,
+            // makes that word stale and *only* that word — the write is addressed by the same
+            // slot, finds no row in the category it names, and is refused beside this row. The
+            // label lies for one press; the deck does not change.
+            //
+            // "Swapping…" while this row's write is in flight, for the reason the button said
+            // it: the visible text cannot say it (the row's visible text is the printing), so
+            // the name is the only place a screen reader hears that the press landed.
+            aria-label={
+              swap && swaps
+                ? `${pending ? "Swapping…" : "Use this printing"} (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${swap.row.categoryName}`
+                : `Show ${printing.setCode.toUpperCase()} · ${printing.collectorNumber}`
+            }
+            // Greyed and refused, never removed from the tab order — see {@link inert}.
+            aria-disabled={inert}
             title={printing.setName ?? undefined}
-            className={cn("min-w-0 flex-1 truncate text-left font-mono", FOCUS)}
+            className={cn(
+              "min-w-0 flex-1 truncate text-left font-mono aria-disabled:opacity-50",
+              FOCUS,
+            )}
           >
             {printing.setCode.toUpperCase()} · {printing.collectorNumber}
             {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
           </button>
+        )}
+        {/* **The mark `DeckLine` used to say in words** ("This deck uses this printing"), in the
+            width a row has for it. A badge in the language the row already speaks — the same
+            border, padding and size as the language badge beside it — and **text, not colour**:
+            the row's other mark is the gold hairline for `current`, which says "this is the
+            printing the pane is showing" and is a different fact entirely. A reader who cannot
+            tell gold from grey still reads the word, and a reader who can still has two distinct
+            channels for two distinct states, which a second coloured edge would have collapsed.
+            Static, because it is a fact about the deck rather than a control — dressing it as a
+            button that cannot be pressed would be worse than saying it. */}
+        {heldByDeck && (
+          <span className="shrink-0 rounded border border-border px-1 text-[0.65rem] leading-4 text-dim">
+            In deck
+          </span>
         )}
         {printing.lang !== "en" && <LangBadge lang={printing.lang} />}
         {/* Per finish, priced at the marketplace the list was read at — never one number
@@ -947,8 +1298,11 @@ function PrintingRow({
         ))}
         {/* This row's printing, not the pane's card: the set and the collector number are the
             row's own, and so are the finishes it may be owned in. The wrapper stops the row's
-            own click: a press on the quick-add (or inside its popup) is not a request to show
-            this printing. */}
+            own click — and **that mark is worth more now than it was**: the press underneath
+            used to navigate the pane, and it writes to a deck, so a quick-add whose click
+            escaped would put a card in a deck the reader never pointed at. The button marks
+            itself `data-no-drag`, which is the other half and is its own fact rather than this
+            call site's (`dnd.ts`). */}
         <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
           <AddToCollectionButton
             className={REVEAL_ON_HOVER}
@@ -964,127 +1318,38 @@ function PrintingRow({
         </span>
       </div>
 
-      {/* Stopped for the quick-add's reason: "Use this printing" writes to the deck, and the
-          row underneath must not also swap the pane to the row it was pressed on. */}
-      {swap && (
-        <div onClick={(e) => e.stopPropagation()}>
-          <DeckLine printing={printing} swap={swap} />
-        </div>
+      {/* **The refusal, beside the row that was refused** — the one thing that tells a reader
+          why nothing happened, and the reason `swap.gone` does not take the whole offer down
+          with it: a press against a deleted deck is answered GONE, the re-read comes back empty,
+          and this sentence is the only thing on screen explaining why forty rows have quietly
+          stopped being offers.
+
+          Where `DeckLine` put it, in the words `DeckLine` used, for the reason `DeckLine` gave:
+          the reader is looking at this row, and a banner at the top of the pane would be one
+          sentence for forty rows with nothing on screen saying which. `pt-0.5` and not a pixel
+          more — the row's own padding is what separates one printing from the next (4px + 4px +
+          the list's 2px), so a line hung further off its own facts than that reads as belonging
+          to the row below. Measured in the running window at 1280 × 800 against a 62-printing
+          list.
+
+          **Nothing stops the click here any more, and that is the change rather than an
+          oversight.** `DeckLine` wrapped its line in a `stopPropagation` because the row
+          underneath meant *view this printing*, which is not what a reader pressing "Use this
+          printing" asked for. The row now means the same thing the refused press meant, so a
+          click that lands on the sentence is a retry — which, for a `BUSY` the reader has just
+          read, is exactly the next thing they want. */}
+      {refused && (
+        <p role="alert" className="pt-0.5 text-[0.7rem] leading-tight text-destructive">
+          Could not use this printing — {refused}
+        </p>
       )}
     </li>
   );
 }
 
-/**
- * What this printing is to the open deck row: the one it holds, or one press away from it.
- *
- * **A line of its own under the row's facts**, not a control squeezed onto the end of them. The
- * pane is 384px wide and the facts already spend it — rarity, set, number, year, language, a
- * price per finish, the quick-add — so a button on that line would take its width out of the
- * set name, which is what the reader is choosing a printing *by*. Underneath, the two states
- * read down the list as one column: every row says either "this is the one" or "use this one",
- * and a refusal has somewhere to land in the reader's own line of sight.
- *
- * **Visible rather than revealed on hover** (spec §2), unlike the quick-add above it: the
- * add is one of forty identical offers a reader may never want, while this list — opened from
- * a deck row — is being read *in order to* pick one.
- */
-function DeckLine({ printing, swap }: { printing: Printing; swap: SwapOffer }) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const pending = swap.pendingId === printing.id;
-  const refused = swap.refused?.printingId === printing.id ? swap.refused.reason : null;
-  const wasPending = useRef(false);
-  // A deck that is gone offers nothing — no button on any row, and no mark on its own: "this
-  // deck uses this printing" is not true of a deck that is not there, and forty buttons whose
-  // only way of finding out is to be pressed are forty wrong offers. The editor beside this is
-  // already saying so. What survives is the refusal that usually *taught* the pane this.
-  const offering = !swap.gone;
-
-  // The disabled-on-press hazard, in the shape it takes **inside a dismissible layer**: a
-  // browser blurs a control that disables itself, with no `relatedTarget` at all, so the caret
-  // lands on `<body>` — and this button is in the card pane, whose Escape hands the caret back
-  // to whatever opened it. A reader who pressed a row, read a refusal and then pressed Escape
-  // would be closing the pane from nowhere. The button is still here when the write settles, so
-  // it takes the caret back — and only from `<body>`, because a reader who has moved on in the
-  // meantime owns where they are. `DeckStats`' send button is the same guard outside a layer.
-  useEffect(() => {
-    if (wasPending.current && !pending && document.activeElement === document.body) {
-      buttonRef.current?.focus();
-    }
-    wasPending.current = pending;
-  }, [pending]);
-
-  // Nothing to offer and nothing to explain: the row is its facts again, with no empty line
-  // under them.
-  if (!offering && !refused) return null;
-
-  return (
-    // `pt-0.5` and not a pixel more: the row's own padding is what separates one printing from
-    // the next (4px + 4px + the list's 2px), so an action line hung further off its own facts
-    // than that reads as belonging to the row *below* it. Measured in the running window at
-    // 1280 × 800 against a 62-printing list.
-    <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 pt-0.5">
-      {refused && (
-        // Beside the row that was pressed, which is where the reader is looking — the docked
-        // search panel's add says its refusals the same way. A banner at the top of the pane
-        // would be one sentence for forty rows, with nothing on screen saying which.
-        <p
-          role="alert"
-          className="min-w-0 flex-1 text-left text-[0.7rem] leading-tight text-destructive"
-        >
-          Could not use this printing — {refused}
-        </p>
-      )}
-      {!offering ? null : swap.row.cardId === printing.id ? (
-        // The deck's own printing says so rather than offering itself. Static text, in the
-        // dim the rest of the row's facts are set in: it is a fact about the deck, not a
-        // control, and dressing it as one that cannot be pressed would be worse than saying it.
-        //
-        // **Static, and not the pane's live region.** What a swap *did* — a fold — is said in
-        // the shell (see the region under the heading): this list is drawn behind `card.data`,
-        // and after a re-key that data is a fetch away, so a region here would first appear with
-        // its sentence already in it and announce nothing.
-        <p className="text-right text-[0.7rem] text-dim">This deck uses this printing</p>
-      ) : (
-        <button
-          ref={buttonRef}
-          type="button"
-          // The row is a drag handle, and Chromium starts a drag from the nearest draggable
-          // *ancestor* of whatever was pressed — so without the mark a press here that
-          // travelled five pixels would carry the printing off and never deliver the click
-          // (`cardDraggable`). The quick-add above marks itself; this one is the row's own.
-          data-no-drag=""
-          // `disabled` while any swap is in flight — this is the half-second case, which is
-          // what `disabled` is for in this app (`DeckStats`' two kinds of no). Every row, not
-          // only the pressed one: they all send the same `from` printing, and the write in
-          // flight is moving it.
-          disabled={swap.pendingId !== null}
-          onClick={() => swap.onUse(printing.id)}
-          // Forty rows, forty buttons, one visible label: the set and the collector number are
-          // what tell them apart, and the category is what says which slot is being rewritten —
-          // the same printing can sit in the main deck and the sideboard. The visible words lead
-          // and change with the button, because an accessible name that no longer contains the
-          // visible label is a control voice control can no longer press (WCAG 2.5.3, and
-          // `DeckStats`' send button is the precedent this borrows).
-          //
-          // The category is the context's, which is the slot the pane was opened on — its name
-          // as well as its id, because the pane is a sibling of the deck editor and has no
-          // category list to translate one through (see `PaneDeckContext`). A row moved to
-          // another category under an open pane makes that word stale — as does a rename of the
-          // category itself — and only the word: the write is addressed by the same slot, finds
-          // no row in the category it names, and is refused in the pane beside the button. The
-          // label lies for one press; the deck does not change.
-          aria-label={`${pending ? "Swapping…" : "Use this printing"} (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${swap.row.categoryName}`}
-          className={cn(
-            "shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-dim",
-            "transition-colors duration-150 hover:text-text disabled:opacity-50",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          {pending ? "Swapping…" : "Use this printing"}
-        </button>
-      )}
-    </div>
-  );
-}
+// `DeckLine` stood here: the second line under every printings row that carried "Use this
+// printing", the deck's own mark and the refusal. All three survive — on the row itself, in
+// {@link PrintingRow}, which is where its doc comment's reasoning and its replacement now live.
+// Its focus hand-back effect did **not** survive, and deliberately: it existed only to repair
+// what its own `disabled` button broke, and an `aria-disabled` row never leaves the tab order
+// for it to repair.

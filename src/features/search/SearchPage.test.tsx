@@ -53,6 +53,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { SearchPage } from "./SearchPage";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { useAppStore } from "@/lib/store";
 import { needsNextPage, nextOffset } from "./useCardSearch";
 
@@ -72,6 +73,10 @@ const BOLT: CardSummary = {
   layout: "normal",
   oracleId: "o-bolt",
   finishes: `["nonfoil","foil"]`,
+  // A plain boolean on this DTO — the backend flattens the nullable column — so an ordinary
+  // card is `false` rather than a third state to fence. The rows that wear the crown spread
+  // `gameChanger: true` over this one.
+  gameChanger: false,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
@@ -93,6 +98,9 @@ const SPARSE: CardSummary = {
   layout: "normal",
   oracleId: null,
   finishes: null,
+  // Not among the nullable columns, however sparse the rest of the row is: `search.rs` reads
+  // `cards.game_changer` as an `Option` and flattens a NULL to `false` before it crosses.
+  gameChanger: false,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
@@ -848,6 +856,29 @@ describe("SearchPage", () => {
     expect(screen.getByText("On your wishlist")).toBeInTheDocument();
   });
 
+  /**
+   * The Commander bracket's crown, in the Name cell — beside the owned badge and the finish
+   * mark, because all three are facts about the *card* and the table's other five columns are
+   * about the printing.
+   *
+   * Named rather than shaped: a screen reader saying "crown" beside a card would be describing
+   * the icon, so the glyph carries the word as its accessible name. The table has no
+   * `aria-hidden` overlay to work around — that trap is the wall's, where the chip sits inside
+   * the tile's button.
+   */
+  it("crowns a game changer's row, and only that row", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, gameChanger: true }, SPARSE]));
+    wrap(<SearchPage />);
+
+    await screen.findByText("Lightning Bolt");
+    const crowns = screen.getAllByRole("img", { name: GAME_CHANGER_LABEL });
+    expect(crowns).toHaveLength(1);
+    expect(screen.getByText("Lightning Bolt").closest('[role="row"]')).toContainElement(crowns[0]);
+    expect(screen.getByText("Nameless Race").closest('[role="row"]')).not.toContainElement(
+      crowns[0],
+    );
+  });
+
   /** Nothing owned and nothing wished is not a fact worth a badge — it is every other row
    *  in a 116 k-card database. */
   it("says nothing about a card the reader neither owns nor wants", async () => {
@@ -992,6 +1023,44 @@ describe("the result layout toggle", () => {
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAccessibleName(
       "Lightning Bolt",
     );
+  });
+
+  /**
+   * The same crown as the table's, over the art instead of beside the name — and it shares the
+   * finish chip rather than taking a fourth corner, because the tile's other two are spoken for
+   * (bottom-left the owned badge, top-left the printing count).
+   *
+   * The chip is inside the tile's button and the whole overlay is `aria-hidden`, so the picture
+   * is decoration and the caption is the statement. Both halves are asserted here: the mark is
+   * drawn, the words are reachable, and the button is still called nothing but the card.
+   */
+  it("crowns a tile whose card the bracket counts, and says so in words", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, gameChanger: true }]));
+    wrap(<SearchPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+
+    expect(
+      screen.getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(`, ${GAME_CHANGER_LABEL}`)).toHaveClass("sr-only");
+    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAccessibleName(
+      "Lightning Bolt",
+    );
+  });
+
+  /**
+   * The tile's top-left corner is hoverable now, so the abbreviation it draws has plain words
+   * to offer — and they say **matched**, because that is what the number counts: a collapsed
+   * row groups the printings that got past the filters, not the card's whole print run.
+   */
+  it("spells out what a tile's ×N printings corner abbreviates", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, printings: 132 }]));
+    wrap(<SearchPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+
+    expect(screen.getByTitle("132 printings matched these filters")).toHaveTextContent("×132");
   });
 
   /**

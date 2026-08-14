@@ -19,9 +19,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { parseFinishes } from "@/lib/finish";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -60,12 +63,19 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
   layout: "normal",
   oracleId: "o-bolt",
   finishes,
+  // Off by default, which is what all but a few hundred of the corpus's cards are. The rows
+  // that wear the crown say so by spreading this — see `SearchPage`'s `tileGameChanger` for
+  // the one-line callback the wall is really handed.
+  gameChanger: false,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
   priceLow: 400.5,
   priceHigh: 400.5,
 });
+
+/** The wall's own slot, exactly as `SearchPage` passes it: a field read, held still. */
+const rowIsGameChanger = (c: CardSummary) => c.gameChanger;
 
 /**
  * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height
@@ -79,6 +89,9 @@ beforeAll(() => {
 
 beforeEach(() => {
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  // The wall's tile size is the reader's, and it lives in a module-level store that outlives a
+  // render — so a test that zooms would hand the next one a 2× wall to measure.
+  useAppStore.setState({ cardZoom: DEFAULT_ZOOM });
 });
 
 afterEach(() => {
@@ -355,14 +368,115 @@ describe("CardGrid", () => {
 
     // The corner is the wall's, not the badge's: every caller hands over a plain inline mark
     // and this is the one place that decides where a mark goes, so two views cannot drift
-    // into two corners. `pointer-events-none` because the whole tile opens the card, and a
-    // mark that swallowed the click over its own two square centimetres would be a dead spot.
-    expect(badge.parentElement).toHaveClass(
-      "pointer-events-none",
-      "absolute",
-      "bottom-1",
-      "left-1",
+    // into two corners.
+    expect(badge.parentElement).toHaveClass("absolute", "bottom-1", "left-1");
+  });
+
+  /**
+   * The corner takes its own pointer events — which is what lets a `title` on the mark inside
+   * it surface at all — and pays for that by opening the card itself.
+   *
+   * It used to be `pointer-events-none`, so the press fell through to the art and the whole
+   * tile was one target. A tooltip cannot come out of an element that receives no pointer
+   * events, and these marks are abbreviations (`×3`, a heart) whose plain words are exactly
+   * what a reader hovers for. So both corners answer a click with the same `onSelect` the
+   * button underneath would have: hoverable, and not a dead spot.
+   */
+  it("opens the card from a mark's corner, which is hoverable rather than click-through", async () => {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={onSelect}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        badge={(c) => <span title="3 in your collection">×{c.printings}</span>}
+        topLeft={() => <span title="3 printings matched these filters">×3</span>}
+      />,
     );
+
+    const bottomLeft = screen.getByTitle("3 in your collection").parentElement!;
+    const topLeft = screen.getByTitle("3 printings matched these filters").parentElement!;
+    expect(bottomLeft).toHaveClass("pointer-events-auto");
+    expect(topLeft).toHaveClass("pointer-events-auto");
+
+    await userEvent.click(bottomLeft);
+    await userEvent.click(topLeft);
+
+    expect(onSelect.mock.calls).toEqual([["aaa"], ["aaa"]]);
+  });
+
+  /**
+   * The Commander bracket's crown, in the chip the finish mark already owns.
+   *
+   * Drawn from the wall's own slot rather than from a field on `GridCard`, for the reason the
+   * `finish` slot beside it exists: the search's rows carry the fact and a mapped collection
+   * row does not, so a wall that guessed would crown nothing or everything.
+   *
+   * `hidden: true`, because the whole overlay the chip sits in is `aria-hidden` — it is inside
+   * the tile's button, where any text of its own would join the button's accessible name and
+   * make a wall of game changers forty buttons called "… Game changer". Which is the other
+   * half of this test.
+   */
+  it("crowns a game changer's tile, and leaves an ordinary card's alone", () => {
+    render(
+      <CardGrid
+        rows={[
+          { ...card("aaa", "Rhystic Study"), gameChanger: true },
+          card("bbb", "Lightning Bolt"),
+        ]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        gameChanger={rowIsGameChanger}
+      />,
+    );
+
+    const crowns = screen.getAllByRole("img", { name: GAME_CHANGER_LABEL, hidden: true });
+    expect(crowns).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Rhystic Study" })).toContainElement(crowns[0]);
+    expect(screen.getByRole("button", { name: "Rhystic Study" })).toHaveAccessibleName(
+      "Rhystic Study",
+    );
+  });
+
+  /**
+   * And the fact stated in words, because the chip that draws it is decoration: the caption is
+   * a *sibling* of the button, so a sentence here reaches a screen reader without renaming
+   * forty tiles. The same treatment the finish word gets, one line above it.
+   */
+  it("states the crown in the caption, where the art's chip cannot", () => {
+    render(
+      <CardGrid
+        rows={[{ ...card("aaa", "Rhystic Study"), gameChanger: true }]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        gameChanger={rowIsGameChanger}
+      />,
+    );
+
+    const stated = screen.getByText(`, ${GAME_CHANGER_LABEL}`);
+    expect(stated).toHaveClass("sr-only");
+    // In the caption beside the set and number, not inside the button that names the card.
+    expect(screen.getByRole("button", { name: "Rhystic Study" })).not.toContainElement(stated);
+  });
+
+  /** A wall told nothing crowns nothing — the collection's, which has no such fact to give. */
+  it("crowns no tile at all when the caller passes no answer", () => {
+    render(
+      <CardGrid
+        rows={[{ ...card("aaa", "Rhystic Study"), gameChanger: true }]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+
+    expect(
+      screen.queryByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(`, ${GAME_CHANGER_LABEL}`)).not.toBeInTheDocument();
   });
 
   /**
@@ -621,6 +735,139 @@ describe("CardGrid", () => {
     // Still a floor and not a width: the pair share out the whole column, gap included — 159px
     // each, which is what the running window measures.
     expect(tileWidthFor(330, 150)).toBeCloseTo(159);
+  });
+
+  /**
+   * The zoom is arithmetic on the **floor**, and this is the whole of it: a bigger floor fits
+   * fewer columns across the same wall, and the tiles then share out the leftover — so zooming
+   * in grows every tile *and* the wall still reaches both edges. That flushness is the reason
+   * the floor is the seam; a scaled tile would have left a widening gutter down one side.
+   *
+   * On the exported pair rather than through a render, for the reason the two tests above are:
+   * jsdom measures every container at zero, so a 1200px wall exists nowhere else.
+   */
+  it("fits fewer, larger tiles across the same wall as the reader zooms in", () => {
+    expect(columnsFor(1200, scaled(170, 0.5))).toBe(12);
+    expect(columnsFor(1200, scaled(170, DEFAULT_ZOOM))).toBe(6);
+    expect(columnsFor(1200, scaled(170, 2))).toBe(3);
+
+    for (const zoom of [0.5, DEFAULT_ZOOM, 1.25, 2]) {
+      const floor = scaled(170, zoom);
+      const columns = columnsFor(1200, floor);
+      const tile = tileWidthFor(1200, floor);
+      // Flush at every zoom, and never a tile narrower than the floor that decided the count.
+      expect(columns * tile + (columns - 1) * 12).toBeCloseTo(1200);
+      expect(tile).toBeGreaterThanOrEqual(floor);
+    }
+  });
+
+  /**
+   * A wall given its own floor is scaled by the same factor, so the deck editor's docked column
+   * zooms with the rest of the app instead of staying at the size it was scoped for. The numbers
+   * are that panel's measured 331px column: one card at 2×, three at 0.5×, and the column full
+   * either way.
+   */
+  it("scales a wall's own floor with the zoom rather than pinning it", () => {
+    expect(scaled(150, 2)).toBe(300);
+
+    expect(columnsFor(330, scaled(150, 2))).toBe(1);
+    expect(tileWidthFor(330, scaled(150, 2))).toBeCloseTo(330);
+
+    expect(columnsFor(330, scaled(150, 0.5))).toBe(3);
+    expect(tileWidthFor(330, scaled(150, 0.5))).toBeCloseTo(102);
+  });
+
+  /**
+   * The store is this wall's only zoom input, and that is the point of putting it here: the
+   * search, the collection and the deck panel are all this component, so they are one setting
+   * rather than three, and not one of those call sites passes anything.
+   *
+   * jsdom measures the container at zero and `tileWidthFor` answers a zero-width wall with its
+   * floor — so the width drawn on a tile here *is* the scaled floor, which is the number under
+   * test. Live, rather than at mount, because a reader zooms while looking at the wall.
+   */
+  it("resizes its tiles when the reader zooms, with no call site involved", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    const tile = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".group");
+
+    expect(tile()).toHaveStyle({ width: "170px" });
+
+    act(() => useAppStore.setState({ cardZoom: 2 }));
+    expect(tile()).toHaveStyle({ width: "340px" });
+
+    act(() => useAppStore.setState({ cardZoom: 0.5 }));
+    expect(tile()).toHaveStyle({ width: "85px" });
+  });
+
+  /**
+   * The caption grows with the tiles and never shrinks below them, and the asymmetry is
+   * arithmetic rather than taste: nothing *in* the strip scales — it is a 24px quick-add beside
+   * 12px text at every zoom. The row's height is what the virtualiser positions rows from, so a
+   * strip budgeted under the height of its own contents is a wall whose rows overlap.
+   */
+  it("grows the caption with the tiles but never below what stands in it", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    const row = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".absolute");
+
+    // A 170px card is 238px of art, under the measured 28px strip.
+    expect(row()).toHaveStyle({ height: "266px" });
+
+    // Twice the card is twice the strip: 476 of art and 56 of caption.
+    act(() => useAppStore.setState({ cardZoom: 2 }));
+    expect(row()).toHaveStyle({ height: "532px" });
+
+    // Half the card is *not* half the strip: 119 of art and the same 28, because the button in
+    // the caption is 24px whatever the tiles are doing.
+    act(() => useAppStore.setState({ cardZoom: 0.5 }));
+    expect(row()).toHaveStyle({ height: "147px" });
+  });
+
+  /**
+   * The gesture is on the **scroller**, which is the element the pointer is over: the sizer
+   * inside it sits within this wall's padding and the rows on top of that are positioned
+   * absolutely, so a wheel over the padding — or in the gap between two rows — would miss a
+   * listener bound any further in.
+   *
+   * Directional rather than exact on purpose. How far one notch moves the zoom, and where the
+   * range stops, are `useCardZoomGesture`'s and are tested there; what belongs to this wall is
+   * that the element the reader is over is the element listening, and that an ordinary scroll
+   * is still an ordinary scroll.
+   */
+  it("zooms on ctrl+wheel over the scroller and leaves a plain scroll alone", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+      />,
+    );
+    const scroller = screen.getByRole("group", { name: "Search results" });
+
+    // A wall of cards is a thing readers scroll, and 117 k results is a lot of scrolling.
+    fireEvent.wheel(scroller, { deltaY: -240 });
+    expect(useAppStore.getState().cardZoom).toBe(DEFAULT_ZOOM);
+
+    fireEvent.wheel(scroller, { ctrlKey: true, deltaY: -240 });
+    expect(useAppStore.getState().cardZoom).toBeGreaterThan(DEFAULT_ZOOM);
+
+    act(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+    fireEvent.wheel(scroller, { ctrlKey: true, deltaY: 240 });
+    expect(useAppStore.getState().cardZoom).toBeLessThan(DEFAULT_ZOOM);
   });
 
   it("asks for the next page once the reader is near the bottom of the loaded rows", () => {

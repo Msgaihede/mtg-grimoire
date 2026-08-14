@@ -121,11 +121,81 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   predicate cannot use it. An index and the query that reads it are one change; shipping the
   first without the second buys the whole cost and none of the benefit.
 - **The collapsed shape is a `GROUP BY` step that also computes the representative's id, then
-  a primary-key join back.** `substr(max(coalesce(released_at,'0000-00-00') || id), 11)` is
-  the newest printing's id — the date is fixed-width, so the concatenation orders as
-  `released_at DESC, id DESC` and the id starts at character 11. That is 108 ms against
-  767 ms for joining on the group key, and against **2 486 ms** for the obvious
-  `row_number() OVER (PARTITION BY …)`, which stays slow even with the index.
+  a primary-key join back.** The whole pick is **one fixed-width sortable string per row fed
+  to `max()`**, with `substr()` slicing the winning `id` back off the end — which is what
+  makes the join `JOIN cards c ON c.id = g.rep`, a primary-key lookup. That shape is 108 ms
+  against 767 ms for joining on the group key and matching the composite expression a second
+  time, and against **2 486 ms** for the obvious `row_number() OVER (PARTITION BY …)`, which
+  stays slow even with the index. (Measured 2026-08-11, release build, Windows, when the
+  string was just `coalesce(released_at,'0000-00-00') || id`. The comparison is between
+  _shapes_ and the shape has not changed; what the wider string below costs to build is
+  measured per marketplace two bullets down.)
+- **The representative is the cheapest printing of the card's _latest release date_** — since
+  2026-08-14. Before that it was simply the newest printing, ties to the greatest `id`. Three
+  keys over the printings that **matched the search**: `released_at` DESC (NULL coalesced to
+  `'0000-00-00'`), then **price ASC at the reader's marketplace**, then `c.id` DESC. Each is
+  one fixed-width segment of the `max()` string, and the price segment is written **inverted**:
+  `max()` takes the _greatest_ string, so the cheapest price has to encode as the largest
+  segment, and an unpriced printing encodes to the losing extreme so that a NULL loses to every
+  priced printing instead of winning by default. `search::COLLAPSE_REP` is the one spelling,
+  and the segment widths and the `substr` offset live there.
+- **"The latest set" is resolved by price, not by set code, and that is the deliberate part.**
+  Every candidate shares the card's latest release date, so every candidate sits in a set
+  released on that date — and **2 503 of 37 556 paper groups have a latest date spanning more
+  than one set**, so the case is common enough to decide on purpose. Where two sets tie, the
+  cheapest printing across both wins. A `set_code DESC` tie-break was written, measured and
+  **rejected**: promo sets are `p`-prefixed (`piko`, `pneo`, `pkhm`) and so sort _above_ their
+  parent set, which handed a same-day tie to the promo printing — usually the dearer one.
+  Icebreaker Kraken went `khm 63` **$0.36** → `pkhm 63p` **$0.88** under that variant, which is
+  a rule called "cheapest" making the row more expensive.
+- **The change moves 4 011 of 37 556 groups (10.7 %) and makes none of them dearer.**
+  Measured 2026-08-14 on the live database (Windows, 116 703 cards, 37 556 paper oracle groups,
+  TCGplayer prices). **0 of the 4 011 get a dearer representative** — a property of the key
+  rather than a lucky sample, because every printing the old rule could have picked is still a
+  candidate, so the one chosen is never more expensive than it. **163** go from an unpriced
+  representative to a priced one, closing an em dash on a card that has a price. **1 155** of
+  the changes cross a set boundary inside the same release date: `pfrf 143s` $2.59 →
+  `frf 143` $0.35, `peld 185s` $0.82 → `eld 185` $0.34.
+- **The pick is therefore marketplace-dependent — switching marketplace can change which
+  printing represents a card.** That is consistent rather than surprising: a `SearchRequest`
+  already carries a `marketplace` and the frontend already has it in the query key, and a
+  collapsed row that offers the cheapest way to own the card has to mean cheapest _where the
+  reader shops_. `COLLAPSE_REP` is a **function** of `sorting::printing_price_expr`'s output
+  for that reason and not a constant any more. **Only `c.price_usd` is a column of
+  `idx_cards_collapse`**, so the group step stays a covering scan at TCGplayer and pays row
+  lookups (Cardmarket) or a correlated subquery into `marketplace_prices` (Card Kingdom, Mana
+  Pool) at the other three — the same asymmetry `printing_price_expr` already carries for the
+  price _column_, now owed by the _grouping_ as well.
+- **What the third price evaluation costs, per marketplace.** The group step evaluated the
+  price expression twice (`min`, `max`) and now evaluates it three times. Measured 2026-08-14
+  against the same 563 MB database, timing the two-step collapsed query with **no filter** —
+  the worst case there is, because every one of the 37 556 groups is built before the `LIMIT`:
+
+  | Marketplace | Old rule | New rule | |
+  | --- | --- | --- | --- |
+  | TCGplayer — `c.price_usd`, in `idx_cards_collapse` | 108 ms | **127 ms** | 1.18× |
+  | Cardmarket — `c.price_eur`, row lookups | 548 ms | **577 ms** | 1.05× |
+  | Card Kingdom / Mana Pool — `marketplace_prices` subquery | 891 ms | **1 044 ms** | 1.17× |
+
+  A **narrowed** browse — anything a reader actually types — is a wash: `name LIKE '%dragon%'`
+  is 24 → 24 ms at TCGplayer and 27 → 28 ms at Card Kingdom. So the whole cost is the
+  unfiltered browse's: **~19 ms** where the price expression is an indexed column, **~150 ms**
+  where it is a correlated subquery. `EXPLAIN QUERY PLAN` still opens
+  `SCAN c USING COVERING INDEX idx_cards_collapse`: the wider string did not cost the covering
+  scan.
+
+  **Provenance, and its limit.** Medians of old and new run **interleaved** (15 pairs
+  unfiltered, 40 narrowed, 9 for the feed), because run-to-run drift on this machine is wider
+  than the effect being measured — a first, non-interleaved pass had the narrowed browse
+  getting *faster*, which it does not. Taken through Python's SQLite **3.40.1** against the
+  app's own database file rather than through the crate, so these figures are comparable _to
+  each other_ and not to a release-build number — the reason to trust the pair is that the old
+  rule's 108 ms lands exactly on the release-build figure above. **The feed row is
+  against 116 314 _synthetic_ `marketplace_prices` rows**, because no feed had ever been synced
+  into this database: the row count is realistic, the prices are not, and only the timing is a
+  fact. The ~900 ms the feed marketplaces already cost unfiltered is **pre-existing** and had
+  never been measured before — `sorting::printing_price_expr` says so in as many words — and it
+  dwarfs what this change added to it.
 - **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must _not_ be.**
   `oracle_id` is nullable, so a bare `GROUP BY c.oracle_id` merges every null-oracle printing
   into one card — silently, with a printing count and price range spanning unrelated cards.

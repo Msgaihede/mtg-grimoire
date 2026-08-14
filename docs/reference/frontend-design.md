@@ -134,7 +134,38 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   finish somewhere else. The stack is its one caller: a `FinishMark` on the data line beside the
   price says the word better than a fourth badge in a corner the rule break and the quantity tag
   are already competing for. What must never happen is _neither_ — a sheen with nothing naming
-  it is decoration, which is the whole of why the chip existed.
+  it is decoration, which is the whole of why the chip existed. **It governs the crown too**,
+  since the chip is the only thing a crown can be drawn as and the stack has its banner instead.
+- **One game changer, three drawings, and the difference is room rather than meaning.** The deck
+  stack stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a
+  card is 295px tall; the other three deck views abbreviate to `GameChangerBadge`'s gold `GC`
+  where a cell has a column; and a search card gets `components/GameChangerMark`, **the banner's
+  crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
+  is a sticker over the picture the reader came to look at. `text-pie-gold` in all three: the spec
+  is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
+  must never be confusable, and the destructive colour belongs to the second. It shares the finish
+  chip rather than taking a corner of its own — **a card fact and a printing fact in one box**,
+  since a card can be either, both or neither. Nothing derives it: the backend flattens
+  `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
+  struct is a `bool`).
+- **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
+  tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
+  overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once
+  been shown over card art: a tooltip is drawn by the element the pointer _hits_, and nothing
+  in that subtree was hittable. The chip now takes `pointer-events-auto` on its own while the
+  full-bleed sheen keeps `none`; it sits _inside_ the enclosing button on all three surfaces
+  that have one, so a click on it bubbles and opens the card exactly as a click on the art
+  does. `data-card-marks` is the handle a test finds it by — a hit target is otherwise
+  invisible to the DOM, which is why this went unnoticed through a green suite.
+- **`CardGrid`'s two corner marks take their own clicks now, and that is the price of their
+  tooltips.** The owned badge (bottom-left) and the printing count (top-left) are _siblings_
+  of the tile's button, so `pointer-events-none` was what let a press fall through to the art
+  and kept the tile one click target. But they are abbreviations — `×3`, a filled heart —
+  whose plain-words tooltip is the whole point of hovering them, so each takes its own events
+  and calls `onSelect` itself: same behaviour, now hoverable. The drag is unaffected,
+  `cardDraggable` being registered on the tile's outer wrapper. No keyboard handler is owed —
+  a corner duplicates what the caption already states and opens what the button opens, and a
+  second tab stop per tile would be forty extra presses across a wall to reach nothing new.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
@@ -143,6 +174,46 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   deck tiles and folder strips (`DecksPage.tsx`), the theory diff (`TheoryDiffDialog.tsx`) and
   the cover art picker (`DeckSettingsDialog.tsx`) — where a 100-card list really is 100 mounted
   rows. (It used to say "the deck zone columns", a component the rebuild deleted.)
+- **Ctrl+wheel resizes the cards and nothing else.** The gesture is attached per _card section_ —
+  `CardGrid`'s scroller (which is the search wall, the collection wall and the deck editor's docked
+  search panel at once) and the deck editor's own `StackView` and `GridView` roots — so the sidebar,
+  the ribbon, the tables and the card pane never move. There is one `cardZoom` behind all of them
+  (`useAppStore`), because it is a statement about how the reader is reading cards rather than about
+  how one list is configured: zoom the search wall, switch to Decks, and the cards there are already
+  the size that was asked for. **The wishlist has no zoom because it has no card section** — it is
+  `VirtualTable` only.
+- **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
+  obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
+  of a 488px `grid` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
+  stops matching the content, and it desynchronises the deck editor's drag-and-drop hit testing from
+  what is painted. Rescaling the numbers keeps text crisp, lets the wall reflow to a new column
+  count, and keeps `CardGrid`'s existing `virtualizer.measure()` effect — already keyed on
+  `tileHeight` — correct for free.
+- **A ladder of ten stops (0.5×–2×), not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
+  not a magnitude worth trusting: a mouse notch arrives as 100 through Chromium's line mode and 120
+  from a driver reporting raw ticks, while a precision trackpad's pinch reaches the page as a stream
+  of ctrl-flagged wheel events in the single digits, dozens a second. The ladder makes the unit the
+  **gesture**. It also keeps the value exact — `zoom * 1.1` applied and undone eight times is
+  0.9999999999999998, which formats as "100%" while sizing every tile a hair off.
+- **Anywhere a scaled budget contains unscaled chrome, the budget floors rather than scales:**
+  `max(base, scaled(base, zoom))`. Three surfaces landed on this independently. `CardGrid`'s 28px
+  caption is set by the 24px quick-add button inside it, so a plain 0.5× gives a 14px strip under a
+  28px caption and the virtualised rows overlap by the difference. `CardStack`'s 34px reveal is a
+  legibility floor for the chip laid over it, not a fraction of the card. `GridView`'s caption and
+  gutter are the same case (4.5px type at half size; tiles touching into one sheet of card backs).
+  The stack's padding and border are the mirror rule — **added, never multiplied**, since chrome is
+  not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason.
+- **The zoom badge is driven by a pulse counter, not by the zoom value** (`CardZoomIndicator`,
+  `zoomPulse`). At either end of the ladder a gesture changes no number, and that is exactly when a
+  reader needs an answer — they are still rolling the wheel and nothing is happening. Keyed off the
+  value, the badge would fade out under their hand at the one moment it is load-bearing. It is
+  `aria-hidden` on purpose: a live region here would announce a percentage per wheel notch.
+- **The wheel listener is a native `addEventListener` with `{ passive: false }`, never React's
+  `onWheel`.** React registers `wheel` as passive on the root container, and a passive listener's
+  `preventDefault()` is defined to do nothing — so the zoom would step *and* WebView2 would apply
+  its own ctrl+wheel page zoom on top, scaling the whole window out from under a reader who asked
+  one grid of cards to get bigger. The same `preventDefault` is what suppresses trackpad pinch,
+  which arrives with `ctrlKey` set and nobody touching a key.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
   phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
@@ -180,13 +251,62 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
   `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
   and each hands focus back to the control that opened it.
-- **An anchored popup near the right of a row is pinned to its trigger's _right_ edge.**
+- **A popup is pinned to, and grows from, the corner nearest its trigger's own edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
   picker did: 288px of listbox opening from a trigger at the end of the filter row put it
   **174px past a 1280px window** (measured), and the page slid left, sidebar and all, the
-  moment its own `scrollIntoView` ran. `right-0`, the same decision as
-  `AddToCollection`'s `align="end"`.
+  moment its own `scrollIntoView` ran. So `SetCombobox` is `right-0` with
+  `origin-top-right`, the same decision as `AddToCollection`'s `align="end"` — and **the
+  mirror of it is equally wrong**. The deck editor's quick add sits at the _left_ end of its
+  toolbar row, where that pair would hang a panel wider than the field out to the left of
+  the field that produced it, away from the edge it has room at; it takes `left-0` with
+  `origin-top-left`. The origin follows the pin, which is the one thing `lib/motion.ts`'s
+  `popup` leaves to whoever anchors it: a listbox that grows from a corner it is not
+  attached to reads as unrelated to the control that opened it. Both spellings are written
+  out whole, for the scanner reason above.
+- **Two comboboxes here are hand-rolled, and the CSP is the reason.** The set filter
+  (`features/search/SetCombobox.tsx`) and the deck editor's quick add
+  (`features/decks/QuickAdd.tsx`) are plain absolutely-positioned listboxes in the same
+  stacking context as their trigger, never portalled popovers: the shipped `csp` is
+  `style-src 'self'`, and every portalled overlay primitive injects a runtime `<style>` the
+  moment it opens — Radix's pull in `react-remove-scroll`. **`devCsp` carries
+  `'unsafe-inline'` and the shipped `csp` does not**, so the failure passes `tauri dev`,
+  Storybook and jsdom and breaks only in a packaged build, exactly like
+  `AnimatePresence mode="popLayout"`. The ARIA wiring is the whole of what the dependency
+  would have supplied: `role="combobox"` on the _field_, `aria-expanded` and
+  `aria-controls`, and `aria-activedescendant` moving the highlight while the caret stays
+  put — which is what lets a reader take a row without Tabbing into the list. Both files
+  build option ids from a module-scope `optionId(id, i)`, so the id an option carries and
+  the id `aria-activedescendant` points at are one spelling rather than two that happen to
+  agree; a mismatch is invisible to the eye and total to a screen reader, which simply
+  announces nothing.
+- **Both draw their panel in `components/PopupListbox`'s `PopupPanel`, and what is shared is
+  an inert guard.** `AnimatePresence` keeps the element it was last handed while that
+  element leaves, so an exiting panel goes on rendering the props of the render in which it
+  was still open — including its `className` — and a flag read upstairs can therefore never
+  reach it. `PopupPanel` reads `useIsPresent` _inside_ the presence, which is the only place
+  the answer changes, and turns the leaving panel `aria-hidden` and `pointer-events-none`.
+  Without it every dismissal a popup has — Escape, the outside-mousedown listener, `onBlur`
+  — comes down with the open flag while the panel is still painted and hit-testable for the
+  length of the fade: a press landing on a listbox that can no longer close itself, and a
+  second, stale copy of its list in the accessibility tree. One component rather than two
+  inline `motion.div`s, so the guard cannot drift between them.
+- **What the two do not share is deliberate.** `SetCombobox` opens from a disclosure button,
+  focuses a search field of its own and hands the caret back on Escape; the quick add _is_
+  the field, so its Escape closes the list and moves nothing. `SetCombobox` scrolls the
+  active option into view because it renders up to 50 rows; the quick add caps at five,
+  which are all visible at once, so it has no such effect and needs none. And the quick add
+  registers its `"inner"` Escape rung on _the list being up_ rather than on its own open
+  flag, because a toolbar field with no list under it owes the press to the card detail
+  pane, which listens on `window` in the bubble phase. Its deck-side rules — the three
+  routes to one write, the freshness guard, the missing `marketplace` — are in
+  `src/features/decks/CLAUDE.md`. **Driven in the shipped window 2026-08-14** (`tauri dev`,
+  debug, 1280×800): the panel computes `z-index: 30` and `transform-origin: 0px 0px`, its
+  left edge sits on the field's to the pixel (285/285), nothing overflowed right and
+  `scrollLeft` stayed 0 — and Escape closed the list while leaving the card pane open, then
+  closed the pane on the second press. Every figure is in
+  `src/features/decks/CLAUDE.md`.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row
@@ -210,6 +330,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   replaces the sort with that one term, and the control reads `Custom…` once the sort starts
   somewhere it has no option for. The wishlist's Printing column is deliberately not
   sortable at all — an any-printing wish names no set.
+- **Every option list is drawn through `sortOptions` in `src/lib/options.ts`: alphabetical by
+  the display label, with a faceted control's greyed rows sunk below its pickable ones.** The
+  label is the words on screen, never the key — `standard` and `Standard Brawl` sort by what
+  the reader reads. One `Intl.Collator` pinned to `"en"`, `sensitivity: "base"` and
+  `numeric: true`: case is not a sort key ("The List" used to land above "the list" under a
+  bare `localeCompare`), an accent is a spelling, and "Arena League 1999" belongs above "Arena
+  League 2001" rather than wherever a code-unit read of `1` against `2` puts it. It **copies**
+  before sorting, because the arrays reaching it are React Query's session-cached
+  `list_sets()` and `formatSpecs()` and every other reader of that key shares them.
+  - **Ordering is a display decision and therefore lives in TS.** Rust answers in whatever
+    order the query produced — `list_sets` newest-first, `format_specs_list` by a seeded
+    `sort_order`, deck categories by the reader's own drag — and each of those is still the
+    right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
+  - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
+    `Custom…` a table-header sort leaves behind, `Auto (by card type)`, the permanent `Move…`
+    verb, `Top level`. `CategoriesPanel`'s `are deleted with it` is pinned **last** — the
+    destructive answer is not allowed to become the default by alphabet.
+  - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
+    Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
+    reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesPanel`
+    and rendered in that order by all four deck views, so an alphabetical dropdown would
+    disagree with the panel beside it. Both carry a comment at the site saying so, because
+    the next sweep for unsorted selects will otherwise "fix" them.
 
 ## Vendored components and tokens
 

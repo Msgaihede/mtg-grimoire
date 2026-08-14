@@ -1095,7 +1095,7 @@ const LARGE_PRINTINGS_EACH = 8;
 const LARGE_ENTRY_COUNT = 600;
 
 /**
- * The rows of `CARDS` a synthetic card may be cut from: **36 of the 43**, measured 2026-08-09.
+ * The rows of `CARDS` a synthetic card may be cut from: **34 of the 43**, measured 2026-08-14.
  *
  * **Single-faced**, which drops five (the transform, split, adventure, modal DFC and art
  * series rows): a synthetic name on a multi-faced template would leave the `faces` blob naming
@@ -1107,8 +1107,18 @@ const LARGE_ENTRY_COUNT = 600;
  * `matchesCardFilters`, so a corpus that reached 5 200 with digital rows in it answers 4 965
  * to the search a story actually makes (measured before this filter was added) and the seed
  * whose entire job is to clear the cap does not clear it.
+ *
+ * **And playable somewhere**, which drops the last two — `Kozilek, Compleated` (a Mystery
+ * Booster 2 playtest card) and `Little Girl` (Unhinged), both legal in no format at all. Same
+ * failure as the paper one and found the same way: `legalities` is taken **card-shaped**, so
+ * each of those two templates made *eight* unplayable printings 18 times over, and the search
+ * view's `playableOnly` default then answered **4 950** — 50 short of the cap this seed exists
+ * to clear. Two of 36 templates cost 288 printings, which is the arithmetic that makes a
+ * one-in-eighteen fixture detail a story-wide failure.
  */
-const LARGE_TEMPLATES = CARDS.filter((c) => c.faces === "[]" && c.isPaper);
+const LARGE_TEMPLATES = CARDS.filter(
+  (c) => c.faces === "[]" && c.isPaper && /"(legal|restricted)"/.test(c.legalities),
+);
 
 /** A deterministic uuid-shaped id. `f` in the first nibble and a counter in the node field:
  *  unique across the synthetic corpus by construction, and obviously not a Scryfall id to
@@ -1121,8 +1131,11 @@ let largeCardsMemo: FakeCard[] | null = null;
 
 /**
  * The `large` corpus: the 43 real printings followed by 5 200 synthetic ones — **5 243 rows**,
- * of which **5 241 are paper**, which is what a default search counts (`paperOnly` is
- * omitted-means-true) and is comfortably past the 5 000 cap.
+ * of which **5 241 are paper** and **5 238 are also playable somewhere**, which is what a
+ * default search counts (`paperOnly` is omitted-means-true and the search view sends
+ * `playableOnly`) and is comfortably past the 5 000 cap. All 5 200 synthetic rows are in that
+ * figure by construction; the five it drops are the two digital and the three unplayable real
+ * ones. Collapsed — which is also the default — that is **683 cards**.
  *
  * The real rows stay at the front so a story on this seed can still find Lightning Bolt; the
  * synthetic ones are what push the count past the cap.

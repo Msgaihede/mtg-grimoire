@@ -70,6 +70,12 @@ deliberately**: no screenshots are stored.
   This has rotted twice: it read 326 stories for three stories' worth of drift, and by
   2026-08-12 it named 43 story files when 44 were on disk — a whole file can go missing from the
   prose while the story total still looks plausible.
+- **Re-count after a merge, not just after your own commit.** 2026-08-14 two branches each
+  measured 359 correctly against their own base and the merged tree was 365: a count is a
+  measurement of a *tree*, so taking either side of that conflict would have shipped a figure
+  true of no checkout. The same trap eats derived counts — "38 docs pages render inline" was
+  `45 − 7` and is now `46 − 7 − 1`, unchanged in value and stale in every term. Re-derive from
+  the built index and from source, never from the last number plus your own diff.
 - **Every drag is held in `try { … } finally { await held.cancel(); }`, and every assertion about
   a drag's result goes through `waitFor`.** A throw mid-drag leaks pdnd's one global drag flag into
   the _next_ story, which is why one broken assertion reported two failures.

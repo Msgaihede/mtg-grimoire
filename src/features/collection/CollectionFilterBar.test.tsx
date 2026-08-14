@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/lib/store";
@@ -123,6 +123,68 @@ describe("CollectionFilterBar", () => {
     rerender(<CollectionFilterBar collection={collection({ needsReview: false })} />);
     const complement = screen.getByRole("button", { name: "Not flagged" });
     expect(complement).toHaveAttribute("aria-pressed", "true");
+  });
+
+  /** Every `<option>`'s text, in the order the reader scrolls past them. */
+  const optionsOf = (label: string) =>
+    within(screen.getByLabelText(label))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+
+  /**
+   * Alphabetical by the words on screen, which is the one order an option list in this app
+   * is drawn in (`lib/options.ts`): a reader hunting Modern looks under M, not in the
+   * position somebody decided the formats rank in — knowledge the list itself never shows.
+   *
+   * The assertion is the whole sequence rather than a spot check, because `FORMATS` is
+   * shared with the search's picker and declared in that ranking order: a bar that had
+   * quietly gone back to mapping the constant would still put a real format under every
+   * option, and only the sequence says which list is being read.
+   *
+   * "Any format" stays first, outside the sort — it is the absence of the filter and not a
+   * format. Nothing on screen distinguishes that from it merely sorting first today, which
+   * is exactly why it is pinned *and* asserted: rename it to "No format filter" and a
+   * sorted-in version would land between Modern and Pauper, where nobody would look for it.
+   */
+  it("offers the formats alphabetically, under a pinned Any format", () => {
+    render(<CollectionFilterBar collection={collection()} />);
+
+    expect(optionsOf("Format")).toEqual([
+      "Any format",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Standard",
+      "Vintage",
+    ]);
+  });
+
+  /**
+   * The same rule over the sort orders, and they are the harder half: these are named for
+   * what they *answer* ("Recently added", "Highest price"), so their declaration order in
+   * `COLLECTION_SORTS` is a train of thought rather than anything a reader can see, and a
+   * picker that showed it would be showing the author's notes.
+   *
+   * "Custom…" is pinned above them for the reason "Any format" is — it is the state of the
+   * control, not an order to pick — and it appears only when the sort came from a header
+   * this select has no option for, which is what the second render is.
+   */
+  it("offers the sort orders alphabetically, under a pinned Custom…", () => {
+    const { rerender } = render(<CollectionFilterBar collection={collection()} />);
+
+    const orders = ["Highest price", "Most copies", "Name", "Recently added", "Set and number"];
+    expect(optionsOf("Sort")).toEqual(orders);
+
+    rerender(<CollectionFilterBar collection={collection({ sortSelection: "" })} />);
+
+    expect(optionsOf("Sort")).toEqual(["Custom…", ...orders]);
+    // Still the unpickable placeholder it was before the sort moved it: a native `<option>`
+    // is the house rule's one exception to `aria-disabled`.
+    expect(
+      within(screen.getByLabelText("Sort")).getByRole("option", { name: "Custom…" }),
+    ).toBeDisabled();
   });
 
   /** Nothing to reset, nothing to say — an always-visible Reset is a control that is

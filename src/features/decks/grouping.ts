@@ -29,7 +29,10 @@ import { sortCards, type SortBy } from "./sorting";
 
 export type GroupBy = "category" | "manaValue" | "type";
 
-/** The toolbar's Group by select, so the three are named in one place. */
+/** The toolbar's Group by select, so the three are named in one place. **The order here is not
+ *  the order they are offered in** — a picker sorts by label (`src/lib/options.ts`), so this
+ *  array is free to read in whatever order explains the modes and a fourth entry may be
+ *  appended without deciding where it appears. */
 export const GROUP_BY_OPTIONS: readonly { value: GroupBy; label: string }[] = [
   { value: "category", label: "Categories" },
   { value: "manaValue", label: "Mana value" },

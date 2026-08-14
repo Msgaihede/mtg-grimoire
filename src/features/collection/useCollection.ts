@@ -24,7 +24,14 @@ export const COLLECTION_PAGE_SIZE = 100;
 export type CollectionSort = CollectionSortKey;
 
 /**
- * The orders the filter bar's select offers, in the order a reader reaches for them.
+ * The orders the filter bar's select offers.
+ *
+ * **This array's order is its declaration order and nothing else.** `CollectionFilterBar`'s
+ * sort `<select>` draws it alphabetically by label through `sortOptions` (`lib/options.ts`),
+ * and the only other reader — `sortSelection` below — asks which keys are *in* it. So
+ * reordering these five lines changes nothing a reader sees; it only breaks the reasoning
+ * that follows, which groups them by what they answer rather than by where they land on
+ * screen. Add to the end.
  *
  * Named for what they answer rather than for the column they touch: "Recently added" is
  * what a reader means by `added`, and `quantity` is asked as "which do I have most of".

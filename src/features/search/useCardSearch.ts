@@ -12,7 +12,15 @@ export const PAGE_SIZE = 50;
 /** How long the search box stays quiet before a keystroke becomes a query. */
 export const DEBOUNCE_MS = 300;
 
-/** The `legalities` keys the format picker offers, in the order players rank them. */
+/**
+ * The `legalities` keys the format picker offers, in the order those keys rank — which is a
+ * fact about the formats and **not** the order anybody sees.
+ *
+ * Every picker draws this through `sortOptions` (`@/lib/options`): alphabetically by `label`,
+ * with the formats this search has nothing legal in sunk to the bottom. So reordering the
+ * array below moves nothing on screen and only costs the keys their one written order — a
+ * picker drawn wrong is a bug in that picker's `sortOptions` call, never in this list.
+ */
 export const FORMATS = [
   { value: "standard", label: "Standard" },
   { value: "pioneer", label: "Pioneer" },
@@ -202,6 +210,16 @@ export function useCardSearch() {
   // cards exist" is the question a search box is asked, and "which printings exist" is the
   // question the card detail pane answers.
   const [allPrintings, setAllPrintings] = useState(false);
+  // The other half of "which cards exist" — and, like `allPrintings`, a statement about the
+  // shape of the corpus rather than a refinement of it, so it sits outside `resetAll` and
+  // outside `activeFilterCount` beside it.
+  //
+  // Off is the default and off means *hidden*: a card legal in no format at all is an art
+  // card, a token, an emblem or a piece of memorabilia, and a search for `lightning bolt`
+  // that answers with three of them above the card is a search answering the wrong question.
+  // `paperOnly` has hidden the digital printings on exactly this reasoning since the command
+  // existed; this is the same rule for the printings no format allows.
+  const [unplayable, setUnplayable] = useState(false);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -236,6 +254,10 @@ export function useCardSearch() {
     // *rows*, not a different order over the same rows, so the two modes must never answer
     // each other from cache.
     allPrintings ? "all" : "collapsed",
+    // Different *rows* again, for the same reason `allPrintings` is spelled rather than
+    // stringified: the two modes are two answers and neither may be served from the other's
+    // cached pages.
+    unplayable ? "unplayable" : "playable",
     // **On every search, not only a price-ordered one.** The marketplace decides what the
     // Price column *contains* now, not merely how it is ordered — Card Kingdom's numbers come
     // out of a different table from TCGplayer's — so two marketplaces are two answers to the
@@ -272,6 +294,12 @@ export function useCardSearch() {
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong.
+        //
+        // `playableOnly` is the opposite and is sent for exactly that reason: **its** default
+        // is false, because every other caller of `search_cards` omits it and none of them
+        // wants an art card dropped out of a list. So this view has to say so, and says it by
+        // absence in the other direction — pressed means "show them", which is no filter.
+        playableOnly: unplayable ? undefined : true,
         limit: PAGE_SIZE,
         offset: pageParam,
       }),
@@ -299,6 +327,10 @@ export function useCardSearch() {
     sets: setsParam,
     manaValues: manaParam,
     owned,
+    // A filter the facet counts must carry, unlike `collapse`: it decides which printings
+    // exist for this search, so a count taken without it would offer a set or a mana value
+    // that only art cards satisfy. Spelled exactly as the page's payload spells it.
+    playableOnly: unplayable ? undefined : true,
   };
   const facets = useCardFacets(facetReq);
 
@@ -329,6 +361,16 @@ export function useCardSearch() {
      */
     allPrintings,
     toggleAllPrintings: () => setAllPrintings((on) => !on),
+    /**
+     * Show the printings no format allows — art series, tokens, emblems, memorabilia.
+     *
+     * `false` is the default, and it means they are **hidden**. Like {@link allPrintings}
+     * this is a statement about which corpus the search runs over rather than a refinement
+     * of the answer, so it is absent from {@link activeFilterCount} and survives `resetAll`:
+     * clearing what you are looking for should not also change what there is to look through.
+     */
+    unplayable,
+    toggleUnplayable: () => setUnplayable((on) => !on),
     /** How many kinds of filter are on — the number on the Reset all badge. */
     activeCount: activeFilterCount({ text, format, colors, sets, manaValues, owned }),
     /**

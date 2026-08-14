@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
+import { scaled } from "@/lib/cardZoom";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { LAYER } from "@/lib/layers";
+import { useAppStore } from "@/lib/store";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { needsNextPage } from "./useCardSearch";
 
@@ -31,6 +35,12 @@ export interface GridCard {
  * fit. Tiles then share out whatever is left over (see {@link tileWidthFor}), so this is
  * a floor rather than the width. A `grid` image is 488 px wide, so even a stretched tile
  * is a downscale, never a blowup.
+ *
+ * The **base** the reader's zoom scales rather than the floor itself: the wall hands
+ * `columnsFor` a floor of `scaled(this, cardZoom)`, so ctrl+wheel moves the column count and
+ * the tiles follow. At the top of the zoom range (2×) the floor is 340 px, comfortably inside
+ * the 488 px image — a *stretched* tile can pass it on a wall too narrow for a second column,
+ * which is one soft picture at the far end of the range rather than a wall of them.
  */
 const TILE_MIN_WIDTH = 170;
 
@@ -43,6 +53,9 @@ const GAP = 12;
  * Set by the quick-add button in it (24px) rather than by the text beside it (16px): the
  * virtualiser positions rows from this number, and a caption taller than it is a wall whose
  * rows overlap by the difference.
+ *
+ * **A measurement of what is in the strip, not a proportion of the tile** — which is why the
+ * zoom grows it and never shrinks it. See where it is scaled.
  */
 const CAPTION_HEIGHT = 28;
 
@@ -98,6 +111,7 @@ export function CardGrid<T extends GridCard>({
   badge,
   topLeft,
   finish,
+  gameChanger,
   action,
   tileRef,
   dragPayload,
@@ -128,8 +142,9 @@ export function CardGrid<T extends GridCard>({
    *
    * Its own slot rather than a second `badge`, because each corner of a tile has exactly one
    * owner and drift is what happens when they do not: bottom-left the owned/wishlist badge,
-   * top-right the finish chip, top-left this. It shares the badge's rules — the same backing,
-   * `pointer-events-none`, and `empty:hidden` so a mark with nothing to say draws nothing.
+   * top-right the finish chip and the game-changer crown, top-left this. It shares the badge's
+   * rules — the same backing, the same click of its own that opens the card (see the corners in
+   * {@link Tile}), and `empty:hidden` so a mark with nothing to say draws nothing.
    */
   topLeft?: (card: T) => ReactNode;
   /**
@@ -143,6 +158,22 @@ export function CardGrid<T extends GridCard>({
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
    */
   finish?: (card: T) => Finish | null;
+  /**
+   * Whether a tile's card is one of the cards the Commander bracket counts — a small gold
+   * crown, drawn by `CardArt` in the **same top-right chip** as the finish mark beside it.
+   *
+   * A callback for {@link finish}'s reason and not a field on {@link GridCard}: the search's
+   * rows carry the fact and a mapped collection row does not, so a wall that guessed would
+   * crown nothing or everything. Absent means no tile is crowned.
+   *
+   * Unlike `finish` this answers a plain `boolean` rather than a nullable word — the backend
+   * flattens `cards.game_changer`'s NULL into `false` (`CardSummary.gameChanger` in
+   * `src/lib/ipc.ts`), so there is no "unknown" arm for a caller to express.
+   *
+   * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}. A fresh arrow
+   * per render tears every tile's drag registration down and rebuilds it on every scrolled row.
+   */
+  gameChanger?: (card: T) => boolean;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
   /**
@@ -196,6 +227,10 @@ export function CardGrid<T extends GridCard>({
    *
    * A floor, not a width: tiles still share out the leftover ({@link tileWidthFor}), and the
    * `grid` image is 488px wide, so a smaller floor is a deeper downscale and never a blowup.
+   *
+   * The reader's zoom scales *this* rather than {@link TILE_MIN_WIDTH}, so a wall given a lower
+   * floor zooms by the same factor as a page-width one — 150 at 2× is 300, which is a 331px
+   * column drawing one card, and that is the honest answer rather than a narrower card.
    */
   minTileWidth?: number;
 }) {
@@ -218,10 +253,49 @@ export function CardGrid<T extends GridCard>({
     return () => observer.disconnect();
   }, []);
 
-  const columns = columnsFor(width, minTileWidth);
+  /**
+   * How big the reader wants their cards — the one thing about this wall that is theirs.
+   *
+   * Read from the store here rather than taken as a prop, and that is the whole reason this
+   * component was the place to put the zoom: it *is* the search's wall, the collection's wall
+   * and the deck editor's docked panel, so three of the app's card surfaces zoom together and
+   * not one of their call sites changed. A prop would have made it three settings that drift,
+   * and a reader who zoomed the search would find the collection back at 1×.
+   */
+  const cardZoom = useAppStore((s) => s.cardZoom);
+
+  // Ctrl+wheel, attached to the **scroller** rather than to the sizer inside it: the scroller is
+  // what the pointer is actually over, since the sizer sits inside this wall's padding and the
+  // rows on top of it are positioned absolutely — so a wheel over the padding, or in the gap
+  // between two rows, would miss a listener bound any further in. The listener is a native
+  // non-passive one for the usual reason (it has to `preventDefault`, or the browser zooms the
+  // whole window underneath it), which is what the hook is for; React registers its own wheel
+  // listeners passively at the root and could not.
+  useCardZoomGesture(scrollRef);
+
+  // The zoom moves the **floor**, not the tiles. Raise the narrowest a tile may be and fewer
+  // columns fit, so each one grows — and `tileWidthFor` still shares the leftover out, so the
+  // wall stays flush to both edges at every zoom instead of growing a gutter as it grows tiles.
+  // Scaling the given floor rather than the constant is what keeps the deck panel's 150 honest:
+  // that column zooms by the same factor as a page-width wall does.
+  //
+  // The other way to do this would be `transform: scale()` on the tiles, and it is wrong three
+  // times over: it resamples the art, it leaves the column count at 1× so the wall no longer
+  // reflows to the window, and it tells the virtualiser a row is a height it is not.
+  const floor = scaled(minTileWidth, cardZoom);
+
+  const columns = columnsFor(width, floor);
   const rowCount = Math.ceil(rows.length / columns);
-  const tileWidth = tileWidthFor(width, minTileWidth);
-  const tileHeight = Math.round(tileWidth * (7 / 5)) + CAPTION_HEIGHT;
+  const tileWidth = tileWidthFor(width, floor);
+
+  // The caption grows with the tiles — a card at 2× under the same 28px strip reads as a card
+  // that has outgrown its label — but never shrinks below them, and that asymmetry is arithmetic
+  // rather than taste: nothing *inside* the caption scales. It is a 24px button beside 12px text
+  // at every zoom, so a strip budgeted at 14px for a 0.5× wall would be a caption taller than the
+  // row the virtualiser positioned for it, which is exactly the overlap `CAPTION_HEIGHT` exists
+  // to prevent.
+  const captionHeight = Math.max(CAPTION_HEIGHT, scaled(CAPTION_HEIGHT, cardZoom));
+  const tileHeight = Math.round(tileWidth * (7 / 5)) + captionHeight;
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -235,6 +309,11 @@ export function CardGrid<T extends GridCard>({
   // Row heights are cached from the first `estimateSize` call, so a resize that changes
   // the column count — and with it every tile's height — has to say so, or the rows keep
   // the old pitch and overlap.
+  //
+  // **A zoom arrives through this same door and needs nothing of its own**: it moves the floor,
+  // the floor moves the tile, and `tileHeight` is what a row's pitch is made of. Keyed on the
+  // height rather than on the zoom deliberately — a zoom step that changed neither the column
+  // count nor the caption left the pitch alone, and there is nothing to remeasure.
   useEffect(() => {
     virtualizer.measure();
   }, [tileHeight, virtualizer]);
@@ -296,6 +375,7 @@ export function CardGrid<T extends GridCard>({
                 badge={badge}
                 topLeft={topLeft}
                 finish={finish}
+                gameChanger={gameChanger}
                 action={action}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
@@ -323,6 +403,7 @@ function Tile<T extends GridCard>({
   badge,
   topLeft,
   finish,
+  gameChanger,
   action,
   tileRef,
   dragPayload,
@@ -334,6 +415,7 @@ function Tile<T extends GridCard>({
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
   finish?: (card: T) => Finish | null;
+  gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
@@ -342,6 +424,7 @@ function Tile<T extends GridCard>({
   const corner = topLeft?.(card);
   const tileFinish = finish?.(card) ?? null;
   const finishWord = tileFinish ? FINISH_LABEL[tileFinish] : null;
+  const crowned = gameChanger?.(card) ?? false;
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -394,6 +477,7 @@ function Tile<T extends GridCard>({
             name={card.name}
             selected={selected}
             finish={tileFinish}
+            gameChanger={crowned}
             hoverZoom
           />
         </button>
@@ -404,22 +488,46 @@ function Tile<T extends GridCard>({
           // can sit on a card without becoming a sticker. Deciding it here is what keeps two
           // views from drifting into two corners and two shades.
           //
-          // `pointer-events-none`: the whole tile opens the card, and a mark that swallowed
-          // the click over its own two square centimetres would be a dead spot in the wall.
+          // **`pointer-events-auto` and a click of its own, where this used to be
+          // `pointer-events-none`.** The corner is a *sibling* of the button, so a
+          // pointer-transparent mark let the press fall through to the art and the whole tile
+          // stayed one click target — but a `title` inside an element that takes no pointer
+          // events can never surface, and these marks are abbreviations (`×3`, a heart) whose
+          // plain-words tooltip is the point of hovering them. So the corner takes its own
+          // events and calls `onSelect` itself: the two square centimetres open the card
+          // exactly as before, and are now hoverable.
+          //
+          // The drag is unaffected. `cardDraggable` is registered on the tile's **outer
+          // wrapper** (the `attach` ref above), and these corners are inside it — a press here
+          // bubbles to the same element it bubbled to when it landed on the art. The corner is
+          // not marked `data-no-drag`, so it is a grab handle like the rest of the tile.
+          //
+          // No keyboard handler, and none is owed: the corner duplicates a fact the caption
+          // already states in words and opens the card the tile's own button opens. A second
+          // tab stop per tile would be forty extra presses across a wall to reach nothing new.
+          // (The eslint config carries no `jsx-a11y` plugin, so nothing flags the handler
+          // either — this note is the reasoning, not a suppression.)
           //
           // `empty:hidden` is what makes "a mark with nothing to say draws nothing" true. A
           // badge that guards *itself* still hands this slot a truthy element — React has no
           // way to ask an element what it will render — so a wall of unowned tiles was a wall
           // of empty 12×4px chips. The guard belongs here, where the corner is decided, and
           // then it holds for every caller instead of for the ones that remembered.
-          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden">
+          <span
+            onClick={() => onSelect(card.id)}
+            className="pointer-events-auto absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden"
+          >
             {mark}
           </span>
         )}
         {corner && (
           // The opposite corner, under the same rules as the badge above — see `topLeft`
-          // for why each corner has exactly one owner.
-          <span className="pointer-events-none absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 font-mono text-[0.7rem] text-dim empty:hidden">
+          // for why each corner has exactly one owner, and the badge's comment for why both
+          // take their own clicks now.
+          <span
+            onClick={() => onSelect(card.id)}
+            className="pointer-events-auto absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 font-mono text-[0.7rem] text-dim empty:hidden"
+          >
             {corner}
           </span>
         )}
@@ -441,6 +549,10 @@ function Tile<T extends GridCard>({
               name and make a wall of foils forty buttons called "… Foil". Stated here
               instead, in the caption, which is a sibling of that button. */}
           {finishWord && <span className="sr-only">, {finishWord}</span>}
+          {/* And the crown, for the same reason and in the same place: it shares the chip
+              that the whole `aria-hidden` overlay covers, so the picture is decoration and
+              this line is the statement. */}
+          {crowned && <span className="sr-only">, {GAME_CHANGER_LABEL}</span>}
         </span>
         {/* Whatever the caller hangs here — the search's quick-add, anchored to this
             caption. The tile does not build it, because what a control needs to be honest

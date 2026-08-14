@@ -107,6 +107,64 @@ const READY: FacetResponse = {
 const lastFacetRequest = () =>
   facetCards.mock.calls[facetCards.mock.calls.length - 1][0] as SearchRequest;
 
+const lastSearchRequest = () =>
+  searchCards.mock.calls[searchCards.mock.calls.length - 1][0] as SearchRequest;
+
+/**
+ * The two `…Only` flags this view decides, whose defaults are **opposites** — which is what
+ * makes them the pair most easily got wrong. `paperOnly` is on unless a caller says
+ * otherwise, so this view says nothing; `playableOnly` is off unless a caller says
+ * otherwise, so this view has to say `true` to get the default it wants.
+ */
+describe("the corpus useCardSearch searches over", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("hides the cards no format allows until the chip is pressed", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+
+    expect(result.current.unplayable).toBe(false);
+    expect(lastSearchRequest().playableOnly).toBe(true);
+    // Omitted, and that *is* the value it wants — the neighbour with the opposite default.
+    expect(lastSearchRequest().paperOnly).toBeUndefined();
+    // The counts have to describe the same corpus the page does, or a chip would offer a set
+    // or a mana value that only art cards satisfy.
+    expect(lastFacetRequest().playableOnly).toBe(true);
+
+    act(() => result.current.toggleUnplayable());
+
+    await waitFor(() => expect(lastSearchRequest().playableOnly).toBeUndefined());
+    await waitFor(() => expect(lastFacetRequest().playableOnly).toBeUndefined());
+    expect(result.current.unplayable).toBe(true);
+  });
+
+  /**
+   * `allPrintings`' rules, because it is `allPrintings`' kind of control: both say what there
+   * is to look *through* rather than what to look for. Reset all clears the latter, and a
+   * badge that counted this one would promise to change something Reset all does not touch.
+   */
+  it("is not counted by Reset all, and survives it", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => {
+      result.current.toggleUnplayable();
+      result.current.setFormat("modern");
+    });
+    await waitFor(() => expect(result.current.activeCount).toBe(1));
+
+    act(() => result.current.resetAll());
+
+    await waitFor(() => expect(result.current.activeCount).toBe(0));
+    expect(result.current.unplayable).toBe(true);
+  });
+});
+
 describe("the facet request useCardSearch builds", () => {
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
