@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
@@ -157,6 +164,7 @@ export function CardGrid<T extends GridCard>({
   finish,
   gameChanger,
   action,
+  cardMenu,
   tileRef,
   dragPayload,
   baseTileWidth = TILE_BASE_WIDTH,
@@ -239,6 +247,27 @@ export function CardGrid<T extends GridCard>({
   gameChanger?: (card: T) => boolean;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
+  /**
+   * What a tile offers on a right-click — **a ready-made `onContextMenu` handler**, not a list
+   * of rows.
+   *
+   * The wall draws three surfaces: the search's results, the collection, and the deck editor's
+   * docked panel. The first two offer the card menu and the third offers that menu plus the
+   * editor's own rows, so the *items* cannot be decided here — and neither can the writes
+   * behind them, which are each page's own. Taking the handler already built (`menu(() =>
+   * buildCardMenu(target, deps))`, from `useContextMenu`) keeps every one of those decisions at
+   * the surface and leaves this file with no knowledge of menus at all beyond where a
+   * right-click lands.
+   *
+   * It lands on the **tile**, which is the whole card: the art, its two corner marks and the
+   * caption under it. A field inside a tile keeps the browser's own menu — the primitive tests
+   * for one before it builds anything — so the quick-add's popup is unaffected.
+   *
+   * Absent means a tile has no menu of its own, and the reader gets the app's plain
+   * suppression. Unlike the two slots below this one needs no stable identity: it is read on
+   * render rather than registered, so nothing is torn down when it changes.
+   */
+  cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
   /**
    * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
    * draggable, since a drag library is handed elements and this wall builds its own.
@@ -464,6 +493,7 @@ export function CardGrid<T extends GridCard>({
                 finish={finish}
                 gameChanger={gameChanger}
                 action={action}
+                cardMenu={cardMenu}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
               />
@@ -492,6 +522,7 @@ function Tile<T extends GridCard>({
   finish,
   gameChanger,
   action,
+  cardMenu,
   tileRef,
   dragPayload,
 }: {
@@ -504,6 +535,7 @@ function Tile<T extends GridCard>({
   finish?: (card: T) => Finish | null;
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
+  cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
 }) {
@@ -542,7 +574,16 @@ function Tile<T extends GridCard>({
     // A wrapper rather than one big button: the caption now carries a control of its own,
     // and a button inside a button is invalid HTML that React warns about and browsers
     // render as they please. The art is the button; the quick-add is its neighbour.
-    <div ref={attach} style={{ width }} className="group flex shrink-0 flex-col gap-1">
+    <div
+      ref={attach}
+      // The whole tile, rather than the art button inside it: a right-click on the caption, on
+      // the printing count or on the owned badge is a right-click on the card. The handler is
+      // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that
+      // was given none attaches nothing at all.
+      onContextMenu={cardMenu?.(card)}
+      style={{ width }}
+      className="group flex shrink-0 flex-col gap-1"
+    >
       {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
           join the button's accessible name, and a wall of forty cards would be forty
           buttons called "Lightning Bolt 3 in your collection". */}

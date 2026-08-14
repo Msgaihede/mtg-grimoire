@@ -54,6 +54,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { SearchPage } from "./SearchPage";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { useAppStore } from "@/lib/store";
 import { needsNextPage, nextOffset } from "./useCardSearch";
@@ -119,9 +120,32 @@ const page = (
 const cards = (n: number, from = 0): CardSummary[] =>
   Array.from({ length: n }, (_, i) => ({ ...BOLT, id: `c${from + i}`, name: `Card ${from + i}` }));
 
+/**
+ * The page, under the two providers `App` mounts above it.
+ *
+ * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
+ * is above it (so that thirteen surfaces stay renderable on their own), which means a page
+ * rendered bare would suppress nothing, open nothing, and pass every menu assertion below by
+ * never being asked.
+ */
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={qc}>
+      <ContextMenuProvider>{ui}</ContextMenuProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * A right-click, and nothing awaited.
+ *
+ * A real `MouseEvent` rather than `fireEvent.contextMenu`, because the handler reads
+ * `clientX`/`clientY` to place the panel — and `bubbles`, because the surface's handler is on
+ * the row or the tile, never on the cell the pointer happened to be over.
+ */
+function rightClick(element: HTMLElement): void {
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
 /**
@@ -1246,6 +1270,91 @@ describe("page image prefetch", () => {
     wrap(<SearchPage />);
 
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The card menu, over both of this view's layouts.
+ *
+ * The two are one surface as far as the menu is concerned — one adapter from a `CardSummary`,
+ * one `CardMenuDeps` for the page — so what is asserted on the table is asserted through the
+ * *writes* rather than through the panel's markup, which is `ContextMenu.test.tsx`'s subject.
+ */
+describe("the card menu", () => {
+  it("opens on a right-click of a result row, without opening the card", async () => {
+    wrap(<SearchPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    rightClick(row);
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    // The pane belongs to a left click; a right-click asks a question about the row. `App`
+    // owns the pane, so the store is the whole of what opening the card means from here —
+    // asserting on a `complementary` this page never renders would be an assertion that
+    // cannot fail.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  it("wishes for the printing that was right-clicked", async () => {
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
+
+    // This exact printing, one copy, and no finish preference — the row named none.
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith({
+        cardId: "1",
+        quantity: 1,
+        preferredFinish: undefined,
+      }),
+    );
+  });
+
+  /**
+   * The other half of the finish rule, and the counterpart to the collection's row: a search
+   * row is a *printing* rather than a copy, so it names no finish and the menu has to ask.
+   */
+  it("asks which finish, because a search row is a printing and names none", async () => {
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    expect(collection).toHaveAttribute("aria-haspopup", "menu");
+
+    await user.click(collection);
+    await user.click(await screen.findByRole("menuitem", { name: "Foil" }));
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "1",
+        finish: "foil",
+        condition: "NM",
+        quantity: 1,
+      }),
+    );
+  });
+
+  it("opens on a tile of the art wall, about that tile's card", async () => {
+    useAppStore.setState({ searchView: "grid" });
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
+
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith(expect.objectContaining({ cardId: "1" })),
+    );
+    expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 });
 

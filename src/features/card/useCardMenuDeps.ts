@@ -1,0 +1,140 @@
+/**
+ * Everything a card menu needs that is not the card, for the surfaces **outside the deck
+ * editor**: the two search views, the two collection views and the wishlist.
+ *
+ * **One definition, not one per page, and the reason is the invalidation rather than the
+ * typing.** A menu's "Add to → Collection" changes what every wish counts as owned, what every
+ * search row is badged with and what every deck reads as claimed; a wishlist add changes the
+ * heart on a result row and nothing else. Those two sets are already written down once, in
+ * `AddToCollection`'s popup, with a paragraph each saying why the collection add takes
+ * `["decks"]` and the wish does not. Three pages writing them out again is three places for one
+ * rule to drift, and the drift would be silent — a stale badge is not a test failure.
+ *
+ * `buildCardMenu` stays a pure builder taking its dependencies as an argument; this is the one
+ * argument these five surfaces all have. The deck editor builds its own, because it answers
+ * `viewPrintingsInPane` and carries the deck extras.
+ */
+import { useCallback, useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { Finish } from "@/lib/finish";
+import { ipc, ipcError } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
+import { useMarketplace } from "@/lib/useMarketplace";
+import { DeckTargetSubmenu, type CardMenuDeps, type CardMenuTarget } from "./cardMenu";
+
+/**
+ * The condition a menu add records.
+ *
+ * Near Mint, always, and stated here rather than left to the backend's default so that the one
+ * decision the menu makes on the reader's behalf is visible at the place it is made. A
+ * collection row's identity includes its condition, so something has to choose; an unmarked
+ * card is assumed NM everywhere else in this app (the quick-add popup opens on it), and the
+ * menu is the fast path rather than the careful one — the popup is still there for a played
+ * copy.
+ */
+const MENU_CONDITION = "NM" as const;
+
+export interface CardMenuWiring {
+  /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */
+  deps: CardMenuDeps;
+  /**
+   * What the last refused **collection or wishlist** add said, as a whole sentence, or `null`.
+   *
+   * **The page must draw this.** Every write a card menu starts is begun by a panel that is
+   * already closing, so there is nothing left on screen for a refusal to be reported to and no
+   * observer left to report it — a page that ignores this string is a page where a card
+   * silently fails to be added.
+   *
+   * The deck add is **not** here and needs nothing from the page: it reaches the app's single
+   * `useCardToDeck` through `CardToDeckProvider`, and that one mount draws its own sentence.
+   */
+  error: string | null;
+}
+
+export function useCardMenuDeps(): CardMenuWiring {
+  const queryClient = useQueryClient();
+  const { marketplace } = useMarketplace();
+  const requestAllPrintings = useAppStore((s) => s.requestAllPrintings);
+
+  /** The sentence a refused collection or wishlist add left behind. */
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  /**
+   * One copy of exactly the printing that was right-clicked.
+   *
+   * The four keys `AddToCollection` invalidates on a collection add, verbatim and for its
+   * reasons: the list and its summary, every wish for that card (`ownedQuantity` is summed from
+   * `collection_entries`), every deck (a claim is clamped to what the entry still holds), and
+   * the search results, which draw `ownedQuantity` on every row and every tile.
+   */
+  const collectionAdd = useMutation({
+    mutationFn: ({ cardId, finish }: { cardId: string; finish: Finish }) =>
+      ipc.collectionAdd({ cardId, finish, condition: MENU_CONDITION, quantity: 1 }),
+    onSuccess: () => {
+      setRefusal(null);
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    },
+    onError: (error) => setRefusal(`Could not add to your collection — ${ipcError(error)}`),
+  });
+
+  /**
+   * A wish for **this exact printing** — the menu is opened on one, and "any printing" is a
+   * choice the quick-add popup exists to offer.
+   *
+   * Two keys rather than four: a wish is a copy the reader does not have, so it moves no
+   * collection figure and no deck's arithmetic. The search results are re-read because every
+   * row draws `wishlisted`.
+   */
+  const wishlistAdd = useMutation({
+    mutationFn: (target: CardMenuTarget) =>
+      ipc.wishlistAdd({
+        cardId: target.cardId,
+        quantity: 1,
+        // The surface's own where it names one — a wish for the foil is a different wish, and
+        // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
+        preferredFinish: target.finish,
+      }),
+    onSuccess: () => {
+      setRefusal(null);
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    },
+    onError: (error) => setRefusal(`Could not add to your wishlist — ${ipcError(error)}`),
+  });
+
+  // `mutate` is stable for the life of the observer, which is what lets the two callbacks below
+  // — and therefore `deps` — hold still across a render of a wall of forty tiles.
+  const addCopy = collectionAdd.mutate;
+  const addWish = wishlistAdd.mutate;
+
+  const addToCollection = useCallback(
+    (target: CardMenuTarget, finish: Finish) => addCopy({ cardId: target.cardId, finish }),
+    [addCopy],
+  );
+  const addToWishlist = useCallback((target: CardMenuTarget) => addWish(target), [addWish]);
+
+  const deps = useMemo<CardMenuDeps>(
+    () => ({
+      marketplace,
+      addToCollection,
+      addToWishlist,
+      // `null` is "not inside the deck editor": here "View all printings" navigates to Search
+      // and filters to the oracle card, which is safe because there is no open deck to close.
+      viewPrintingsInPane: null,
+      requestAllPrintings,
+      // **Passed as itself, with no glue at all.** The picker reaches the app's single
+      // `useCardToDeck` through `CardToDeckProvider` rather than through a callback threaded
+      // from here, so there is nothing for a surface to mis-wire and no second observer of the
+      // same write. Wiring it without that mount throws on the first render of the picker,
+      // which is the fence: a deck add that quietly never lands is the failure this shape
+      // exists to prevent.
+      DeckTargetSubmenu,
+    }),
+    [marketplace, addToCollection, addToWishlist, requestAllPrintings],
+  );
+
+  return { deps, error: refusal };
+}
