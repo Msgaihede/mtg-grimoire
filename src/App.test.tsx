@@ -200,6 +200,9 @@ const MAIN: DeckCategory = {
   deckId: 4,
   name: "Main deck",
   kind: "main",
+  // `user`, and load-bearing for the sentence above: this is the *one* column these tests
+  // expect, and an `auto` pile holding no cards draws no heading at all.
+  origin: "user",
   isActive: true,
   sortOrder: 0,
   cardCount: 0,

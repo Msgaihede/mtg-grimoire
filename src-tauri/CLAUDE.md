@@ -66,8 +66,25 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v14** — see
+  never reuse one. Schema is at **v15** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
+- **`deck_categories.origin` says who made the pile** (schema v15) — `'auto'` the app, filing a
+  card it had to invent a column for; `'user'` the reader pressing "New category", and the four
+  seeded zones count as the reader's. TS hides an **empty** `auto` pile and always draws a `user`
+  one; Rust records the fact and concludes nothing. **Four writers, each spelling its own answer
+  rather than leaning on the DEFAULT**: `deck_meta::category_for_name` (`auto`),
+  `deck_meta::create_category` (`user`), `deck_meta::ensure_predefined_categories` (`user`), and
+  `deck::duplicate_deck`, which **copies** the source pile's answer — a copy has the same shape as
+  its original, and defaulting there would make every auto pile in the duplicate draw empty. No
+  CHECK (`ADD COLUMN` cannot) and, unlike `last_variant`, **no Rust fence either**: no command
+  parameter reaches this column, so there is no untrusted value to refuse. **The reason it is a
+  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)` and
+  `category_for_name` finds before it creates, so a reader's own "Ramp" keeps `'user'` forever
+  even once the app files cards into it — and "Ramp"/"Draw"/"Removal"/"Land" are exactly what a
+  person names their own piles. The v15 backfill is a **frozen one-time guess** (`kind = 'main'`
+  plus the 22 names the rule could answer with on the day it shipped) and is deliberately not kept
+  in step with TypeScript's list; **"Main deck" is not on it** — that is the v8 migration's pile
+  and it holds real cards.
 - **Scryfall's Oracle Tags live in four tables plus a watermark** (schema v14), keyed on the
   tag **slug** and on `cards.oracle_id` — both soft, no foreign key anywhere.
   `src/oracle_tags.rs` is the only writer: it streams the `oracle_tags` bulk file, flattens

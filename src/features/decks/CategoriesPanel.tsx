@@ -38,6 +38,16 @@
  * asked about a group holding nothing. This panel is the surface that answers "what piles does
  * this deck have", and the answer is all of them: a heading the editor leaves out is exactly the
  * pile a reader comes here to find, rename, reorder or delete. Every row, always.
+ *
+ * **`DeckCategory.origin` is the second fact the editor now leaves piles out by, and the same
+ * reasoning covers it: no branch on it in here either.** A pile the app made while filing a card
+ * (`origin: 'auto'` — Ramp, Draw, Removal) draws no heading until it holds one, so an auto pile
+ * the reader empties is gone from the desk altogether — which makes "every row, always" more
+ * load-bearing than it was, not less: this drawer is then the only surface where that pile can
+ * be found, renamed or deleted at all. Predefined, auto and user-made are three answers to *when
+ * is an empty pile drawn* and one answer to *what piles does this deck have*, and this panel
+ * asks only the second question. The class still travels to {@link groupOf} as `isAuto`, because
+ * `GroupHeader` is handed a whole group and must draw this row exactly as the desk would.
  */
 import {
   useCallback,
@@ -279,6 +289,12 @@ const NO_CARDS: never[] = [];
  * `isPredefined` is `grouping.ts`'s own expression, by kind **and** by name: a user is free to
  * call a pile of their own "Sideboard" — the grain allows it, because the predefined Sideboard
  * was never named by the user — and that one is theirs to rename and delete like any other.
+ *
+ * `isAuto` is carried across from the row's `origin` rather than guessed from the name, for the
+ * reason `origin` exists at all: "Ramp" and "Draw" are exactly what a person calls a pile of
+ * their own, and the name is the user's while the kind — here the provenance — is what the rules
+ * read. It changes **nothing about which rows this component is drawn for**; it is here so that
+ * a heading in the drawer and the same heading on the desk are one component fed one shape.
  */
 function groupOf(category: DeckCategory): CardGroup {
   return {
@@ -288,6 +304,7 @@ function groupOf(category: DeckCategory): CardGroup {
     categoryId: category.id,
     isActive: category.isActive,
     isPredefined: category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
+    isAuto: category.origin === "auto",
     cards: NO_CARDS,
     count: category.cardCount,
     // Rust summed this at the marketplace the category list was read at, so it is carried
@@ -829,12 +846,18 @@ function DeleteCategory({
  * *reach* worth stating — `useDeckMeta` words that sentence, so the hook that decided to move
  * nothing is the thing that says so.
  *
- * **A pile this press empties keeps its heading in the editor behind the drawer**, and it used to
- * lose it. `grouping.ts`'s `drawsWhenEmpty` draws an empty category now — a pile the cards
- * left is still the place the next one goes — so this press moves cards out of a pile without
- * moving the pile. The list above never depended on that either way: it is `deck_category_list`
- * and draws every category a deck has, because this drawer is the surface where a pile is the
- * subject rather than a heading over cards.
+ * **Whether a pile this press empties keeps its heading in the editor behind the drawer depends
+ * on who made it**, and that sentence has been through all three answers. It once said the
+ * heading always goes; then, when `drawsWhenEmpty` was reversed, that it always stays — a pile
+ * the cards left is still the place the next one goes. The reversal's argument survives for a
+ * pile a *person* made and for the seeded zones, and `origin` is now what tells them apart. The
+ * two piles this press is allowed to empty (`useDeckMeta`'s `LOOSE_PILES`) are one of each:
+ * `Main deck` is the v8 migration's own pile and keeps its heading, while `Uncategorised` is
+ * made by the app filing a card and is therefore `origin: 'auto'` — so emptying it takes its
+ * column off the desk, which is the point of the change rather than a loss. **The list above
+ * never depended on the answer either way**: it is `deck_category_list` and draws every category
+ * a deck has, so a pile that has just left the desk is still a row here to rename or delete —
+ * which is the surface's whole job, and more of it than before.
  */
 function AutoCategorise({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[] }) {
   const { autoCategorise } = meta;

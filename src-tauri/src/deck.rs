@@ -1299,27 +1299,41 @@ pub fn duplicate_deck(
     // Read then write, one row at a time with `RETURNING id`, rather than one
     // `INSERT … SELECT`: the map from old id to new is the whole point, and a set insert
     // answers no ordered list of ids to build one from.
-    let categories: Vec<(i64, String, String, bool, i64)> = tx
+    let categories: Vec<(i64, String, String, bool, i64, String)> = tx
         .prepare(
-            "SELECT id, name, kind, is_active, sort_order FROM deck_categories
+            "SELECT id, name, kind, is_active, sort_order, origin FROM deck_categories
               WHERE deck_id = ?1 ORDER BY id",
         )
         .map_err(|e| e.to_string())?
         .query_map(params![id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
         })
         .map_err(|e| e.to_string())?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
     let mut category_map: HashMap<i64, i64> = HashMap::new();
-    for (old, name, kind, is_active, sort_order) in categories {
+    for (old, name, kind, is_active, sort_order, origin) in categories {
+        // **`origin` is copied rather than re-decided**, and it is the fourth write site of a
+        // column with only four ([`crate::deck_meta::DeckCategoryRow::origin`]). Duplicating a
+        // deck copies its piles; it does not *make* them, so a pile the app invented stays
+        // `'auto'` and one the reader made stays `'user'`. Defaulting the copy to `'user'`
+        // would quietly give the duplicate a different shape from its original — every auto
+        // pile in it drawing empty — and letting this INSERT fall through to the column's
+        // DEFAULT is exactly how that would happen.
         let new: i64 = tx
             .query_row(
                 "INSERT INTO deck_categories
-                    (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, unixepoch(), unixepoch())
+                    (deck_id, name, kind, is_active, sort_order, origin, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch(), unixepoch())
                  RETURNING id",
-                params![copy, name, kind, is_active, sort_order],
+                params![copy, name, kind, is_active, sort_order, origin],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -4018,6 +4032,61 @@ mod tests {
             3,
             "the copy's three rows survive the original's deletion"
         );
+    }
+
+    /// A copy's piles are the source's piles, `origin` included — the duplicate must have the
+    /// same *shape* as the deck it was made from.
+    ///
+    /// This is the fourth write site of a column with only four, and the one that would have
+    /// been missed: the INSERT is a re-write of a row that already exists, so leaning on the
+    /// column's `DEFAULT 'user'` looks harmless and quietly hands the copy a set of auto piles
+    /// that now draw empty. Nothing else in the deck would differ, which is what makes it worth
+    /// its own test rather than a line in the one above.
+    #[test]
+    fn duplicate_carries_each_categorys_origin_rather_than_defaulting_it() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        // `main_of` is `category_for_name`, so this pile is app-made; the other is the reader's.
+        let auto = main_of(&conn, deck.id);
+        let mine = crate::deck_meta::create_category(&conn, deck.id, "Flex slots").unwrap();
+        assert_eq!(origin_of(&conn, auto), "auto", "the premise, not the claim");
+        assert_eq!(origin_of(&conn, mine.id), "user");
+
+        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+
+        let origins: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT name, origin FROM deck_categories WHERE deck_id = ?1
+                  ORDER BY sort_order, id",
+            )
+            .unwrap()
+            .query_map(params![copy.id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            origins,
+            vec![
+                ("Commander".to_owned(), "user".to_owned()),
+                ("Sideboard".to_owned(), "user".to_owned()),
+                ("Companion".to_owned(), "user".to_owned()),
+                ("Maybeboard".to_owned(), "user".to_owned()),
+                ("Main deck".to_owned(), "auto".to_owned()),
+                ("Flex slots".to_owned(), "user".to_owned()),
+            ],
+            "each pile's provenance travels with it"
+        );
+    }
+
+    /// One category's stored `origin`. The tests above read the column rather than a
+    /// [`crate::deck_meta::DeckCategoryRow`], because the column is the fact.
+    fn origin_of(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT origin FROM deck_categories WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     #[test]

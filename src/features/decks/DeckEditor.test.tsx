@@ -132,6 +132,14 @@ const PICKER: FormatSpec[] = [spec("modern"), spec("commander"), spec("gladiator
  * **`isActive` is derived from the kind by default**, mirroring `schema::PREDEFINED_CATEGORIES`:
  * the Maybeboard is the one predefined pile seeded switched off, and every other category a
  * deck is born with is on. A test about the switch itself passes `isActive` and says so.
+ *
+ * **`origin` defaults to `"user"`, which is what all three of Rust's writing sites but one
+ * produce**: `create_category` (the panel's button) and `ensure_predefined_categories` (the four
+ * seeds) both write it, and only `category_for_name` — the app filing a card — writes `"auto"`.
+ * The default matters because it decides whether an **empty** pile is drawn at all: a pile of the
+ * reader's own always is, an auto one never is. A test about that rule passes `origin` and says
+ * so, and no test may reach for the *name* instead — "Ramp" and "Draw" are what a reader calls a
+ * pile of their own as readily as what the app calls one.
  */
 function category(
   id: number,
@@ -145,6 +153,7 @@ function category(
     name,
     kind,
     isActive: kind !== "maybe",
+    origin: "user",
     sortOrder: id - 1,
     // The heading counts the rows it was handed, so these three are read by nothing here.
     cardCount: 0,
@@ -618,6 +627,10 @@ describe("DeckEditor", () => {
    * fixed zones Modern does use, and a pile the reader made and emptied, which is the reverse of
    * the old rule and the whole reason this changed.
    *
+   * **Every category here is `origin: "user"`**, which is the fixture's default and is what makes
+   * this test about the *format* alone. The third class — a pile the app made while filing a card
+   * — is never drawn empty in any format, and has its own tests below.
+   *
    * The default grouping is Categories, so the deck opens on exactly this list.
    */
   it("draws no empty command zone or companion slot for a format with neither", async () => {
@@ -688,41 +701,121 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The filter is the one thing that takes a reader's own empty pile off the screen**, and the
-   * exception belongs to the filter rather than to the deck: a pile that is empty *because three
-   * letters are in the box* is empty by the act of looking, and a filter matching one card must
-   * not answer with twenty headings and one row. Only the fixed zones survive it — which is the
-   * rule the whole editor used to run on, kept exactly where it was earned.
+   * **A pile the app made appears with its first card, and that is the whole of what the reader
+   * asked for**: *"Ramp should only show once a ramp card is added."* No filter, no format — an
+   * empty `origin: "auto"` pile draws no heading, and an empty pile of the reader's own always
+   * does, because they made it on purpose and it is where the next card of that kind goes.
    *
-   * It is a fact about the view and never about the deck: `deck.categories` does not change, so
-   * the toolbar's "Add to" select goes on offering the pile by name throughout, and clearing the
-   * box brings the heading straight back.
+   * **The two fixtures are one letter apart from being interchangeable, and that is the test.**
+   * Both are `main`, both are empty, and *both are called something the app itself files cards
+   * under* — `Ramp` and `Draw` are two of `AUTO_CATEGORY_NAMES`. Only `origin` differs. A rule
+   * that hid empty piles by that name list was considered and rejected for exactly this case: it
+   * would hide the reader's own `Draw`, which is the failure "the name is the user's; the kind is
+   * what the rules read" exists to prevent. Rust records the provenance at the two creation paths
+   * — `category_for_name` on the filing path writes `auto`, `create_category` behind the panel's
+   * button writes `user` — and this layer concludes from it.
+   *
+   * The hidden pile is not an unreachable one: `deck.categories` is untouched, so the toolbar
+   * goes on offering it by name, and that select is the route by which it gets its first card and
+   * therefore its heading.
    */
-  it("collapses the reader's own empty piles while a filter is running", async () => {
+  it("draws no heading for an empty auto pile, whatever the pile is called", async () => {
+    const auto = category(6, "Ramp", "main", { origin: "auto" });
+    const mine = category(7, "Draw", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, auto, mine]));
+
+    await open();
+
+    expect(screen.queryByRole("region", { name: "Ramp" })).not.toBeInTheDocument();
+    expect(within(group("Draw")).getByText("0 cards")).toBeInTheDocument();
+    // Every pile of the deck is still filable-into, drawn or not.
+    const addTo = within(screen.getByLabelText("Add to"));
+    expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    expect(addTo.getByRole("option", { name: "Draw" })).toBeInTheDocument();
+  });
+
+  /** The other half of the same sentence: with a card in it the auto pile is a pile like any
+   *  other — `drawsWhenEmpty` is asked about empty groups only, so nothing here can hide
+   *  cardboard whoever made the column it is under. */
+  it("draws an auto pile as soon as it holds a card", async () => {
+    const auto = category(6, "Ramp", "main", { origin: "auto" });
+    deckGet.mockResolvedValue(
+      detail(
+        {},
+        [bolt(), card({ name: "Llanowar Elves", categoryId: 6, categoryName: "Ramp" })],
+        [...CATEGORIES, auto],
+      ),
+    );
+
+    await open();
+
+    expect(
+      within(group("Ramp")).getByRole("button", { name: /^Llanowar Elves/ }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **What a filter takes off the screen is auto piles, and it takes them off for being empty
+   * rather than for being filtered.** A pile the filter empties *is* empty, so the rule above
+   * answers it with no second clause: the wall of twenty headings over three cards was always
+   * Removal, Ramp, Draw and the type buckets, and those are gone the moment nothing matches in
+   * them. What goes on drawing under a filter is the reader's own deliberate handful, which is
+   * exactly what "always shown, unless you delete it" asks for.
+   *
+   * **This test asserted the reverse until now, and the rule it asserted has been deleted.** PR
+   * #56 added `EmptyGroupRules.narrowed`: while a filter ran, `isPredefined` became the test for
+   * an empty pile, so the four fixed zones survived and a pile the reader had made and emptied —
+   * `Sunday brew` — went with the auto ones. That knob was never the reader's ask and the auto
+   * rule subsumes it, so it is gone from `EmptyGroupRules` entirely rather than left unread. The
+   * observation that survives from the old doc is the *cost*, which is unchanged and now falls on
+   * auto piles alone: the shape of the deck moves as the reader types, and a heading that is not
+   * drawn is not a drop target.
+   *
+   * **Both sides in one test**, because either alone passes against a rule that is simply wrong
+   * in the other direction: "the auto pile goes" is satisfied by `narrowed`, and "the user pile
+   * stays" is satisfied by a `drawsWhenEmpty` that has stopped hiding anything at all.
+   *
+   * It stays a fact about the view and never about the deck: `deck.categories` does not change,
+   * so the toolbar's "Add to" goes on offering **both** piles by name throughout, and clearing
+   * the box brings the heading straight back.
+   */
+  it("keeps the reader's own empty piles under a filter and drops the app's", async () => {
     const brew = category(6, "Sunday brew", "main");
-    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, brew]));
+    const ramp = category(7, "Ramp", "main", { origin: "auto" });
+    deckGet.mockResolvedValue(
+      detail(
+        {},
+        [bolt(), card({ name: "Llanowar Elves", categoryId: 7, categoryName: "Ramp" })],
+        [...CATEGORIES, brew, ramp],
+      ),
+    );
 
     await open();
     expect(group("Sunday brew")).toBeInTheDocument();
+    expect(group("Ramp")).toBeInTheDocument();
 
     const box = screen.getByLabelText("Filter this deck");
     await userEvent.type(box, "bolt");
 
-    expect(screen.queryByRole("region", { name: "Sunday brew" })).not.toBeInTheDocument();
+    // The reader made it, so it draws — a filter is not a reason to take away a place they chose
+    // to keep.
+    expect(within(group("Sunday brew")).getByText("0 cards")).toBeInTheDocument();
+    // The app made it, and the filter has left nothing in it.
+    expect(screen.queryByRole("region", { name: "Ramp" })).not.toBeInTheDocument();
     expect(group("Main deck")).toBeInTheDocument();
     expect(group("Sideboard")).toBeInTheDocument();
     expect(group("Maybeboard")).toBeInTheDocument();
-    // The pile is still somewhere a card can be filed while it is not a heading — the whole
+    // Both are still somewhere a card can be filed while one of them is not a heading — the whole
     // reason hiding one is survivable is that no surface a reader files a card with is built
     // from the drawn groups. The per-card "Move…" select made the same point and was removed on
     // 2026-08-14, so the toolbar's "Add to" is what carries it now.
-    expect(
-      within(screen.getByLabelText("Add to")).getByRole("option", { name: "Sunday brew" }),
-    ).toBeInTheDocument();
+    const addTo = within(screen.getByLabelText("Add to"));
+    expect(addTo.getByRole("option", { name: "Sunday brew" })).toBeInTheDocument();
+    expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
 
     await userEvent.clear(box);
 
-    expect(await screen.findByRole("region", { name: "Sunday brew" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Ramp" })).toBeInTheDocument();
   });
 
   /** A card is drawn in the group its `categoryId` names, which is the whole of the filing: the

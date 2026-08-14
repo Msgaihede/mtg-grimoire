@@ -136,6 +136,28 @@ pub struct DeckCategoryRow {
     /// refusal in this module is [`predefined_refusal`], and it never reaches this field.
     pub is_active: bool,
     pub sort_order: i64,
+    /// Who made this pile: `'auto'` — the app, filing a card it had to invent a column for —
+    /// or `'user'`, the reader pressing "New category". Schema v15; the four seeded zones
+    /// count as the reader's.
+    ///
+    /// **It is what TypeScript draws an *empty* pile from.** An empty auto pile is hidden (a
+    /// Ramp column with no ramp in it is a heading about nothing) and an empty user pile is
+    /// always drawn, until they delete it. Rust supplies the fact; TS draws the conclusion —
+    /// CLAUDE.md's boundary — and this crate has no opinion at all about who gets drawn.
+    ///
+    /// **A stored fact rather than a name comparison, and that is the whole point.**
+    /// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, name)`, so
+    /// [`category_for_name`] *finds* a pile the reader made rather than making a second one —
+    /// which means their own "Ramp" keeps `'user'` forever, even once the app starts filing
+    /// ramp spells into it. Deciding from the name instead would flip that pile to hidden the
+    /// first time it emptied, and "Ramp", "Draw", "Removal" and "Land" are exactly what a
+    /// person calls their own piles.
+    ///
+    /// No CHECK, and no `valid_…` fence beside `valid_variant`: this is never a caller's value.
+    /// Four INSERTs inside this crate write it — [`category_for_name`], [`create_category`],
+    /// [`ensure_predefined_categories`] and [`crate::deck::duplicate_deck`] — and no command
+    /// parameter reaches it, so there is nothing untrusted to refuse.
+    pub origin: String,
     /// Copies filed here **in the one `variant` the caller asked by**, `sum(quantity)` and not
     /// a row count — two different printings at 2 and 3 copies read 5, not 2.
     ///
@@ -328,10 +350,15 @@ pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(
         if exists {
             continue;
         }
+        // **`'user'`, spelled out rather than left to the column's DEFAULT** — every write site
+        // says its own answer, so which of the three made a pile is readable at the code. The
+        // four seeded zones are the reader's for the reason [`DeckCategoryRow::origin`] gives:
+        // a deck's rules zones are piles nobody has to earn, and an empty Sideboard is a place
+        // to put a card rather than a heading about nothing.
         conn.execute(
             "INSERT INTO deck_categories
-                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, unixepoch(), unixepoch())",
+                (deck_id, name, kind, is_active, sort_order, origin, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'user', unixepoch(), unixepoch())",
             params![deck_id, name, kind, is_active, next_order],
         )
         .map_err(|e| e.to_string())?;
@@ -346,7 +373,7 @@ pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(
 fn category_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
         "SELECT cat.id, cat.deck_id, cat.name, cat.kind, cat.is_active,
-            cat.sort_order,
+            cat.sort_order, cat.origin,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                        WHERE dc.category_id = cat.id AND dc.variant = ?2), 0),
             (SELECT sum(dc.quantity * ({price}))
@@ -367,11 +394,12 @@ fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
         kind: r.get(3)?,
         is_active: r.get(4)?,
         sort_order: r.get(5)?,
-        card_count: r.get(6)?,
-        total_price: r.get(7)?,
+        origin: r.get(6)?,
+        card_count: r.get(7)?,
+        total_price: r.get(8)?,
         // No `?2` in this one's subquery, and that is the whole of the difference: the CASCADE
         // this number exists to describe does not know what variant anybody is looking at.
-        card_count_all_variants: r.get(8)?,
+        card_count_all_variants: r.get(9)?,
     })
 }
 
@@ -478,10 +506,16 @@ pub fn category_for_name(conn: &Connection, deck_id: i64, name: &str) -> Result<
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    // **`'auto'`, and only on this branch** — the one the app reaches when it had to invent a
+    // column for a card it was filing. The lookup above is what makes that safe to record as a
+    // fact: a pile the *reader* made is found rather than re-made, so it keeps its `'user'`
+    // forever even once the add path starts filing cards into it. That is the case a
+    // name-matching rule gets wrong and this gets right for free —
+    // `category_for_name_leaves_an_existing_user_pile_alone` is the pin.
     conn.query_row(
-        "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order,
+        "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order, origin,
                                        created_at, updated_at)
-         VALUES (?1, ?2, 'main', 1, ?3, unixepoch(), unixepoch())
+         VALUES (?1, ?2, 'main', 1, ?3, 'auto', unixepoch(), unixepoch())
          RETURNING id",
         params![deck_id, name, next_order],
         |r| r.get(0),
@@ -519,11 +553,15 @@ pub fn create_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    // **`'user'`: this is the reader pressing "New category"**, which is the whole of what
+    // separates this function from [`category_for_name`]. A pile made here draws whether or not
+    // anything is in it — it was created with intent, and an empty one is where the next card
+    // of that kind goes.
     let id: i64 = tx
         .query_row(
-            "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order,
+            "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order, origin,
                                            created_at, updated_at)
-             VALUES (?1, ?2, 'main', 1, ?3, unixepoch(), unixepoch())
+             VALUES (?1, ?2, 'main', 1, ?3, 'user', unixepoch(), unixepoch())
              RETURNING id",
             params![deck_id, name, next_order],
             |r| r.get(0),
@@ -1712,6 +1750,96 @@ mod tests {
         );
     }
 
+    // -- origin (schema v15) ----------------------------------------------------------------
+
+    /// One category's stored `origin`, read straight off the table rather than off a
+    /// [`DeckCategoryRow`] — what the column holds is the fact, and the DTO is a copy of it.
+    fn origin_of(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT origin FROM deck_categories WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The add path invents a column, so the column is the app's: `'auto'`.
+    ///
+    /// If this were `'user'` every functional bucket would draw the moment a deck was filed —
+    /// a wall of empty Removal/Ramp/Draw headings over three cards, which is the thing the
+    /// column exists to prevent.
+    #[test]
+    fn category_for_name_makes_an_auto_pile() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+
+        let id = category_for_name(&conn, deck_id, "Removal").unwrap();
+
+        assert_eq!(origin_of(&conn, id), "auto");
+    }
+
+    /// **The whole reason this is a stored fact and not a name comparison.**
+    ///
+    /// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, name)`, so a
+    /// reader who makes their own "Ramp" and later adds a ramp spell has that spell filed into
+    /// *their* pile — [`category_for_name`] finds before it creates. The find arm must therefore
+    /// touch nothing: were it to write `'auto'` over what it found, or were the drawing rule
+    /// reading the name instead, their deliberate pile would silently start hiding itself the
+    /// first time they emptied it. That is exactly the case the reader called out as intentional.
+    #[test]
+    fn category_for_name_leaves_an_existing_user_pile_alone() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let mine = create_category(&conn, deck_id, "Ramp").unwrap();
+        assert_eq!(origin_of(&conn, mine.id), "user", "the reader made it");
+
+        let found = category_for_name(&conn, deck_id, "Ramp").unwrap();
+
+        assert_eq!(found, mine.id, "the add path files into the pile they made");
+        assert_eq!(
+            origin_of(&conn, mine.id),
+            "user",
+            "and filing a card into it must not turn their pile into an app-made one"
+        );
+    }
+
+    /// "New category" is a deliberate act, so the pile is the reader's and draws empty.
+    #[test]
+    fn create_category_makes_a_user_pile() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+
+        let row = create_category(&conn, deck_id, "Flex slots").unwrap();
+
+        assert_eq!(row.origin, "user", "on the row the command answers with");
+        assert_eq!(origin_of(&conn, row.id), "user", "and in the table");
+    }
+
+    /// The four seeded zones count as the reader's, so an empty Sideboard keeps its heading.
+    ///
+    /// They are nobody's *deliberate* act, which is what makes this worth stating: the rule is
+    /// not "did a person type this name" but "may this pile be hidden when it empties", and a
+    /// deck's rules zones may not — an empty Sideboard is where the next sideboard card goes.
+    /// (Which of the four draw empty is TypeScript's decision on top of this; Commander and
+    /// Companion are conditional there for reasons that are about formats, not provenance.)
+    #[test]
+    fn the_predefined_seed_is_user_made() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+
+        ensure_predefined_categories(&conn, deck_id).unwrap();
+
+        let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
+        assert_eq!(rows.len(), 4);
+        for row in rows {
+            assert_eq!(
+                row.origin, "user",
+                "{} is a rules zone and is never hidden for being empty",
+                row.name
+            );
+        }
+    }
+
     // -- card_count / total_price -----------------------------------------------------------
 
     #[test]
@@ -1987,6 +2115,7 @@ mod tests {
             kind: "custom".to_owned(),
             is_active: true,
             sort_order: 2,
+            origin: "auto".to_owned(),
             card_count: 5,
             card_count_all_variants: 12,
             total_price: Some(41.5),
@@ -1996,8 +2125,8 @@ mod tests {
             value,
             serde_json::json!({
                 "id": 3, "deckId": 7, "name": "Ramp", "kind": "custom", "isActive": true,
-                "sortOrder": 2, "cardCount": 5, "cardCountAllVariants": 12,
-                "totalPrice": 41.5
+                "sortOrder": 2, "origin": "auto", "cardCount": 5,
+                "cardCountAllVariants": 12, "totalPrice": 41.5
             })
         );
     }

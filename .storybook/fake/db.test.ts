@@ -1836,6 +1836,9 @@ describe("the deck grain (deck, variant, category, card)", () => {
    * `autoCategoryFor`'s to compute in TypeScript, because which pile a Sol Ring goes in is
    * domain logic; this is the plumbing that files it there. A second add of the same name
    * finds the category rather than making a second one.
+   *
+   * **A pile this path creates is `origin: "auto"`** — the app asked for it while filing a card
+   * — which is the fact `grouping.ts` reads to hide it again once it is empty.
    */
   it("finds or creates a main category by name, and refuses neither an id nor a name", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1 })] });
@@ -1845,7 +1848,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
     w.deck_add_card({ ...add, categoryName: "Removal", quantity: 1 });
     const made = db.deckCategories.filter((c) => c.name === "Removal");
     expect(made).toHaveLength(1);
-    expect(made[0]).toMatchObject({ deckId: 1, kind: "main", isActive: true });
+    expect(made[0]).toMatchObject({ deckId: 1, kind: "main", isActive: true, origin: "auto" });
     expect(db.deckCards).toHaveLength(1);
     expect(db.deckCards[0].quantity).toBe(2);
     expect(() => w.deck_add_card({ ...add, categoryName: null, quantity: 1 })).toThrow(
@@ -2477,7 +2480,9 @@ describe("the decklist import", () => {
     expect(out.categoriesCreated).toBe(1);
     const ramp = db.deckCategories.filter((c) => c.deckId === 1 && c.name === "Ramp");
     expect(ramp).toHaveLength(1);
-    expect(ramp[0]).toMatchObject({ kind: "main", isActive: true });
+    // `auto`, like every pile `category_for_name` makes: an import is the add path in bulk, and
+    // a pile it had to invent is one nobody asked for by name.
+    expect(ramp[0]).toMatchObject({ kind: "main", isActive: true, origin: "auto" });
     // Two printings, so two rows — one pile.
     expect(db.deckCards.filter((dc) => dc.categoryId === ramp[0].id)).toHaveLength(2);
     expect(db.deckCards.filter((dc) => dc.categoryId === categoryId(1, "side"))).toHaveLength(1);
@@ -3215,6 +3220,34 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(live.find((c) => c.name === "Cut list")!.totalPrice).toBeNull();
   });
 
+  /**
+   * `deck_categories.origin` — three writers, three answers, and the fourth case is the reason
+   * it is a column rather than a name list.
+   *
+   * `AUTO_CATEGORY_NAMES` would have answered all four by matching, and it would have got the
+   * third one wrong: "Card advantage" is a pile the reader made, and filing a card into it by
+   * name **finds** it rather than creating one, so it stays theirs — and goes on drawing the day
+   * they empty it.
+   */
+  it("records who made a category, and leaves a found one alone", () => {
+    const { r, w } = testbed();
+    const of = (name: string) =>
+      r.deck_category_list({ deckId: 4, variant: "live" }).find((c) => c.name === name)!;
+    const add = { deckId: 4, cardId: BOLT.id, categoryId: null, variant: "live" } as const;
+
+    // Seeded with the deck; made by the add path while filing a Sol Ring.
+    expect(of("Sideboard").origin).toBe("user");
+    expect(of("Ramp").origin).toBe("auto");
+    // The panel's "New category" button.
+    expect(w.deck_category_create({ deckId: 4, name: "Combo pieces" }).origin).toBe("user");
+
+    w.deck_add_card({ ...add, categoryName: "Card advantage", quantity: 1 });
+    expect(of("Card advantage").origin).toBe("user");
+    // A name this deck has never had is the other half: nobody asked for it, so it is the app's.
+    w.deck_add_card({ ...add, categoryName: "Burn", quantity: 1 });
+    expect(of("Burn").origin).toBe("auto");
+  });
+
   it("refuses to rename or delete a predefined category and switches every one of them off", () => {
     const { db, r, w } = testbed();
     const commander = r.deck_category_list({ deckId: 4, variant: "live" })[0];
@@ -3271,7 +3304,15 @@ describe("categories, tags, folders, history and the plan", () => {
       ],
       deckCategories: [
         ...categoriesOf([deck({ id: 1 })]),
-        { id: 99, deckId: 1, name: "Doomed", kind: "main", isActive: true, sortOrder: 9 },
+        {
+          id: 99,
+          deckId: 1,
+          name: "Doomed",
+          kind: "main",
+          isActive: true,
+          sortOrder: 9,
+          origin: "user",
+        },
       ],
     });
 
