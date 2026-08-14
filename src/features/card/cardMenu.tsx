@@ -27,6 +27,7 @@ import {
   LibraryBig,
   Plus,
 } from "lucide-react";
+import { ROW_CLASS } from "@/components/menu/panel";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildFolderTree, type FolderNode } from "@/features/decks/FolderTree";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
@@ -35,7 +36,7 @@ import { useDecks } from "@/features/decks/useDecks";
 import { copyText } from "@/lib/clipboard";
 import { marketplaceSearchUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
 import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
-import { ipc, type DeckFolder, type DeckRow, type DeckVariant } from "@/lib/ipc";
+import { ipc, ipcError, type DeckFolder, type DeckRow, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { sortOptions } from "@/lib/options";
 import { cn } from "@/lib/utils";
@@ -318,6 +319,8 @@ export function DeckTargetSubmenu({
   const { folders, query: folderQuery } = useDeckFolders();
   /** The leaf the reader pressed. Setting it is what mounts the deck's own hook below. */
   const [pending, setPending] = useState<{ deckId: number; variant: DeckVariant } | null>(null);
+  /** What the last refused add said, drawn over the rows it came back to. */
+  const [refusal, setRefusal] = useState<string | null>(null);
 
   /**
    * **One `useDeck`, mounted on the press rather than on the row**, because `useDeck` is the
@@ -349,8 +352,32 @@ export function DeckTargetSubmenu({
      * not *absent*, which is the arm that files everything under `DEFAULT_CATEGORY_NAME`
      * without consulting the card at all.
      */
-    add({ cardId: target.cardId, typeLine: target.typeLine ?? null, quantity: 1 });
-    onDone();
+    add(
+      { cardId: target.cardId, typeLine: target.typeLine ?? null, quantity: 1 },
+      /**
+       * **The menu closes on the answer, not on the press** — which is what makes these two
+       * callbacks fire at all. `mutate`'s per-call callbacks are the observer's, and TanStack
+       * skips them once the component holding it has unmounted; closing first would have thrown
+       * the refusal away with the panel. The write is a local SQLite round trip, so the beat
+       * this costs a successful add is imperceptible.
+       *
+       * **Reporting is the surface's, the write and its refusal rule are the deck's** —
+       * `useSidebarDrops` is the precedent and the same shape: per-call sentences here, and the
+       * `["decks"]` invalidation that carries a `GONE` back to the editor's columns staying on
+       * `useDeck.addCard`'s single definition. There is no toast in this app to reach for; the
+       * sentence is drawn where the reader is already looking, over the rows it came back to.
+       */
+      {
+        onSuccess: () => onDone(),
+        onError: (error) => {
+          // Both are undone, so the same leaf can simply be pressed again: the guard above is
+          // keyed on the leaf, and a refusal that left it set would make one deck unpressable.
+          written.current = null;
+          setPending(null);
+          setRefusal(ipcError(error));
+        },
+      },
+    );
   }, [pending, add, onDone, target.cardId, target.typeLine]);
 
   const items = useMemo(
@@ -364,7 +391,18 @@ export function DeckTargetSubmenu({
   // `isPending`, never by the empty array — both hooks say so on their own `decks`/`folders`.
   if (deckQuery.isPending || folderQuery.isPending) return <PickerNote>Loading decks…</PickerNote>;
   if (items.length === 0) return <PickerNote>No decks</PickerNote>;
-  return <PickerRows items={items} depth={0} />;
+  return (
+    <>
+      {refusal !== null && (
+        // `role="alert"` and not the panel's rows: it appears with its sentence already in it,
+        // which a `status` region announces nothing for.
+        <p role="alert" className="px-2 py-1.5 text-sm text-destructive">
+          {refusal}
+        </p>
+      )}
+      <PickerRows items={items} depth={0} />
+    </>
+  );
 }
 
 /**
@@ -377,10 +415,17 @@ export function DeckTargetSubmenu({
  * destination list that offered them would put a deck the reader has explicitly shelved beside
  * the one they are building.
  *
- * Folders and decks each go through `sortOptions`, folders first: a filing cabinet lists its
- * drawers before its loose files, and within each half the reader looks a name up
- * alphabetically. A folder holding neither a deck nor a folder with a deck in it is dropped —
- * an empty submenu is a row that opens onto nothing.
+ * Folders come first at every level and **keep `buildFolderTree`'s order**, which is
+ * `sortOrder`, then name, then id. A folder tree is an arrangement the reader made, which is
+ * exactly the second of the two exemptions `src/lib/options.ts` names — the other being a grade
+ * scale — and it is the same argument deck categories are exempt under: re-sorting it here
+ * would list a reader's drawers in one order in the gallery and another in this picker, over
+ * the same cabinet, which reads as a bug and is one. **Decks within a level still go through
+ * `sortOptions`**: `deck_list` answers archived-last, most-recently-touched-first, which is a
+ * gallery's order and not a list anybody looks a name up in.
+ *
+ * A folder holding neither a deck nor a folder with a deck in it is dropped — an empty submenu
+ * is a row that opens onto nothing.
  */
 export function buildDeckTargetItems(
   folders: readonly DeckFolder[],
@@ -405,7 +450,9 @@ function deckLevel(
   homeOf: (deck: DeckRow) => number | null,
   choose: (deckId: number, variant: DeckVariant) => void,
 ): MenuItem[] {
-  const drawers = sortOptions(nodes, (node) => node.folder.name).flatMap((node) => {
+  // No `sortOptions` here, deliberately — see this level's builder above. `buildFolderTree` has
+  // already put the siblings in the reader's own order.
+  const drawers = nodes.flatMap((node) => {
     const items = deckLevel(node.children, decks, node.folder.id, homeOf, choose);
     if (items.length === 0) return [];
     return [
@@ -492,16 +539,21 @@ function PickerRows({ items, depth }: { items: readonly MenuItem[]; depth: numbe
 const PICKER_INDENT_STEP = 12;
 
 /**
- * The focus ring written out rather than imported from `features/decks/cardControl`, which is
- * where the app's `FOCUS_INSET` lives: that module's subject is a deck card drawn as a control
- * and it pulls in the drag machinery with it, which a menu row has no business importing. Every
- * other surface here spells the same three utilities out for the same reason.
+ * A picker row wears the panel's own row, not a lookalike.
+ *
+ * `ROW_CLASS` is the cascade's shared geometry — and its shared **timing**, which is the token
+ * `duration-[var(--duration-fast)]` rather than a number, because timings live in
+ * `src/lib/motion.ts` and `index.css` and nowhere else.
+ *
+ * The colours are `ContextMenu.tsx`'s `LIVE_ROW`, spelled out here because that constant is
+ * module-private. **`focus:` and not `focus-visible:` is the load-bearing half**: the panel's
+ * caret *is* real focus, moved programmatically by `moveCaret`, and `:focus-visible`'s heuristic
+ * may decline to paint a focus the reader never reached with the keyboard — so a row styled the
+ * other way loses the caret the instant it crosses from a panel row into this content. `px-2`
+ * comes with `ROW_CLASS` and the indent overrides its left half from the `style` attribute,
+ * which wins over a class.
  */
-const PICKER_ROW = cn(
-  "flex w-full cursor-pointer items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm text-text",
-  "transition-colors duration-150 hover:bg-bg motion-reduce:transition-none",
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
-);
+const PICKER_ROW = cn(ROW_CLASS, "cursor-pointer text-text hover:bg-bg focus:bg-bg");
 
 function PickerRow({ item, depth }: { item: MenuItem; depth: number }) {
   const [open, setOpen] = useState(false);
@@ -527,7 +579,8 @@ function PickerRow({ item, depth }: { item: MenuItem; depth: number }) {
             <span className="min-w-0 flex-1 truncate">{item.label}</span>
             <ChevronRight
               className={cn(
-                "size-4 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+                "size-4 shrink-0 transition-transform motion-reduce:transition-none",
+                "duration-[var(--duration-fast)]",
                 open && "rotate-90",
               )}
               aria-hidden

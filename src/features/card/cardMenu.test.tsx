@@ -233,17 +233,20 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   ...over,
 });
 
-const folder = (id: number, name: string, parentId: number | null = null): DeckFolder => ({
-  id,
-  parentId,
-  name,
-  sortOrder: 0,
-});
+const folder = (
+  id: number,
+  name: string,
+  parentId: number | null = null,
+  sortOrder = 0,
+): DeckFolder => ({ id, parentId, name, sortOrder });
 
 describe("buildDeckTargetItems", () => {
-  it("lists folders before decks, each alphabetically by its own name", () => {
+  it("keeps the reader's own folder order and sorts only the decks", () => {
+    // `Standard` sorts first here and `Commander` second, which is the order the reader
+    // arranged in the gallery and the reverse of the alphabet -- a folder tree is an
+    // arrangement, `src/lib/options.ts`'s second exemption. The loose decks are alphabetical.
     const items = buildDeckTargetItems(
-      [folder(2, "Standard"), folder(1, "Commander")],
+      [folder(2, "Standard", null, 0), folder(1, "Commander", null, 1)],
       [
         deck({ id: 10, name: "Zoo", folderId: 1 }),
         deck({ id: 11, name: "Affinity", folderId: 2 }),
@@ -252,7 +255,7 @@ describe("buildDeckTargetItems", () => {
       ],
       vi.fn(),
     );
-    expect(labels(items)).toEqual(["Commander", "Standard", "Belcher", "Tron"]);
+    expect(labels(items)).toEqual(["Standard", "Commander", "Belcher", "Tron"]);
   });
 
   it("leaves archived decks out", () => {
@@ -345,7 +348,26 @@ describe("DeckTargetSubmenu", () => {
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "live", 1),
     );
-    expect(onDone).toHaveBeenCalled();
+    // On the **answer**, not on the press: closing first would unmount the observer and throw
+    // the other branch's sentence away with it.
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it("says why a refused add failed instead of closing over it", async () => {
+    const user = userEvent.setup();
+    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
+    const onDone = mount();
+
+    await user.click(await screen.findByRole("menuitem", { name: "Burn" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
+    // The menu stays open, so the sentence has somewhere to be read...
+    expect(onDone).not.toHaveBeenCalled();
+    // ...and the same deck can simply be pressed again.
+    deckAddCard.mockResolvedValue(undefined);
+    await user.click(screen.getByRole("menuitem", { name: "Burn" }));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
   });
 
   it("says so rather than drawing an empty panel when there are no decks", async () => {
