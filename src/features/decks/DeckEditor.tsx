@@ -331,12 +331,13 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
  *
  * **At most one of these is ever meant to be open, and a union is what makes that structural
- * rather than remembered.** Eight booleans can express "Categories and History both up", which is
+ * rather than remembered.** A boolean per member could express "Categories and History both up",
+ * which is
  * a state nothing here draws and nothing here could draw well: two scrims, two `aria-modal`
  * panels and two focus traps, with two hand-backs racing for the caret as either closes. One slot
  * cannot say it, and the failure it forecloses is the invisible kind — every test that opens one
  * layer at a time passes either way. Every member below registers the same `"inner"` Escape rung
- * from inside its own component, so at most one of the eight registrations is ever enabled.
+ * from inside its own component, so at most one of those registrations is ever enabled.
  * `DecksPage`'s `Panel` is the same arrangement, for the same reason.
  *
  * **The Escape protocol is no longer that argument, and the change landed under this file.** This
@@ -351,8 +352,9 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * reassuring version was the false one; the hook's own doc carries the whole of it. What survives
  * is the paragraph above, which never depended on any of this.
  *
- * `check` is the format check anchored to its chip; the other seven are **full-window overlays**
- * on `LAYER.overlay` — one rung and not seven because of that same "at most one is up": they
+ * `check` is the format check anchored to its chip; **every other arm is a full-window overlay**
+ * on `LAYER.overlay` — one rung between them, rather than one each, because of that same "at most
+ * one is up": they
  * never need ordering against each other (see `layers.ts`). Categories and tags used to be one of
  * them: a single right-hand drawer with two sections in it. Splitting it into two dialogs adds a
  * member here and takes nothing away from the argument — one slot is one slot however many things
@@ -379,21 +381,21 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
  * way the set filter is, by focus — it closes when the caret leaves its root, and every layer
  * here focuses itself on the way up. The preview is a *dwell*, so it can coexist with an
- * anchored layer out here; the seven overlays make it unreachable, because a pointer cannot get
+ * anchored layer out here; the overlays make it unreachable, because a pointer cannot get
  * to the pane through a scrim.
  *
- * **All seven overlays are modal, and that is what makes the sentence above true of a keyboard
+ * **Every overlay here is modal, and that is what makes the sentence above true of a keyboard
  * too**: each paints a full-window scrim, claims `aria-modal="true"` and runs `lib/trapTab.ts`,
  * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
  * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
- * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds the **six with
- * a control in this view** together — the export dialog is opened from a category heading's
- * right-click and has no button to point that sweep at — and it is a **behavioural** sweep for a
- * reason worth reading before the next modality edit.
+ * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds **the ones with a
+ * control in this view** together — the export dialog and the delete-category confirmation are
+ * both opened from a category heading's right-click and have no button to point that sweep at —
+ * and it is a **behavioural** sweep for a reason worth reading before the next modality edit.
  *
- * **Five of the seven are a `DeckDialog`** — Categories, Tags, History, Deck settings and the
- * export — where the scrim, the centring, `aria-modal`, the trap, the ✕ and the `"inner"` rung
- * are written once. **`TheoryDiffDialog` and `ImportDeckDialog` are not**: each still carries
+ * **All but two of the overlays are a `DeckDialog`** — where the scrim, the centring,
+ * `aria-modal`, the trap, the ✕ and the `"inner"` rung are written once. **`TheoryDiffDialog`
+ * and `ImportDeckDialog` are the two that are not**: each still carries
  * its own copy of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of
  * scope when the shell was written rather than exempt from it, and they are the next two to
  * move onto it. `CreateDeckDialog` is a third such copy outside this editor. So a change to how
@@ -443,7 +445,7 @@ type Layer =
  *
  * **What this component is and is not.** It is a header, a toolbar and a frame: it decides which
  * variant is read, how the rows are grouped, sorted and filtered, which of the four views draws
- * them, and which of eight layers is open. It draws no card and no group heading itself —
+ * them, and which of its layers is open. It draws no card and no group heading itself —
  * `grouping.ts` says what the groups are and `views/` draw them, so four surfaces cannot answer
  * "how many cards are in the Ramp column" four ways.
  *
@@ -987,7 +989,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const close = useCallback(() => setLayer(null), []);
 
   /**
-   * Open one of the eight, from the control that was pressed — and never a second one, because
+   * Open one of them, from the control that was pressed — and never a second one, because
    * there is one slot. A menu row has no control to hand back to and passes `null`.
    *
    * **A press on the layer that is already up closes it**, which is what a toolbar toggle should
@@ -2229,10 +2231,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           is a stacking context and a containing block both). Mounted inside the view area, a
           dialog would centre itself over a column instead of over the window.
 
-          Each is closed by `open`, and each of the seven unmounts everything behind that flag —
-          so a closed one costs no query, no window listener and no state. That is what makes it
-          safe to mount all seven unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than seven booleans. For five of them `DeckDialog` guarantees it:
+          Each is closed by `open`, and each unmounts everything behind that flag — so a closed
+          one costs no query, no window listener and no state. That is what makes it safe to
+          mount every one of them unconditionally, and it is why the editor can hold them in one
+          `Layer` union rather than a boolean apiece. For all but two `DeckDialog` guarantees it:
           `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
           The theory diff and the import dialog are not on that shell (see the `Layer` union's
           doc) and each guarantees the same thing with an `AnimatePresence` of its own — which

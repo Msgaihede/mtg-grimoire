@@ -1982,9 +1982,18 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
-   * would consume one press — so the editor holds *one* piece of state for all eight, and
+   * Two of these open at once would be two scrims, two `aria-modal` panels and two focus traps
+   * over one screen — so the editor holds *one* piece of state for every member of `Layer`, and
    * opening any of them takes whichever was up down with it.
+   *
+   * **The Escape argument that used to stand here is gone rather than reworded.** It read "two
+   * `"inner"` layers open at once are not ordered by the Escape protocol at all — both would
+   * consume one press", and neither half survives: `useDismissOnEscape` keeps a stack of
+   * capture-phase registrations and only the token on top acts, so peers *are* ordered by mount
+   * depth; and the old hook did not close both either — its capture rung checks
+   * `defaultPrevented`, so the first-registered peer took the press and the newer one was
+   * starved. The reason above never depended on any of it. No count either: the union grew twice
+   * in one day, and a number here was wrong both times.
    */
   it("never has two of its own layers open at once", async () => {
     await open();
