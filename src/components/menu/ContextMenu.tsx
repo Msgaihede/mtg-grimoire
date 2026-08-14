@@ -1,10 +1,14 @@
 import {
+  createContext,
+  useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { motion, useIsPresent } from "motion/react";
 import { Check } from "lucide-react";
@@ -65,6 +69,57 @@ interface RowsContext {
   run: (onSelect: () => void) => void;
   /** Close the whole menu and hand focus nowhere — a lazy panel's `onDone`. */
   close: () => void;
+}
+
+/**
+ * The cascade a set of rows is being drawn into: its machinery, and **which panel it is in**.
+ *
+ * Depth is here rather than passed down the recursion because a lazy panel's body is not part of
+ * the recursion at all — `MenuLazy.Content` is somebody else's component, and it is handed nothing
+ * but `onDone`. Reading the depth from a provider that {@link Submenu}'s own children sit inside
+ * means a foreign component's rows are at the depth of the panel they are actually drawn in,
+ * without anyone having to tell it what that is or being able to get it wrong.
+ */
+interface Cascade {
+  ctx: RowsContext;
+  depth: number;
+}
+
+/**
+ * What {@link MenuRows} does outside a menu: draw the rows, open no submenus, run what is pressed.
+ *
+ * Rows outside a cascade are a real case rather than a defensive one — a story that wants to look
+ * at a set of rows without opening a menu around them is the obvious way to catalogue this — and
+ * a component that throws there would make that impossible for no gain. `run` still calls through,
+ * because "press it and the thing happens" is the part that does not depend on a panel.
+ */
+const NO_CASCADE: Cascade = {
+  ctx: {
+    openPath: [],
+    openSubmenu: () => {},
+    closeSubmenu: () => {},
+    run: (onSelect) => onSelect(),
+    close: () => {},
+  },
+  depth: 0,
+};
+
+/**
+ * **Private on purpose, and that is the whole design of the seam.**
+ *
+ * A lazy `Content` needs the cascade in order to draw rows that join it, and there were three ways
+ * to give it one: widen `MenuLazy.Content`'s props, export this context, or export a component that
+ * reads it. Exporting the context makes every field of `RowsContext` — an `openPath` keyed by
+ * depth, a `focusDepth` protocol, the ordering rules between them — a public contract that any
+ * consumer may reimplement and this module must then keep. {@link MenuRows} is the whole of what a
+ * consumer needs and the only thing exported; everything above stays free to change.
+ */
+const CascadeContext = createContext<Cascade>(NO_CASCADE);
+
+/** Everything inside this is one panel deeper. Memoised, so a re-render is not a context change. */
+function CascadeLevel({ ctx, depth, children }: Cascade & { children: ReactNode }) {
+  const value = useMemo(() => ({ ctx, depth }), [ctx, depth]);
+  return <CascadeContext.Provider value={value}>{children}</CascadeContext.Provider>;
 }
 
 /** The colours of a row the caret may land on. The caret is real focus, so `focus:` is the caret. */
@@ -139,8 +194,22 @@ function RadioRow({ item, run }: { item: MenuRadio; run: RowsContext["run"] }) {
  * calls the component, and only the expanded branch of `Submenu` mounts anything. So a menu with
  * six lazy rows reaches the backend zero times when it opens, which is the entire reason that kind
  * exists.
+ *
+ * ## The one thing this module exports for a `MenuLazy.Content` to use
+ *
+ * A lazy body that wants to offer real choices — a folder tree, a deck list — should not have to
+ * rebuild a row. Rendering `<MenuRows items={…} />` inside a `Content` gets the same rows the menu
+ * draws for itself: the same caret and `focus:` styling, the same `data-menu-row` attributes that
+ * put them on the caret's walk, and, for a nested `MenuSubmenu`, the same ArrowRight to expand,
+ * ArrowLeft to collapse, `aria-haspopup`/`aria-expanded`, and one Escape per level.
+ *
+ * **It takes no depth and no context object**, because both are facts about where it is being
+ * rendered rather than decisions a caller should be making — and a caller that could pass the
+ * wrong depth would produce a cascade whose levels close each other. It reads them from the panel
+ * it is inside, so a `Content` mounted at depth 3 is at depth 3 without knowing the number exists.
  */
-function MenuRows({ items, depth, ctx }: { items: MenuItem[]; depth: number; ctx: RowsContext }) {
+export function MenuRows({ items }: { items: MenuItem[] }) {
+  const { ctx, depth } = useContext(CascadeContext);
   return (
     <>
       {items.map((item) => {
@@ -163,7 +232,12 @@ function MenuRows({ items, depth, ctx }: { items: MenuItem[]; depth: number; ctx
                 onOpen={(focus) => ctx.openSubmenu(depth, item.id, focus)}
                 onClose={() => ctx.closeSubmenu(depth)}
               >
-                <MenuRows items={item.items} depth={depth + 1} ctx={ctx} />
+                {/* The body of a panel is one level deeper than the row that opens it, and that
+                    is stated here — once, for both kinds — rather than threaded through the
+                    recursion, so that the built-in case and the foreign one below cannot drift. */}
+                <CascadeLevel ctx={ctx} depth={depth + 1}>
+                  <MenuRows items={item.items} />
+                </CascadeLevel>
               </Submenu>
             );
           case "lazy":
@@ -178,7 +252,13 @@ function MenuRows({ items, depth, ctx }: { items: MenuItem[]; depth: number; ctx
                 onOpen={(focus) => ctx.openSubmenu(depth, item.id, focus)}
                 onClose={() => ctx.closeSubmenu(depth)}
               >
-                <item.Content onDone={ctx.close} />
+                {/* Still an element and not a call: `Content` is invoked when `Submenu` mounts
+                    this, never before. Wrapping it changes nothing about that — a provider around
+                    an unmounted subtree runs none of it — and it is what lets the body render
+                    `<MenuRows>` of its own that lands at this depth. */}
+                <CascadeLevel ctx={ctx} depth={depth + 1}>
+                  <item.Content onDone={ctx.close} />
+                </CascadeLevel>
               </Submenu>
             );
         }
@@ -257,23 +337,30 @@ export function ContextMenu({
     hoverTimer.current = null;
   };
 
-  const ctx: RowsContext = {
-    openPath,
-    openSubmenu: (rowDepth, id, focus) => {
-      if (focus) focusDepth.current = rowDepth + 1;
-      setOpenPath((prev) => [...prev.slice(0, rowDepth), id]);
-    },
-    closeSubmenu: (rowDepth) => setOpenPath((prev) => prev.slice(0, rowDepth)),
-    run: (onSelect) => {
-      // The caret goes home first, while the row it came from is still mounted; then the menu
-      // closes; then the thing happens — in that order, so an action that opens a dialog and
-      // focuses it is not overwritten by a hand-back arriving late.
-      opener?.focus();
-      onClose();
-      onSelect();
-    },
-    close: onClose,
-  };
+  // Memoised because it is a **context value** now, and a context value penetrates the
+  // `children`-identity bail-out that keeps a `MenuLazy.Content` from re-rendering: without this,
+  // measuring the panel would re-render every foreign row in the cascade. The two setters read
+  // `prev`, so nothing here goes stale between renders that `openPath` did not cause.
+  const ctx = useMemo<RowsContext>(
+    () => ({
+      openPath,
+      openSubmenu: (rowDepth, id, focus) => {
+        if (focus) focusDepth.current = rowDepth + 1;
+        setOpenPath((prev) => [...prev.slice(0, rowDepth), id]);
+      },
+      closeSubmenu: (rowDepth) => setOpenPath((prev) => prev.slice(0, rowDepth)),
+      run: (onSelect) => {
+        // The caret goes home first, while the row it came from is still mounted; then the menu
+        // closes; then the thing happens — in that order, so an action that opens a dialog and
+        // focuses it is not overwritten by a hand-back arriving late.
+        opener?.focus();
+        onClose();
+        onSelect();
+      },
+      close: onClose,
+    }),
+    [openPath, opener, onClose],
+  );
 
   // The caret starts on the panel, so Escape has something to hand back and the first ArrowDown
   // is not swallowed by an element outside the menu. Measuring here too: `offsetWidth`/
@@ -453,7 +540,9 @@ export function ContextMenu({
         !present && "pointer-events-none",
       )}
     >
-      <MenuRows items={items} depth={0} ctx={ctx} />
+      <CascadeLevel ctx={ctx} depth={0}>
+        <MenuRows items={items} />
+      </CascadeLevel>
     </motion.div>
   );
 }

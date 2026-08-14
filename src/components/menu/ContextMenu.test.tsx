@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SUBMENU_HOVER_MS } from "./ContextMenu";
+import { MenuRows, SUBMENU_HOVER_MS } from "./ContextMenu";
 import { ContextMenuProvider } from "./ContextMenuProvider";
 import { useContextMenu } from "./useContextMenu";
 import type { MenuItem } from "./types";
@@ -485,6 +485,101 @@ describe("ContextMenu", () => {
 
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     });
+  });
+
+  /**
+   * **The contract a lazy body builds against**, and the reason `MenuRows` is exported at all.
+   *
+   * "Add to → Deck" is a folder→deck→variant tree that cannot be built until the row is expanded,
+   * so it is a `MenuLazy` — and a lazy body that had to hand-roll its own rows would be a second
+   * implementation of the caret, the focus styling and the expand/collapse keys, drifting from
+   * this one from the first commit. So a `Content` renders `<MenuRows items={…} />` and gets the
+   * real thing, nested `MenuSubmenu`s included.
+   *
+   * The whole of "the real thing" is asserted here, because every part of it is a way this could
+   * silently half-work: the caret walks the foreign rows, a nested submenu carries its ARIA and
+   * expands and collapses on the arrows, one Escape closes one level all the way back out — and
+   * the body still does not mount until its row is expanded, which is the rule the `lazy` kind
+   * exists for and the one thing that must not be traded for any of the rest.
+   */
+  it("gives a lazy body's own MenuRows the whole cascade", async () => {
+    const user = userEvent.setup();
+    const mounted = vi.fn();
+    const pick = vi.fn();
+    function Content() {
+      mounted();
+      return (
+        <MenuRows
+          items={[
+            { kind: "action", id: "recent", label: "Recent deck", onSelect: vi.fn() },
+            {
+              kind: "submenu",
+              id: "burn",
+              label: "Burn",
+              items: [{ kind: "action", id: "main", label: "Main deck", onSelect: pick }],
+            },
+          ]}
+        />
+      );
+    }
+    open([{ kind: "lazy", id: "deck", label: "Deck", Content }]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    await screen.findByRole("menu");
+
+    // Still lazy. Wrapping the body in a cascade provider must not mount it.
+    expect(mounted).not.toHaveBeenCalled();
+
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    expect(mounted).toHaveBeenCalledTimes(1);
+    // The caret went into the lazy panel and landed on a row this module never built.
+    expect(screen.getByRole("menuitem", { name: "Recent deck" })).toHaveFocus();
+
+    // ...and walks the foreign rows like any others.
+    await user.keyboard("{ArrowDown}");
+    const nested = screen.getByRole("menuitem", { name: /Burn/ });
+    expect(nested).toHaveFocus();
+    expect(nested).toHaveAttribute("aria-haspopup", "menu");
+    expect(nested).toHaveAttribute("aria-expanded", "false");
+
+    // A submenu nested two levels down, inside a foreign body, on the same two keys.
+    await user.keyboard("{ArrowRight}");
+    expect(nested).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "Main deck" })).toHaveFocus();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(nested).toHaveAttribute("aria-expanded", "false");
+    expect(nested).toHaveFocus();
+
+    // One Escape per level, three levels deep: the nested panel, the lazy panel, the menu.
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("menuitem", { name: "Main deck" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitem", { name: "Main deck" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Recent deck" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitem", { name: "Recent deck" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("runs a foreign row's action and closes the whole menu", async () => {
+    const user = userEvent.setup();
+    const pick = vi.fn();
+    function Content() {
+      return (
+        <MenuRows items={[{ kind: "action", id: "main", label: "Main deck", onSelect: pick }]} />
+      );
+    }
+    open([{ kind: "lazy", id: "deck", label: "Deck", Content }]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+
+    await user.click(screen.getByRole("menuitem", { name: "Main deck" }));
+
+    expect(pick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   /**

@@ -106,7 +106,13 @@ export function Submenu({
   });
 
   return (
-    <div data-menu-row={id} className={cn("relative", LAYER.raisedWhenPopupOpen)}>
+    // `role="none"`, because a `menu` may only own `menuitem`, `menuitemradio`, `group` and
+    // `separator` — and this box is none of those. It is the APG's own shape for a submenu (the
+    // `li role="none"` holding a `menuitem` and the `menu` it opens), and it exists here for a
+    // layout reason rather than a semantic one: the panel is positioned in the cascade against
+    // this box, so the box cannot be dissolved, only made transparent. Presentational-role
+    // conflict does not apply — the box is not focusable and carries no ARIA of its own.
+    <div role="none" data-menu-row={id} className={cn("relative", LAYER.raisedWhenPopupOpen)}>
       <button
         ref={rowRef}
         type="button"
