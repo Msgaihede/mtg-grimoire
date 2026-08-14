@@ -329,18 +329,26 @@ describe("CategoriesDialog", () => {
  * capture rung `preventDefault()`s and the card pane's bubble rung returns early on
  * `defaultPrevented`.
  *
- * **This used to add "and `useDismissOnEscape` orders exactly two rungs, so two `"inner"` peers
- * are not ordered by it at all", and that has stopped being true in a way this test's own reader
- * needs to know.** The hook stacks capture-phase registrations now and only the token on top
- * acts, so peers *are* ordered, by mount depth. Follow that through this scenario: with a rung
- * registered on the panel's **mount** — the defect — the fading Categories panel would hold a
- * token pushed at its original mount, and the opening Tags panel would push above it, so Tags
- * would act and the assertions below would **still pass**. So this test no longer discriminates
- * the regression it was written for; what it still pins is worth keeping — exactly one layer
- * listening, and it is the *new* one, with the press consumed — but a rung moved back onto the
- * mount would not turn it red. Restoring that requires a different shape (asserting the exiting
- * layer holds no registration, rather than which one answers), and it is deliberately not done
- * here in a documentation pass.
+ * **It takes two switches to catch, and that is the hook's stack's doing.** `useDismissOnEscape`
+ * orders capture-phase registrations by mount depth now — only the token on top acts — so one
+ * switch does not discriminate: with the rung on the panel's **mount**, the fading Categories
+ * panel would still hold the token pushed at its original mount, the opening Tags panel would
+ * push *above* it, and Tags would answer exactly as it does here. Correct code and the defect
+ * agree on that press.
+ *
+ * They part on the way **back**. Registered on the flag, the fade takes the layer off the stack,
+ * so reopening Categories over a fading Tags pushes Categories on top and the press is
+ * Categories'. Registered on the mount, neither panel ever left: the stack is still
+ * `[categories, tags]` in original mount order, Tags is still on top, and the press goes to the
+ * dialog the reader has just **left** while the one they have just reopened is starved — a
+ * capture rung `preventDefault()`s, so nothing behind it hears the press either. That is the
+ * regression in its own words, and the second half of this test is what turns it red. Verified
+ * by mutation, 2026-08-15: with `useDismissOnEscape` moved out of `DeckDialog` and into its
+ * `Panel`, the first press stayed green and the second failed on `categoriesDismiss` — called 0
+ * times, with `tagsDismiss` called twice.
+ *
+ * The reader changing their mind one press later is also the realest version of this: Categories
+ * and Tags are one press apart in the same toolbar.
  *
  * **The rung it proves is `DeckDialog`'s**, and this is deliberately not a second copy of that
  * file's own tests: the case needs *two peers*, and these two are the realest pair the editor
@@ -351,7 +359,7 @@ describe("CategoriesDialog", () => {
  * and proves nothing.
  */
 describe("Escape during a dialog's exit", () => {
-  it("leaves exactly one layer listening while the previous one fades out", async () => {
+  it("gives the press to the open layer, never to the one still fading", async () => {
     const categoriesDismiss = vi.fn();
     const tagsDismiss = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -376,6 +384,17 @@ describe("Escape during a dialog's exit", () => {
       </QueryClientProvider>
     );
 
+    /** One press at `window`, handed back so the caller can read whether it was consumed. */
+    const escape = () => {
+      const press = new KeyboardEvent("keydown", {
+        key: "Escape",
+        cancelable: true,
+        bubbles: true,
+      });
+      window.dispatchEvent(press);
+      return press;
+    };
+
     const { rerender } = render(overlays("categories"));
     await screen.findByText("Ramp");
 
@@ -389,12 +408,26 @@ describe("Escape during a dialog's exit", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "Tags" })).toBeInTheDocument();
 
-    const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
-    window.dispatchEvent(press);
-
+    const first = escape();
     expect(tagsDismiss).toHaveBeenCalledTimes(1);
     expect(categoriesDismiss).not.toHaveBeenCalled();
-    expect(press.defaultPrevented).toBe(true);
+    expect(first.defaultPrevented).toBe(true);
+
+    // **Back again, inside both fades — the half that discriminates.** No `await` above this
+    // line on purpose: the exit is what the assertions three lines up prove is still running,
+    // and anything that yielded would let it finish and take the case with it.
+    act(() => rerender(overlays("categories")));
+
+    expect(screen.getByText("Tags")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Categories" })).toBeInTheDocument();
+
+    const second = escape();
+    // The reopened dialog answers, and the one fading out of view has stopped listening — it
+    // took no second press and did not consume this one on the way past.
+    expect(categoriesDismiss).toHaveBeenCalledTimes(1);
+    expect(tagsDismiss).toHaveBeenCalledTimes(1);
+    expect(second.defaultPrevented).toBe(true);
   });
 });
 
