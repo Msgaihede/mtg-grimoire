@@ -6500,12 +6500,80 @@ export function writeHandlers(db: FakeDb) {
   } satisfies Record<string, CommandHandler>;
 }
 
+/* --------------------------------------------------------------- the three plugins ---- */
+
+/** Where a story's save dialog pretends to put a file — `SYNC_DATA_DIR`'s drive, since both
+ *  are the same invented machine. */
+const SAVE_DIR = "D:\\Storybook\\";
+
 /**
- * Reads ∪ writes: the whole command table, which is what a story registers.
+ * The three Tauri **plugin** commands the page reaches, which are not this app's commands and
+ * are not mirrored from `src-tauri/src` at all.
  *
- * Both halves close over the one `db`, so a write is visible to the next read — the property
- * that makes a story clickable rather than a snapshot.
+ * They are here because the fake `invoke` is the whole IPC layer in Storybook: `copyText`,
+ * `openExternal` and `ExportDialog`'s Save as… each go through a plugin wrapper that calls
+ * `invoke` with one of these names, so without them every one of those presses is answered
+ * `No fake handler registered for command "plugin:…"` — a rejection about the workbench's
+ * plumbing, drawn in a `role="alert"` the app wrote for a rejection about the reader's disk.
+ *
+ * A third table rather than rows in either of the two above, for one reason each: they mirror
+ * no Rust module, and `db.test.ts`'s busy sweep walks {@link writeHandlers} asserting that
+ * everything in it can be refused by a running sync — which none of these can, because none of
+ * them holds a connection.
+ *
+ * **`plugin:dialog|save` answers a path, and that is not the same decision as
+ * `deck_import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
+ * difference is what would be invented: `open` + `read_import_file` would invent a *decklist*,
+ * which is the entire subject of the screen it feeds, so a story built on one would be a story
+ * about a thing that cannot happen. All this dialog produces is a **string naming a file**, and
+ * the export it then writes is text the reader is already looking at — so a fixed directory
+ * over the dialog's own `defaultPath` invents nothing about the export and makes the one
+ * refusal that matters (`exportWriteError`) name a plausible file.
+ */
+export function pluginHandlers() {
+  return {
+    /**
+     * `tauri-plugin-clipboard-manager`'s one granted command — `allow-write-text`, never the
+     * read (`src/lib/clipboard.ts`).
+     *
+     * Accepted and **not stored**, because there is no clipboard here to hold it and no read
+     * command to get it back with: this app grants `write_text` only, so a fake that kept the
+     * string would offer a story a way to check something the app itself cannot ask. What a
+     * story observes is what a reader observes — that the press was accepted, which for
+     * `ExportDialog` is the `Copied.` line and for a menu row is the menu closing.
+     */
+    "plugin:clipboard-manager|write_text": (): void => undefined,
+
+    /** `tauri-plugin-opener`'s `openUrl`, behind `src/lib/externalLinks.ts`. A no-op for
+     *  `update_open_release_page`'s reason: it hands a URL to the OS, and there is no OS here
+     *  to answer it. The URL is still *built* by the app, which is the half a story is about. */
+    "plugin:opener|open_url": (): void => undefined,
+
+    /**
+     * The OS save dialog, answering a path under {@link SAVE_DIR}.
+     *
+     * The name is the dialog's own `defaultPath` — `ExportDialog` seeds it
+     * `${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`, so switching format really does
+     * change the file this answers with, exactly as it does in the window.
+     *
+     * **`null` is the other real answer and is deliberately not reachable from a story.** A
+     * cancelled save resolves `null`, and writing *that* to disk is the trap `ExportDialog`'s
+     * own guard exists for — pinned in `ExportDialog.test.tsx`, where `save` is mocked
+     * directly, because a `null` here would make every save story a story about Cancel.
+     */
+    "plugin:dialog|save": (args: { options?: { defaultPath?: string } }): string =>
+      `${SAVE_DIR}${args.options?.defaultPath ?? "export.txt"}`,
+  } satisfies Record<string, CommandHandler>;
+}
+
+/**
+ * Reads ∪ writes ∪ the plugins: the whole command table, which is what a story registers.
+ *
+ * The first two halves close over the one `db`, so a write is visible to the next read — the
+ * property that makes a story clickable rather than a snapshot. The third takes **no** store,
+ * and that is the shape of what it is: three commands that mirror no table here and no module
+ * in the crate, none of which can see the reader's rows or change them.
  */
 export function allHandlers(db: FakeDb) {
-  return { ...readHandlers(db), ...writeHandlers(db) };
+  return { ...readHandlers(db), ...writeHandlers(db), ...pluginHandlers() };
 }

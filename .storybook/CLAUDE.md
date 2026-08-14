@@ -58,6 +58,17 @@ deliberately**: no screenshots are stored.
   fourth printing is left out of Mana Pool's on purpose — a card one feed lists and another does
   not is the state no amount of currency arithmetic could produce, and it is the one the em-dash
   rule exists for.
+- **Three of the fake's commands are Tauri _plugins_, not this app's** — `pluginHandlers()` in
+  `db.ts`, merged into `allHandlers` beside the two mirrored tables:
+  `plugin:clipboard-manager|write_text`, `plugin:opener|open_url` and `plugin:dialog|save`. The
+  fake `invoke` is the whole IPC layer here, so without them a Copy, an Open on or a Save as… is
+  answered `No fake handler registered` — a rejection about the workbench drawn in a `role="alert"`
+  the app wrote about the reader's disk. It takes **no store**: they mirror no table and no crate
+  module, and `db.test.ts`'s busy sweep walks `writeHandlers` asserting everything there can be
+  refused by a running sync, which none of these can. **`save` answering a path is not the same
+  decision as `deck_import_read_file` throwing**: the picker there would invent the *decklist*,
+  which is the screen's whole subject, while this one invents only a file name over text the
+  reader is already looking at.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.
