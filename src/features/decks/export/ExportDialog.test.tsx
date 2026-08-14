@@ -89,6 +89,46 @@ describe("ExportDialog", () => {
     );
   });
 
+  it("clears the Copied status when the format changes, since it would misrepresent what's on the clipboard", async () => {
+    const user = userEvent.setup();
+    render(
+      <ExportDialog
+        open
+        subject="Removal"
+        cards={[BOLT]}
+        suggestedFileName="Removal"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Copy/ }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied.");
+
+    // The preview redraws for CSV; the clipboard still holds the Plain-text copy. The status
+    // line has to go with it, or it sits beside text it is no longer telling the truth about.
+    await user.click(await screen.findByRole("radio", { name: "CSV" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("reports a clipboard failure rather than swallowing it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(copyTextMock).mockRejectedValueOnce(new Error("clipboard access denied"));
+    render(
+      <ExportDialog
+        open
+        subject="Removal"
+        cards={[BOLT]}
+        suggestedFileName="Removal"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Copy/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/clipboard access denied/);
+    // No false "Copied." beside the refusal.
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("writes the file Rust was told to write, at the path the picker answered", async () => {
     const user = userEvent.setup();
     vi.mocked(saveMock).mockResolvedValue("D:\\decks\\Removal.txt");

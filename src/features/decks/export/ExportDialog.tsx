@@ -26,6 +26,15 @@
  * already avoid; the guard below is the whole of what stops it here. And a refused write is
  * reported rather than closing the dialog on it: the reader's text is still on screen and still
  * copyable, so the failure costs them nothing they cannot immediately retry.
+ *
+ * **The Copied status is a claim about the clipboard's contents, and it is cleared the moment
+ * that claim could go stale** (2026-08-14, code review). Switching format redraws the preview
+ * but does nothing to the clipboard, which still holds whatever text was on screen at the last
+ * Copy — so the format radios clear `copied` on every press rather than leaving a "Copied." line
+ * sitting beside text it is no longer true of. And a clipboard write can itself be refused (the
+ * plugin is a real Tauri command, not a browser API guaranteed to succeed), so `handleCopy`
+ * reports a rejection through the same `role="alert"` line `handleSaveAs`'s refusal uses, rather
+ * than swallowing it — the "reported, not fatal" rule above is not just the save button's.
  */
 import { useCallback, useMemo, useState, type JSX } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -101,18 +110,27 @@ function Body({
   const [format, setFormat] = useState<ExportFormat>("plain");
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  /** One line for both failures a press here can produce — a refused clipboard write and a
+   *  refused save — each stores its own full sentence at the point it happened, since which
+   *  control failed decides the wording. */
+  const [error, setError] = useState<string | null>(null);
 
   const text = useMemo(() => formatExport(cards, format), [cards, format]);
 
   const handleCopy = useCallback(() => {
-    setSaveError(null);
+    setError(null);
     setCopied(false);
-    void copyText(text).then(() => setCopied(true));
+    copyText(text).then(
+      () => setCopied(true),
+      // A real rejection path, not a hypothetical: the clipboard goes through a Tauri plugin
+      // command, so an ACL or platform failure surfaces as a rejected promise — reported the
+      // same way a refused save is, rather than swallowed.
+      (e: unknown) => setError(`Could not copy that export — ${ipcError(e)}`),
+    );
   }, [text]);
 
   const handleSaveAs = useCallback(async () => {
-    setSaveError(null);
+    setError(null);
     setSaving(true);
     try {
       // `save()` answers `null` on Cancel, and writing that string to disk is the bug this
@@ -125,7 +143,7 @@ function Body({
     } catch (e) {
       // Reported, not fatal to the dialog: the reader's text is still on screen and still
       // copyable, so a refused write must not throw either away.
-      setSaveError(ipcError(e));
+      setError(`Could not save that export — ${ipcError(e)}`);
     } finally {
       setSaving(false);
     }
@@ -143,7 +161,12 @@ function Body({
             type="button"
             role="radio"
             aria-checked={format === f}
-            onClick={() => setFormat(f)}
+            onClick={() => {
+              setFormat(f);
+              // The preview redraws for the new format; the clipboard does not. Left standing,
+              // "Copied." would sit beside text it is no longer an honest claim about.
+              setCopied(false);
+            }}
             className={cn(
               "h-8 shrink-0 rounded-md border px-3 text-sm",
               "transition-colors duration-150 motion-reduce:transition-none",
@@ -207,13 +230,13 @@ function Body({
       </div>
 
       <AnimatePresence initial={false}>
-        {saveError !== null && (
+        {error !== null && (
           <motion.p
             {...statusLine}
             role="alert"
             className="overflow-hidden text-sm text-destructive"
           >
-            Could not save that export — {saveError}
+            {error}
           </motion.p>
         )}
       </AnimatePresence>
