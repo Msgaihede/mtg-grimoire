@@ -586,16 +586,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // further press failing the same way and nothing on screen explaining why. The family is the
   // point: **no refused deck write may leave a dead deck painted.**
   //
-  // **Three of the six have no control in this view as it stands**, and they are kept for the
-  // reason `swapPrinting` has always been kept. `swapPrinting` is pressed on the card pane,
-  // which is a *sibling* of this editor, so its refusal lands in the pane's own mutation state
-  // and this observer stays idle for the life of the editor — what actually carries it back
-  // here is the `onError` invalidation on the mutation's single definition (`useDeck.ts`).
-  // `setQuantity` and `moveCard` joined it when the rebuilt views replaced the category columns
-  // that used to carry a stepper and a "Move to" menu: nothing in this tree fires them today.
-  // Each costs one array element, each is where an in-editor control would land the day one
-  // exists, and reading any of the three as live GONE coverage would be reading it as something
-  // it cannot do today.
+  // **`swapPrinting` has no control in this view and is kept anyway.** It is pressed on the
+  // card pane, which is a *sibling* of this editor, so its refusal lands in the pane's own
+  // mutation state and this observer stays idle for the life of the editor — what actually
+  // carries it back here is the `onError` invalidation on the mutation's single definition
+  // (`useDeck.ts`). It costs one array element, it is where an in-editor control would land the
+  // day one exists, and reading it as live GONE coverage would be reading it as something it
+  // cannot do today.
+  //
+  // **`moveCard` is fired by a drag and by nothing else** (2026-08-14), the card's own `Move…`
+  // select having been removed. A drop is still a press for this purpose — it reaches
+  // `applyDrop` and the same mutation — so this entry is live coverage rather than a placeholder
+  // like the one above it. What it is *not* any more is reachable from the keyboard.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,
@@ -627,7 +629,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
   // that is all a *drop* carries, and a drag and a control press must not be two ways of
-  // writing the same thing. The card controls below hand their own card to the same three.
+  // writing the same thing. The card's stepper hands its own card to the first of the three;
+  // the other two are a drop's alone now that the `Move…` select is gone, and the addressing is
+  // still the drop's rather than the control's for the day one of them grows a control again.
   //
   // Each takes the mutation's `mutate` rather than the mutation: TanStack hands back a fresh
   // result object on every render, so a callback that depended on the whole thing would have a
@@ -672,8 +676,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `focusDeckGroup` looks the pile up by attribute rather than by ref for exactly this reason:
    * the element it finds the second time is a different element with the same identity.
    *
-   * Measured, not guessed: `DeckEditor.stories.tsx`'s `MoveBetweenPiles` fails without the
-   * second pass and passes with it.
+   * Measured, not guessed: it was `DeckEditor.stories.tsx`'s `MoveBetweenPiles` that failed
+   * without the second pass and passed with it. **That story went with the `Move…` select on
+   * 2026-08-14 and nothing replaced it**, because the only remaining route into this that
+   * changes a pile's *size* is a drop, and Storybook cannot drive a drag (the page's own note
+   * says why). What is still driven is the stepper's zero — `ZeroRemovesTheCard` asserts the
+   * caret lands on the pile — which exercises the same two passes on the pile a card *left*.
    */
   const owedFocus = useRef<number | null>(null);
   const handOffTo = useCallback((categoryId: number) => {
@@ -704,9 +712,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       writeMove(
         { cardId, from, to },
         {
-          // The card this control belongs to has left the pile, so the caret goes to where it
-          // landed — which announces the category it is now in. A dropped card is handed on the
-          // same way: it is the card that unmounts either way, and focus follows it.
+          // The dropped card has left the pile it was in, so the caret goes to where it landed
+          // — which announces the category it is now in. The same hand-off the stepper's zero
+          // makes: it is the card that unmounts either way, and focus follows it.
           onSuccess: () => handOffTo(to),
         },
       );
@@ -743,13 +751,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.categoryId, quantity),
     [setQuantityAt],
   );
-  const move = useCallback(
-    (card: DeckCard, to: number) => moveTo(card.cardId, card.categoryId, to),
-    [moveTo],
-  );
   const actions = useMemo<DeckCardActions>(
-    () => ({ setQuantity, move, moveTargets: categories, drop: applyDrop }),
-    [setQuantity, move, categories, applyDrop],
+    () => ({ setQuantity, drop: applyDrop }),
+    [setQuantity, applyDrop],
   );
 
   // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to

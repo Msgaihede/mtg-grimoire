@@ -293,6 +293,11 @@ describe("buildGroups by category", () => {
  * accumulates a dozen of them) survives exactly where it was really true: while a filter is
  * narrowing the deck, where an empty pile is the filter's doing rather than the deck's.
  *
+ * **The card's "Move…" select was removed on 2026-08-14**, which is what makes the reversal
+ * load-bearing rather than cosmetic: that select was built from the deck's `categories` rather
+ * than from these groups, so it was how an empty pile got reached while it was hidden. A drawn
+ * heading is a drop target, so drawing one is now the affordance itself.
+ *
  * Two of the fixed zones went the other way and are conditional now. Every case below is about
  * one flag being read for another's question — which is the mistake this rule is one bad line
  * away from at all times, and there are four flags in it rather than two.

@@ -550,19 +550,19 @@ describe("CardStack does not reflow", () => {
   /**
    * **And the controls cannot change it either**, which is the claim worth making twice.
    *
-   * A stepper and a move select were added to every card after this component was built, and
-   * the obvious place to put them — in the card, under the data line — would have made
-   * {@link STACK_CARD_HEIGHT} a lie and every number above it with it. They are drawn *over*
-   * the card instead, absolutely positioned, so they take no height at all: the same card is
-   * still 319px whether it can be edited or not, and `stackHeight` never learns that actions
-   * exist.
+   * A stepper was added to every card after this component was built, and the obvious place to
+   * put it — in the card, under the data line — would have made {@link STACK_CARD_HEIGHT} a lie
+   * and every number above it with it. It is drawn *over* the card instead, absolutely
+   * positioned, so it takes no height at all: the same card is still 319px whether it can be
+   * edited or not, and `stackHeight` never learns that actions exist.
    *
-   * This is the test that fails the day somebody puts them in the flow. It is deliberately not
+   * This is the test that fails the day somebody puts them in the flow — including the day the
+   * `Move…` select removed on 2026-08-14 comes back in some other form. It is deliberately not
    * "the classes contain `absolute`" — it is the height, measured both ways, which is the thing
    * that actually has to hold.
    */
   it("keeps its height when its cards carry controls", () => {
-    const actions = { setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop: vi.fn() };
+    const actions = { setQuantity: vi.fn(), drop: vi.fn() };
     const { unmount } = render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
     const plain = list().style.height;
     unmount();

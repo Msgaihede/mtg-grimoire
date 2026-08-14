@@ -99,7 +99,11 @@ are all things no suite could have seen.
   list height was read back — so the superseded note at the top of this file still stands. Two
   defects it did find, both now fixed: the stepper was 28px with a 6px radius against the
   canvas's 24px and 8px, and the `Move…` select — which the canvas does not draw at all — sat
-  beside the stepper and covered about three-fifths of the width of a 210px card face.
+  beside the stepper and covered about three-fifths of the width of a 210px card face. **That
+  second one is moot as of 2026-08-14**: the select was removed from every view rather than
+  narrowed further, so the card's control column agrees with the canvas by having nothing in it
+  the canvas does not draw. A replacement control is expected, and this measurement is what it
+  has to clear.
 - **Reduced motion holds**: `transitionProperty` is `none` on the view buttons under
   `prefers-reduced-motion: reduce`, while `transitionDuration` still reads `0.15s`
   — the exact false failure [live-ui-verification.md](live-ui-verification.md) warns about, reproduced here on purpose.

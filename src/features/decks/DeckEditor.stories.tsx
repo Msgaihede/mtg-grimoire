@@ -147,19 +147,24 @@ const meta = {
           "0→1, Tarmogoyf 2→3, Urza's Saga 3→4, and the deck's shortfall 65→61 of 75. " +
           "{@link Modern60} reads one of those marks and {@link BuiltToggle} presses the " +
           "switch.\n\n" +
-          "**Every card carries the same four affordances in every view, from one module.** A " +
-          "stepper whose zero *removes* the card, a move control, a `draggable()` registration " +
-          "and the slot attribute the card pane finds its way home by all come from " +
-          "`cardControl.tsx` — four copies would be four chances for one surface to quietly " +
-          "stop offering something, and the reader would find it by switching view and losing " +
-          "the ability to remove a card. What each view decides is *placement*: the table " +
-          "spends them as a column, the other three draw them over the card, revealed by the " +
-          "same hover and focus that lift a stacked card.\n\n" +
-          "**The move control is a native `<select>`, deliberately.** The row menu it replaces " +
-          'was an anchored popup, which made it a sixth `"inner"` peer in the Escape union ' +
-          "with a z-index, a focus hand-back and a click-away boundary to get right. A select " +
-          "is none of those: the browser draws it in its own layer, and it is reachable by " +
-          "keyboard, pointer and voice without this app writing a line of it.\n\n" +
+          "**Every card carries the same three affordances in every view, from one module.** A " +
+          "stepper whose zero *removes* the card, a `draggable()` registration and the slot " +
+          "attribute the card pane finds its way home by all come from `cardControl.tsx` — " +
+          "four copies would be four chances for one surface to quietly stop offering " +
+          "something, and the reader would find it by switching view and losing the ability to " +
+          "remove a card. What each view decides is *placement*: the table spends them as a " +
+          "column, the other three draw them over the card, revealed by the same hover and " +
+          "focus that lift a stacked card.\n\n" +
+          "**There were four until 2026-08-14, and the fourth was a move control** — a native " +
+          "`Move…` `<select>` listing every other pile of the deck. It was removed whole, with " +
+          "a different control expected later, so **moving a card between piles is a drag and " +
+          "nothing else today**. Two things that costs, written here because no story can " +
+          "assert an absence usefully: there is no keyboard path to a move, and an *empty* pile " +
+          "of the reader's own draws no heading (`grouping.ts`'s `drawsWhenEmpty`) and is " +
+          "therefore not a drop target — the select was built from the deck's categories rather " +
+          "than from the drawn groups, which is what used to close that hole. The four seeded " +
+          "piles draw empty, so they can still be dropped into. {@link NoMoveControl} is the " +
+          "absence, pinned.\n\n" +
           "**The stepper sends an absolute quantity and never a delta**, and the reason is in " +
           "`useDeck.ts`: `deck_add_card` looks the printing up in `cards` and therefore " +
           "*refuses an orphaned card*, while `deck_set_card_quantity` addresses the slot that " +
@@ -566,36 +571,25 @@ export const ZeroRemovesTheCard: Story = {
 };
 
 /**
- * Moving a card between piles, from the card itself.
+ * **A card carries a stepper and nothing else** — the `Move…` select that stood beside it was
+ * removed on 2026-08-14, and a different control for moving a card between piles is expected
+ * later.
  *
- * A native `<select>` rather than the anchored menu it replaces — see this page's own note. The
- * card's current pile is never among its options: `deck_move_card` from a category to itself
- * would touch the deck, reallocate and bump `updated_at` to leave the list exactly as it was.
- *
- * The caret follows the card, which is the same hand-off the stepper's zero makes and the same
- * one a drop makes: the control the reader was using has left the pile it was in, so leaving
- * focus where it was would drop it on `<body>`.
+ * This is what took `MoveBetweenPiles`' place, and it is the weaker of the two on purpose:
+ * moving a card is a drag now, and Storybook cannot drive one (see this page's own note on why
+ * a green drag here would prove nothing). What a story *can* still hold is that the control
+ * really is gone from every one of the four views rather than from the module that drew it —
+ * the deck opens on Stacks, and {@link FourViews} walks the other three.
  */
-export const MoveBetweenPiles: Story = {
+export const NoMoveControl: Story = {
   args: { deckId: 3 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const select = await canvas.findByLabelText("Move Black Lotus out of Main deck");
-    await expect(within(select).queryByRole("option", { name: "Main deck" })).toBeNull();
+    // The stepper is still there, so this is not passing on a deck that drew no controls.
+    await canvas.findByRole("spinbutton", { name: "Copies of Black Lotus in Main deck" });
 
-    await userEvent.selectOptions(
-      select,
-      within(select).getByRole("option", { name: "Sideboard" }),
-    );
-
-    await waitFor(async () => {
-      await expect(
-        within(canvas.getByRole("region", { name: "Sideboard" })).getByRole("button", {
-          name: /^Black Lotus/,
-        }),
-      ).toBeInTheDocument();
-    });
-    await expect(canvas.getByRole("region", { name: "Sideboard" })).toHaveFocus();
+    await expect(canvas.queryByLabelText(/^Move Black Lotus/)).toBeNull();
+    await expect(canvas.queryByRole("option", { name: "Move…" })).toBeNull();
   },
 };
 

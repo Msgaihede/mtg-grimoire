@@ -517,9 +517,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `sort_order`, deck categories by the reader's own drag — and each of those is still the
     right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
   - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
-    `Custom…` a table-header sort leaves behind, `Auto (by card type)`, the permanent `Move…`
-    verb, `Top level`. `CategoriesPanel`'s `are deleted with it` is pinned **last** — the
-    destructive answer is not allowed to become the default by alphabet.
+    `Custom…` a table-header sort leaves behind, `Auto (by card type)`, `Top level`.
+    `CategoriesPanel`'s `are deleted with it` is pinned **last** — the destructive answer is
+    not allowed to become the default by alphabet. (A sixth, the deck card's permanent `Move…`
+    verb, went with that select on 2026-08-14.)
   - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
     Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
     reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesPanel`

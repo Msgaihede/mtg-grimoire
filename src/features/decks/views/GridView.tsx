@@ -323,9 +323,11 @@ function GridCard({
         </span>
       </button>
 
-      {/* Over the art, as in the stack — 150px is too narrow for a stepper and a select on one
-          line, so the controls' own `flex-wrap` puts the move control on a second. Absolute
-          either way, so the tile is exactly as wide and as tall as its card whatever it holds.
+      {/* Over the art, as in the stack. Absolute, so the tile is exactly as wide and as tall as
+          its card whatever it holds — which is what let the `Move…` select be removed on
+          2026-08-14 without a number here changing: 150px was too narrow for a stepper and a
+          select on one line, so the controls' own `flex-wrap` used to put the select on a
+          second, and a bar that takes no height cost the tile nothing either way.
 
           The positioning is a wrapper's rather than the controls' own `className`, and that is
           the zoom's doing: the bar sits directly on top of the foot, so its offset is the foot's

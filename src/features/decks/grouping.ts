@@ -263,6 +263,15 @@ export const DEFAULT_EMPTY_GROUP_RULES: EmptyGroupRules = {
  * remember: the `cards.length > 0` arm in {@link buildGroups}' filter runs in front of this
  * call, so no answer here can hide a card.
  *
+ * **The reversal below is the answer to a question this comment used to ask.** Every card's
+ * `Move…` select — which offered *every* category of the deck, empty ones included, because
+ * `DeckEditor` built it from `categories` rather than from these groups — was removed on
+ * 2026-08-14, and what stood here said so: a heading that is not drawn is not a drop target, so
+ * an empty pile of the reader's own could not be reached at all, and *"if instead this rule is
+ * ever reversed, it is this that made the case, not a wall of headings."* It has been. A pile of
+ * the reader's own draws empty now, which makes it a drop target again, and the "Add to" select
+ * (still built from `categories`) is the second route rather than the only one.
+ *
  * **An empty pile the reader made draws, because a column is a *place* as well as a heading.**
  * An empty `Ramp` is where the next ramp spell goes, and a pile that vanished with its last card
  * would move the layout under the reader's hand and take its own drop target with it. This file
