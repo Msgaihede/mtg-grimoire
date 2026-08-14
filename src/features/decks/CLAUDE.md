@@ -138,6 +138,16 @@ just made; it now asks all of them.
   `rememberView`, each for its own reason stated on its definition.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
+- **A move is a drag and nothing else** (2026-08-14). Every deck card used to carry a native
+  `Move…` `<select>` beside its stepper, listing every other category of the deck; it was
+  removed whole and a different control is expected later, so `moveCard` is reached only through
+  `DeckEditor`'s `applyDrop`. Two costs, written here rather than discovered later: **there is no
+  keyboard path to moving a card** (a caret cannot drag; stepping to zero and adding again
+  elsewhere is not the same write and loses the slot), and **an empty category of the reader's
+  own cannot be moved into at all** — `drawsWhenEmpty` draws no heading for it, a heading that is
+  not drawn is not a drop target, and the select was the one control built from `categories`
+  rather than from the drawn groups. The four seeded piles draw empty and are unaffected.
+  `cardControl.tsx`'s `DeckCardControls` carries the same two paragraphs at the code.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
   definitions would be two places to keep one rule. The two surfaces outside the editor
   (`useSwapFromPane`, `useSidebarDrops`) borrow a mutation whole and own only their own reporting.
@@ -418,9 +428,11 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **Filtering therefore also decides which headings exist.** The filter runs before the grouping,
   so a category the filter empties is an empty category and stops drawing. That is deliberate — a
   filter matching three cards should not answer with twenty headings — but the shape of the deck
-  changes as the reader types, and **a hidden category is not a drop target**. The per-card
-  "Move…" select and the panel's "Add to" select both build from the category list rather than
-  from the drawn groups, so every empty category stays reachable by name.
+  changes as the reader types, and **a hidden category is not a drop target**. The panel's
+  "Add to" select builds from the category list rather than from the drawn groups, so every
+  empty category stays reachable by name **for an add**. It is no longer reachable for a *move*:
+  the per-card "Move…" select that built from the same list was removed on 2026-08-14 (below),
+  so a card can be dragged only into a pile that is currently drawn.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:

@@ -80,7 +80,7 @@ export function TableView({
   selectedCardId?: string | null;
   className?: string;
 }) {
-  const editable = actions?.setQuantity !== undefined || actions?.move !== undefined;
+  const editable = actions?.setQuantity !== undefined;
   const rows = useMemo<Row[]>(
     () =>
       groups.flatMap((group) => [
@@ -100,14 +100,19 @@ export function TableView({
     () => [
       {
         key: "quantity",
-        // Wide enough for the stepper *and* the move control when there is one, and no wider
-        // when there is not — a read-only deck table should not carry an empty gutter.
+        // Wide enough for the stepper, and no wider — a read-only deck table should not carry
+        // an empty gutter, and neither should an editable one.
         //
-        // 11rem measured rather than guessed, in three passes: at 8.5rem the cell's own content
-        // was **154px in a 136px column** in the shipped window, so the move select was clipped
-        // by 18px; 10rem left 6px over and 10.5rem left 2. 176 clears the stepper, the gap and
-        // the select outright.
-        width: editable ? "11rem" : "3rem",
+        // **11rem → 6.5rem when the `Move…` select was removed** (2026-08-14), and the number
+        // is the same kind of measurement the old one was: the stepper at `xs` is two `size-5`
+        // buttons either side of an `h-5 w-8` box with `gap-1` between them, which is
+        // 20 + 4 + 32 + 4 + 20 = **80px**, and `VirtualTable`'s cell padding takes the rest of
+        // the 104. The 11rem it replaces was three passes' worth of clearing the select as
+        // well: at 8.5rem the cell's own content was 154px in a 136px column and the select was
+        // clipped by 18px, 10rem left 6px over and 10.5rem left 2. Keeping 11rem would have
+        // left **72px of empty gutter on every row of every deck** — the exact thing the
+        // read-only arm exists to avoid.
+        width: editable ? "6.5rem" : "3rem",
         header: "Qty",
         // `interactive` is the whole of what keeps a press on `−` from also opening the card
         // and a typed `12` from scrolling the list a screenful — `VirtualTable` applies

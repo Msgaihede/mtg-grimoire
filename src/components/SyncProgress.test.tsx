@@ -44,14 +44,33 @@ describe("the first-run variant", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText(/setting up your card database/i)).toBeInTheDocument();
     expect(screen.getByText(/importing cards/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /retry/i })).toBeDisabled();
+    // The app's one progress bar, on the one screen that used to have a second one. The
+    // name is the phase, which is `syncActivity`'s wording rather than this file's — the
+    // same fold the ribbon's line is given.
+    expect(screen.getByRole("progressbar", { name: "Importing cards" })).toHaveAttribute(
+      "aria-valuenow",
+      "50",
+    );
+  });
+
+  /**
+   * `sync_run` refuses a second concurrent run, so a button offering one while the first
+   * is downloading is a control that cannot do anything. It comes back the moment nothing
+   * is running, which is the only state it is any use in.
+   */
+  it("keeps Retry off the screen while the download is running", () => {
+    show({ cardCount: 0, busy: true, progress: event({ phase: "downloading" }) });
+
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
   });
 
   it("waits for the first sync even before any event arrives", () => {
     show({ cardCount: 0, busy: true });
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/starting/i)).toBeInTheDocument();
+    // The generic sentence, and the ribbon's own: a run this window has only heard *about*
+    // has no phase to name.
+    expect(screen.getByText("Syncing card data")).toBeInTheDocument();
   });
 
   /** A finished run means the database is filling; the overlay gets out of the way. */
@@ -122,6 +141,56 @@ describe("the first-run variant", () => {
 
       expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
       expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    });
+
+    /**
+     * The press has to answer for itself, and the failure it was pressed over has to go.
+     *
+     * A `sync:progress` error is the last thing this window heard and stays the last thing
+     * until a new run says something — so without the dismissal this screen would go on
+     * reporting a run the reader replaced, with the button as the only thing that moved.
+     */
+    it("replaces the failure it was pressed over with the run it asked for", async () => {
+      show({
+        cardCount: 0,
+        busy: true,
+        progress: event({ phase: "error", done: 0, total: 0, message: "no internet connection" }),
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/no internet connection/i)).not.toBeInTheDocument();
+      // The generic sentence and a line with no denominator: a run nobody has heard from yet.
+      expect(screen.getByRole("progressbar", { name: "Syncing card data" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    });
+
+    /**
+     * …and a *new* failure is never the dismissed one, so it lands. The identity of the
+     * event is what carries this: holding a "retrying" flag instead would swallow the
+     * second failure for as long as the flag stood.
+     */
+    it("reports a fresh failure after a retry", async () => {
+      const { rerender } = show({
+        cardCount: 0,
+        busy: true,
+        progress: event({ phase: "error", message: "no internet connection" }),
+      });
+      await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+      rerender(
+        <SyncProgress
+          cardCount={0}
+          busy={false}
+          progress={event({ phase: "error", message: "rate limited by Scryfall" })}
+          error={null}
+          onRetry={onRetry}
+        />,
+      );
+
+      expect(screen.getByText(/rate limited by Scryfall/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
     });
   });
 });
