@@ -21,8 +21,10 @@
 //!   row, each pinned by a test of its own: [`crate::deck::update_deck`] records one row per
 //!   changed **field**, and [`crate::deck_import::commit_import`] in `replace` mode records the
 //!   `remove` and the `add` it did — opposite deltas, which one signed row cannot carry.
-//!   **Six** writes deliberately record nothing, and each says why on its own doc:
+//!   **Seven** writes deliberately record nothing, and each says why on its own doc:
 //!   [`crate::deck::delete_deck`] (the row would CASCADE away with the deck it describes);
+//!   [`crate::deck::set_view_state`] (the history holds changes to the deck, and which tab was
+//!   open is not one — it is not an edit at all, which is why it moves no `updated_at` either);
 //!   [`crate::deck::missing_to_wishlist`] and [`crate::deck_theory::missing_to_wishlist`]
 //!   (they write the wishlist, not the deck); and three of `deck_meta`'s four folder writes —
 //!   [`crate::deck_meta::create_folder`], [`crate::deck_meta::rename_folder`] and
@@ -455,9 +457,9 @@ mod tests {
                 }),
             ),
             (
-                // The seeding rides along inside this one write — switching the theory list on
-                // copies the live deck into it — and it must still be **one** line. N `add`
-                // rows for one press would read as a deck somebody typed out.
+                // The move rides along inside this one write — switching the theory list on
+                // moves the live deck into it — and it must still be **one** line. N `move`
+                // rows for one press would read as a deck somebody re-filed by hand.
                 "deck_update (theory)",
                 1,
                 Box::new(|| {
